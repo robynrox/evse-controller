@@ -26,11 +26,12 @@ install the following on your system:
 * Python 3.11.7
 * Use `pip install requests pyModbusTCP` to install using pip the required libraries (or install them however you like).
 
-I've provided an example in scheduler.py, but it's very basic.
+I've provided an example in scheduler.py, but it's very basic. IP addresses are in configuration.py, so if your setup
+happens to be very close to mine, you can feel free to make changes.
 
 ## Roadmap
 
-* Implement the APIs for the hardware I have
+* Implement the APIs for the hardware I have (basic ones are now complete)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
 * Add a user interface allowing for rapid termination of any current EV charging or discharging session
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot

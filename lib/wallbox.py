@@ -21,6 +21,7 @@ class EVSE_Wallbox_Quasar:
         self.STATE_POWER_DEMAND_TOO_HIGH = 10
         self.STATE_DISCHARGING = 11
         self.READ_BATTERY_REG = 0x021a
+        self.battery_charge_level = -1
 
     def set_charging_current(self, current):
         print(f"Setting charging current to {current}A")
@@ -55,6 +56,9 @@ class EVSE_Wallbox_Quasar:
     def get_battery_charge_level(self):
         try:
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
-            return regs[0]
+            battery_charge_level = regs[0]
+            if battery_charge_level != 0:
+                self.battery_charge_level = battery_charge_level
+            return self.battery_charge_level
         except:
-            return -1
+            return self.battery_charge_level
