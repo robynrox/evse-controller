@@ -1,6 +1,7 @@
 from lib.wallbox import EVSE_Wallbox_Quasar
-from lib.shelly import CTClamp_Shelly
+from lib.shelly import PwrMon_Shelly
 import time
+import datetime
 import configuration
 
 # This is a simple scheduler designed to work with the Octopus Flux tariff.
@@ -31,24 +32,29 @@ import configuration
 # you can remove the CT clamp code and the code that prints the values.
 #
 controller = EVSE_Wallbox_Quasar(configuration.WALLBOX_URL)
-ctclamp = CTClamp_Shelly(configuration.SHELLY_URL)
+ctclamp = PwrMon_Shelly(configuration.SHELLY_URL)
 
+def log(msg):
+    print(msg)
+    with open('log.txt', 'a') as f:
+        f.write(msg + '\n')
+
+controller.set_charging_current(16)
 while True:
     now = time.localtime()
-    print(time.strftime("%a, %d %b %Y %H:%M:%S %z", now))
+    log(time.strftime("%a, %d %b %Y %H:%M:%S %z", now))
 
     charger_state = controller.get_charger_state()
-    print(f"Charger state: {charger_state}")
+    log(f"Charger state: {charger_state}")
     print("0=disconnected, 1=charging, 2=waiting for car demand, 3=waiting for schedule, 4=paused, 7=error,")
     print("10=power demand limiting, 11=discharging")
     charge_level = controller.get_battery_charge_level()
-    print(f"Battery charge level: {charge_level}%")
+    log(f"Battery charge level: {charge_level}%")
     gridPower = ctclamp.get_power_ch0()
     solarPower = ctclamp.get_power_ch1()
     mainsVoltage = ctclamp.get_voltage()
-    print(f"Grid power: {gridPower} W; Solar power: {solarPower} W; Mains voltage: {mainsVoltage} V")
+    log(f"Grid power: {gridPower} W; Solar power: {solarPower} W; Mains voltage: {mainsVoltage} V")
 
-    now = time.localtime()
     # If charging active and charge level is 90%, stop charging.
     if charger_state == controller.STATE_CHARGING and charge_level >= 90:
         controller.stop_charging()
@@ -61,7 +67,7 @@ while True:
         elif now.tm_hour == 5:
             controller.stop_charging()
         elif now.tm_hour == 11:
-            controller.set_charging_current(8)
+            controller.set_charging_current(16)
         elif now.tm_hour == 16:
             controller.set_charging_current(-16)
         elif now.tm_hour == 19:
@@ -69,4 +75,6 @@ while True:
 
     now = time.localtime()
     time.sleep(15 - (now.tm_sec % 15))
-    print("")
+    #now = datetime.datetime.now()
+    #time.sleep((1000000 - now.microsecond) / 1000000.0)
+    log("")

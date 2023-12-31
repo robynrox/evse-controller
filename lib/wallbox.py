@@ -22,9 +22,14 @@ class EVSE_Wallbox_Quasar:
         self.STATE_DISCHARGING = 11
         self.READ_BATTERY_REG = 0x021a
         self.battery_charge_level = -1
+        self.current = 0
+        self.guardTime = 0
 
     def set_charging_current(self, current):
-        print(f"Setting charging current to {current}A")
+        if (current == 0):
+            self.stop_charging()
+            return
+        print(f"Setting charging current to {current} A")
         # Take control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
         # Set charging current
@@ -36,6 +41,20 @@ class EVSE_Wallbox_Quasar:
         self.client.write_single_register(self.CONTROL_STATE_REG, self.START_CHARGING)
         # Return control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
+        # Calculate time in seconds required before next change
+        if self.current == 0 and current != 0:
+            print("Starting charging")
+            self.guardTime = 25
+        elif abs(self.current + current) <= 1:
+            self.guardTime = 6
+        elif abs(self.current + current) <= 2:
+            self.guardTime = 8
+        else:
+            self.guardTime = 11
+        self.current = current
+
+    def get_guard_time(self):
+        return self.guardTime
 
     def stop_charging(self):
         print("Stopping charging")
@@ -45,6 +64,9 @@ class EVSE_Wallbox_Quasar:
         self.client.write_single_register(self.CONTROL_STATE_REG, self.STOP_CHARGING)
         # Return control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
+        self.current = 0
+        # Configure guard time
+        self.guardTime = 25
 
     def get_charger_state(self):
         try:
@@ -62,3 +84,6 @@ class EVSE_Wallbox_Quasar:
             return self.battery_charge_level
         except:
             return self.battery_charge_level
+
+    def calc_grid_power(self, power):
+        return power.gridWatts
