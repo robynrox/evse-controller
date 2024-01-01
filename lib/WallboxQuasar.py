@@ -1,7 +1,9 @@
+from lib.Power import Power
 from pyModbusTCP.client import ModbusClient
+from lib.EvseInterface import EvseInterface, EvseState
 
-class EVSE_Wallbox_Quasar:
-    def __init__(self, host):
+class EvseWallboxQuasar(EvseInterface):
+    def __init__(self, host: str):
         self.host = host
         self.client = ModbusClient(host = host, auto_open = True, auto_close = True)
         self.CONTROL_LOCKOUT_REG = 0x51
@@ -12,22 +14,14 @@ class EVSE_Wallbox_Quasar:
         self.START_CHARGING = 1
         self.STOP_CHARGING = 2
         self.READ_STATE_REG = 0x0219
-        self.STATE_DISCONNECTED = 0
-        self.STATE_CHARGING = 1
-        self.STATE_WAITING_FOR_CAR_DEMAND = 2
-        self.STATE_WAITING_FOR_SCHEDULE = 3
-        self.STATE_PAUSED = 4
-        self.STATE_ERROR = 7
-        self.STATE_POWER_DEMAND_TOO_HIGH = 10
-        self.STATE_DISCHARGING = 11
         self.READ_BATTERY_REG = 0x021a
         self.battery_charge_level = -1
         self.current = 0
         self.guardTime = 0
 
-    def set_charging_current(self, current):
+    def setChargingCurrent(self, current: int):
         if (current == 0):
-            self.stop_charging()
+            self.stopCharging()
             return
         print(f"Setting charging current to {current} A")
         # Take control
@@ -45,18 +39,18 @@ class EVSE_Wallbox_Quasar:
         if self.current == 0 and current != 0:
             print("Starting charging")
             self.guardTime = 25
-        elif abs(self.current + current) <= 1:
+        elif abs(self.current - current) <= 1:
             self.guardTime = 6
-        elif abs(self.current + current) <= 2:
+        elif abs(self.current - current) <= 2:
             self.guardTime = 8
         else:
             self.guardTime = 11
         self.current = current
 
-    def get_guard_time(self):
+    def getGuardTime(self) -> int:
         return self.guardTime
 
-    def stop_charging(self):
+    def stopCharging(self):
         print("Stopping charging")
         # Take control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
@@ -66,16 +60,17 @@ class EVSE_Wallbox_Quasar:
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
         self.current = 0
         # Configure guard time
-        self.guardTime = 25
+        self.guardTime = 11
 
-    def get_charger_state(self):
+    def getEvseState(self) -> EvseState:
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
-            return regs[0]
+            state = EvseState(regs[0])
+            return state
         except:
-            return -1
+            return EvseState.NO_COMMS
 
-    def get_battery_charge_level(self):
+    def getBatteryChargeLevel(self) -> int:
         try:
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
             battery_charge_level = regs[0]
@@ -85,5 +80,5 @@ class EVSE_Wallbox_Quasar:
         except:
             return self.battery_charge_level
 
-    def calc_grid_power(self, power):
+    def calcGridPower(self, power: Power) -> float:
         return power.gridWatts

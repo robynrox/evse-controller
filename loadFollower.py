@@ -1,5 +1,7 @@
-from lib.shelly import PwrMon_Shelly, PowerMonitorPollingThread
-from lib.wallbox import EVSE_Wallbox_Quasar
+from lib.EvseInterface import EvseInterface, EvseState
+from lib.PowerMonitorInterface import PowerMonitorInterface
+from lib.Shelly import PowerMonitorShelly, PowerMonitorPollingThread
+from lib.WallboxQuasar import EvseWallboxQuasar
 import configuration
 import time
 import math
@@ -8,35 +10,52 @@ class Observer:
     def update(self, result):
         print(f"Observer: {result}")
 
-class MockEvse:
+class MockEvse(EvseInterface):
     def __init__(self):
         self.current = 0
         self.guardTime = 0
+        self.state = EvseState.PAUSED
     
-    def get_guard_time(self):
+    def getGuardTime(self):
         return self.guardTime
     
-    def set_charging_current(self, current):
+    def setChargingCurrent(self, current):
         print(f"Setting charging current to {current} A")
         if self.current == 0 and current != 0:
             print("Starting charging")
             self.guardTime = 25
+            self.state = EvseState.CHARGING if self.current > 0 else EvseState.DISCHARGING
         elif self.current != 0 and current == 0:
             print("Stopping charging")
-            self.guardTime = 25
-        elif abs(self.current + current) <= 1:
+            self.guardTime = 11
+            self.state = EvseState.PAUSED
+        elif abs(self.current - current) <= 1:
             self.guardTime = 6
-        elif abs(self.current + current) <= 2:
+            self.state = EvseState.CHARGING if self.current > 0 else EvseState.DISCHARGING
+        elif abs(self.current - current) <= 2:
             self.guardTime = 8
+            self.state = EvseState.CHARGING if self.current > 0 else EvseState.DISCHARGING
         else:
             self.guardTime = 11
         self.current = current
 
-    def calc_grid_power(self, power):
+    def calcGridPower(self, power):
         return power.gridWatts + self.current * power.voltage
+    
+    def stopCharging(self):
+        print("Stopping charging")
+        self.current = 0
+        self.guardTime = 25
+        self.state = EvseState.PAUSED
 
+    def getEvseState(self):
+        return self.state
+    
+    def getBatteryChargeLevel(self):
+        return 50
+    
 class PowerFollower:
-    def __init__(self, pmon, evse):
+    def __init__(self, pmon: PowerMonitorInterface, evse: EvseInterface):
         self.pmon = pmon
         self.evse = evse
         self.MIN_CURRENT = 3
@@ -45,7 +64,7 @@ class PowerFollower:
         self.evseCurrent = 0
     
     def update(self, power):
-        powerWithEvse = round(self.evse.calc_grid_power(power), 2)
+        powerWithEvse = round(self.evse.calcGridPower(power), 2)
         desiredEvseCurrent = self.evseCurrent - round(powerWithEvse / power.voltage)
         if abs(desiredEvseCurrent) < self.MIN_CURRENT:
             desiredEvseCurrent = 0
@@ -60,15 +79,15 @@ class PowerFollower:
 
         if self.evseCurrent != desiredEvseCurrent:
             print(f"Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-            self.evse.set_charging_current(desiredEvseCurrent)
-            self.ignoreSeconds = self.evse.get_guard_time()
+            self.evse.setChargingCurrent(desiredEvseCurrent)
+            self.ignoreSeconds = self.evse.getGuardTime()
             self.evseCurrent = desiredEvseCurrent
 
-pmon = PwrMon_Shelly(configuration.SHELLY_URL)
-#evse = MockEvse()
-evse = EVSE_Wallbox_Quasar(configuration.WALLBOX_URL)
-evse.stop_charging()
-time.sleep(25)
+pmon = PowerMonitorShelly(configuration.SHELLY_URL)
+evse = MockEvse()
+#evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
+evse.stopCharging()
+#time.sleep(25)
 thread = PowerMonitorPollingThread(pmon)
 #thread.attach(Observer())
 thread.start()

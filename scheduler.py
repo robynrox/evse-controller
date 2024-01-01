@@ -1,5 +1,6 @@
-from lib.wallbox import EVSE_Wallbox_Quasar
-from lib.shelly import PwrMon_Shelly
+from lib.EvseInterface import EvseState
+from lib.WallboxQuasar import EvseWallboxQuasar
+from lib.Shelly import PowerMonitorShelly
 import time
 import datetime
 import configuration
@@ -31,47 +32,44 @@ import configuration
 # I have also added a CT clamp to monitor the grid power, solar power and mains voltage. If this is not useful to you,
 # you can remove the CT clamp code and the code that prints the values.
 #
-controller = EVSE_Wallbox_Quasar(configuration.WALLBOX_URL)
-ctclamp = PwrMon_Shelly(configuration.SHELLY_URL)
+evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
+powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
 
 def log(msg):
     print(msg)
     with open('log.txt', 'a') as f:
         f.write(msg + '\n')
 
-controller.set_charging_current(16)
+#controller.set_charging_current(-16)
+evse.stopCharging()
 while True:
     now = time.localtime()
     log(time.strftime("%a, %d %b %Y %H:%M:%S %z", now))
 
-    charger_state = controller.get_charger_state()
+    charger_state = evse.getEvseState()
     log(f"Charger state: {charger_state}")
-    print("0=disconnected, 1=charging, 2=waiting for car demand, 3=waiting for schedule, 4=paused, 7=error,")
-    print("10=power demand limiting, 11=discharging")
-    charge_level = controller.get_battery_charge_level()
+    charge_level = evse.getBatteryChargeLevel()
     log(f"Battery charge level: {charge_level}%")
-    gridPower = ctclamp.get_power_ch0()
-    solarPower = ctclamp.get_power_ch1()
-    mainsVoltage = ctclamp.get_voltage()
-    log(f"Grid power: {gridPower} W; Solar power: {solarPower} W; Mains voltage: {mainsVoltage} V")
+    power = powerMonitor.getPowerLevels()
+    log(f"Power levels: {power}")
 
     # If charging active and charge level is 90%, stop charging.
-    if charger_state == controller.STATE_CHARGING and charge_level >= 90:
-        controller.stop_charging()
+    if charger_state == EvseState.CHARGING and charge_level >= 90:
+        evse.stopCharging()
     # If discharging active and charge level is 30%, stop discharging. (-1 is returned if modbus fails)
-    if charger_state == controller.STATE_DISCHARGING and charge_level <= 30 and charge_level >= 0:
-        controller.stop_charging()
+    if charger_state == EvseState.DISCHARGING and charge_level <= 30 and charge_level >= 0:
+        evse.stopCharging()
     if now.tm_min == 0:
         if now.tm_hour == 2:
-            controller.set_charging_current(16)
+            evse.setChargingCurrent(16)
         elif now.tm_hour == 5:
-            controller.stop_charging()
+            evse.stopCharging()
         elif now.tm_hour == 11:
-            controller.set_charging_current(16)
+            evse.setChargingCurrent(16)
         elif now.tm_hour == 16:
-            controller.set_charging_current(-16)
+            evse.setChargingCurrent(-16)
         elif now.tm_hour == 19:
-            controller.stop_charging()
+            evse.stopCharging()
 
     now = time.localtime()
     time.sleep(15 - (now.tm_sec % 15))
