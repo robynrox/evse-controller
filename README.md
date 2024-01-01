@@ -6,13 +6,20 @@ is shared; this is intended to be simpler and more of a standalone project. In p
 to use Home Assistant; if your needs include using Home Assistant then the above project may well be more suited to your
 needs.
 
-At this stage, I am working on library routines. These routines will work with systems such as the following:
+I have completed some library routines declaring the interfaces used for controlling EVSEs and reading from power
+monitors and I have implemented these for the following devices:
 
 * [Wallbox Quasar](https://wallbox.com/en_ca/quasar-dc-charger) for EV charging and discharging (V2G)
 * [Shelly EM](https://shellystore.co.uk/product/shelly-em/) for energy monitoring enabling solar energy capture (S2V)
-  and load following (V2H)
+  and load following (V2H); here it is assumed that grid power is monitored through channel 0 and solar power through
+  channel 1, but nothing is done with the solar power measurement other than reporting it. It may be more useful to
+  monitor EVSE power through this channel.
 
-Eventually I intend to abstract the interfaces out so that the code can be used with other systems.
+I have also started work on a basic scheduler example and a basic load follower (for doing V2G and S2V) which can be
+seen in files Scheduler.py and LoadFollower.py respectively.
+
+This code may look more Javaesque than Pythonesque - I have more expertise in Java but I've chosen Python so that I can
+learn a little bit more.
 
 ## How to use and develop
 
@@ -26,17 +33,18 @@ install the following on your system:
 * Python 3.11.7
 * Use `pip install requests pyModbusTCP` to install using pip the required libraries (or install them however you like).
 
-I've provided an example in scheduler.py, but it's very basic. IP addresses are in configuration.py, so if your setup
-happens to be very close to mine, you can feel free to make changes.
+IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
+changes.
 
 ## Roadmap
 
 * Implement the APIs for the hardware I have (basic ones are now complete)
-* Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
-* Add a user interface allowing for rapid termination of any current EV charging or discharging session
-* Add V2G and S2V capabilities that may be independently specified during a scheduled slot
-* Add logging with a view to optimising V2G and S2V
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
-  the Shelly
+  the Shelly (complete)
+* Add a user interface allowing for rapid termination of any current EV charging or discharging session
+* Add V2G and S2V capabilities that may be independently specified during a scheduled slot (code that handles the
+  capabilities has been written)
+* Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
+* Add logging with a view to optimising V2G and S2V
 
 The above is an ideal and some of it is sure to be done out of order!
