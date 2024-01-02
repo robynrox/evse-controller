@@ -5,7 +5,7 @@ from lib.EvseInterface import EvseInterface, EvseState
 class EvseWallboxQuasar(EvseInterface):
     def __init__(self, host: str):
         self.host = host
-        self.client = ModbusClient(host = host, auto_open = True, auto_close = True)
+        self.client = ModbusClient(host = host, auto_open = True, auto_close = False)
         self.CONTROL_LOCKOUT_REG = 0x51
         self.MODBUS_CONTROL = 1
         self.USER_CONTROL = 0
@@ -46,6 +46,7 @@ class EvseWallboxQuasar(EvseInterface):
         else:
             self.guardTime = 11
         self.current = current
+        self.client.close()
 
     def getGuardTime(self) -> int:
         return self.guardTime
@@ -61,20 +62,23 @@ class EvseWallboxQuasar(EvseInterface):
         self.current = 0
         # Configure guard time
         self.guardTime = 11
+        self.client.close()
 
     def getEvseState(self) -> EvseState:
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
+            self.client.close()
             state = EvseState(regs[0])
             return state
         except:
-            return EvseState.NO_COMMS
+            raise ConnectionError("Could not read EVSE state")
 
     def getBatteryChargeLevel(self) -> int:
         try:
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
+            self.client.close()
             battery_charge_level = regs[0]
-            if battery_charge_level != 0:
+            if battery_charge_level > 0:
                 self.battery_charge_level = battery_charge_level
             return self.battery_charge_level
         except:
