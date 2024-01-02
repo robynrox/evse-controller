@@ -42,10 +42,19 @@ def log(msg):
 
 #controller.set_charging_current(-16)
 evse.stopCharging()
+connectionErrors = 0
 while True:
     now = time.localtime()
     log(time.strftime("%a, %d %b %Y %H:%M:%S %z", now))
 
+    try:
+        charger_state = evse.getEvseState()
+        connectionErrors = 0
+    except ConnectionError:
+        connectionErrors += 1
+        log(f"Consecutive connection errors: {connectionErrors}")
+        charger_state = EvseState.ERROR
+        evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
     charger_state = evse.getEvseState()
     log(f"Charger state: {charger_state}")
     charge_level = evse.getBatteryChargeLevel()
