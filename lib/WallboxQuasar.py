@@ -38,7 +38,7 @@ class EvseWallboxQuasar(EvseInterface):
         # Calculate time in seconds required before next change
         if self.current == 0 and current != 0:
             print("Starting charging")
-            self.guardTime = 25
+            self.guardTime = 22
         elif abs(self.current - current) <= 1:
             self.guardTime = 6
         elif abs(self.current - current) <= 2:
