@@ -21,6 +21,12 @@ seen in files Scheduler.py and LoadFollower.py respectively.
 This code may look more Javaesque than Pythonesque - I have more expertise in Java but I've chosen Python so that I can
 learn a little bit more.
 
+This uses code from a library that can use a Web API to control the Wallbox Quasar, but that code is only used to
+restart the wallbox in the case of modbus failure, a condition that happens once every few days to myself. The library
+used for this is to be found here:
+
+* https://github.com/cliviu74/wallbox
+
 ## How to use and develop
 
 This isn't yet designed for end-users, only for software engineers and the like. You need to know at least a little
@@ -31,7 +37,8 @@ that contains the dependencies required to develop, test and run this in a Docke
 install the following on your system:
 
 * Python 3.11.7
-* Use `pip install requests pyModbusTCP` to install using pip the required libraries (or install them however you like).
+* Use `pip install requests pyModbusTCP wallbox` to install using pip the required libraries (or install them however
+  you like).
 
 IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
 changes.
@@ -41,9 +48,10 @@ changes.
 * Implement the APIs for the hardware I have (basic ones are now complete)
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
   the Shelly (complete)
-* Add a user interface allowing for rapid termination of any current EV charging or discharging session
+* Add a user interface allowing for rapid termination of any current EV charging or discharging session (will probably
+  use Python's own tkinter for this)
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot (code that handles the
-  capabilities has been written)
+  capabilities has been written; it is intended to make that part of the library)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
 * Add logging with a view to optimising V2G and S2V
 
