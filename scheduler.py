@@ -40,8 +40,15 @@ def log(msg):
     with open('log.txt', 'a') as f:
         f.write(msg + '\n')
 
-#controller.set_charging_current(-16)
-evse.stopCharging()
+# Configure desired start state
+now = time.localtime()
+if (now.tm_hour >= 2 and now.tm_hour < 5):
+    evse.setChargingCurrent(16)
+elif (now.tm_hour >= 16 and now.tm_hour < 19):
+    evse.setChargingCurrent(-16)
+else:
+    evse.stopCharging()
+
 connectionErrors = 0
 while True:
     now = time.localtime()
@@ -54,8 +61,14 @@ while True:
         connectionErrors += 1
         log(f"Consecutive connection errors: {connectionErrors}")
         charger_state = EvseState.ERROR
-        evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
-    charger_state = evse.getEvseState()
+        if connectionErrors > 10 and isinstance(evse, EvseWallboxQuasar):
+            log("Restarting EVSE")
+            evse.resetViaWebApi(configuration.WALLBOX_USERNAME,
+                                configuration.WALLBOX_PASSWORD,
+                                configuration.WALLBOX_SERIAL)
+            # Allow up to an hour for the EVSE to restart without trying to restart again
+            connectionErrors = -3600
+            
     log(f"Charger state: {charger_state}")
     charge_level = evse.getBatteryChargeLevel()
     log(f"Battery charge level: {charge_level}%")

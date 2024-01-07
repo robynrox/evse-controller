@@ -1,6 +1,7 @@
 from lib.Power import Power
 from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
+from wallbox import Wallbox, Statuses
 
 class EvseWallboxQuasar(EvseInterface):
     def __init__(self, host: str):
@@ -57,6 +58,8 @@ class EvseWallboxQuasar(EvseInterface):
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
         # Stop charging
         self.client.write_single_register(self.CONTROL_STATE_REG, self.STOP_CHARGING)
+        # Set charging current to 0 (Otherwise when disconnected and reconnected, car starts to charge again)
+        self.client.write_single_register(self.CONTROL_CURRENT_REG, 0)
         # Return control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
         self.current = 0
@@ -86,3 +89,8 @@ class EvseWallboxQuasar(EvseInterface):
 
     def calcGridPower(self, power: Power) -> float:
         return power.gridWatts
+
+    def resetViaWebApi(self, username: str, password: str, charger: int):
+        wallbox = Wallbox(username, password)
+        wallbox.authenticate()
+        wallbox.restartCharger(charger)
