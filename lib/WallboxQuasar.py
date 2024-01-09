@@ -1,3 +1,4 @@
+import time
 from lib.Power import Power
 from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
@@ -19,6 +20,7 @@ class EvseWallboxQuasar(EvseInterface):
         self.battery_charge_level = -1
         self.current = 0
         self.guardTime = 0
+        self.readGuardTime = 0
 
     def setChargingCurrent(self, current: int):
         if (current == 0):
@@ -47,6 +49,7 @@ class EvseWallboxQuasar(EvseInterface):
         else:
             self.guardTime = 11
         self.current = current
+        self.readGuardTime = time.time() + 0.9
         self.client.close()
 
     def getGuardTime(self) -> int:
@@ -65,9 +68,12 @@ class EvseWallboxQuasar(EvseInterface):
         self.current = 0
         # Configure guard time
         self.guardTime = 11
+        self.readGuardTime = time.time() + 0.9
         self.client.close()
 
     def getEvseState(self) -> EvseState:
+        if (time.time() < self.readGuardTime):
+            raise ConnectionError("Guard time not expired")
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
             self.client.close()
@@ -77,6 +83,8 @@ class EvseWallboxQuasar(EvseInterface):
             raise ConnectionError("Could not read EVSE state")
 
     def getBatteryChargeLevel(self) -> int:
+        if (time.time() < self.readGuardTime):
+            return self.battery_charge_level
         try:
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
             self.client.close()
