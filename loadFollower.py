@@ -72,10 +72,12 @@ class PowerFollower:
             desiredEvseCurrent = self.minCurrent
         elif desiredEvseCurrent > self.maxCurrent:
             desiredEvseCurrent = self.maxCurrent
-        if abs(desiredEvseCurrent) < self.MIN_CURRENT:
+        if abs(desiredEvseCurrent) < self.MIN_CURRENT / 2:
             desiredEvseCurrent = 0
+        elif abs(desiredEvseCurrent) < self.MIN_CURRENT:
+            desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
-            desiredEvseCurrent = math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT
+            desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
         print(f"Grid: {powerWithEvse} W; Solar: {power.solarWatts} W; Voltage: {power.voltage} V; EVSE current: {self.evseCurrent}; Desired: {desiredEvseCurrent} A; Charge %: {self.evse.getBatteryChargeLevel()}  ")  
 
         if self.ignoreSeconds > 0:
