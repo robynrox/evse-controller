@@ -45,11 +45,11 @@ evseController = EvseController(powerMonitor, evse, {
 
 while True:
     now = time.localtime()
-    if (now.tm_hour >= 2 and now.tm_hour <= 5):
+    if (now.tm_hour >= 2 and now.tm_hour < 5):
         evseController.setControlState(ControlState.FULL_CHARGE)
-    elif (now.tm_hour >= 5 and now.tm_hour <= 16):
+    elif (now.tm_hour >= 5 and now.tm_hour < 16):
         evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-    elif (now.tm_hour >= 16 and now.tm_hour <= 19):
+    elif (now.tm_hour >= 16 and now.tm_hour < 19):
         evseController.setControlState(ControlState.FULL_DISCHARGE)
     else:
         evseController.setControlState(ControlState.DORMANT)

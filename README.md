@@ -27,6 +27,8 @@ used for this is to be found here:
 
 * https://github.com/cliviu74/wallbox
 
+This has been tested and seems to work well.
+
 ## How to use and develop
 
 This isn't yet designed for end-users, only for software engineers and the like. You need to know at least a little
@@ -49,10 +51,11 @@ changes.
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
   the Shelly (complete)
 * Add a user interface allowing for rapid termination of any current EV charging or discharging session (will probably
-  use Python's own tkinter for this)
-* Add V2G and S2V capabilities that may be independently specified during a scheduled slot (code that handles the
-  capabilities has been written; it is intended to make that part of the library)
+  use Python's own tkinter for this - not started)
+* Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
+  of the library routines)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
-* Add logging with a view to optimising V2G and S2V
+  (Scheduler2.py shows an example of this but this wants putting into a proper UI)
+* Add logging with a view to optimising V2G and S2V (it's in a form that's easily regexable)
 
 The above is an ideal and some of it is sure to be done out of order!

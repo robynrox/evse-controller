@@ -16,11 +16,12 @@ class ControlState(Enum):
     LOAD_FOLLOW_BIDIRECTIONAL = 5
 
 def log(msg):
-    print(msg)
-    current_date = datetime.now()
-    date_string = current_date.strftime('%Y%m%d')
-    with open(f"log/{date_string}.txt", 'a') as f:
-        f.write(msg + '\n')
+    currentTime = datetime.now()
+    dateStr = currentTime.strftime('%Y%m%d')
+    with open(f"log/{dateStr}.txt", 'a') as f:
+        timeStr = currentTime.strftime('%H:%M:%S.%f ')
+        f.write(timeStr + msg + '\n')
+        print(timeStr + msg)
 
 class EvseController:
     def __init__(self, pmon: PowerMonitorInterface, evse: EvseInterface, configuration):
@@ -37,10 +38,9 @@ class EvseController:
         self.thread.start()
         self.thread.attach(self)
         self.connectionErrors = 0
-        log("EvseController started")
+        log("INFO EvseController started")
     
     def update(self, power):
-        log(f"Update at {datetime.now()}")
         powerWithEvse = round(self.evse.calcGridPower(power), 2)
         desiredEvseCurrent = self.evseCurrent - round(powerWithEvse / power.voltage)
         if desiredEvseCurrent < self.minCurrent:
@@ -53,18 +53,18 @@ class EvseController:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
-        log(f"Grid: {powerWithEvse} W; Solar: {power.solarWatts} W; Voltage: {power.voltage} V; EVSE current: {self.evseCurrent} A; Desired: {desiredEvseCurrent} A; Charge %: {self.evse.getBatteryChargeLevel()}  ")  
+        logMsg = f"DEBUG G:{powerWithEvse} S:{power.solarWatts} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
 
         try:
             self.chargerState = self.evse.getEvseState()
             self.connectionErrors = 0
-            log(f"Charger state: {self.chargerState}")
+            logMsg += f"CS:{self.chargerState} "
         except ConnectionError:
             self.connectionErrors += 1
-            log(f"Consecutive connection errors: {self.connectionErrors}")
+            log(f"WARNING Consecutive connection errors: {self.connectionErrors}")
             self.chargerState = EvseState.ERROR
             if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                log("Restarting EVSE")
+                log("ERROR Restarting EVSE")
                 self.evse.resetViaWebApi(self.configuration["WALLBOX_USERNAME"],
                                          self.configuration["WALLBOX_PASSWORD"],
                                          self.configuration["WALLBOX_SERIAL"])
@@ -72,10 +72,12 @@ class EvseController:
                 self.connectionErrors = -3600
 
         if self.ignoreSeconds > 0:
-            log(f"Skipping {self.ignoreSeconds} seconds")
+            logMsg += f"IGNORE:{self.ignoreSeconds} "
             self.ignoreSeconds -= 1
+            log(logMsg)
             return
 
+        log(logMsg)
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:
             resetState = True
@@ -86,7 +88,7 @@ class EvseController:
         if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
             resetState = True
         if resetState:
-            log(f"Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+            log(f"INFO Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
             self.evse.setChargingCurrent(desiredEvseCurrent)
             self.ignoreSeconds = self.evse.getGuardTime()
             self.evseCurrent = desiredEvseCurrent
@@ -111,5 +113,4 @@ class EvseController:
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
                 self.minCurrent = -self.MAX_CURRENT
                 self.maxCurrent = self.MAX_CURRENT
-        log(f"Setting control state to {state}: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
-        
+        log(f"DEBUG Setting control state to {state}: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
