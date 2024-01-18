@@ -113,4 +113,9 @@ class EvseController:
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
                 self.minCurrent = -self.MAX_CURRENT
                 self.maxCurrent = self.MAX_CURRENT
-        log(f"DEBUG Setting control state to {state}: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
+        log(f"INFO Setting control state to {state}: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
+
+    def setMinMaxCurrent(self, minCurrent, maxCurrent):
+        self.minCurrent = minCurrent;
+        self.maxCurrent = maxCurrent;
+        log(f"INFO Setting current levels: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")

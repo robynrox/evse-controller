@@ -39,25 +39,26 @@ while True:
     elif (now.tm_hour >= 5 and now.tm_hour < 13):
         evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
     elif now.tm_hour == 13:
-        if (evse.getBatteryChargeLevel() <= 48):
+        if (evse.getBatteryChargeLevel() <= 54):
             evseController.setControlState(ControlState.FULL_CHARGE)
         else:
             evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
     elif now.tm_hour == 14:
-        if (evse.getBatteryChargeLevel() <= 55):
+        if (evse.getBatteryChargeLevel() <= 60):
             evseController.setControlState(ControlState.FULL_CHARGE)
         else:
             evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
     elif now.tm_hour == 15:
-        if (evse.getBatteryChargeLevel() <= 62):
+        if (evse.getBatteryChargeLevel() <= 66):
             evseController.setControlState(ControlState.FULL_CHARGE)
         else:
             evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
     elif (now.tm_hour >= 16 and now.tm_hour < 19):
-        if (evse.getBatteryChargeLevel() <= 40):
+        #if (evse.getBatteryChargeLevel() <= 40):
+            evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
             evseController.setMinMaxCurrent(-16, -3)
-        else:
-            evseController.setControlState(ControlState.FULL_DISCHARGE)
+        #else:
+            #evseController.setControlState(ControlState.FULL_DISCHARGE)
     else:
         evseController.setControlState(ControlState.DORMANT)
     time.sleep(60 - now.tm_sec)
