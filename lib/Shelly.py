@@ -59,4 +59,4 @@ class PowerMonitorShelly(PowerMonitorInterface):
             self.pfCh1 = reqJson["emeters"][1]["pf"]
             self.voltage = reqJson["emeters"][0]["voltage"]
             self.lastUpdate = time.time()
-        return Power(self.powerCh0, self.powerCh1, self.voltage)
+        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage)

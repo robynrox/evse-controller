@@ -21,9 +21,18 @@ class EvseWallboxQuasar(EvseInterface):
         self.current = 0
         self.guardTime = 0
         self.readGuardTime = 0
+        self.lastEvseState = EvseState.UNKNOWN
 
     def setChargingCurrent(self, current: int):
         if (current == 0):
+            self.stopCharging()
+            return
+        if (self.battery_charge_level >= 97 and current > 0):
+            print("Cannot charge past 97%, not charging")
+            self.stopCharging()
+            return
+        if (self.battery_charge_level <= 20 and current < 0):
+            print("Will not discharge past 20%, not discharging")
             self.stopCharging()
             return
         print(f"Setting charging current to {current} A")
@@ -73,12 +82,12 @@ class EvseWallboxQuasar(EvseInterface):
 
     def getEvseState(self) -> EvseState:
         if (time.time() < self.readGuardTime):
-            raise ConnectionError("Guard time not expired")
+            return self.lastEvseState
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
             self.client.close()
-            state = EvseState(regs[0])
-            return state
+            self.lastEvseState = EvseState(regs[0])
+            return self.lastEvseState
         except:
             raise ConnectionError("Could not read EVSE state")
 

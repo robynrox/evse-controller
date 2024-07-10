@@ -47,13 +47,13 @@ class EvseController:
             desiredEvseCurrent = self.minCurrent
         elif desiredEvseCurrent > self.maxCurrent:
             desiredEvseCurrent = self.maxCurrent
-        if abs(desiredEvseCurrent) < self.MIN_CURRENT / 2:
+        if abs(desiredEvseCurrent) < self.MIN_CURRENT - 0.5:
             desiredEvseCurrent = 0
         elif abs(desiredEvseCurrent) < self.MIN_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
-        logMsg = f"DEBUG G:{powerWithEvse} S:{power.solarWatts} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
+        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.solarWatts} pf {power.solarPf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
 
         try:
             self.chargerState = self.evse.getEvseState()
@@ -119,3 +119,6 @@ class EvseController:
         self.minCurrent = minCurrent;
         self.maxCurrent = maxCurrent;
         log(f"INFO Setting current levels: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
+
+    def writeLog(self, logString):
+        log(logString)

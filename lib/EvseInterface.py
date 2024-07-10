@@ -14,6 +14,7 @@ class EvseState(Enum):
     ERROR = 7
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
+    UNKNOWN = 999
 
 class EvseInterface(ABC):
     @abstractmethod

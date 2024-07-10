@@ -45,9 +45,17 @@ install the following on your system:
 IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
 changes.
 
+## Provided samples
+
+The following samples are provided:
+
+* RemainDormant.py: Hold the wallbox in dormant state. (I used to use that to detach my vehicle.)
+* ChargeFull.py: Set the wallbox to charge at maximum rate.
+* flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
+  Scheduler2.py.)
+
 ## Roadmap
 
-* Implement the APIs for the hardware I have (basic ones are now complete)
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
   the Shelly (complete)
 * Add a user interface allowing for rapid termination of any current EV charging or discharging session (will probably
@@ -55,7 +63,6 @@ changes.
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
   of the library routines)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
-  (Scheduler2.py shows an example of this but this wants putting into a proper UI)
-* Add logging with a view to optimising V2G and S2V (it's in a form that's easily regexable)
+  (flux.py shows an example of this but this wants putting into a proper UI)
 
 The above is an ideal and some of it is sure to be done out of order!
