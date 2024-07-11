@@ -54,6 +54,13 @@ The following samples are provided:
 * flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
   Scheduler2.py.)
 
+To get this running after setting up the configuration file, you would run commands such as:
+
+* `python3 flux.py` or `python flux.py` (whichever works for you but you must use python 3)
+* `python[3] flux.py -?` will show a brief help page
+* `python[3] flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
+  before anything else is done which is useful for disconnecting your vehicle before going on a journey.
+
 ## Roadmap
 
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
@@ -66,3 +73,10 @@ The following samples are provided:
   (flux.py shows an example of this but this wants putting into a proper UI)
 
 The above is an ideal and some of it is sure to be done out of order!
+
+## Explanatory video
+
+I have produced a video that explains my setup, how I use the system, and goes into some detail regarding the flux.py
+scheduler. Note that it is long at 66 minutes! You can find that here:
+
+* https://youtu.be/4bIpY-AyUUw
