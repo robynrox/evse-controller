@@ -7,6 +7,12 @@ from lib.PowerMonitorInterface import PowerMonitorInterface
 from lib.Shelly import PowerMonitorPollingThread
 from lib.WallboxQuasar import EvseWallboxQuasar
 
+try:
+    import influxdb_client
+    from influxdb_client.client.write_api import SYNCHRONOUS
+except ImportError:
+    pass
+
 class ControlState(Enum):
     DORMANT = 0
     FULL_CHARGE = 1
@@ -38,6 +44,9 @@ class EvseController:
         self.thread.start()
         self.thread.attach(self)
         self.connectionErrors = 0
+        if self.configuration.get("USING_INFLUXDB", False) == True:
+            self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"], token=self.configuration["INFLUXDB_TOKEN"], org=self.configuration["INFLUXDB_ORG"])
+            self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
         log("INFO EvseController started")
     
     def update(self, power):
@@ -54,6 +63,19 @@ class EvseController:
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
         logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.solarWatts} pf {power.solarPf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
+        if self.configuration.get("USING_INFLUXDB", False) == True:
+            point = (
+                influxdb_client.Point("measurement")
+                .field("grid", powerWithEvse)
+                .field("grid_pf", power.gridPf)
+                .field("evse", power.solarWatts)
+                .field("evse_pf", power.solarPf)
+                .field("voltage", power.voltage)
+                .field("evseTargetCurrent", self.evseCurrent)
+                .field("evseDesiredCurrent", desiredEvseCurrent)
+                .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+            )
+            self.write_api.write(bucket="powerlog", record=point)
 
         try:
             self.chargerState = self.evse.getEvseState()

@@ -47,7 +47,11 @@ powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
 evseController = EvseController(powerMonitor, evse, {
         "WALLBOX_USERNAME": configuration.WALLBOX_USERNAME,
         "WALLBOX_PASSWORD": configuration.WALLBOX_PASSWORD,
-        "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL
+        "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL,
+        "USING_INFLUXDB": configuration.USING_INFLUXDB,
+        "INFLUXDB_URL": configuration.INFLUXDB_URL,
+        "INFLUXDB_TOKEN": configuration.INFLUXDB_TOKEN,
+        "INFLUXDB_ORG": configuration.INFLUXDB_ORG
     })
 
 while True:

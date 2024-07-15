@@ -9,4 +9,4 @@ RUN apt update \
     && useradd -m -s /usr/bin/bash ${USER} \
     && echo "${USER} ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/${USER} \
     && chmod 0440 /etc/sudoers.d/${USER} \
-    && pip install --no-cache-dir requests pyModbusTCP wallbox
+    && pip install --no-cache-dir requests pyModbusTCP wallbox influxdb-client
