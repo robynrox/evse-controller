@@ -51,12 +51,16 @@ class PowerMonitorShelly(PowerMonitorInterface):
 
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
-            r = requests.get(self.ENDPOINT)
-            reqJson = r.json()
-            self.powerCh0 = reqJson["emeters"][0]["power"]
-            self.pfCh0 = reqJson["emeters"][0]["pf"]
-            self.powerCh1 = r.json()["emeters"][1]["power"]
-            self.pfCh1 = reqJson["emeters"][1]["pf"]
-            self.voltage = reqJson["emeters"][0]["voltage"]
-            self.lastUpdate = time.time()
+            try:
+                r = requests.get(self.ENDPOINT, timeout=0.5)
+                r.raise_for_status()
+                reqJson = r.json()
+                self.powerCh0 = reqJson["emeters"][0]["power"]
+                self.pfCh0 = reqJson["emeters"][0]["pf"]
+                self.powerCh1 = r.json()["emeters"][1]["power"]
+                self.pfCh1 = reqJson["emeters"][1]["pf"]
+                self.voltage = reqJson["emeters"][0]["voltage"]
+                self.lastUpdate = time.time()
+            except requests.exceptions.RequestException as e:
+                print(f"PowerMonitorShelly RequestException: {e}")
         return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage)
