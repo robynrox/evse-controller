@@ -29,6 +29,15 @@ used for this is to be found here:
 
 This has been tested and seems to work well.
 
+I have also added logging to InfluxDB OSS version 2. This is the open-source variant and is documented here:
+
+* https://docs.influxdata.com/influxdb/v2/
+* https://docs.influxdata.com/influxdb/v2/install/?t=Linux for installation instructions if using Linux (also go to
+  that page for other operating systems as the instructions are also there)
+
+I do not believe it will work with version 1. If you just try `apt install influxdb`, it is likely that you will get
+version 1, so I would suggest installing as per the official instructions on the page above.
+
 ## How to use and develop
 
 This isn't yet designed for end-users, only for software engineers and the like. You need to know at least a little
@@ -41,6 +50,7 @@ install the following on your system:
 * Python 3.11.7
 * Use `pip install requests pyModbusTCP wallbox` to install using pip the required libraries (or install them however
   you like).
+* If you are using InfluxDB version 2, also use `pip install influxdb-client`. 
 
 IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
 changes.
