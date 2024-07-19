@@ -16,11 +16,12 @@ import sys
 # This example roughly does the following:
 #
 # Between 02:00 and 05:00, charge the car to at maximum rate
-# Between 16:00 and 19:00, discharge the car at maximum rate if SoC is greater than 10%, otherwise
+# Between 16:00 and 19:00, discharge the car at maximum rate if SoC is greater than 31%, otherwise
 #   only discharge to match home power demand.
-# At other times, if SoC is high, charge or discharge to match home power production or consumption.
+# At other times, if SoC is higher than 80%, charge or discharge to match home power production or consumption.
 #   If SoC is medium, charge to match home power production but do not discharge.
-#   If SoC is low, charge at maximum rate.
+#   If SoC is lower than 31%, charge at maximum rate.
+# (Note that the Wallbox Quasar does not report a SoC% of 30% - it skips that number; it goes from 29% to 31% or 31% to 29%.)
 
 pauseState = 0
 
@@ -64,46 +65,16 @@ while True:
         evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
         evseController.setMinMaxCurrent(3, 3)
     elif (now.tm_hour >= 16 and now.tm_hour < 19):
-        if (evse.getBatteryChargeLevel() <= 10):
+        if (evse.getBatteryChargeLevel() < 31):
             evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-            evseController.setMinMaxCurrent(-16, -3)
         else:
             evseController.setControlState(ControlState.FULL_DISCHARGE)
-    elif (evse.getBatteryChargeLevel() <= 30):
+    elif (evse.getBatteryChargeLevel() < 31):
         evseController.setControlState(ControlState.FULL_CHARGE)
     elif (now.tm_hour >= 2 and now.tm_hour < 5):
         evseController.setControlState(ControlState.FULL_CHARGE)
-    elif (now.tm_hour >= 5 and now.tm_hour < 13):
-        if (evse.getBatteryChargeLevel() >= 72):
-            evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-        else:
-            evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-    elif now.tm_hour == 13:
-        if (evse.getBatteryChargeLevel() <= 53):
-            evseController.setControlState(ControlState.FULL_CHARGE)
-        else:
-            if (evse.getBatteryChargeLevel() >= 90):
-                evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-            else:
-                evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-    elif now.tm_hour == 14:
-        if (evse.getBatteryChargeLevel() <= 58):
-            evseController.setControlState(ControlState.FULL_CHARGE)
-        else:
-            if (evse.getBatteryChargeLevel() >= 90):
-                evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-            else:
-                evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-    elif now.tm_hour == 15:
-        if (evse.getBatteryChargeLevel() <= 63):
-            evseController.setControlState(ControlState.FULL_CHARGE)
-        else:
-            if (evse.getBatteryChargeLevel() >= 90):
-                evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-            else:
-                evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
     else:
-        if (evse.getBatteryChargeLevel() >= 50):
+        if (evse.getBatteryChargeLevel() >= 80):
             evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
         else:
             evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
