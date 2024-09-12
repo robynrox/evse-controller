@@ -47,10 +47,13 @@ Configuration files are provided to spin up a [dev container](https://code.visua
 that contains the dependencies required to develop, test and run this in a Docker container. Alternatively, you can
 install the following on your system:
 
-* Python 3.11.7
-* Use `pip install requests pyModbusTCP wallbox` to install using pip the required libraries (or install them however
-  you like).
-* If you are using InfluxDB version 2, also use `pip install influxdb-client`. 
+* Python 3.11.7 / 3.12.3
+* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment for python at the root path
+  of this repository (i.e. the directory that contains this README file). The dot at the end of the command is required and
+  the spaces are important.
+* Use `bin/pip install requests pyModbusTCP wallbox` to install using pip the required libraries into the virtual
+  environment.
+* If you are using InfluxDB version 2, also use `bin/pip install influxdb-client`. 
 
 IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
 changes.
@@ -66,9 +69,9 @@ The following samples are provided:
 
 To get this running after setting up the configuration file, you would run commands such as:
 
-* `python3 flux.py` or `python flux.py` (whichever works for you but you must use python 3)
-* `python[3] flux.py -?` will show a brief help page
-* `python[3] flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
+* `bin/python flux.py` or `python flux.py` (whichever works for you but you must use python 3)
+* `bin/python flux.py -?` will show a brief help page
+* `bin/python flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
   before anything else is done which is useful for disconnecting your vehicle before going on a journey.
 
 ## Roadmap
