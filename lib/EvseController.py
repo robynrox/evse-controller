@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum
 import math
+import time
 from lib.EvseInterface import EvseInterface, EvseState
 
 from lib.PowerMonitorInterface import PowerMonitorInterface
@@ -35,7 +36,6 @@ class EvseController:
         self.evse = evse
         self.MIN_CURRENT = 3
         self.MAX_CURRENT = 16
-        self.ignoreSeconds = 0
         self.evseCurrent = 0
         self.minCurrent = 0
         self.maxCurrent = 0
@@ -93,9 +93,9 @@ class EvseController:
                 # Allow up to an hour for the EVSE to restart without trying to restart again
                 self.connectionErrors = -3600
 
-        if self.ignoreSeconds > 0:
-            logMsg += f"IGNORE:{self.ignoreSeconds} "
-            self.ignoreSeconds -= 1
+        nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
+        if nextWriteAllowed > 0:
+            logMsg += f"NextChgIn:{nextWriteAllowed}s "
             log(logMsg)
             return
 
@@ -112,7 +112,6 @@ class EvseController:
         if resetState:
             log(f"INFO Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
             self.evse.setChargingCurrent(desiredEvseCurrent)
-            self.ignoreSeconds = self.evse.getGuardTime()
             self.evseCurrent = desiredEvseCurrent
 
     def setControlState(self, state: ControlState):

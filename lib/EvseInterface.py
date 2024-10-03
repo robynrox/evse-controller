@@ -22,7 +22,11 @@ class EvseInterface(ABC):
         pass
 
     @abstractmethod
-    def getGuardTime(self) -> int:
+    def getWriteNextAllowed(self) -> float:
+        pass
+
+    @abstractmethod
+    def getReadNextAllowed(self) -> float:
         pass
 
     @abstractmethod
