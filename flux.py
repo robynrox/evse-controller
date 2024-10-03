@@ -59,7 +59,7 @@ while True:
     now = time.localtime()
     if (time.time() < pauseState):
         seconds = math.ceil(pauseState - time.time())
-        evseController.writeLog(f"INFO Pausing for {seconds} s")
+        evseController.writeLog(f"INFO Pausing for {seconds}s")
         evseController.setControlState(ControlState.DORMANT)
     elif evse.getBatteryChargeLevel() == -1:
         evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
@@ -67,6 +67,7 @@ while True:
     elif (now.tm_hour >= 16 and now.tm_hour < 19):
         if (evse.getBatteryChargeLevel() < 31):
             evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+            evseController.setMinMaxCurrent(-16, -3)
         else:
             evseController.setControlState(ControlState.FULL_DISCHARGE)
     elif (evse.getBatteryChargeLevel() < 31):
