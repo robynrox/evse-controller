@@ -62,14 +62,14 @@ class EvseController:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
-        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.solarWatts} pf {power.solarPf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
+        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
         if self.configuration.get("USING_INFLUXDB", False) == True:
             point = (
                 influxdb_client.Point("measurement")
                 .field("grid", powerWithEvse)
                 .field("grid_pf", power.gridPf)
-                .field("evse", power.solarWatts)
-                .field("evse_pf", power.solarPf)
+                .field("evse", power.evseWatts)
+                .field("evse_pf", power.evsePf)
                 .field("voltage", power.voltage)
                 .field("evseTargetCurrent", self.evseCurrent)
                 .field("evseDesiredCurrent", desiredEvseCurrent)

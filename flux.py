@@ -74,6 +74,19 @@ while True:
         evseController.setControlState(ControlState.FULL_CHARGE)
     elif (now.tm_hour >= 2 and now.tm_hour < 5):
         evseController.setControlState(ControlState.FULL_CHARGE)
+    # Included as an example of using an Octopus "all-you-can-eat electricity" hour
+    # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
+    # in the now object.
+    elif (now.tm_year == 2024 and now.tm_mon == 9 and now.tm_mday == 14 and now.tm_hour >= 5 and now.tm_hour < 14):
+        # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
+        # for a 32A controller you may want to substitute around 83%)
+        if (now.tm_hour < 13):
+            if (evse.getBatteryChargeLevel() > 90):
+                evseController.setControlState(ControlState.FULL_DISCHARGE)
+            else:
+                evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+        elif (now.tm_hour == 13):
+            evseController.setControlState(ControlState.FULL_CHARGE)
     else:
         if (evse.getBatteryChargeLevel() >= 80):
             evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)

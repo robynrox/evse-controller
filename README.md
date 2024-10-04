@@ -10,10 +10,10 @@ I have completed some library routines declaring the interfaces used for control
 monitors and I have implemented these for the following devices:
 
 * [Wallbox Quasar](https://wallbox.com/en_ca/quasar-dc-charger) for EV charging and discharging (V2G)
-* [Shelly EM](https://shellystore.co.uk/product/shelly-em/) for energy monitoring enabling solar energy capture (S2V)
-  and load following (V2H); here it is assumed that grid power is monitored through channel 0 and solar power through
-  channel 1, but nothing is done with the solar power measurement other than reporting it. It may be more useful to
-  monitor EVSE power through this channel.
+* [Shelly EM](https://shellystore.co.uk/product/shelly-em/) for energy monitoring enabling solar energy capture (like S2V)
+  and load following (like V2H); here it is assumed that grid power is monitored through channel 0 and EVSE power through
+  channel 1. The EVSE channel is only used for monitoring and reporting and could be substituted with the solar power, for
+  example.
 
 I have also started work on a basic scheduler example and a basic load follower (for doing V2G and S2V) which can be
 seen in files Scheduler.py and LoadFollower.py respectively.
@@ -78,18 +78,20 @@ To get this running after setting up the configuration file, you would run comma
 
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
   the Shelly (complete)
-* Add a user interface allowing for rapid termination of any current EV charging or discharging session (will probably
-  use Python's own tkinter for this - not started)
+* Add a user interface allowing for rapid termination of any current EV charging or discharging session (HTML seems to
+  be the obvious way to go)
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
   of the library routines)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
   (flux.py shows an example of this but this wants putting into a proper UI)
+* I'm trying to attach greater importance to bug-fixing; it's more important for it to be solid than look pretty.
 
 The above is an ideal and some of it is sure to be done out of order!
 
 ## Explanatory video
 
 I have produced a video that explains my setup, how I use the system, and goes into some detail regarding the flux.py
-scheduler. Note that it is long at 66 minutes! You can find that here:
+scheduler. Note that it is long at 66 minutes! It is somewhat outdated now, but most of it still applies. You can find
+that here:
 
 * https://youtu.be/4bIpY-AyUUw
