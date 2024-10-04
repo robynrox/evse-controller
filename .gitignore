@@ -2,3 +2,6 @@ __pycache__
 log
 bin
 lib/python*
+pyvenv.cfg
+lib64
+influxdata-archive_compat.key
