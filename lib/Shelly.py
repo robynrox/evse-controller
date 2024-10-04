@@ -47,10 +47,16 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.pfCh1 = 0
         self.voltage = 0
         self.lastUpdate = 0
+        self.unixtime = -1
+        self.posEnergyJoulesCh0 = 0
+        self.negEnergyJoulesCh0 = 0
+        self.posEnergyJoulesCh1 = 0
+        self.negEnergyJoulesCh1 = 0
         self.getPowerLevels()
 
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
+            lastUnixtime = self.unixtime
             try:
                 r = requests.get(self.ENDPOINT, timeout=0.1)
                 r.raise_for_status()
@@ -60,6 +66,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.powerCh1 = r.json()["emeters"][1]["power"]
                 self.pfCh1 = reqJson["emeters"][1]["pf"]
                 self.voltage = reqJson["emeters"][0]["voltage"]
+                self.unixtime = reqJson["unixtime"]
                 self.lastUpdate = time.time()
             except requests.exceptions.RequestException as e:
                 # second try
@@ -72,6 +79,15 @@ class PowerMonitorShelly(PowerMonitorInterface):
                     self.powerCh1 = r.json()["emeters"][1]["power"]
                     self.pfCh1 = reqJson["emeters"][1]["pf"]
                     self.voltage = reqJson["emeters"][0]["voltage"]
+                    self.unixtime = reqJson["unixtime"]
                 except requests.exceptions.RequestException as e:
                     print(f"PowerMonitorShelly second try RequestException: {e}")
-        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage)
+            if (self.powerCh0 < 0):
+                self.negEnergyJoulesCh0 -= self.powerCh0 * (self.unixtime - lastUnixtime)
+            else:
+                self.posEnergyJoulesCh0 += self.powerCh0 * (self.unixtime - lastUnixtime)
+            if (self.powerCh1 < 0):
+                self.negEnergyJoulesCh1 -= self.powerCh1 * (self.unixtime - lastUnixtime)
+            else:
+                self.posEnergyJoulesCh1 += self.powerCh1 * (self.unixtime - lastUnixtime)
+        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage, self.unixtime, self.posEnergyJoulesCh0, self.negEnergyJoulesCh0, self.posEnergyJoulesCh1, self.negEnergyJoulesCh1)

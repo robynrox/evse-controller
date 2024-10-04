@@ -24,9 +24,13 @@ import sys
 # (Note that the Wallbox Quasar does not report a SoC% of 30% - it skips that number; it goes from 29% to 31% or 31% to 29%.)
 
 pauseState = 0
+chargeState = 0
+dischargeState = 0
 
 def checkCommandLineArguments():
     global pauseState
+    global chargeState
+    global dischargeState
     # Check if there are more than one elements in sys.argv
     if len(sys.argv) > 1:
         # Iterate over all arguments except the script name (sys.argv[0])
@@ -36,10 +40,16 @@ def checkCommandLineArguments():
                     print("Usage: python3 flux.py [-p|--pause]")
                     print("  -h|--help|-?   Print this help message and exit.")
                     print("  -p|--pause     Do not charge or discharge for ten minutes, then resume normal operation.")
+                    print("  -c|--charge    Charge for one hour at full power, then resume normal operation.")
+                    print("  -d|--discharge Discharge for one hour at full power, then resume normal operation.")
                     print("  Control the Wallbox Quasar EVSE based on the Octopus Flux tariff.")
                     sys.exit(0)
                 case "-p" | "--pause":
                     pauseState = time.time() + 600
+                case "-c" | "--charge":
+                    chargeState = time.time() + 3600
+                case "-d" | "--discharge":
+                    dischargeState = time.time() + 3600
 
 checkCommandLineArguments()
 
@@ -61,6 +71,14 @@ while True:
         seconds = math.ceil(pauseState - time.time())
         evseController.writeLog(f"INFO Pausing for {seconds}s")
         evseController.setControlState(ControlState.DORMANT)
+    elif (time.time() < chargeState):
+        seconds = math.ceil(chargeState - time.time())
+        evseController.writeLog(f"INFO Charging for {seconds}s")
+        evseController.setControlState(ControlState.FULL_CHARGE)
+    elif (time.time() < dischargeState):
+        seconds = math.ceil(dischargeState - time.time())
+        evseController.writeLog(f"INFO Discharging for {seconds}s")
+        evseController.setControlState(ControlState.FULL_DISCHARGE)
     elif evse.getBatteryChargeLevel() == -1:
         evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
         evseController.setMinMaxCurrent(3, 3)

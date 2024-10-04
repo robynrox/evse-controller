@@ -44,6 +44,8 @@ class EvseController:
         self.thread.start()
         self.thread.attach(self)
         self.connectionErrors = 0
+        self.batteryChargeLevel = -1
+        self.powerAtBatteryChargeLevel = None
         if self.configuration.get("USING_INFLUXDB", False) == True:
             self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"], token=self.configuration["INFLUXDB_TOKEN"], org=self.configuration["INFLUXDB_ORG"])
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
@@ -62,7 +64,15 @@ class EvseController:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
-        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{self.evse.getBatteryChargeLevel()} "
+        updateBatteryChargeLevel = self.evse.getBatteryChargeLevel()
+        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
+        if updateBatteryChargeLevel != self.batteryChargeLevel:
+            self.batteryChargeLevel = updateBatteryChargeLevel
+            if self.powerAtBatteryChargeLevel != None:
+                logMsg += f"posEnergyInJoulesEVSE:{power.posEnergyJoulesCh1 - self.powerAtBatteryChargeLevel.posEnergyJoulesCh1} negEnergyInJoulesEVSE:{power.negEnergyJoulesCh1 - self.powerAtBatteryChargeLevel.negEnergyJoulesCh1} time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s "
+            else:
+                logMsg += "Storing energy values "
+            self.powerAtBatteryChargeLevel = power
         if self.configuration.get("USING_INFLUXDB", False) == True:
             point = (
                 influxdb_client.Point("measurement")
