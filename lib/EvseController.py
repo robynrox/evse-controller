@@ -52,8 +52,10 @@ class EvseController:
         log("INFO EvseController started")
     
     def update(self, power):
-        powerWithEvse = round(self.evse.calcGridPower(power), 2)
-        desiredEvseCurrent = self.evseCurrent - round(powerWithEvse / power.voltage)
+        # If not using the EVSE channel with the Shelly then substitute the following code:
+        # self.evseCurrent = self.evse.getEvseCurrent()
+        self.evseCurrent = round(power.evseWatts / power.voltage)
+        desiredEvseCurrent = self.evseCurrent - round(power.gridWatts / power.voltage)
         if desiredEvseCurrent < self.minCurrent:
             desiredEvseCurrent = self.minCurrent
         elif desiredEvseCurrent > self.maxCurrent:
@@ -65,7 +67,7 @@ class EvseController:
         elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
             desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
         updateBatteryChargeLevel = self.evse.getBatteryChargeLevel()
-        logMsg = f"DEBUG G:{powerWithEvse} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
+        logMsg = f"DEBUG G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
         if updateBatteryChargeLevel != self.batteryChargeLevel:
             self.batteryChargeLevel = updateBatteryChargeLevel
             if self.powerAtBatteryChargeLevel != None:
@@ -76,7 +78,7 @@ class EvseController:
         if self.configuration.get("USING_INFLUXDB", False) == True:
             point = (
                 influxdb_client.Point("measurement")
-                .field("grid", powerWithEvse)
+                .field("grid", power.gridWatts)
                 .field("grid_pf", power.gridPf)
                 .field("evse", power.evseWatts)
                 .field("evse_pf", power.evsePf)

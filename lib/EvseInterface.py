@@ -38,11 +38,11 @@ class EvseInterface(ABC):
         pass
 
     @abstractmethod
-    def getBatteryChargeLevel(self) -> int:
+    def getEvseCurrent(self) -> int:
         pass
 
     @abstractmethod
-    def calcGridPower(self, power: Power) -> float:
+    def getBatteryChargeLevel(self) -> int:
         pass
 
     @abstractmethod
