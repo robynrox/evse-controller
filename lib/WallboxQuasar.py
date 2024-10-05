@@ -92,11 +92,17 @@ class EvseWallboxQuasar(EvseInterface):
             return self.lastEvseState
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
+            self.current = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)[0]
             self.client.close()
             self.lastEvseState = EvseState(regs[0])
+            if self.lastEvseState == EvseState.PAUSED:
+                self.current = 0
             return self.lastEvseState
         except:
             raise ConnectionError("Could not read EVSE state")
+        
+    def getEvseCurrent(self) -> int:
+        return self.current
 
     def getBatteryChargeLevel(self) -> int:
         if (time.time() < self.readNextAllowed):
@@ -110,9 +116,6 @@ class EvseWallboxQuasar(EvseInterface):
             return self.battery_charge_level
         except:
             return self.battery_charge_level
-
-    def calcGridPower(self, power: Power) -> float:
-        return power.gridWatts
 
     def resetViaWebApi(self, username: str, password: str, charger: int):
         wallbox = Wallbox(username, password)
