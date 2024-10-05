@@ -113,14 +113,21 @@ class EvseController:
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:
             resetState = True
-        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent != 0:
+        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
             resetState = True
+            if self.evse.isFull():
+                desiredEvseCurrent = 0
+        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
+            resetState = True
+            if self.evse.isEmpty():
+                desiredEvseCurrent = 0
         if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
             resetState = True
         if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
             resetState = True
         if resetState:
-            log(f"INFO Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+            if (self.evseCurrent != desiredEvseCurrent):
+                log(f"INFO Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
             self.evse.setChargingCurrent(desiredEvseCurrent)
             self.evseCurrent = desiredEvseCurrent
 
