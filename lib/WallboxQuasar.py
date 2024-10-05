@@ -30,13 +30,14 @@ class EvseWallboxQuasar(EvseInterface):
             self.stopCharging()
             return
         if (self.battery_charge_level >= self.MAX_CHARGE_PERCENT and current > 0):
-            if (self.lastEvseState == EvseState.CHARGING):
+            if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
                 print(f"Cannot charge past {self.MAX_CHARGE_PERCENT}%, not charging")
                 self.stopCharging()
             return
         if (self.battery_charge_level <= self.MIN_CHARGE_PERCENT and current < 0):
-            print(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
-            self.stopCharging()
+            if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
+                print(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
+                self.stopCharging()
             return
         print(f"Setting charging current to {current}A")
         # Take control
