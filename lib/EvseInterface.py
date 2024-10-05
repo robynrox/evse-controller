@@ -44,3 +44,11 @@ class EvseInterface(ABC):
     @abstractmethod
     def calcGridPower(self, power: Power) -> float:
         pass
+
+    @abstractmethod
+    def isFull(self) -> bool:
+        pass
+
+    @abstractmethod
+    def isEmpty(self) -> bool:
+        pass
