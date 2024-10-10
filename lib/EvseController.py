@@ -15,11 +15,22 @@ except ImportError:
     pass
 
 class ControlState(Enum):
+    # The EVSE will not charge or discharge the vehicle in DORMANT state (obviously).
     DORMANT = 0
-    FULL_CHARGE = 1
-    FULL_DISCHARGE = 2
+    # The EVSE will charge the vehicle and follow the grid load between the ranges specified.
+    # If the load moves out of range, target current will be set to the minimum or maximum as appropriate.
+    CHARGE = 1
+    # The EVSE will discharge the vehicle similar to the CHARGE state.
+    DISCHARGE = 2
+    # The EVSE will charge the vehicle and follow the grid load between the ranges specified.
+    # If the load goes too high, target current will be set to the maximum.
+    # If the load goes too low, charging will be stopped.
     LOAD_FOLLOW_CHARGE = 3
+    # The EVSE will discharge the vehicle similar to the LOAD_FOLLOW_CHARGE state.
     LOAD_FOLLOW_DISCHARGE = 4
+    # This is like a combination of LOAD_FOLLOW_CHARGE and LOAD_FOLLOW_DISCHARGE.
+    # If the load goes too high in either direction, target current will be set to the maximum.
+    # If the load goes too low in either direction, charging will be stopped.
     LOAD_FOLLOW_BIDIRECTIONAL = 5
 
 def log(msg):
@@ -34,11 +45,17 @@ class EvseController:
     def __init__(self, pmon: PowerMonitorInterface, evse: EvseInterface, configuration):
         self.pmon = pmon
         self.evse = evse
+        # Minimum current in either direction
         self.MIN_CURRENT = 3
-        self.MAX_CURRENT = 16
+        # Maximum charging current
+        self.MAX_CHARGE_CURRENT = 14
+        # Maximum discharging current
+        self.MAX_DISCHARGE_CURRENT = 15
         self.evseCurrent = 0
-        self.minCurrent = 0
-        self.maxCurrent = 0
+        self.minDischargeCurrent = 0
+        self.maxDischargeCurrent = 0
+        self.minChargeCurrent = 0
+        self.maxChargeCurrent = 0
         self.configuration = configuration
         self.thread = PowerMonitorPollingThread(pmon)
         self.thread.start()
@@ -46,34 +63,70 @@ class EvseController:
         self.connectionErrors = 0
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None
+        self.powerAtLastHalfHourlyLog = None
+        self.nextHalfHourlyLog = 0
+        self.state = ControlState.DORMANT
         if self.configuration.get("USING_INFLUXDB", False) == True:
             self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"], token=self.configuration["INFLUXDB_TOKEN"], org=self.configuration["INFLUXDB_ORG"])
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
         log("INFO EvseController started")
-    
+
+    def calculateTargetCurrent(self, evseSetpointCurrent, power):
+        # If using the setpoint current, set evseMeasuredCurrent to the setpoint current
+        # instead of using the measurement below.
+        evseMeasuredCurrent = round(power.evseWatts / power.voltage)
+        desiredEvseCurrent = evseMeasuredCurrent - round(power.gridWatts / power.voltage)
+        match self.state:
+            case ControlState.LOAD_FOLLOW_CHARGE:
+                if (desiredEvseCurrent < self.minChargeCurrent):
+                    desiredEvseCurrent = 0
+                elif (desiredEvseCurrent > self.maxChargeCurrent):
+                    desiredEvseCurrent = self.maxChargeCurrent
+            case ControlState.LOAD_FOLLOW_DISCHARGE:
+                if (-desiredEvseCurrent < self.minDischargeCurrent):
+                    desiredEvseCurrent = 0
+                elif (-desiredEvseCurrent < self.maxDischargeCurrent):
+                    desiredEvseCurrent = -self.maxDischargeCurrent
+            case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
+                if (-self.minDischargeCurrent < desiredEvseCurrent < self.minChargeCurrent):
+                    desiredEvseCurrent = 0
+                elif (-desiredEvseCurrent > self.maxDischargeCurrent):
+                    desiredEvseCurrent = -self.maxDischargeCurrent
+                elif (desiredEvseCurrent > self.maxChargeCurrent):
+                    desiredEvseCurrent = self.maxChargeCurrent
+            case ControlState.CHARGE:
+                if (desiredEvseCurrent < self.minChargeCurrent):
+                    desiredEvseCurrent = self.minChargeCurrent
+                elif (desiredEvseCurrent > self.maxChargeCurrent):
+                    desiredEvseCurrent = self.maxChargeCurrent
+            case ControlState.DISCHARGE:
+                if (-desiredEvseCurrent < self.minDischargeCurrent):
+                    desiredEvseCurrent = -self.minDischargeCurrent
+                elif (-desiredEvseCurrent < self.maxDischargeCurrent):
+                    desiredEvseCurrent = -self.maxDischargeCurrent
+            case ControlState.DORMANT:
+                desiredEvseCurrent = 0
+        return desiredEvseCurrent
+
     def update(self, power):
-        # If not using the EVSE channel with the Shelly then substitute the following code:
-        # self.evseCurrent = self.evse.getEvseCurrent()
-        self.evseCurrent = round(power.evseWatts / power.voltage)
-        desiredEvseCurrent = self.evseCurrent - round(power.gridWatts / power.voltage)
-        if desiredEvseCurrent < self.minCurrent:
-            desiredEvseCurrent = self.minCurrent
-        elif desiredEvseCurrent > self.maxCurrent:
-            desiredEvseCurrent = self.maxCurrent
-        if abs(desiredEvseCurrent) < self.MIN_CURRENT - 0.5:
-            desiredEvseCurrent = 0
-        elif abs(desiredEvseCurrent) < self.MIN_CURRENT:
-            desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MIN_CURRENT)
-        elif abs(desiredEvseCurrent) > self.MAX_CURRENT:
-            desiredEvseCurrent = int(math.copysign(1, desiredEvseCurrent) * self.MAX_CURRENT)
+        if (time.time() >= self.nextHalfHourlyLog):
+            self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
+            log(f"ENERGY {power.getAccumulatedEnergy()}")
+            if (self.powerAtLastHalfHourlyLog != None):
+                log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
+            self.powerAtLastHalfHourlyLog = power
+
+        # The code assumes that it is measuring power to the EVSE.
+        # If that's not the case, the setpoint current should be used.
+        evseSetpointCurrent = self.evse.getEvseCurrent()
+        desiredEvseCurrent = self.calculateTargetCurrent(evseSetpointCurrent, power)
+
         updateBatteryChargeLevel = self.evse.getBatteryChargeLevel()
-        logMsg = f"DEBUG G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(desired):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
+        logMsg = f"STATE G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
         if updateBatteryChargeLevel != self.batteryChargeLevel:
             self.batteryChargeLevel = updateBatteryChargeLevel
             if self.powerAtBatteryChargeLevel != None:
-                logMsg += f"posEnergyInJoulesEVSE:{power.posEnergyJoulesCh1 - self.powerAtBatteryChargeLevel.posEnergyJoulesCh1} negEnergyInJoulesEVSE:{power.negEnergyJoulesCh1 - self.powerAtBatteryChargeLevel.negEnergyJoulesCh1} time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s "
-            else:
-                logMsg += "Storing energy values "
+                log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}")
             self.powerAtBatteryChargeLevel = power
         if self.configuration.get("USING_INFLUXDB", False) == True:
             point = (
@@ -129,36 +182,46 @@ class EvseController:
             resetState = True
         if resetState:
             if (self.evseCurrent != desiredEvseCurrent):
-                log(f"INFO Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+                log(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
             self.evse.setChargingCurrent(desiredEvseCurrent)
             self.evseCurrent = desiredEvseCurrent
 
     def setControlState(self, state: ControlState):
+        self.state = state
         match state:
             case ControlState.DORMANT:
-                self.minCurrent = 0
-                self.maxCurrent = 0
-            case ControlState.FULL_CHARGE:
-                self.minCurrent = self.MAX_CURRENT
-                self.maxCurrent = self.MAX_CURRENT
-            case ControlState.FULL_DISCHARGE:
-                self.minCurrent = -self.MAX_CURRENT
-                self.maxCurrent = -self.MAX_CURRENT
+                self.minDischargeCurrent = 0
+                self.maxDischargeCurrent = 0
+                self.minChargeCurrent = 0
+                self.maxChargeCurrent = 0
+            case ControlState.CHARGE:
+                self.minChargeCurrent = self.MAX_CHARGE_CURRENT
+                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+            case ControlState.DISCHARGE:
+                self.minDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
             case ControlState.LOAD_FOLLOW_CHARGE:
-                self.minCurrent = 0
-                self.maxCurrent = self.MAX_CURRENT
+                self.minChargeCurrent = 0
+                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
             case ControlState.LOAD_FOLLOW_DISCHARGE:
-                self.minCurrent = -self.MAX_CURRENT
-                self.maxCurrent = 0
+                self.minDischargeCurrent = 0
+                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
-                self.minCurrent = -self.MAX_CURRENT
-                self.maxCurrent = self.MAX_CURRENT
-        log(f"INFO Setting control state to {state}: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
+                self.minChargeCurrent = 0
+                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                self.minDischargeCurrent = 0
+                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+        log(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
-    def setMinMaxCurrent(self, minCurrent, maxCurrent):
-        self.minCurrent = minCurrent;
-        self.maxCurrent = maxCurrent;
-        log(f"INFO Setting current levels: minCurrent: {self.minCurrent}, maxCurrent: {self.maxCurrent}")
+    def setDischargeCurrentRange(self, minCurrent, maxCurrent):
+        self.minDischargeCurrent = minCurrent
+        self.maxDischargeCurrent = maxCurrent
+        log(f"CONTROL Setting discharge current range: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}")
+
+    def setChargeCurrentRange(self, minCurrent, maxCurrent):
+        self.minChargeCurrent = minCurrent
+        self.maxChargeCurrent = maxCurrent
+        log(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def writeLog(self, logString):
         log(logString)
