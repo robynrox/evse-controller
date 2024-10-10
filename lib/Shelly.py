@@ -82,6 +82,8 @@ class PowerMonitorShelly(PowerMonitorInterface):
                     self.unixtime = reqJson["unixtime"]
                 except requests.exceptions.RequestException as e:
                     print(f"PowerMonitorShelly second try RequestException: {e}")
+            if (lastUnixtime == -1):
+                lastUnixtime = self.unixtime
             if (self.powerCh0 < 0):
                 self.negEnergyJoulesCh0 -= self.powerCh0 * (self.unixtime - lastUnixtime)
             else:

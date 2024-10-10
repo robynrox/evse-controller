@@ -1,3 +1,4 @@
+from enum import Enum
 from lib.EvseController import ControlState, EvseController
 from lib.EvseInterface import EvseState
 from lib.WallboxQuasar import EvseWallboxQuasar
@@ -6,6 +7,8 @@ import time
 import configuration
 import math
 import sys
+import threading
+import queue
 
 # This is a simple scheduler designed to work with the Octopus Flux tariff.
 #
@@ -23,14 +26,39 @@ import sys
 #   If SoC is lower than 31%, charge at maximum rate.
 # (Note that the Wallbox Quasar does not report a SoC% of 30% - it skips that number; it goes from 29% to 31% or 31% to 29%.)
 
-pauseState = 0
-chargeState = 0
-dischargeState = 0
+nextFluxState = 0
+execQueue = queue.SimpleQueue()
+class ExecState(Enum):
+    FLUX = 0
+    CHARGE_THEN_FLUX = 1
+    DISCHARGE_THEN_FLUX = 2
+    PAUSE_THEN_FLUX = 3
+    FIXED = 4
+
+# Default state
+execState = ExecState.FLUX
+
+class InputParser(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+    
+    def run(self):
+        global execQueue
+        while True:
+            try:
+                execQueue.put(input())
+            except EOFError:
+                print("Standard input closed, exiting monitoring thread")
+                break
+            except Exception as e:
+                print(f"Exception raised: {e}")
+
+inputThread = InputParser()
+inputThread.start()
 
 def checkCommandLineArguments():
-    global pauseState
-    global chargeState
-    global dischargeState
+    global nextFluxState
+    global execState
     # Check if there are more than one elements in sys.argv
     if len(sys.argv) > 1:
         # Iterate over all arguments except the script name (sys.argv[0])
@@ -45,11 +73,14 @@ def checkCommandLineArguments():
                     print("  Control the Wallbox Quasar EVSE based on the Octopus Flux tariff.")
                     sys.exit(0)
                 case "-p" | "--pause":
-                    pauseState = time.time() + 600
+                    nextFluxState = time.time() + 600
+                    execState = ExecState.PAUSE_THEN_FLUX
                 case "-c" | "--charge":
-                    chargeState = time.time() + 3600
+                    nextFluxState = time.time() + 3600
+                    execState = ExecState.CHARGE_THEN_FLUX
                 case "-d" | "--discharge":
-                    dischargeState = time.time() + 3600
+                    nextFluxState = time.time() + 3600
+                    execState = ExecState.DISCHARGE_THEN_FLUX
 
 checkCommandLineArguments()
 
@@ -65,49 +96,104 @@ evseController = EvseController(powerMonitor, evse, {
         "INFLUXDB_ORG": configuration.INFLUXDB_ORG
     })
 
+nextStateCheck = 0
+
 while True:
+    try:
+        dequeue = execQueue.get(True, 1)
+        match dequeue:
+            case "p" | "pause":
+                print("Entering pause state for ten minutes")
+                nextFluxState = time.time() + 600
+                execState = ExecState.PAUSE_THEN_FLUX
+                nextStateCheck = time.time()
+            case "c" | "charge":
+                print("Entering charge state for one hour")
+                nextFluxState = time.time() + 3600
+                execState = ExecState.CHARGE_THEN_FLUX
+                nextStateCheck = time.time()
+            case "d" | "discharge":
+                print("Entering discharge state for one hour")
+                nextFluxState = time.time() + 3600
+                execState = ExecState.DISCHARGE_THEN_FLUX
+                nextStateCheck = time.time()
+            case "f" | "flux":
+                print("Entering flux state")
+                execState = ExecState.FLUX
+                nextStateCheck = time.time()
+            case _:
+                try:
+                    currentAmps = int(dequeue)
+                    print(f"Setting current to {currentAmps}")
+                    if (currentAmps > 0):
+                        evseController.setControlState(ControlState.CHARGE)
+                        evseController.setMinMaxCurrent(currentAmps, currentAmps)
+                    elif currentAmps < 0:
+                        evseController.setControlState(ControlState.DISCHARGE)
+                        evseController.setMinMaxCurrent(currentAmps, currentAmps)
+                    else:
+                        evseController.setControlState(ControlState.DORMANT)
+                    execState = ExecState.FIXED
+                except ValueError:
+                    print("You can enter the following to change state:")
+                    print("p | pause: Enter pause state for ten minutes then enter flux state")
+                    print("c | charge: Enter full charge state for one hour then enter flux state")
+                    print("d | discharge: Enter full discharge state for one hour then enter flux state")
+                    print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
+                    print("           (current is expressed in Amps)")
+                    print("f | flux: Enter state optimised for the Octopus Flux tariff")
+    except queue.Empty:
+        pass
+
     now = time.localtime()
-    if (time.time() < pauseState):
-        seconds = math.ceil(pauseState - time.time())
-        evseController.writeLog(f"INFO Pausing for {seconds}s")
-        evseController.setControlState(ControlState.DORMANT)
-    elif (time.time() < chargeState):
-        seconds = math.ceil(chargeState - time.time())
-        evseController.writeLog(f"INFO Charging for {seconds}s")
-        evseController.setControlState(ControlState.FULL_CHARGE)
-    elif (time.time() < dischargeState):
-        seconds = math.ceil(dischargeState - time.time())
-        evseController.writeLog(f"INFO Discharging for {seconds}s")
-        evseController.setControlState(ControlState.FULL_DISCHARGE)
-    elif evse.getBatteryChargeLevel() == -1:
-        evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-        evseController.setMinMaxCurrent(3, 3)
-    elif (now.tm_hour >= 16 and now.tm_hour < 19):
-        if (evse.getBatteryChargeLevel() < 31):
-            evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-            evseController.setMinMaxCurrent(-16, -3)
-        else:
-            evseController.setControlState(ControlState.FULL_DISCHARGE)
-    elif (evse.getBatteryChargeLevel() < 31):
-        evseController.setControlState(ControlState.FULL_CHARGE)
-    elif (now.tm_hour >= 2 and now.tm_hour < 5):
-        evseController.setControlState(ControlState.FULL_CHARGE)
-    # Included as an example of using an Octopus "all-you-can-eat electricity" hour
-    # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
-    # in the now object.
-    elif (now.tm_year == 2024 and now.tm_mon == 9 and now.tm_mday == 14 and now.tm_hour >= 5 and now.tm_hour < 14):
-        # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
-        # for a 32A controller you may want to substitute around 83%)
-        if (now.tm_hour < 13):
-            if (evse.getBatteryChargeLevel() > 90):
-                evseController.setControlState(ControlState.FULL_DISCHARGE)
+    nowInSeconds = time.time()
+    if (nowInSeconds >= nextStateCheck):
+        nextStateCheck = math.ceil((nowInSeconds + 1) / 30) * 30
+        
+        if (execState == ExecState.PAUSE_THEN_FLUX or execState == ExecState.CHARGE_THEN_FLUX or execState == ExecState.DISCHARGE_THEN_FLUX):
+            seconds = math.ceil(nextFluxState - nowInSeconds)
+            if (seconds > 0):
+                evseController.writeLog(f"INFO {execState} for {seconds}s")
+                if (execState == ExecState.PAUSE_THEN_FLUX):
+                    evseController.setControlState(ControlState.DORMANT)
+                elif (execState == ExecState.CHARGE_THEN_FLUX):
+                    evseController.setControlState(ControlState.CHARGE)
+                elif (execState == ExecState.DISCHARGE_THEN_FLUX):
+                    evseController.setControlState(ControlState.DISCHARGE)
             else:
-                evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-        elif (now.tm_hour == 13):
-            evseController.setControlState(ControlState.FULL_CHARGE)
-    else:
-        if (evse.getBatteryChargeLevel() >= 80):
-            evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-        else:
-            evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-    time.sleep(60 - now.tm_sec)
+                execState = ExecState.FLUX
+        if (execState == ExecState.FLUX):
+            if evse.getBatteryChargeLevel() == -1:
+                evseController.setControlState(ControlState.CHARGE)
+                evseController.setChargeCurrentRange(3, 3)
+            elif (now.tm_hour >= 16 and now.tm_hour < 19):
+                if (evse.getBatteryChargeLevel() < 31):
+                    evseController.setControlState(ControlState.DISCHARGE)
+                    evseController.setDischargeCurrentRange(6, 16)
+                else:
+                    evseController.setControlState(ControlState.DISCHARGE)
+            elif (evse.getBatteryChargeLevel() < 31):
+                evseController.setControlState(ControlState.CHARGE)
+            elif (now.tm_hour >= 2 and now.tm_hour < 5):
+                evseController.setControlState(ControlState.CHARGE)
+            # Included as an example of using an Octopus "all-you-can-eat electricity" hour
+            # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
+            # in the now object.
+            elif (now.tm_year == 2024 and now.tm_mon == 9 and now.tm_mday == 14 and now.tm_hour >= 5 and now.tm_hour < 14):
+                # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
+                # for a 32A controller you may want to substitute around 83%)
+                if (now.tm_hour < 13):
+                    if (evse.getBatteryChargeLevel() > 90):
+                        evseController.setControlState(ControlState.DISCHARGE)
+                    else:
+                        evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+                elif (now.tm_hour == 13):
+                    evseController.setControlState(ControlState.CHARGE)
+            else:
+                if (evse.getBatteryChargeLevel() >= 80):
+                    evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
+                    evseController.setDischargeCurrentRange(6, 16)
+                    evseController.setChargeCurrentRange(6, 16)
+                else:
+                    evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
+                    evseController.setChargeCurrentRange(6, 16)

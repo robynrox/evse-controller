@@ -13,3 +13,17 @@ class Power:
     
     def __str__(self):
         return f"Grid: {self.gridWatts}W, pf {self.gridPf}; EVSE: {self.evseWatts}W, pf {self.evsePf}; Voltage: {self.voltage}V; unixtime {self.unixtime}"
+
+    def getAccumulatedEnergy(self):
+        posEnergyCh0 = round(self.posEnergyJoulesCh0 / 3600)
+        posEnergyCh1 = round(self.posEnergyJoulesCh1 / 3600)
+        negEnergyCh0 = round(self.negEnergyJoulesCh0 / 3600)
+        negEnergyCh1 = round(self.negEnergyJoulesCh1 / 3600)
+        return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
+
+    def getEnergyDelta(self, olderPower):
+        posEnergyCh0 = round((self.posEnergyJoulesCh0 - olderPower.posEnergyJoulesCh0) / 3600)
+        posEnergyCh1 = round((self.posEnergyJoulesCh1 - olderPower.posEnergyJoulesCh1) / 3600)
+        negEnergyCh0 = round((self.negEnergyJoulesCh0 - olderPower.negEnergyJoulesCh0) / 3600)
+        negEnergyCh1 = round((self.negEnergyJoulesCh1 - olderPower.negEnergyJoulesCh1) / 3600)
+        return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
