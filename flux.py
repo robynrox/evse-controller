@@ -153,7 +153,7 @@ while True:
         if (execState == ExecState.PAUSE_THEN_FLUX or execState == ExecState.CHARGE_THEN_FLUX or execState == ExecState.DISCHARGE_THEN_FLUX):
             seconds = math.ceil(nextFluxState - nowInSeconds)
             if (seconds > 0):
-                evseController.writeLog(f"INFO {execState} for {seconds}s")
+                evseController.writeLog(f"CONTROL {execState} for {seconds}s")
                 if (execState == ExecState.PAUSE_THEN_FLUX):
                     evseController.setControlState(ControlState.DORMANT)
                 elif (execState == ExecState.CHARGE_THEN_FLUX):
@@ -164,36 +164,47 @@ while True:
                 execState = ExecState.FLUX
         if (execState == ExecState.FLUX):
             if evse.getBatteryChargeLevel() == -1:
+                evseController.writeLog("FLUX SoC unknown, charge at 3A until known")
                 evseController.setControlState(ControlState.CHARGE)
                 evseController.setChargeCurrentRange(3, 3)
             elif (now.tm_hour >= 16 and now.tm_hour < 19):
                 if (evse.getBatteryChargeLevel() < 31):
+                    evseController.writeLog("FLUX Peak rate: SoC<31%, discharge to match home load with minimum 10A")
                     evseController.setControlState(ControlState.DISCHARGE)
-                    evseController.setDischargeCurrentRange(6, 16)
+                    evseController.setDischargeCurrentRange(10, 16)
                 else:
+                    evseController.writeLog("FLUX Peak rate: SoC>=31%, discharge at max rate")
                     evseController.setControlState(ControlState.DISCHARGE)
             elif (evse.getBatteryChargeLevel() < 31):
+                evseController.writeLog("FLUX Flux or day rate: SoC<31%, charge at max rate")
                 evseController.setControlState(ControlState.CHARGE)
             elif (now.tm_hour >= 2 and now.tm_hour < 5):
+                evseController.writeLog("FLUX Flux rate: charge at max rate")
                 evseController.setControlState(ControlState.CHARGE)
             # Included as an example of using an Octopus "all-you-can-eat electricity" hour
             # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
             # in the now object.
-            elif (now.tm_year == 2024 and now.tm_mon == 9 and now.tm_mday == 14 and now.tm_hour >= 5 and now.tm_hour < 14):
+            elif (now.tm_year == 2024 and now.tm_mon == 10 and now.tm_mday == 20 and now.tm_hour >= 5 and now.tm_hour < 14):
                 # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
                 # for a 32A controller you may want to substitute around 83%)
                 if (now.tm_hour < 13):
                     if (evse.getBatteryChargeLevel() > 90):
+                        evseController.writeLog("FREE Preparing for zero rate: SoC>90%, discharge at max rate")
                         evseController.setControlState(ControlState.DISCHARGE)
                     else:
+                        evseController.writeLog("FREE Preparing for zero rate: SoC<=90%, discharge to match home load")
                         evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+                        evseController.setDischargeCurrentRange(6, 16)
                 elif (now.tm_hour == 13):
+                    evseController.writeLog("FREE Zero rate: charge at max rate")
                     evseController.setControlState(ControlState.CHARGE)
             else:
                 if (evse.getBatteryChargeLevel() >= 80):
+                    evseController.writeLog("FLUX Day rate: SoC>=80%, charge or discharge to minimise grid use 6-16A")
                     evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
                     evseController.setDischargeCurrentRange(6, 16)
                     evseController.setChargeCurrentRange(6, 16)
                 else:
+                    evseController.writeLog("FLUX Day rate: SoC<80%, charge from solar 6-16A")
                     evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
                     evseController.setChargeCurrentRange(6, 16)
