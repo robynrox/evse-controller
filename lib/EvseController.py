@@ -85,7 +85,7 @@ class EvseController:
             case ControlState.LOAD_FOLLOW_DISCHARGE:
                 if (-desiredEvseCurrent < self.minDischargeCurrent):
                     desiredEvseCurrent = 0
-                elif (-desiredEvseCurrent < self.maxDischargeCurrent):
+                elif (-desiredEvseCurrent > self.maxDischargeCurrent):
                     desiredEvseCurrent = -self.maxDischargeCurrent
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
                 if (-self.minDischargeCurrent < desiredEvseCurrent < self.minChargeCurrent):
@@ -102,7 +102,7 @@ class EvseController:
             case ControlState.DISCHARGE:
                 if (-desiredEvseCurrent < self.minDischargeCurrent):
                     desiredEvseCurrent = -self.minDischargeCurrent
-                elif (-desiredEvseCurrent < self.maxDischargeCurrent):
+                elif (-desiredEvseCurrent > self.maxDischargeCurrent):
                     desiredEvseCurrent = -self.maxDischargeCurrent
             case ControlState.DORMANT:
                 desiredEvseCurrent = 0
