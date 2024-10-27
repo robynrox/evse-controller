@@ -148,7 +148,7 @@ while True:
     now = time.localtime()
     nowInSeconds = time.time()
     if (nowInSeconds >= nextStateCheck):
-        nextStateCheck = math.ceil((nowInSeconds + 1) / 30) * 30
+        nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
         
         if (execState == ExecState.PAUSE_THEN_FLUX or execState == ExecState.CHARGE_THEN_FLUX or execState == ExecState.DISCHARGE_THEN_FLUX):
             seconds = math.ceil(nextFluxState - nowInSeconds)
@@ -169,11 +169,14 @@ while True:
                 evseController.setChargeCurrentRange(3, 3)
             elif (now.tm_hour >= 16 and now.tm_hour < 19):
                 if (evse.getBatteryChargeLevel() < 31):
-                    evseController.writeLog("FLUX Peak rate: SoC<31%, discharge to match home load with minimum 10A")
+                    evseController.writeLog("FLUX Peak rate: SoC<31%, load follow discharge to match home load only")
+                    evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+                if (evse.getBatteryChargeLevel() < 51):
+                    evseController.writeLog("FLUX Peak rate: 31%<=SoC<51%, discharge to match home load with minimum 10A")
                     evseController.setControlState(ControlState.DISCHARGE)
                     evseController.setDischargeCurrentRange(10, 16)
                 else:
-                    evseController.writeLog("FLUX Peak rate: SoC>=31%, discharge at max rate")
+                    evseController.writeLog("FLUX Peak rate: SoC>=51%, discharge at max rate")
                     evseController.setControlState(ControlState.DISCHARGE)
             elif (evse.getBatteryChargeLevel() < 31):
                 evseController.writeLog("FLUX Flux or day rate: SoC<31%, charge at max rate")

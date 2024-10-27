@@ -121,12 +121,12 @@ class EvseController:
         evseSetpointCurrent = self.evse.getEvseCurrent()
         desiredEvseCurrent = self.calculateTargetCurrent(evseSetpointCurrent, power)
 
-        updateBatteryChargeLevel = self.evse.getBatteryChargeLevel()
-        logMsg = f"STATE G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{updateBatteryChargeLevel} "
-        if updateBatteryChargeLevel != self.batteryChargeLevel:
-            self.batteryChargeLevel = updateBatteryChargeLevel
+        power.soc = self.evse.getBatteryChargeLevel()
+        logMsg = f"STATE G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
+        if power.soc != self.batteryChargeLevel:
             if self.powerAtBatteryChargeLevel != None:
-                log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}")
+                log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
+            self.batteryChargeLevel = power.soc
             self.powerAtBatteryChargeLevel = power
         if self.configuration.get("USING_INFLUXDB", False) == True:
             point = (
