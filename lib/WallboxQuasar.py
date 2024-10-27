@@ -7,7 +7,7 @@ from wallbox import Wallbox, Statuses
 class EvseWallboxQuasar(EvseInterface):
     def __init__(self, host: str):
         self.host = host
-        self.client = ModbusClient(host = host, auto_open = True, auto_close = False)
+        self.client = ModbusClient(host = host, auto_open = True, auto_close = False, timeout = 5)
         self.CONTROL_LOCKOUT_REG = 0x51
         self.MODBUS_CONTROL = 1
         self.USER_CONTROL = 0
