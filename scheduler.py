@@ -2,7 +2,6 @@ from lib.EvseInterface import EvseState
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.Shelly import PowerMonitorShelly
 import time
-import datetime
 import configuration
 
 # This is a simple scheduler designed to work with the Octopus Flux tariff.
@@ -35,10 +34,12 @@ import configuration
 evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
 powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
 
+
 def log(msg):
     print(msg)
     with open('log.txt', 'a') as f:
         f.write(msg + '\n')
+
 
 # Configure desired start state
 now = time.localtime()
@@ -68,7 +69,7 @@ while True:
                                 configuration.WALLBOX_SERIAL)
             # Allow up to an hour for the EVSE to restart without trying to restart again
             connectionErrors = -3600
-            
+
     log(f"Charger state: {charger_state}")
     charge_level = evse.getBatteryChargeLevel()
     log(f"Battery charge level: {charge_level}%")
@@ -95,6 +96,6 @@ while True:
 
     now = time.localtime()
     time.sleep(15 - (now.tm_sec % 15))
-    #now = datetime.datetime.now()
-    #time.sleep((1000000 - now.microsecond) / 1000000.0)
+    # now = datetime.datetime.now()
+    # time.sleep((1000000 - now.microsecond) / 1000000.0)
     log("")

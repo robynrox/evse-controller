@@ -6,6 +6,7 @@ import datetime
 from lib.Power import Power
 from lib.PowerMonitorInterface import PowerMonitorInterface
 
+
 class PowerMonitorPollingThread(threading.Thread):
     def __init__(self, powerMonitor):
         threading.Thread.__init__(self)
@@ -26,16 +27,17 @@ class PowerMonitorPollingThread(threading.Thread):
     def attach(self, observer):
         if observer not in self.observers:
             self.observers.append(observer)
-    
+
     def detach(self, observer):
         try:
             self.observers.remove(observer)
         except ValueError:
             pass
-    
+
     def notify(self, result):
         for observer in self.observers:
             observer.update(result)
+
 
 class PowerMonitorShelly(PowerMonitorInterface):
     def __init__(self, host: str):
@@ -54,34 +56,29 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.negEnergyJoulesCh1 = 0
         self.getPowerLevels()
 
-    def getPowerLevels(self):
-        if (time.time() - self.lastUpdate) > 0.9:
-            lastUnixtime = self.unixtime
+    def fetch_data(self):
+        max_attempts = 5
+        for attempt in range(max_attempts):
             try:
                 r = requests.get(self.ENDPOINT, timeout=0.1)
                 r.raise_for_status()
                 reqJson = r.json()
                 self.powerCh0 = reqJson["emeters"][0]["power"]
                 self.pfCh0 = reqJson["emeters"][0]["pf"]
-                self.powerCh1 = r.json()["emeters"][1]["power"]
+                self.powerCh1 = reqJson["emeters"][1]["power"]
                 self.pfCh1 = reqJson["emeters"][1]["pf"]
                 self.voltage = reqJson["emeters"][0]["voltage"]
                 self.unixtime = reqJson["unixtime"]
                 self.lastUpdate = time.time()
+                break  # Exit the loop if the request is successful
             except requests.exceptions.RequestException as e:
-                # second try
-                try:
-                    r = requests.get(self.ENDPOINT, timeout=0.1)
-                    r.raise_for_status()
-                    reqJson = r.json()
-                    self.powerCh0 = reqJson["emeters"][0]["power"]
-                    self.pfCh0 = reqJson["emeters"][0]["pf"]
-                    self.powerCh1 = r.json()["emeters"][1]["power"]
-                    self.pfCh1 = reqJson["emeters"][1]["pf"]
-                    self.voltage = reqJson["emeters"][0]["voltage"]
-                    self.unixtime = reqJson["unixtime"]
-                except requests.exceptions.RequestException as e:
-                    print(f"PowerMonitorShelly second try RequestException: {e}")
+                if attempt == max_attempts - 1:
+                    print(f"Max attempts reached. Failed to fetch data from Shelly. Reason {e}")
+
+    def getPowerLevels(self):
+        if (time.time() - self.lastUpdate) > 0.9:
+            lastUnixtime = self.unixtime
+            self.fetch_data()
             if (lastUnixtime == -1):
                 lastUnixtime = self.unixtime
             if (self.powerCh0 < 0):
@@ -92,4 +89,5 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.negEnergyJoulesCh1 -= self.powerCh1 * (self.unixtime - lastUnixtime)
             else:
                 self.posEnergyJoulesCh1 += self.powerCh1 * (self.unixtime - lastUnixtime)
-        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage, self.unixtime, self.posEnergyJoulesCh0, self.negEnergyJoulesCh0, self.posEnergyJoulesCh1, self.negEnergyJoulesCh1)
+        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage, self.unixtime,
+                     self.posEnergyJoulesCh0, self.negEnergyJoulesCh0, self.posEnergyJoulesCh1, self.negEnergyJoulesCh1)

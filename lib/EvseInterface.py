@@ -1,8 +1,7 @@
 # Define the interface class
-from lib.Power import Power
-
 from abc import ABC, abstractmethod
 from enum import Enum
+
 
 class EvseState(Enum):
     NO_COMMS = -1
@@ -15,6 +14,7 @@ class EvseState(Enum):
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
     UNKNOWN = 999
+
 
 class EvseInterface(ABC):
     @abstractmethod

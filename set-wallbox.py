@@ -1,13 +1,13 @@
 from pyModbusTCP.client import ModbusClient
 import time
 
-client = ModbusClient(host = "wb057703.ultrahub", auto_open = True, auto_close = True)
+client = ModbusClient(host="wb057703.ultrahub", auto_open=True, auto_close=True)
 # Set remote control
 print("Setting remote control")
 client.write_single_register(0x51, 1)
 time.sleep(1)
 # Set charging current to -3A
-#client.write_single_register(0x102, 65533)
+# client.write_single_register(0x102, 65533)
 # Set charging current to 15A
 print("Setting charging current to 15A")
 client.write_single_register(0x102, 15)
