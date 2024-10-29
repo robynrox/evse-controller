@@ -171,12 +171,14 @@ while True:
                 if (evse.getBatteryChargeLevel() < 31):
                     evseController.writeLog("FLUX Peak rate: SoC<31%, load follow discharge to match home load only")
                     evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-                if (evse.getBatteryChargeLevel() < 51):
-                    evseController.writeLog("FLUX Peak rate: 31%<=SoC<51%, discharge to match home load with minimum 10A")
+                minsSince1600 = (now.tm_hour - 16) * 60 + now.tm_min
+                threshold = 51 - math.floor(minsSince1600 * 20 / 180)
+                if (evse.getBatteryChargeLevel() < threshold):
+                    evseController.writeLog(f"FLUX Peak rate: 31%<=SoC<{threshold}%, discharge to match home load with minimum 10A")
                     evseController.setControlState(ControlState.DISCHARGE)
                     evseController.setDischargeCurrentRange(10, 16)
                 else:
-                    evseController.writeLog("FLUX Peak rate: SoC>=51%, discharge at max rate")
+                    evseController.writeLog(f"FLUX Peak rate: SoC>={threshold}%, discharge at max rate")
                     evseController.setControlState(ControlState.DISCHARGE)
             elif (evse.getBatteryChargeLevel() < 31):
                 evseController.writeLog("FLUX Flux or day rate: SoC<31%, charge at max rate")
