@@ -1,6 +1,5 @@
 from enum import Enum
 from lib.EvseController import ControlState, EvseController
-from lib.EvseInterface import EvseState
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.Shelly import PowerMonitorShelly
 import time
@@ -24,10 +23,13 @@ import queue
 # At other times, if SoC is higher than 80%, charge or discharge to match home power production or consumption.
 #   If SoC is medium, charge to match home power production but do not discharge.
 #   If SoC is lower than 31%, charge at maximum rate.
-# (Note that the Wallbox Quasar does not report a SoC% of 30% - it skips that number; it goes from 29% to 31% or 31% to 29%.)
+# (Note that the Wallbox Quasar does not report a SoC% of 30% - it skips that number; it goes from 29% to 31%
+# or 31% to 29%.)
 
 nextFluxState = 0
 execQueue = queue.SimpleQueue()
+
+
 class ExecState(Enum):
     FLUX = 0
     CHARGE_THEN_FLUX = 1
@@ -35,13 +37,15 @@ class ExecState(Enum):
     PAUSE_THEN_FLUX = 3
     FIXED = 4
 
+
 # Default state
 execState = ExecState.FLUX
+
 
 class InputParser(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
-    
+
     def run(self):
         global execQueue
         while True:
@@ -53,8 +57,10 @@ class InputParser(threading.Thread):
             except Exception as e:
                 print(f"Exception raised: {e}")
 
+
 inputThread = InputParser()
 inputThread.start()
+
 
 def checkCommandLineArguments():
     global nextFluxState
@@ -81,6 +87,7 @@ def checkCommandLineArguments():
                 case "-d" | "--discharge":
                     nextFluxState = time.time() + 3600
                     execState = ExecState.DISCHARGE_THEN_FLUX
+
 
 checkCommandLineArguments()
 
@@ -149,8 +156,9 @@ while True:
     nowInSeconds = time.time()
     if (nowInSeconds >= nextStateCheck):
         nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
-        
-        if (execState == ExecState.PAUSE_THEN_FLUX or execState == ExecState.CHARGE_THEN_FLUX or execState == ExecState.DISCHARGE_THEN_FLUX):
+
+        if (execState == ExecState.PAUSE_THEN_FLUX or execState == ExecState.CHARGE_THEN_FLUX or
+                execState == ExecState.DISCHARGE_THEN_FLUX):
             seconds = math.ceil(nextFluxState - nowInSeconds)
             if (seconds > 0):
                 evseController.writeLog(f"CONTROL {execState} for {seconds}s")

@@ -14,6 +14,7 @@ try:
 except ImportError:
     pass
 
+
 class ControlState(Enum):
     # The EVSE will not charge or discharge the vehicle in DORMANT state (obviously).
     DORMANT = 0
@@ -33,6 +34,7 @@ class ControlState(Enum):
     # If the load goes too low in either direction, charging will be stopped.
     LOAD_FOLLOW_BIDIRECTIONAL = 5
 
+
 def log(msg):
     currentTime = datetime.now()
     dateStr = currentTime.strftime('%Y%m%d')
@@ -40,6 +42,7 @@ def log(msg):
         timeStr = currentTime.strftime('%H:%M:%S.%f ')
         f.write(timeStr + msg + '\n')
         print(timeStr + msg)
+
 
 class EvseController:
     def __init__(self, pmon: PowerMonitorInterface, evse: EvseInterface, configuration):
@@ -66,8 +69,10 @@ class EvseController:
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        if self.configuration.get("USING_INFLUXDB", False) == True:
-            self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"], token=self.configuration["INFLUXDB_TOKEN"], org=self.configuration["INFLUXDB_ORG"])
+        if self.configuration.get("USING_INFLUXDB", False) is True:
+            self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"],
+                                                         token=self.configuration["INFLUXDB_TOKEN"],
+                                                         org=self.configuration["INFLUXDB_ORG"])
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
         log("INFO EvseController started")
 
@@ -112,7 +117,7 @@ class EvseController:
         if (time.time() >= self.nextHalfHourlyLog):
             self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
             log(f"ENERGY {power.getAccumulatedEnergy()}")
-            if (self.powerAtLastHalfHourlyLog != None):
+            if (self.powerAtLastHalfHourlyLog is not None):
                 log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
             self.powerAtLastHalfHourlyLog = power
 
@@ -124,11 +129,11 @@ class EvseController:
         power.soc = self.evse.getBatteryChargeLevel()
         logMsg = f"STATE G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
         if power.soc != self.batteryChargeLevel:
-            if self.powerAtBatteryChargeLevel != None:
+            if self.powerAtBatteryChargeLevel is not None:
                 log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
             self.batteryChargeLevel = power.soc
             self.powerAtBatteryChargeLevel = power
-        if self.configuration.get("USING_INFLUXDB", False) == True:
+        if self.configuration.get("USING_INFLUXDB", False) is True:
             point = (
                 influxdb_client.Point("measurement")
                 .field("grid", power.gridWatts)

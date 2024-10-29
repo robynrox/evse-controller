@@ -11,7 +11,7 @@ class Power:
         self.posEnergyJoulesCh1 = posEnergyJoulesCh1
         self.negEnergyJoulesCh1 = negEnergyJoulesCh1
         self.soc = soc
-    
+
     def __str__(self):
         return f"Grid: {self.gridWatts}W, pf {self.gridPf}; EVSE: {self.evseWatts}W, pf {self.evsePf}; Voltage: {self.voltage}V; unixtime {self.unixtime}; SoC% {self.soc}"
 

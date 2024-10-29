@@ -23,7 +23,7 @@ learn a little bit more.
 
 This uses code from a library that can use a Web API to control the Wallbox Quasar, but that code is only used to
 restart the wallbox in the case of modbus failure, a condition that happens once every few days to myself. The library
-used for this is to be found here:
+used for this can be found here:
 
 * https://github.com/cliviu74/wallbox
 
@@ -33,7 +33,7 @@ I have also added logging to InfluxDB OSS version 2. This is the open-source var
 
 * https://docs.influxdata.com/influxdb/v2/
 * https://docs.influxdata.com/influxdb/v2/install/?t=Linux for installation instructions if using Linux (also go to
-  that page for other operating systems as the instructions are also there)
+  that page for other operating systems as the instructions are also there).
 
 I do not believe it will work with version 1. If you just try `apt install influxdb`, it is likely that you will get
 version 1, so I would suggest installing as per the official instructions on the page above.
@@ -44,18 +44,19 @@ This isn't yet designed for end-users, only for software engineers and the like.
 Python to use this.
 
 Configuration files are provided to spin up a [dev container](https://code.visualstudio.com/docs/devcontainers/containers)
-that contains the dependencies required to develop, test and run this in a Docker container. Alternatively, you can
+that contains the dependencies required to develop, test, and run this in a Docker container. Alternatively, you can
 install the following on your system:
 
 * Python 3.11.7 / 3.12.3
-* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment for python at the root path
-  of this repository (i.e. the directory that contains this README file). The dot at the end of the command is required and
+* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment for Python at the root path
+  of this repository (i.e., the directory that contains this README file). The dot at the end of the command is required and
   the spaces are important.
-* Use `bin/pip install requests pyModbusTCP wallbox` to install using pip the required libraries into the virtual
-  environment.
-* If you are using InfluxDB version 2, also use `bin/pip install influxdb-client`. 
+* Run `source bin/activate` to use the virtual environment.
+* Use `pip install requests pyModbusTCP wallbox` to install the required libraries into the virtual environment.
+* If you are using InfluxDB version 2, also use `pip install influxdb-client`.
+* If you want to use flake8 for linting, use `pip install flake8`.
 
-IP addresses are in configuration.py, so if your setup happens to be very close to mine, you can feel free to make
+IP addresses are in `configuration.py`, so if your setup happens to be very close to mine, you can feel free to make
 changes.
 
 ## Provided samples
@@ -69,9 +70,9 @@ The following samples are provided:
 
 To get this running after setting up the configuration file, you would run commands such as:
 
-* `bin/python flux.py` or `python flux.py` (whichever works for you but you must use python 3)
-* `bin/python flux.py -?` will show a brief help page
-* `bin/python flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
+* `python3 flux.py` or `python flux.py` (whichever works for you but you must use python 3)
+* `python flux.py -?` will show a brief help page
+* `python flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
   before anything else is done which is useful for disconnecting your vehicle before going on a journey.
 
 ## Roadmap

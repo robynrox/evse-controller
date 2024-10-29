@@ -1,5 +1,4 @@
 from lib.EvseController import ControlState, EvseController
-from lib.EvseInterface import EvseState
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.Shelly import PowerMonitorShelly
 import time

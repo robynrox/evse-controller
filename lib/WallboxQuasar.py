@@ -1,13 +1,13 @@
 import time
-from lib.Power import Power
 from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
-from wallbox import Wallbox, Statuses
+from wallbox import Wallbox
+
 
 class EvseWallboxQuasar(EvseInterface):
     def __init__(self, host: str):
         self.host = host
-        self.client = ModbusClient(host = host, auto_open = True, auto_close = False, timeout = 5)
+        self.client = ModbusClient(host=host, auto_open=True, auto_close=False, timeout=2)
         self.CONTROL_LOCKOUT_REG = 0x51
         self.MODBUS_CONTROL = 1
         self.USER_CONTROL = 0
@@ -67,7 +67,7 @@ class EvseWallboxQuasar(EvseInterface):
 
     def getWriteNextAllowed(self) -> float:
         return self.writeNextAllowed
-    
+
     def getReadNextAllowed(self) -> float:
         return self.readNextAllowed
 
@@ -101,7 +101,7 @@ class EvseWallboxQuasar(EvseInterface):
             return self.lastEvseState
         except:
             raise ConnectionError("Could not read EVSE state")
-        
+
     def getEvseCurrent(self) -> int:
         return self.current
 
@@ -125,6 +125,6 @@ class EvseWallboxQuasar(EvseInterface):
 
     def isFull(self) -> bool:
         return self.battery_charge_level >= self.MAX_CHARGE_PERCENT
-    
+
     def isEmpty(self) -> bool:
         return self.battery_charge_level <= self.MIN_CHARGE_PERCENT
