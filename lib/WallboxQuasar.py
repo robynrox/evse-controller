@@ -112,7 +112,9 @@ class EvseWallboxQuasar(EvseInterface):
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
             self.client.close()
             battery_charge_level = regs[0]
-            if battery_charge_level > 0:
+            # The Wallbox Quasar often returns 4 in error, so this has to be ignored.
+            # Also any non-positive number is not valid and has to be ignored.
+            if battery_charge_level > 0 and battery_charge_level != 4:
                 self.battery_charge_level = battery_charge_level
             return self.battery_charge_level
         except:
