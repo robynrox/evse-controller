@@ -113,8 +113,11 @@ class EvseWallboxQuasar(EvseInterface):
             self.client.close()
             battery_charge_level = regs[0]
             # The Wallbox Quasar often returns 4 in error, so this has to be ignored.
+            # It also returns 1 in error and this should be ignored as well.
+            # I have taken the decision to treat any state of charge under 5% as
+            # not valid.
             # Also any non-positive number is not valid and has to be ignored.
-            if battery_charge_level > 0 and battery_charge_level != 4:
+            if battery_charge_level > 4:
                 self.battery_charge_level = battery_charge_level
             return self.battery_charge_level
         except:
