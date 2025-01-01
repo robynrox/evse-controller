@@ -69,6 +69,8 @@ class EvseController:
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
+        self.minDischargeActivationPower = 0
+        self.minChargeActivationPower = 0
         if self.configuration.get("USING_INFLUXDB", False) is True:
             self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"],
                                                          token=self.configuration["INFLUXDB_TOKEN"],
@@ -81,6 +83,10 @@ class EvseController:
         # instead of using the measurement below.
         evseMeasuredCurrent = round(power.evseWatts / power.voltage)
         desiredEvseCurrent = evseMeasuredCurrent - round(power.gridWatts / power.voltage)
+        #if (desiredEvseCurrent < 0 and power.getHomeWatts() < self.minDischargeActivationPower):
+        #    desiredEvseCurrent = 0
+        #if (desiredEvseCurrent > 0 and power.getHomeWatts() > -self.minChargeActivationPower):
+        #    desiredEvseCurrent = 0
         match self.state:
             case ControlState.LOAD_FOLLOW_CHARGE:
                 if (desiredEvseCurrent < self.minChargeCurrent):
@@ -227,6 +233,14 @@ class EvseController:
         self.minChargeCurrent = minCurrent
         self.maxChargeCurrent = maxCurrent
         log(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
+
+    def setChargeActivationPower(self, minChargeActivationPower):
+        self.minChargeActivationPower = minChargeActivationPower
+        log(f"CONTROL Setting charge activation power to {self.minChargeActivationPower} W")
+
+    def setDischargeActivationPower(self, minDischargeActivationPower):
+        self.minDischargeActivationPower = minDischargeActivationPower
+        log(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
 
     def writeLog(self, logString):
         log(logString)
