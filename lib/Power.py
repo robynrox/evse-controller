@@ -28,3 +28,6 @@ class Power:
         negEnergyCh0 = round((self.negEnergyJoulesCh0 - olderPower.negEnergyJoulesCh0) / 3600)
         negEnergyCh1 = round((self.negEnergyJoulesCh1 - olderPower.negEnergyJoulesCh1) / 3600)
         return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
+
+    def getHomeWatts(self):
+        return self.gridWatts - self.evseWatts
