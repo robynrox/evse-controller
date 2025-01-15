@@ -107,8 +107,8 @@ class EvseController:
         # ])
         # Home demand levels for targeting range -240W to 0W with startup at 300W demand
         self.setHomeDemandLevels([
-            (0, 300, 0), #(0, 600, 0),
-            (300, 720, 3), #(600, 840, 3),
+            (0, 200, 0), #(0, 600, 0),
+            (200, 720, 3), #(600, 840, 3),
             (720, 960, 4),
             (960, 1200, 5),
             (1200, 1440, 6),

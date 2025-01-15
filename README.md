@@ -52,7 +52,7 @@ install the following on your system:
   of this repository (i.e., the directory that contains this README file). The dot at the end of the command is required and
   the spaces are important.
 * Run `source bin/activate` to use the virtual environment.
-* Use `pip install requests pyModbusTCP wallbox` to install the required libraries into the virtual environment.
+* Use `pip install requests pyModbusTCP wallbox flask` to install the required libraries into the virtual environment.
 * If you are using InfluxDB version 2, also use `pip install influxdb-client`.
 * If you want to use flake8 for linting, use `pip install flake8`.
 
@@ -67,12 +67,19 @@ The following samples are provided:
 * ChargeFull.py: Set the wallbox to charge at maximum rate.
 * flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
   Scheduler2.py.)
+* cosy.py: Control the wallbox in a way that works well with Octopus Cosy.
+* octgo.py: Control the wallbox in a way that works well with Octopus Go.
+* app.py: At the time of writing, this runs the controller along with a web interface that allows the same basic
+  controls that you can type on the command line. You can access that web interface on port 5000. For example,
+  on the host system, point your web browser to http://127.0.0.1:5000/. On another system on your local network,
+  it might be accessed by using the name of the server, e.g. http://evserver:5000/, or alternatively I believe it
+  tells you at the time of startup what IP address you can use.
 
 To get this running after setting up the configuration file, you would run commands such as:
 
-* `python3 flux.py` or `python flux.py` (whichever works for you but you must use python 3)
-* `python flux.py -?` will show a brief help page
-* `python flux.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
+* `python3 app.py` or `python app.py` (whichever works for you but you must use python 3)
+* `python app.py -?` will show a brief help page
+* `python app.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
   before anything else is done which is useful for disconnecting your vehicle before going on a journey.
 
 ## Roadmap
@@ -80,7 +87,7 @@ To get this running after setting up the configuration file, you would run comma
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
   the Shelly (complete)
 * Add a user interface allowing for rapid termination of any current EV charging or discharging session (HTML seems to
-  be the obvious way to go)
+  be the obvious way to go - this is now in progress and a working prototype is available)
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
   of the library routines)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
