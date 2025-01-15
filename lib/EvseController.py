@@ -69,8 +69,76 @@ class EvseController:
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        self.minDischargeActivationPower = 0
-        self.minChargeActivationPower = 0
+        self.hysteresisWindow = 20 # Default hysteresis in Watts
+        self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
+        # Home demand levels for targeting range -120W to 120W with startup at 300W demand
+        # self.setHomeDemandLevels([
+        #     (0, 300, 0), #(0, 600, 0),
+        #     (300, 840, 3), #(600, 840, 3),
+        #     (840, 1080, 4),
+        #     (1080, 1320, 5),
+        #     (1320, 1560, 6),
+        #     (1560, 1800, 7),
+        #     (1800, 2040, 8),
+        #     (2040, 2280, 9),
+        #     (2280, 2520, 10),
+        #     (2520, 2760, 11),
+        #     (2760, 3000, 12),
+        #     (3000, 3240, 13),
+        #     (3240, 3480, 14),
+        #     (3480, 3720, 15),
+        #     (3720, 3960, 16),
+        #     (3960, 4200, 17),
+        #     (4200, 4440, 18),
+        #     (4440, 4680, 19),
+        #     (4680, 4920, 20),
+        #     (4920, 5160, 21),
+        #     (5160, 5400, 22),
+        #     (5400, 5640, 23),
+        #     (5640, 5880, 24),
+        #     (5880, 6120, 25),
+        #     (6120, 6360, 26),
+        #     (6360, 6600, 27),
+        #     (6600, 6840, 28),
+        #     (6840, 7080, 29),
+        #     (7080, 7320, 30),
+        #     (7320, 7560, 31),
+        #     (7560, 99999, 32)
+        # ])
+        # Home demand levels for targeting range -240W to 0W with startup at 300W demand
+        self.setHomeDemandLevels([
+            (0, 300, 0), #(0, 600, 0),
+            (300, 720, 3), #(600, 840, 3),
+            (720, 960, 4),
+            (960, 1200, 5),
+            (1200, 1440, 6),
+            (1440, 1680, 7),
+            (1680, 1920, 8),
+            (1920, 2160, 9),
+            (2160, 2400, 10),
+            (2400, 2640, 11),
+            (2640, 2880, 12),
+            (2880, 3120, 13),
+            (3120, 3360, 14),
+            (3360, 3600, 15),
+            (3600, 3840, 16),
+            (3840, 4080, 17),
+            (4080, 4320, 18),
+            (4320, 4560, 19),
+            (4560, 4800, 20),
+            (4800, 5040, 21),
+            (5040, 5280, 22),
+            (5280, 5520, 23),
+            (5520, 5760, 24),
+            (5760, 6000, 25),
+            (6000, 6240, 26),
+            (6240, 6480, 27),
+            (6480, 6720, 28),
+            (6720, 6960, 29),
+            (6960, 7200, 30),
+            (7200, 7440, 31),
+            (7440, 99999, 32)
+        ])
         if self.configuration.get("USING_INFLUXDB", False) is True:
             self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"],
                                                          token=self.configuration["INFLUXDB_TOKEN"],
@@ -78,15 +146,43 @@ class EvseController:
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
         log("INFO EvseController started")
 
-    def calculateTargetCurrent(self, evseSetpointCurrent, power):
-        # If using the setpoint current, set evseMeasuredCurrent to the setpoint current
-        # instead of using the measurement below.
-        evseMeasuredCurrent = round(power.evseWatts / power.voltage)
-        desiredEvseCurrent = evseMeasuredCurrent - round(power.gridWatts / power.voltage)
-        #if (desiredEvseCurrent < 0 and power.getHomeWatts() < self.minDischargeActivationPower):
-        #    desiredEvseCurrent = 0
-        #if (desiredEvseCurrent > 0 and power.getHomeWatts() > -self.minChargeActivationPower):
-        #    desiredEvseCurrent = 0
+    def setHysteresisWindow(self, window):
+        """
+        Set the hysteresis window for power transitions.
+        :param window: Hysteresis window in watts.
+        """
+        self.hysteresisWindow = window
+        log(f"CONTROL Setting hysteresis window to {self.hysteresisWindow} W")
+
+    def setHomeDemandLevels(self, levels):
+        """
+        Set power ranges and corresponding fixed current levels.
+        :param levels: List of tuples [(min_power, max_power, target_current), ...]
+        """
+        self.homeDemandLevels = sorted(levels, key=lambda x: x[0])
+        log(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
+
+    def calculateTargetCurrent(self, power):
+        homeWatts = power.getHomeWatts()
+        desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
+
+        # Determine desired current based on home power draw with hysteresis
+        for min_power, max_power, target_current in self.homeDemandLevels:
+            if min_power - self.hysteresisWindow <= homeWatts < max_power + self.hysteresisWindow:
+                if (homeWatts < min_power or homeWatts > max_power) and target_current != self.lastTargetCurrent:
+                    continue  # Stay within hysteresis window
+                desiredEvseCurrent = -target_current
+                break
+            if min_power - self.hysteresisWindow <= -homeWatts < max_power + self.hysteresisWindow:
+                if (-homeWatts < min_power or -homeWatts > max_power) and target_current != self.lastTargetCurrent:
+                    continue  # Stay within hysteresis window
+                desiredEvseCurrent = target_current
+                break
+
+        #log(f"DEBUG: lastTargetCurrent={self.lastTargetCurrent}; homeWatts={homeWatts}; desiredEvseCurrent={desiredEvseCurrent}")
+        self.lastTargetCurrent = desiredEvseCurrent  # Update last current level
+
+        # Apply control state logic
         match self.state:
             case ControlState.LOAD_FOLLOW_CHARGE:
                 if (desiredEvseCurrent < self.minChargeCurrent):
@@ -117,6 +213,7 @@ class EvseController:
                     desiredEvseCurrent = -self.maxDischargeCurrent
             case ControlState.DORMANT:
                 desiredEvseCurrent = 0
+
         return desiredEvseCurrent
 
     def update(self, power):
@@ -129,11 +226,10 @@ class EvseController:
 
         # The code assumes that it is measuring power to the EVSE.
         # If that's not the case, the setpoint current should be used.
-        evseSetpointCurrent = self.evse.getEvseCurrent()
-        desiredEvseCurrent = self.calculateTargetCurrent(evseSetpointCurrent, power)
+        desiredEvseCurrent = self.calculateTargetCurrent(power)
 
         power.soc = self.evse.getBatteryChargeLevel()
-        logMsg = f"STATE G:{power.gridWatts} pf {power.gridPf} E:{power.evseWatts} pf {power.evsePf} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
+        logMsg = f"STATE H:{round(power.getHomeWatts())} G:{power.gridWatts} E:{power.evseWatts} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
         if power.soc != self.batteryChargeLevel:
             if self.powerAtBatteryChargeLevel is not None:
                 log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
