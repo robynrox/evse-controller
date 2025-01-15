@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EVSE Control</title>
+</head>
+
+<body>
+    <h1>EVSE Control Interface</h1>
+    <button onclick="sendCommand('pause')">Pause for 10 Minutes</button>
+    <button onclick="sendCommand('charge')">Charge for 1 Hour</button>
+    <button onclick="sendCommand('discharge')">Discharge for 1 Hour</button>
+    <button onclick="sendCommand('octgo')">Resume Octopus Go</button>
+
+    <!--<h2>Current Status</h2>
+    <p id="status">Loading...</p>
+
+    <script>
+        async function sendCommand(command) {
+            const response = await fetch('/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command })
+            });
+            const result = await response.json();
+            alert(result.message);
+            updateStatus();
+        }
+
+        async function updateStatus() {
+            const response = await fetch('/status');
+            const data = await response.json();
+            document.getElementById('status').innerText = `Current State: ${data.current_state}, Next State Time: ${data.next_state_time}`;
+        }
+
+        // Update status every 5 seconds
+        setInterval(updateStatus, 5000);
+        updateStatus();
+    </script>-->
+</body>
+
+</html>

@@ -19,8 +19,19 @@ import queue
 # grid and so that the battery will still be able to charge at full rate
 # for the full five hours.
 
+# Experimental: Use Carbon Intensity API to optimise carbon intensity for
+# discharge
+
+# URL to use for the whole of the UK
+CARBON_INTENSITY_API_ENDPOINT = "https://api.carbonintensity.org.uk/intensity"
+# Recommended to use the regional API; a region list is available here:
+# https://carbon-intensity.github.io/api-definitions/#region-list
+CARBON_INTENSITY_API_ENDPOINT = "https://api.carbonintensity.org.uk/regional/regionid/17"
+
 nextSmartState = 0
 execQueue = queue.SimpleQueue()
+# Shared queue for communication between the web interface and the main logic
+web_command_queue = queue.Queue()
 
 
 class ExecState(Enum):
@@ -96,103 +107,140 @@ evseController = EvseController(powerMonitor, evse, {
         "INFLUXDB_ORG": configuration.INFLUXDB_ORG
     })
 
-nextStateCheck = 0
+def main():
+    global nextSmartState, execState
+    nextStateCheck = 0
 
-while True:
-    try:
-        dequeue = execQueue.get(True, 1)
-        match dequeue:
-            case "p" | "pause":
-                print("Entering pause state for ten minutes")
-                nextSmartState = time.time() + 600
-                execState = ExecState.PAUSE_THEN_OCTGO
-                nextStateCheck = time.time()
-            case "c" | "charge":
-                print("Entering charge state for one hour")
-                nextSmartState = time.time() + 3600
-                execState = ExecState.CHARGE_THEN_OCTGO
-                nextStateCheck = time.time()
-            case "d" | "discharge":
-                print("Entering discharge state for one hour")
-                nextSmartState = time.time() + 3600
-                execState = ExecState.DISCHARGE_THEN_OCTGO
-                nextStateCheck = time.time()
-            case "s" | "g" | "go" | "octgo":
-                print("Entering Octopus Go state")
-                execState = ExecState.OCTGO
-                nextStateCheck = time.time()
-            case _:
-                try:
-                    currentAmps = int(dequeue)
-                    print(f"Setting current to {currentAmps}")
-                    if (currentAmps > 0):
-                        evseController.setControlState(ControlState.CHARGE)
-                        evseController.setChargeCurrentRange(currentAmps, currentAmps)
-                    elif currentAmps < 0:
-                        evseController.setControlState(ControlState.DISCHARGE)
-                        evseController.setDischargeCurrentRange(currentAmps, currentAmps)
-                    else:
+    while True:
+        try:
+            dequeue = execQueue.get(True, 1)
+            match dequeue:
+                case "p" | "pause":
+                    print("Entering pause state for ten minutes")
+                    nextSmartState = time.time() + 600
+                    execState = ExecState.PAUSE_THEN_OCTGO
+                    nextStateCheck = time.time()
+                case "c" | "charge":
+                    print("Entering charge state for one hour")
+                    nextSmartState = time.time() + 3600
+                    execState = ExecState.CHARGE_THEN_OCTGO
+                    nextStateCheck = time.time()
+                case "d" | "discharge":
+                    print("Entering discharge state for one hour")
+                    nextSmartState = time.time() + 3600
+                    execState = ExecState.DISCHARGE_THEN_OCTGO
+                    nextStateCheck = time.time()
+                case "s" | "g" | "go" | "octgo":
+                    print("Entering Octopus Go state")
+                    execState = ExecState.OCTGO
+                    nextStateCheck = time.time()
+                case _:
+                    try:
+                        currentAmps = int(dequeue)
+                        print(f"Setting current to {currentAmps}")
+                        if (currentAmps > 0):
+                            evseController.setControlState(ControlState.CHARGE)
+                            evseController.setChargeCurrentRange(currentAmps, currentAmps)
+                        elif currentAmps < 0:
+                            evseController.setControlState(ControlState.DISCHARGE)
+                            evseController.setDischargeCurrentRange(currentAmps, currentAmps)
+                        else:
+                            evseController.setControlState(ControlState.DORMANT)
+                        execState = ExecState.FIXED
+                    except ValueError:
+                        print("You can enter the following to change state:")
+                        print("p | pause: Enter pause state for ten minutes then enter octgo state")
+                        print("c | charge: Enter full charge state for one hour then enter octgo state")
+                        print("d | discharge: Enter full discharge state for one hour then enter octgo state")
+                        print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
+                        print("           (current is expressed in Amps)")
+                        print("s | g | go | octgo: Enter state optimised for the Octopus Go tariff")
+        except queue.Empty:
+            pass
+
+        try:
+            # Check for commands from the web interface
+            if not web_command_queue.empty():
+                web_command = web_command_queue.get()
+                match web_command:
+                    case "pause":
+                        print("Web command: Entering pause state for ten minutes")
+                        nextSmartState = time.time() + 600
+                        execState = ExecState.PAUSE_THEN_OCTGO
+                        nextStateCheck = time.time()
+                    case "charge":
+                        print("Web command: Entering charge state for one hour")
+                        nextSmartState = time.time() + 3600
+                        execState = ExecState.CHARGE_THEN_OCTGO
+                        nextStateCheck = time.time()
+                    case "discharge":
+                        print("Web command: Entering discharge state for one hour")
+                        nextSmartState = time.time() + 3600
+                        execState = ExecState.DISCHARGE_THEN_OCTGO
+                        nextStateCheck = time.time()
+                    case "octgo":
+                        print("Web command: Entering Octopus Go state")
+                        execState = ExecState.OCTGO
+                        nextStateCheck = time.time()
+
+            # Existing logic for handling command line input
+            dequeue = execQueue.get(True, 1)
+            # ... (rest of your existing logic)
+
+        except queue.Empty:
+            pass
+
+        now = time.localtime()
+        nowInSeconds = time.time()
+        if (nowInSeconds >= nextStateCheck):
+            nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
+
+            if (execState == ExecState.PAUSE_THEN_OCTGO or execState == ExecState.CHARGE_THEN_OCTGO or
+                    execState == ExecState.DISCHARGE_THEN_OCTGO):
+                seconds = math.ceil(nextSmartState - nowInSeconds)
+                if (seconds > 0):
+                    evseController.writeLog(f"CONTROL {execState} for {seconds}s")
+                    if (execState == ExecState.PAUSE_THEN_OCTGO):
                         evseController.setControlState(ControlState.DORMANT)
-                    execState = ExecState.FIXED
-                except ValueError:
-                    print("You can enter the following to change state:")
-                    print("p | pause: Enter pause state for ten minutes then enter octgo state")
-                    print("c | charge: Enter full charge state for one hour then enter octgo state")
-                    print("d | discharge: Enter full discharge state for one hour then enter octgo state")
-                    print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
-                    print("           (current is expressed in Amps)")
-                    print("s | g | go | octgo: Enter state optimised for the Octopus Go tariff")
-    except queue.Empty:
-        pass
-
-    now = time.localtime()
-    nowInSeconds = time.time()
-    if (nowInSeconds >= nextStateCheck):
-        nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
-
-        if (execState == ExecState.PAUSE_THEN_OCTGO or execState == ExecState.CHARGE_THEN_OCTGO or
-                execState == ExecState.DISCHARGE_THEN_OCTGO):
-            seconds = math.ceil(nextSmartState - nowInSeconds)
-            if (seconds > 0):
-                evseController.writeLog(f"CONTROL {execState} for {seconds}s")
-                if (execState == ExecState.PAUSE_THEN_OCTGO):
-                    evseController.setControlState(ControlState.DORMANT)
-                elif (execState == ExecState.CHARGE_THEN_OCTGO):
-                    evseController.setControlState(ControlState.CHARGE)
-                elif (execState == ExecState.DISCHARGE_THEN_OCTGO):
-                    evseController.setControlState(ControlState.DISCHARGE)
-            else:
-                execState = ExecState.OCTGO
-        if (execState == ExecState.OCTGO):
-            dayMinute = now.tm_hour * 60 + now.tm_min
-            if evse.getBatteryChargeLevel() == -1:
-                evseController.writeLog("OCTGO SoC unknown, charge at 3A until known")
-                evseController.setControlState(ControlState.CHARGE)
-                evseController.setChargeCurrentRange(3, 3)
-            # Included as an example of using an Octopus "all-you-can-eat electricity" hour
-            # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
-            # in the now object.
-            elif (now.tm_year == 2024 and now.tm_mon == 11 and now.tm_mday == 24 and now.tm_hour >= 7 and now.tm_hour < 9):
-                # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
-                # for a 32A controller you may want to substitute around 83%)
-                evseController.writeLog("FREE Zero rate: charge at max rate")
-                evseController.setControlState(ControlState.CHARGE)
-            elif dayMinute >= 30 and dayMinute < 330: # between 00:30 and 05:30
-                evseController.writeLog("OCTGO Night rate: charge at max rate")
-                evseController.setControlState(ControlState.CHARGE)
-            elif dayMinute >= 330 and dayMinute < 19*60: # Load follow discharge, no minimum current
-                evseController.writeLog("OCTGO Day rate before 16:00: load follow discharge")
-                evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-                evseController.setDischargeCurrentRange(2, 16)
-            else:
-                # Dump at full power to target 55% SoC by 00:30. If not enough energy available, load follow.
-                # Assume 7% SoC drain per hour when discharging at full power.
-                minsBeforeNightRate = 1440 - ((dayMinute + 1410) % 1440)
-                thresholdSoCforDisharging = 55 + 7 * (minsBeforeNightRate / 60)
-                if evse.getBatteryChargeLevel() > thresholdSoCforDisharging:
-                    evseController.writeLog(f"OCTGO Day rate 19:00-00:30: SoC>{thresholdSoCforDisharging}%, discharge at max rate")
-                    evseController.setControlState(ControlState.DISCHARGE)
+                    elif (execState == ExecState.CHARGE_THEN_OCTGO):
+                        evseController.setControlState(ControlState.CHARGE)
+                    elif (execState == ExecState.DISCHARGE_THEN_OCTGO):
+                        evseController.setControlState(ControlState.DISCHARGE)
                 else:
-                    evseController.writeLog(f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge")
+                    execState = ExecState.OCTGO
+            if (execState == ExecState.OCTGO):
+                dayMinute = now.tm_hour * 60 + now.tm_min
+                if evse.getBatteryChargeLevel() == -1:
+                    evseController.writeLog("OCTGO SoC unknown, charge at 3A until known")
+                    evseController.setControlState(ControlState.CHARGE)
+                    evseController.setChargeCurrentRange(3, 3)
+                # Included as an example of using an Octopus "all-you-can-eat electricity" hour
+                # Ref https://www.geeksforgeeks.org/python-time-localtime-method/ for the names of the fields
+                # in the now object.
+                elif (now.tm_year == 2024 and now.tm_mon == 11 and now.tm_mday == 24 and now.tm_hour >= 7 and now.tm_hour < 9):
+                    # Make sure we can fully use the hour (for my 16A controller an SoC of 90% works well,
+                    # for a 32A controller you may want to substitute around 83%)
+                    evseController.writeLog("FREE Zero rate: charge at max rate")
+                    evseController.setControlState(ControlState.CHARGE)
+                elif dayMinute >= 30 and dayMinute < 330: # between 00:30 and 05:30
+                    evseController.writeLog("OCTGO Night rate: charge at max rate")
+                    evseController.setControlState(ControlState.CHARGE)
+                elif dayMinute >= 330 and dayMinute < 19*60: # Load follow discharge, no minimum current
+                    evseController.writeLog("OCTGO Day rate before 16:00: load follow discharge")
                     evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
                     evseController.setDischargeCurrentRange(2, 16)
+                else:
+                    # Dump at full power to target 55% SoC by 00:30. If not enough energy available, load follow.
+                    # Assume 7% SoC drain per hour when discharging at full power.
+                    minsBeforeNightRate = 1440 - ((dayMinute + 1410) % 1440)
+                    thresholdSoCforDisharging = 55 + 7 * (minsBeforeNightRate / 60)
+                    if evse.getBatteryChargeLevel() > thresholdSoCforDisharging:
+                        evseController.writeLog(f"OCTGO Day rate 19:00-00:30: SoC>{thresholdSoCforDisharging}%, discharge at max rate")
+                        evseController.setControlState(ControlState.DISCHARGE)
+                    else:
+                        evseController.writeLog(f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge")
+                        evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+                        evseController.setDischargeCurrentRange(2, 16)
+
+if __name__ == '__main__':
+    main()
