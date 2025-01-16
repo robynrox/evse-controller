@@ -4,7 +4,7 @@ import time
 import queue
 
 # Import your existing code
-from octgo import main, web_command_queue, execState, nextSmartState
+from octgo import main, web_command_queue, execState, nextSmartState, evseController
 
 app = Flask(__name__)
 
@@ -35,6 +35,12 @@ def status():
         "current_state": current_state,
         "next_state_time": next_state_time
     })
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    # Get the historical data from the EvseController
+    history = evseController.getHistory()
+    return jsonify(history)
 
 # Run the Flask app in a separate thread
 def run_flask():
