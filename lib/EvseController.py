@@ -14,6 +14,8 @@ try:
 except ImportError:
     pass
 
+from collections import deque
+
 
 class ControlState(Enum):
     # The EVSE will not charge or discharge the vehicle in DORMANT state (obviously).
@@ -144,6 +146,11 @@ class EvseController:
                                                          token=self.configuration["INFLUXDB_TOKEN"],
                                                          org=self.configuration["INFLUXDB_ORG"])
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+        # Data for the last 300 readings
+        self.gridPowerHistory = deque(maxlen=300)
+        self.evsePowerHistory = deque(maxlen=300)
+        self.socHistory = deque(maxlen=300)
+        self.timestamps = deque(maxlen=300)
         log("INFO EvseController started")
 
     def setHysteresisWindow(self, window):
@@ -217,6 +224,15 @@ class EvseController:
         return desiredEvseCurrent
 
     def update(self, power):
+        # When power was instantiated, the SoC was not known, so update it here.
+        power.soc = self.evse.getBatteryChargeLevel()
+
+        # Append new data to the history buffers
+        self.gridPowerHistory.append(power.gridWatts)
+        self.evsePowerHistory.append(power.evseWatts)
+        self.socHistory.append(power.soc)
+        self.timestamps.append(power.unixtime)
+
         if (time.time() >= self.nextHalfHourlyLog):
             self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
             log(f"ENERGY {power.getAccumulatedEnergy()}")
@@ -228,7 +244,6 @@ class EvseController:
         # If that's not the case, the setpoint current should be used.
         desiredEvseCurrent = self.calculateTargetCurrent(power)
 
-        power.soc = self.evse.getBatteryChargeLevel()
         logMsg = f"STATE H:{round(power.getHomeWatts())} G:{power.gridWatts} E:{power.evseWatts} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
         if power.soc != self.batteryChargeLevel:
             if self.powerAtBatteryChargeLevel is not None:
@@ -340,3 +355,19 @@ class EvseController:
 
     def writeLog(self, logString):
         log(logString)
+
+    def getHistory(self) -> dict:
+        """
+        Returns the last 300 points (nominally 5 minutes) of historical data.
+        :return: A dictionary containing:
+            - timestamps: List of timestamps (in seconds since epoch).
+            - grid_power: List of grid power values (in watts).
+            - evse_power: List of EVSE power values (in watts).
+            - soc: List of state of charge values (in percent).
+        """
+        return {
+            "timestamps": list(self.timestamps),
+            "grid_power": list(self.gridPowerHistory),
+            "evse_power": list(self.evsePowerHistory),
+            "soc": list(self.socHistory)
+        }
