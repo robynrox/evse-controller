@@ -225,6 +225,9 @@ def main():
                 elif dayMinute >= 30 and dayMinute < 330: # between 00:30 and 05:30
                     evseController.writeLog("OCTGO Night rate: charge at max rate")
                     evseController.setControlState(ControlState.CHARGE)
+                elif evse.getBatteryChargeLevel() <= 20:
+                    evseController.writeLog("OCTGO Battery depleted, remain dormant")
+                    evseController.setControlState(ControlState.DORMANT)
                 elif dayMinute >= 330 and dayMinute < 19*60: # Load follow discharge, no minimum current
                     evseController.writeLog("OCTGO Day rate before 16:00: load follow discharge")
                     evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
