@@ -72,11 +72,11 @@ class CosyOctopusTariff(Tariff):
         elif self.is_off_peak(dayMinute):
             return ControlState.CHARGE, None, None, "COSY Off-peak rate: charge at max rate"
         elif self.is_expensive_period(dayMinute):
-            return ControlState.DISCHARGE, None, None, "COSY Expensive rate: discharge at max rate"
+            return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Expensive rate: load follow discharge"
         elif evse.getBatteryChargeLevel() <= 25:
             return ControlState.DORMANT, None, None, "COSY Battery depleted, remain dormant"
         else:
-            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, "COSY Standard rate: load follow discharge"
+            return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Standard rate: load follow discharge"
 
 
 # Tariff manager
@@ -199,13 +199,13 @@ def main():
                         execState = ExecState.FIXED
                     except ValueError:
                         print("You can enter the following to change state:")
-                        print("p | pause: Enter pause state for ten minutes then resume SMART state")
-                        print("c | charge: Enter full charge state for one hour then resume SMART state")
-                        print("d | discharge: Enter full discharge state for one hour then resume SMART state")
+                        print("p | pause: Enter pause state for ten minutes then resume smart tariff controller state")
+                        print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
+                        print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
                         print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
                         print("           (current is expressed in Amps)")
-                        print("s | g | go | smart: Enter SMART state")
-                        print("octgo: Switch to Octopus Go tariff")
+                        print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
+                        print("g | go | octgo: Switch to Octopus Go tariff")
                         print("cosy: Switch to Cosy Octopus tariff")
         except queue.Empty:
             pass
@@ -231,7 +231,7 @@ def main():
                         execState = ExecState.DISCHARGE_THEN_SMART
                         nextStateCheck = time.time()
                     case "smart":
-                        print("Web command: Entering SMART state")
+                        print("Web command: Resume smart tariff controller state")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                     case "octgo":
