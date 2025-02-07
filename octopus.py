@@ -94,28 +94,27 @@ class TariffManager:
             return True
         return False
 
+    def get_tariff(self):
+        return self.current_tariff
+
     def get_control_state(self, evse, dayMinute):
         return self.current_tariff.get_control_state(evse, dayMinute)
 
 
 # Main application
 class ExecState(Enum):
-    OCTGO = 0
-    COSY = 1
-    CHARGE_THEN_OCTGO = 2
-    DISCHARGE_THEN_OCTGO = 3
-    PAUSE_THEN_OCTGO = 4
-    CHARGE_THEN_COSY = 5
-    DISCHARGE_THEN_COSY = 6
-    PAUSE_THEN_COSY = 7
-    FIXED = 8
+    SMART = 0
+    CHARGE_THEN_SMART = 1
+    DISCHARGE_THEN_SMART = 2
+    PAUSE_THEN_SMART = 3
+    FIXED = 4
 
 
 nextSmartState = 0
 execQueue = queue.SimpleQueue()
 web_command_queue = queue.Queue()
-execState = ExecState.OCTGO
-tariffManager = TariffManager("OCTGO")
+execState = ExecState.SMART
+tariffManager = TariffManager(configuration.DEFAULT_TARIFF)
 
 
 class InputParser(threading.Thread):
@@ -140,14 +139,14 @@ inputThread.start()
 evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
 powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
 evseController = EvseController(powerMonitor, evse, {
-        "WALLBOX_USERNAME": configuration.WALLBOX_USERNAME,
-        "WALLBOX_PASSWORD": configuration.WALLBOX_PASSWORD,
-        "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL,
-        "USING_INFLUXDB": configuration.USING_INFLUXDB,
-        "INFLUXDB_URL": configuration.INFLUXDB_URL,
-        "INFLUXDB_TOKEN": configuration.INFLUXDB_TOKEN,
-        "INFLUXDB_ORG": configuration.INFLUXDB_ORG
-    })
+    "WALLBOX_USERNAME": configuration.WALLBOX_USERNAME,
+    "WALLBOX_PASSWORD": configuration.WALLBOX_PASSWORD,
+    "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL,
+    "USING_INFLUXDB": configuration.USING_INFLUXDB,
+    "INFLUXDB_URL": configuration.INFLUXDB_URL,
+    "INFLUXDB_TOKEN": configuration.INFLUXDB_TOKEN,
+    "INFLUXDB_ORG": configuration.INFLUXDB_ORG
+})
 
 
 def main():
@@ -161,27 +160,29 @@ def main():
                 case "p" | "pause":
                     print("Entering pause state for ten minutes")
                     nextSmartState = time.time() + 600
-                    execState = ExecState.PAUSE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.PAUSE_THEN_OCTGO
+                    execState = ExecState.PAUSE_THEN_SMART
                     nextStateCheck = time.time()
                 case "c" | "charge":
                     print("Entering charge state for one hour")
                     nextSmartState = time.time() + 3600
-                    execState = ExecState.CHARGE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.CHARGE_THEN_OCTGO
+                    execState = ExecState.CHARGE_THEN_SMART
                     nextStateCheck = time.time()
                 case "d" | "discharge":
                     print("Entering discharge state for one hour")
                     nextSmartState = time.time() + 3600
-                    execState = ExecState.DISCHARGE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.DISCHARGE_THEN_OCTGO
+                    execState = ExecState.DISCHARGE_THEN_SMART
+                    nextStateCheck = time.time()                
+                case "s" | "smart":
+                    print("Enter the smart tariff controller state")
+                    execState = ExecState.SMART
                     nextStateCheck = time.time()
-                case "s" | "g" | "go" | "octgo":
+                case "g" | "go" | "octgo":
                     print("Switching to Octopus Go tariff")
                     tariffManager.set_tariff("OCTGO")
-                    execState = ExecState.OCTGO
                     nextStateCheck = time.time()
                 case "cosy":
                     print("Switching to Cosy Octopus tariff")
                     tariffManager.set_tariff("COSY")
-                    execState = ExecState.COSY
                     nextStateCheck = time.time()
                 case _:
                     try:
@@ -198,12 +199,13 @@ def main():
                         execState = ExecState.FIXED
                     except ValueError:
                         print("You can enter the following to change state:")
-                        print("p | pause: Enter pause state for ten minutes then resume normal operation")
-                        print("c | charge: Enter full charge state for one hour then resume normal operation")
-                        print("d | discharge: Enter full discharge state for one hour then resume normal operation")
+                        print("p | pause: Enter pause state for ten minutes then resume SMART state")
+                        print("c | charge: Enter full charge state for one hour then resume SMART state")
+                        print("d | discharge: Enter full discharge state for one hour then resume SMART state")
                         print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
                         print("           (current is expressed in Amps)")
-                        print("s | g | go | octgo: Switch to Octopus Go tariff")
+                        print("s | g | go | smart: Enter SMART state")
+                        print("octgo: Switch to Octopus Go tariff")
                         print("cosy: Switch to Cosy Octopus tariff")
         except queue.Empty:
             pass
@@ -216,27 +218,29 @@ def main():
                     case "pause":
                         print("Web command: Entering pause state for ten minutes")
                         nextSmartState = time.time() + 600
-                        execState = ExecState.PAUSE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.PAUSE_THEN_OCTGO
+                        execState = ExecState.PAUSE_THEN_SMART
                         nextStateCheck = time.time()
                     case "charge":
                         print("Web command: Entering charge state for one hour")
                         nextSmartState = time.time() + 3600
-                        execState = ExecState.CHARGE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.CHARGE_THEN_OCTGO
+                        execState = ExecState.CHARGE_THEN_SMART
                         nextStateCheck = time.time()
                     case "discharge":
                         print("Web command: Entering discharge state for one hour")
                         nextSmartState = time.time() + 3600
-                        execState = ExecState.DISCHARGE_THEN_COSY if tariffManager.current_tariff == "COSY" else ExecState.DISCHARGE_THEN_OCTGO
+                        execState = ExecState.DISCHARGE_THEN_SMART
+                        nextStateCheck = time.time()
+                    case "smart":
+                        print("Web command: Entering SMART state")
+                        execState = ExecState.SMART
                         nextStateCheck = time.time()
                     case "octgo":
                         print("Web command: Switching to Octopus Go tariff")
                         tariffManager.set_tariff("OCTGO")
-                        execState = ExecState.OCTGO
                         nextStateCheck = time.time()
                     case "cosy":
                         print("Web command: Switching to Cosy Octopus tariff")
                         tariffManager.set_tariff("COSY")
-                        execState = ExecState.COSY
                         nextStateCheck = time.time()
 
         except queue.Empty:
@@ -247,21 +251,20 @@ def main():
         if nowInSeconds >= nextStateCheck:
             nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
 
-            if execState in [ExecState.PAUSE_THEN_COSY, ExecState.CHARGE_THEN_COSY, ExecState.DISCHARGE_THEN_COSY,
-                            ExecState.PAUSE_THEN_OCTGO, ExecState.CHARGE_THEN_OCTGO, ExecState.DISCHARGE_THEN_OCTGO]:
+            if execState in [ExecState.PAUSE_THEN_SMART, ExecState.CHARGE_THEN_SMART, ExecState.DISCHARGE_THEN_SMART]:
                 seconds = math.ceil(nextSmartState - nowInSeconds)
                 if seconds > 0:
                     evseController.writeLog(f"CONTROL {execState} for {seconds}s")
-                    if execState in [ExecState.PAUSE_THEN_COSY, ExecState.PAUSE_THEN_OCTGO]:
+                    if execState == ExecState.PAUSE_THEN_SMART:
                         evseController.setControlState(ControlState.DORMANT)
-                    elif execState in [ExecState.CHARGE_THEN_COSY, ExecState.CHARGE_THEN_OCTGO]:
+                    elif execState == ExecState.CHARGE_THEN_SMART:
                         evseController.setControlState(ControlState.CHARGE)
-                    elif execState in [ExecState.DISCHARGE_THEN_COSY, ExecState.DISCHARGE_THEN_OCTGO]:
+                    elif execState == ExecState.DISCHARGE_THEN_SMART:
                         evseController.setControlState(ControlState.DISCHARGE)
                 else:
-                    execState = ExecState.COSY if tariffManager.current_tariff == "COSY" else ExecState.OCTGO
+                    execState = ExecState.SMART
 
-            if execState in [ExecState.COSY, ExecState.OCTGO]:
+            if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
                 evseController.writeLog(log_message)
