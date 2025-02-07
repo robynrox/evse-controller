@@ -67,20 +67,22 @@ The following samples are provided:
 * ChargeFull.py: Set the wallbox to charge at maximum rate.
 * flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
   Scheduler2.py.)
-* cosy.py: Control the wallbox in a way that works well with Octopus Cosy.
+* cosy.py: Control the wallbox in a way that works well with Cosy Octopus.
 * octgo.py: Control the wallbox in a way that works well with Octopus Go.
+* octopus.py: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
+  It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point - at the time
+  of writing, it doesn't seem to be the case that the use of the Agile tariff is favourable.
 * app.py: At the time of writing, this runs the controller along with a web interface that allows the same basic
-  controls that you can type on the command line. You can access that web interface on port 5000. For example,
+  controls that you can type interactively into the terminal. You can access that web interface on port 5000. For example,
   on the host system, point your web browser to http://127.0.0.1:5000/. On another system on your local network,
   it might be accessed by using the name of the server, e.g. http://evserver:5000/, or alternatively I believe it
   tells you at the time of startup what IP address you can use.
 
-To get this running after setting up the configuration file, you would run commands such as:
+To get this running after setting up the configuration file, you would run the following command:
 
 * `python3 app.py` or `python app.py` (whichever works for you but you must use python 3)
-* `python app.py -?` will show a brief help page
-* `python app.py -p` will put the Wallbox into dormant mode (i.e. pause charging and discharging) for ten minutes
-  before anything else is done which is useful for disconnecting your vehicle before going on a journey.
+
+I deprecated the command-line argument parsing since interactive control and web control are now available.
 
 ## Roadmap
 

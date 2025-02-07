@@ -28,6 +28,9 @@ OCTOPUS_API_KEY = "sk_live_your_key_here"
 # If you want logging to be enabled, set this to True:
 LOGGING = True
 
+# Set your default tariff here (at the time of writing, COSY or OCTGO):
+DEFAULT_TARIFF = "OCTGO"
+
 # ***** END OF CONFIGURATION *****
 
 # If using the secret.py file, do not copy the statements below into it.
