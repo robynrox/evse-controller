@@ -20,10 +20,11 @@
 
 <body>
     <h1>EVSE Control Interface</h1>
+    <button onclick="sendCommand('octgo')">Select and start Octopus Go</button>
+    <button onclick="sendCommand('cosy')">Select and start Cosy Octopus</button>
     <button onclick="sendCommand('pause')">Pause for 10 Minutes</button>
     <button onclick="sendCommand('charge')">Charge for 1 Hour</button>
     <button onclick="sendCommand('discharge')">Discharge for 1 Hour</button>
-    <button onclick="sendCommand('octgo')">Resume Octopus Go</button>
 
     <h1>EVSE Power History</h1>
     <div id="chart" style="width:100%;height:600px;"></div>
