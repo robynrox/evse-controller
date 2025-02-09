@@ -18,6 +18,9 @@ class Tariff:
 
     def get_control_state(self, evse, dayMinute):
         raise NotImplementedError
+    
+    def set_home_demand_levels(self, evse, evseController, dayMinute):
+        raise NotImplementedError
 
 
 # Octopus Go tariff
@@ -47,6 +50,29 @@ class OctopusGoTariff(Tariff):
             else:
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
 
+    def set_home_demand_levels(self, evse, evseController, dayMinute):
+        # If SoC > 50%:
+        if evse.getBatteryChargeLevel() >= 50:
+            # Start discharging at a home demand level of 416W. Cover all of the home demand as far as possible.
+            levels = []
+            levels.append((0, 410, 0))
+            levels.append((410, 720, 3))
+            for current in range(4, 32):
+                end = current * 240
+                start = end - 240
+                levels.append((start, end, current))
+            levels.append((31 * 240, 99999, 32))
+        else:
+            # Use a more conservative strategy of meeting some of the requirement from the battery and
+            # allowing 0 to 240 W to come from the grid.
+            levels = []
+            levels.append((0, 720, 0))
+            for current in range(3, 32):
+                start = current * 240
+                end = start + 240
+                levels.append((start, end, current))
+            levels.append((32 * 240, 99999, 32))
+        evseController.setHomeDemandLevels(levels)
 
 # Cosy Octopus tariff
 class CosyOctopusTariff(Tariff):
@@ -77,6 +103,41 @@ class CosyOctopusTariff(Tariff):
             return ControlState.DORMANT, None, None, "COSY Battery depleted, remain dormant"
         else:
             return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Standard rate: load follow discharge"
+        
+    def set_home_demand_levels(self, evse, evseController, dayMinute):
+        # If in expensive period:
+        if self.is_expensive_period(dayMinute):
+            # Start discharging at a home demand level of 192W. Cover all of the home demand as far as possible.
+            levels = []
+            levels.append((0, 192, 0))
+            levels.append((192, 720, 3))
+            for current in range(4, 32):
+                end = current * 240
+                start = end - 240
+                levels.append((start, end, current))
+            levels.append((31 * 240, 99999, 32))
+        # If SoC > 50%:
+        elif evse.getBatteryChargeLevel() >= 50:
+            # Start discharging at a home demand level of 416W. Cover all of the home demand as far as possible.
+            levels = []
+            levels.append((0, 410, 0))
+            levels.append((410, 720, 3))
+            for current in range(4, 32):
+                end = current * 240
+                start = end - 240
+                levels.append((start, end, current))
+            levels.append((31 * 240, 99999, 32))
+        else:
+            # Use a more conservative strategy of meeting some of the requirement from the battery and
+            # allowing 0 to 240 W to come from the grid.
+            levels = []
+            levels.append((0, 720, 0))
+            for current in range(3, 32):
+                start = current * 240
+                end = start + 240
+                levels.append((start, end, current))
+            levels.append((32 * 240, 99999, 32))
+        evseController.setHomeDemandLevels(levels)
 
 
 # Tariff manager
@@ -94,7 +155,7 @@ class TariffManager:
             return True
         return False
 
-    def get_tariff(self):
+    def get_tariff(self) -> Tariff:
         return self.current_tariff
 
     def get_control_state(self, evse, dayMinute):
@@ -269,6 +330,7 @@ def main():
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
                 evseController.writeLog(log_message)
                 evseController.setControlState(control_state)
+                tariffManager.get_tariff().set_home_demand_levels(evse, evseController, dayMinute)
                 if min_current is not None and max_current is not None:
                     if control_state == ControlState.CHARGE:
                         evseController.setChargeCurrentRange(min_current, max_current)
