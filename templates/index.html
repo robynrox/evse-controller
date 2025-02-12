@@ -76,15 +76,19 @@
                 const timestamps = data.timestamps.map(t => new Date(t * 1000).toLocaleTimeString());
                 const gridPower = data.grid_power;
                 const evsePower = data.evse_power;
+                const heatPumpPower = data.heat_pump_power;
+                const solarPower = data.solar_power;
 
                 // Calculate home power consumption
-                const homePower = gridPower.map((grid, index) => grid - evsePower[index]);
+                const homePower = gridPower.map((grid, index) => grid - evsePower[index] - heatPumpPower[index] - solarPower[index]);
 
                 // Update the chart
                 const chartData = [
-                    { x: timestamps, y: gridPower, name: 'Grid Power (W)', type: 'scatter' },
-                    { x: timestamps, y: evsePower, name: 'EVSE Power (W)', type: 'scatter' },
-                    { x: timestamps, y: homePower, name: 'Home Power (W)', type: 'scatter' }
+                    { x: timestamps, y: gridPower, name: 'Grid pwr (W)', type: 'scatter' },
+                    { x: timestamps, y: evsePower, name: 'EVSE pwr (W)', type: 'scatter' },
+                    { x: timestamps, y: heatPumpPower, name: 'HP pwr (W)', type: 'scatter' },
+                    { x: timestamps, y: solarPower, name: 'Solar pwr (W)', type: 'scatter' },
+                    { x: timestamps, y: homePower, name: 'Home pwr (W)', type: 'scatter' }
                 ];
 
                 const layout = {
