@@ -1,9 +1,9 @@
 class Power:
-    def __init__(self, gridWatts: float, gridPf: float, evseWatts: float, evsePf: float, voltage: float, unixtime: int = -1, posEnergyJoulesCh0: float = 0, negEnergyJoulesCh0: float = 0, posEnergyJoulesCh1: float = 0, negEnergyJoulesCh1: float = 0, soc: int = 0):
-        self.gridWatts = gridWatts
-        self.gridPf = gridPf
-        self.evseWatts = evseWatts
-        self.evsePf = evsePf
+    def __init__(self, ch1Watts: float = 0, ch1Pf: float = 0, ch2Watts: float = 0, ch2Pf: float = 0, voltage: float = 0, unixtime: int = -1, posEnergyJoulesCh0: float = 0, negEnergyJoulesCh0: float = 0, posEnergyJoulesCh1: float = 0, negEnergyJoulesCh1: float = 0, soc: int = 0):
+        self.ch1Watts = ch1Watts
+        self.ch1Pf = ch1Pf
+        self.ch2Watts = ch2Watts
+        self.ch2Pf = ch2Pf
         self.voltage = voltage
         self.unixtime = unixtime
         self.posEnergyJoulesCh0 = posEnergyJoulesCh0
@@ -13,7 +13,7 @@ class Power:
         self.soc = soc
 
     def __str__(self):
-        return f"Grid: {self.gridWatts}W, pf {self.gridPf}; EVSE: {self.evseWatts}W, pf {self.evsePf}; Voltage: {self.voltage}V; unixtime {self.unixtime}; SoC% {self.soc}"
+        return f"Grid: {self.ch1Watts}W, pf {self.ch1Pf}; EVSE: {self.ch2Watts}W, pf {self.ch2Pf}; Voltage: {self.voltage}V; unixtime {self.unixtime}; SoC% {self.soc}"
 
     def getAccumulatedEnergy(self):
         posEnergyCh0 = round(self.posEnergyJoulesCh0 / 3600)
@@ -30,4 +30,4 @@ class Power:
         return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
 
     def getHomeWatts(self):
-        return self.gridWatts - self.evseWatts
+        return self.ch1Watts - self.ch2Watts

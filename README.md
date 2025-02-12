@@ -63,12 +63,6 @@ changes.
 
 The following samples are provided:
 
-* RemainDormant.py: Hold the wallbox in dormant state. (I used to use that to detach my vehicle.)
-* ChargeFull.py: Set the wallbox to charge at maximum rate.
-* flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
-  Scheduler2.py.)
-* cosy.py: Control the wallbox in a way that works well with Cosy Octopus.
-* octgo.py: Control the wallbox in a way that works well with Octopus Go.
 * octopus.py: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
   It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point - at the time
   of writing, it doesn't seem to be the case that the use of the Agile tariff is favourable.
@@ -82,7 +76,18 @@ To get this running after setting up the configuration file, you would run the f
 
 * `python3 app.py` or `python app.py` (whichever works for you but you must use python 3)
 
-I deprecated the command-line argument parsing since interactive control and web control are now available.
+I removed the command-line argument parsing since interactive control and web control are now available.
+
+## Deprecated samples
+
+These are older samples of code and are no longer guaranteed to work.
+
+* RemainDormant.py: Hold the wallbox in dormant state. (I used to use that to detach my vehicle.)
+* ChargeFull.py: Set the wallbox to charge at maximum rate.
+* flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
+  Scheduler2.py.)
+* cosy.py: Control the wallbox in a way that works well with Cosy Octopus.
+* octgo.py: Control the wallbox in a way that works well with Octopus Go.
 
 ## Roadmap
 

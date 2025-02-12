@@ -10,6 +10,12 @@ import threading
 
 # Tariff base class
 class Tariff:
+    def __init__(self):
+        # Dictionary of time periods with rates (sample shown of a typical variable rate tariff)
+        self.time_of_use = {
+            "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
+        }  
+
     def is_off_peak(self, dayMinute):
         raise NotImplementedError
 
@@ -21,10 +27,53 @@ class Tariff:
     
     def set_home_demand_levels(self, evse, evseController, dayMinute):
         raise NotImplementedError
+    
+    def get_import_rate(self, current_time):
+        """Get the import rate at the given time in £/kWh"""
+        for period in self.time_of_use.values():
+            if self.is_in_period(current_time, period["start"], period["end"]):
+                return period["import_rate"]
+        return None
+
+    def get_export_rate(self, current_time):
+        """Get the export rate at the given time in £/kWh"""
+        for period in self.time_of_use.values():
+            if self.is_in_period(current_time, period["start"], period["end"]):
+                return period["export_rate"]
+        return None
+
+    def calculate_import_cost(self, kWh, timestamp):
+        """Calculate import cost based on time of use rates"""
+        return self.get_import_rate(timestamp) * kWh
+
+    def calculate_export_credit(self, kWh, timestamp):
+        """Calculate export credit based on time of use rates"""
+        return self.get_export_rate(timestamp) * kWh
+    
+    def is_in_period(self, current_time, start_time, end_time):
+        # Convert times to minutes since midnight
+        current = current_time.hour * 60 + current_time.minute
+        stparts = start_time.split(":")
+        start = int(stparts[0]) * 60 + int(stparts[1])
+        etparts = end_time.split(":")
+        end = int(etparts[0]) * 60 + int(etparts[1])
+
+        if start < end:
+            return start <= current < end
+        else:
+            # If period crosses midnight (e.g., "23:00" to "01:00")
+            return current >= start or current < end
 
 
 # Octopus Go tariff
 class OctopusGoTariff(Tariff):
+    def __init__(self):
+        super().__init__()
+        self.time_of_use = {
+            "low":  {"start": "00:30", "end": "05:30", "import_rate": 0.0850, "export_rate": 0.15},
+            "high": {"start": "05:30", "end": "00:30", "import_rate": 0.2627, "export_rate": 0.15}
+        }
+
     def is_off_peak(self, dayMinute):
         # Off-peak period: 00:30-05:30
         return 30 <= dayMinute < 330
@@ -76,6 +125,21 @@ class OctopusGoTariff(Tariff):
 
 # Cosy Octopus tariff
 class CosyOctopusTariff(Tariff):
+    def __init__(self):
+        super().__init__()
+        low = 0.1286
+        med = 0.2622
+        high = 0.3932
+        self.time_of_use = {
+            "med 1": {"start": "00:00", "end": "04:00", "import_rate":  med, "export_rate": 0.15},
+            "low 1": {"start": "04:00", "end": "07:00", "import_rate":  low, "export_rate": 0.15},
+            "med 2": {"start": "07:00", "end": "13:00", "import_rate":  med, "export_rate": 0.15},
+            "low 2": {"start": "13:00", "end": "16:00", "import_rate":  low, "export_rate": 0.15},
+            "high":  {"start": "16:00", "end": "19:00", "import_rate": high, "export_rate": 0.15},
+            "med 3": {"start": "19:00", "end": "22:00", "import_rate":  med, "export_rate": 0.15},
+            "low 3": {"start": "22:00", "end": "24:00", "import_rate":  low, "export_rate": 0.15},
+        }
+
     def is_off_peak(self, dayMinute):
         # Off-peak periods: 04:00-07:00, 13:00-16:00, 22:00-24:00
         off_peak_periods = [
@@ -199,7 +263,10 @@ inputThread.start()
 
 evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
 powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
-evseController = EvseController(powerMonitor, evse, {
+powerMonitor2 = None
+if configuration.SHELLY_2_URL:
+    powerMonitor2 = PowerMonitorShelly(configuration.SHELLY_2_URL)
+evseController = EvseController(powerMonitor, powerMonitor2, evse, {
     "WALLBOX_USERNAME": configuration.WALLBOX_USERNAME,
     "WALLBOX_PASSWORD": configuration.WALLBOX_PASSWORD,
     "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL,
@@ -207,7 +274,7 @@ evseController = EvseController(powerMonitor, evse, {
     "INFLUXDB_URL": configuration.INFLUXDB_URL,
     "INFLUXDB_TOKEN": configuration.INFLUXDB_TOKEN,
     "INFLUXDB_ORG": configuration.INFLUXDB_ORG
-})
+}, tariffManager)
 
 
 def main():

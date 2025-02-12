@@ -4,8 +4,8 @@ import math
 import time
 from lib.EvseInterface import EvseInterface, EvseState
 
-from lib.PowerMonitorInterface import PowerMonitorInterface
-from lib.Shelly import PowerMonitorPollingThread
+from lib.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
+from lib.Power import Power
 from lib.WallboxQuasar import EvseWallboxQuasar
 
 try:
@@ -46,9 +46,14 @@ def log(msg):
         print(timeStr + msg)
 
 
-class EvseController:
-    def __init__(self, pmon: PowerMonitorInterface, evse: EvseInterface, configuration):
+class EvseController(PowerMonitorObserver):
+    def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, evse: EvseInterface, configuration, tariffManager):
+        """
+        Initialize the EVSE controller.
+        """
         self.pmon = pmon
+        self.pmon2 = pmon2
+        self.auxpower = Power()
         self.evse = evse
         # Minimum current in either direction
         self.MIN_CURRENT = 3
@@ -65,6 +70,9 @@ class EvseController:
         self.thread = PowerMonitorPollingThread(pmon)
         self.thread.start()
         self.thread.attach(self)
+        self.thread2 = PowerMonitorPollingThread(pmon2)
+        self.thread2.start()
+        self.thread2.attach(self)
         self.connectionErrors = 0
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None
@@ -92,8 +100,11 @@ class EvseController:
         # Data for the last 300 readings
         self.gridPowerHistory = deque(maxlen=300)
         self.evsePowerHistory = deque(maxlen=300)
+        self.solarPowerHistory = deque(maxlen=300)
+        self.heatPumpPowerHistory = deque(maxlen=300)
         self.socHistory = deque(maxlen=300)
         self.timestamps = deque(maxlen=300)
+        self.tariffManager = tariffManager
         log("INFO EvseController started")
 
     def setHysteresisWindow(self, window):
@@ -172,90 +183,114 @@ class EvseController:
 
         return desiredEvseCurrent
 
-    def update(self, power):
-        # When power was instantiated, the SoC was not known, so update it here.
-        power.soc = self.evse.getBatteryChargeLevel()
+    def update(self, monitor, power):
+        # If monitor is the one that deals with solar and heat pump data,
+        if monitor == self.pmon2:
+            # Log the values.
+            self.auxpower = power
+        #Else
+        else:
+            # At present, channels are allocated as follows:
+            #   power.ch1 is grid power
+            #   power.ch2 is EVSE power
+            #   self.auxpower.ch1 is heat pump power
+            #   self.auxpower.ch2 is solar power
+            # I am not sure how to generalise this at present for the circumstances of others.
 
-        # Append new data to the history buffers
-        self.gridPowerHistory.append(power.gridWatts)
-        self.evsePowerHistory.append(power.evseWatts)
-        self.socHistory.append(power.soc)
-        self.timestamps.append(power.unixtime)
+            # When power was instantiated, the SoC was not known, so update it here.
+            power.soc = self.evse.getBatteryChargeLevel()
 
-        if (time.time() >= self.nextHalfHourlyLog):
-            self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
-            log(f"ENERGY {power.getAccumulatedEnergy()}")
-            if (self.powerAtLastHalfHourlyLog is not None):
-                log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
-            self.powerAtLastHalfHourlyLog = power
+            # Append new data to the history buffers
+            self.gridPowerHistory.append(power.ch1Watts)
+            self.evsePowerHistory.append(power.ch2Watts)
+            self.heatPumpPowerHistory.append(self.auxpower.ch1Watts)
+            self.solarPowerHistory.append(self.auxpower.ch2Watts)
+            self.socHistory.append(power.soc)
+            self.timestamps.append(power.unixtime)
 
-        # The code assumes that it is measuring power to the EVSE.
-        # If that's not the case, the setpoint current should be used.
-        desiredEvseCurrent = self.calculateTargetCurrent(power)
+            if (time.time() >= self.nextHalfHourlyLog):
+                self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
+                log(f"ENERGY {power.getAccumulatedEnergy()}")
+                if (self.powerAtLastHalfHourlyLog is not None):
+                    log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
+                self.powerAtLastHalfHourlyLog = power
 
-        logMsg = f"STATE H:{round(power.getHomeWatts())} G:{power.gridWatts} E:{power.evseWatts} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
-        if power.soc != self.batteryChargeLevel:
-            if self.powerAtBatteryChargeLevel is not None:
-                log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
-            self.batteryChargeLevel = power.soc
-            self.powerAtBatteryChargeLevel = power
-        if self.configuration.get("USING_INFLUXDB", False) is True:
-            point = (
-                influxdb_client.Point("measurement")
-                .field("grid", power.gridWatts)
-                .field("grid_pf", power.gridPf)
-                .field("evse", power.evseWatts)
-                .field("evse_pf", power.evsePf)
-                .field("voltage", power.voltage)
-                .field("evseTargetCurrent", self.evseCurrent)
-                .field("evseDesiredCurrent", desiredEvseCurrent)
-                .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
-            )
-            self.write_api.write(bucket="powerlog", record=point)
+            # The code assumes that it is measuring power to the EVSE.
+            # If that's not the case, the setpoint current should be used.
+            desiredEvseCurrent = self.calculateTargetCurrent(power)
 
-        try:
-            self.chargerState = self.evse.getEvseState()
-            self.connectionErrors = 0
-            logMsg += f"CS:{self.chargerState} "
-        except ConnectionError:
-            self.connectionErrors += 1
-            log(f"WARNING Consecutive connection errors: {self.connectionErrors}")
-            self.chargerState = EvseState.ERROR
-            if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                log("ERROR Restarting EVSE")
-                self.evse.resetViaWebApi(self.configuration["WALLBOX_USERNAME"],
-                                         self.configuration["WALLBOX_PASSWORD"],
-                                         self.configuration["WALLBOX_SERIAL"])
-                # Allow up to an hour for the EVSE to restart without trying to restart again
-                self.connectionErrors = -3600
+            gridPower = round(power.ch1Watts)
+            evsePower = round(power.ch2Watts)
+            hpPower = round(self.auxpower.ch1Watts)
+            solarPower = round(self.auxpower.ch2Watts)
 
-        nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
-        if nextWriteAllowed > 0:
-            logMsg += f"NextChgIn:{nextWriteAllowed}s "
+            homePower = round(gridPower - evsePower - hpPower - solarPower)
+
+            logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
+            if power.soc != self.batteryChargeLevel:
+                if self.powerAtBatteryChargeLevel is not None:
+                    log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
+                self.batteryChargeLevel = power.soc
+                self.powerAtBatteryChargeLevel = power
+            if self.configuration.get("USING_INFLUXDB", False) is True:
+                point = (
+                    influxdb_client.Point("measurement")
+                    .field("grid", power.ch1Watts)
+                    .field("grid_pf", power.ch1Pf)
+                    .field("evse", power.ch2Watts)
+                    .field("evse_pf", power.ch2Pf)
+                    .field("voltage", power.voltage)
+                    .field("evseTargetCurrent", self.evseCurrent)
+                    .field("evseDesiredCurrent", desiredEvseCurrent)
+                    .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+                    .field("heatpump", self.auxpower.ch1Watts)
+                    .field("solar", self.auxpower.ch2Watts)
+                )
+                self.write_api.write(bucket="powerlog", record=point)
+
+            try:
+                self.chargerState = self.evse.getEvseState()
+                self.connectionErrors = 0
+                logMsg += f"CS:{self.chargerState} "
+            except ConnectionError:
+                self.connectionErrors += 1
+                log(f"WARNING Consecutive connection errors: {self.connectionErrors}")
+                self.chargerState = EvseState.ERROR
+                if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
+                    log("ERROR Restarting EVSE")
+                    self.evse.resetViaWebApi(self.configuration["WALLBOX_USERNAME"],
+                                            self.configuration["WALLBOX_PASSWORD"],
+                                            self.configuration["WALLBOX_SERIAL"])
+                    # Allow up to an hour for the EVSE to restart without trying to restart again
+                    self.connectionErrors = -3600
+
+            nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
+            if nextWriteAllowed > 0:
+                logMsg += f"NextChgIn:{nextWriteAllowed}s "
+                log(logMsg)
+                return
+
             log(logMsg)
-            return
-
-        log(logMsg)
-        resetState = False
-        if self.evseCurrent != desiredEvseCurrent:
-            resetState = True
-        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
-            resetState = True
-            if self.evse.isFull():
-                desiredEvseCurrent = 0
-        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
-            resetState = True
-            if self.evse.isEmpty():
-                desiredEvseCurrent = 0
-        if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
-            resetState = True
-        if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
-            resetState = True
-        if resetState:
-            if (self.evseCurrent != desiredEvseCurrent):
-                log(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-            self.evse.setChargingCurrent(desiredEvseCurrent)
-            self.evseCurrent = desiredEvseCurrent
+            resetState = False
+            if self.evseCurrent != desiredEvseCurrent:
+                resetState = True
+            if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
+                resetState = True
+                if self.evse.isFull():
+                    desiredEvseCurrent = 0
+            if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
+                resetState = True
+                if self.evse.isEmpty():
+                    desiredEvseCurrent = 0
+            if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
+                resetState = True
+            if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
+                resetState = True
+            if resetState:
+                if (self.evseCurrent != desiredEvseCurrent):
+                    log(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+                self.evse.setChargingCurrent(desiredEvseCurrent)
+                self.evseCurrent = desiredEvseCurrent
 
     def setControlState(self, state: ControlState):
         self.state = state
@@ -310,13 +345,35 @@ class EvseController:
         Returns the last 300 points (nominally 5 minutes) of historical data.
         :return: A dictionary containing:
             - timestamps: List of timestamps (in seconds since epoch).
-            - grid_power: List of grid power values (in watts).
-            - evse_power: List of EVSE power values (in watts).
+            - grid_power: List of grid power measurements (in watts).
+            - evse_power: List of EVSE power measurements (in watts).
+            - heat_pump_power: List of heat pump power measurements (in watts).
+            - solar_power: List of solar power measurements (in watts).
             - soc: List of state of charge values (in percent).
         """
         return {
             "timestamps": list(self.timestamps),
             "grid_power": list(self.gridPowerHistory),
             "evse_power": list(self.evsePowerHistory),
+            "heat_pump_power": list(self.heatPumpPowerHistory),
+            "solar_power": list(self.solarPowerHistory),
+            "soc": list(self.socHistory)
+        }
+        """
+        Returns the last 300 points (nominally 5 minutes) of historical data.
+        :return: A dictionary containing:
+            - timestamps: List of timestamps (in seconds since epoch).
+            - grid_power: List of grid power values (in watts).
+            - evse_power: List of EVSE power values (in watts).
+            - heat_pump_power: List of heat pump power measurements (in watts).
+            - solar_power: List of solar power measurements (in watts).
+            - soc: List of state of charge values (in percent).
+        """
+        return {
+            "timestamps": list(self.timestamps),
+            "grid_power": list(self.gridPowerHistory),
+            "evse_power": list(self.evsePowerHistory),
+            "heat_pump_power": list(self.heatPumpPowerHistory),
+            "solar_power": list(self.solarPowerHistory),
             "soc": list(self.socHistory)
         }
