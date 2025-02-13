@@ -86,7 +86,10 @@ class OctopusGoTariff(Tariff):
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
-            return ControlState.CHARGE, None, None, "OCTGO Night rate: charge at max rate"
+            if evse.getBatteryChargeLevel() < 90:
+                return ControlState.CHARGE, None, None, "OCTGO Night rate: charge at max rate"
+            else:
+                return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC>=90%, remain dormant"
         elif evse.getBatteryChargeLevel() <= 25:
             return ControlState.DORMANT, None, None, "OCTGO Battery depleted, remain dormant"
         elif 330 <= dayMinute < 19 * 60:
@@ -160,7 +163,10 @@ class CosyOctopusTariff(Tariff):
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "COSY SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
-            return ControlState.CHARGE, None, None, "COSY Off-peak rate: charge at max rate"
+            if evse.getBatteryChargeLevel() < 90:
+                return ControlState.CHARGE, None, None, "COSY Off-peak rate: charge at max rate"
+            else:
+                return ControlState.DORMANT, None, None, "COSY Off-peak rate: SoC>=90%, remain dormant"
         elif self.is_expensive_period(dayMinute):
             return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Expensive rate: load follow discharge"
         elif evse.getBatteryChargeLevel() <= 25:
