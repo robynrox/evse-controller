@@ -58,9 +58,9 @@ class EvseController(PowerMonitorObserver):
         # Minimum current in either direction
         self.MIN_CURRENT = 3
         # Maximum charging current
-        self.MAX_CHARGE_CURRENT = 14
+        self.MAX_CHARGE_CURRENT = 16
         # Maximum discharging current
-        self.MAX_DISCHARGE_CURRENT = 15
+        self.MAX_DISCHARGE_CURRENT = 16
         self.evseCurrent = 0
         self.minDischargeCurrent = 0
         self.maxDischargeCurrent = 0
@@ -79,8 +79,10 @@ class EvseController(PowerMonitorObserver):
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        self.hysteresisWindow = 20 # Default hysteresis in Watts
+        self.hysteresisWindow = 50 # Default hysteresis in Watts
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
+        self.grid_power_history = deque(maxlen=3)  # To store up to three previous grid power readings
+        self.current_grid_power = Power()
 
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
@@ -122,7 +124,7 @@ class EvseController(PowerMonitorObserver):
         """
         newLevels = sorted(levels, key=lambda x: x[0])
         try:
-            if self.homeDemandLevels != newLevels: 
+            if self.homeDemandLevels != newLevels:
                 self.homeDemandLevels = newLevels
                 log(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
         except: # if homeDemandLevels was unset
@@ -215,9 +217,35 @@ class EvseController(PowerMonitorObserver):
                     log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
                 self.powerAtLastHalfHourlyLog = power
 
-            # The code assumes that it is measuring power to the EVSE.
-            # If that's not the case, the setpoint current should be used.
-            desiredEvseCurrent = self.calculateTargetCurrent(power)
+            # We need to determine the grid power that will be used for the EVSE state calculation.
+            # This is to eliminate spikes in the data (e.g. from a fridge powering up).
+            smoothed_grid_power = power
+            self.grid_power_history.append(power)
+            # If there are three readings,
+            if len(self.grid_power_history) >= 3:
+                power_used_for_set_point = self.current_grid_power
+                set_point_watts = power_used_for_set_point.getHomeWatts()
+                power_t_minus_1 = self.grid_power_history[-2]
+                ptm1_watts = power_t_minus_1.getHomeWatts()
+                power_t_0 = self.grid_power_history[-1]
+                pt0_watts = power_t_0.getHomeWatts()
+                # Both have to be higher or lower than the current set point to change state.
+                # We need to choose whichever of these represents the minimum change.
+                if pt0_watts > set_point_watts and ptm1_watts > set_point_watts:
+                    if pt0_watts > ptm1_watts:
+                        smoothed_grid_power = power_t_minus_1
+                    else:
+                        smoothed_grid_power = power_t_0
+                elif pt0_watts < set_point_watts and ptm1_watts < set_point_watts:
+                    if pt0_watts < ptm1_watts:
+                        smoothed_grid_power = power_t_minus_1
+                    else:
+                        smoothed_grid_power = power_t_0
+                else:
+                    smoothed_grid_power = power_used_for_set_point
+
+            desiredEvseCurrent = self.calculateTargetCurrent(smoothed_grid_power)
+            self.current_grid_power = smoothed_grid_power
 
             gridPower = round(power.ch1Watts)
             evsePower = round(power.ch2Watts)
@@ -227,6 +255,7 @@ class EvseController(PowerMonitorObserver):
             homePower = round(gridPower - evsePower - hpPower - solarPower)
 
             logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
+
             if power.soc != self.batteryChargeLevel:
                 if self.powerAtBatteryChargeLevel is not None:
                     log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
@@ -347,24 +376,6 @@ class EvseController(PowerMonitorObserver):
             - timestamps: List of timestamps (in seconds since epoch).
             - grid_power: List of grid power measurements (in watts).
             - evse_power: List of EVSE power measurements (in watts).
-            - heat_pump_power: List of heat pump power measurements (in watts).
-            - solar_power: List of solar power measurements (in watts).
-            - soc: List of state of charge values (in percent).
-        """
-        return {
-            "timestamps": list(self.timestamps),
-            "grid_power": list(self.gridPowerHistory),
-            "evse_power": list(self.evsePowerHistory),
-            "heat_pump_power": list(self.heatPumpPowerHistory),
-            "solar_power": list(self.solarPowerHistory),
-            "soc": list(self.socHistory)
-        }
-        """
-        Returns the last 300 points (nominally 5 minutes) of historical data.
-        :return: A dictionary containing:
-            - timestamps: List of timestamps (in seconds since epoch).
-            - grid_power: List of grid power values (in watts).
-            - evse_power: List of EVSE power values (in watts).
             - heat_pump_power: List of heat pump power measurements (in watts).
             - solar_power: List of solar power measurements (in watts).
             - soc: List of state of charge values (in percent).
