@@ -22,7 +22,10 @@ class EvseWallboxQuasar(EvseInterface):
         self.writeNextAllowed = 0
         self.readNextAllowed = 0
         self.lastEvseState = EvseState.UNKNOWN
-        self.MAX_CHARGE_PERCENT = 97
+        # Hard limit of maximum charge percentage (might have to adjust to avoid cycling if charger keeps turning
+        # on and off after a certain level, e.g. 97%)
+        self.MAX_CHARGE_PERCENT = 100
+        # Hard limit of minimum charge percentage (it is not good for the EV battery to go too low and stay there)
         self.MIN_CHARGE_PERCENT = 20
 
     def setChargingCurrent(self, current: int):
