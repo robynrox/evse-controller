@@ -36,6 +36,9 @@ LOGGING = True
 # Set your default tariff here (at the time of writing, COSY or OCTGO):
 DEFAULT_TARIFF = "COSY"
 
+# Maximum charge percentage (if not overridden manually)
+MAX_CHARGE_PERCENT = 90
+
 # ***** END OF CONFIGURATION *****
 
 # If using the secret.py file, do not copy the statements below into it.
