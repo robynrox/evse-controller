@@ -219,31 +219,36 @@ class EvseController(PowerMonitorObserver):
 
             # We need to determine the grid power that will be used for the EVSE state calculation.
             # This is to eliminate spikes in the data (e.g. from a fridge powering up).
+            # Experimentally it has been found that spikes can affect one or two adjacent samples.
             smoothed_grid_power = power
             self.grid_power_history.append(power)
-            # If there are three readings,
-            if len(self.grid_power_history) >= 3:
-                power_used_for_set_point = self.current_grid_power
-                set_point_watts = power_used_for_set_point.getHomeWatts()
-                power_t_minus_1 = self.grid_power_history[-2]
-                ptm1_watts = power_t_minus_1.getHomeWatts()
-                power_t_0 = self.grid_power_history[-1]
-                pt0_watts = power_t_0.getHomeWatts()
-                # Both have to be higher or lower than the current set point to change state.
-                # We need to choose whichever of these represents the minimum change.
-                if pt0_watts > set_point_watts and ptm1_watts > set_point_watts:
-                    if pt0_watts > ptm1_watts:
-                        smoothed_grid_power = power_t_minus_1
-                    else:
-                        smoothed_grid_power = power_t_0
-                elif pt0_watts < set_point_watts and ptm1_watts < set_point_watts:
-                    if pt0_watts < ptm1_watts:
-                        smoothed_grid_power = power_t_minus_1
-                    else:
-                        smoothed_grid_power = power_t_0
-                else:
-                    smoothed_grid_power = power_used_for_set_point
 
+            # Current power on which the set point is based.
+            set_point_power = power.getHomeWatts()
+            # Check all available readings to see if all are above or below the set point.
+            # Only if that is true should we use a new reading, and that reading should then
+            # be the reading that deviates least from the existing set point.
+            all_above = True
+            all_below = True
+            min_sample = power
+            max_sample = power
+            for sample in self.grid_power_history:
+                sample_power = sample.getHomeWatts()
+                if sample_power <= set_point_power:
+                    all_above = False
+                if sample_power >= set_point_power:
+                    all_below = False
+                if sample_power < min_sample.getHomeWatts():
+                    min_sample = sample
+                if sample_power > max_sample.getHomeWatts():
+                    max_sample = sample
+            if all_above:
+                smoothed_grid_power = min_sample
+            elif all_below:
+                smoothed_grid_power = max_sample
+            else:
+                smoothed_grid_power = power
+                
             desiredEvseCurrent = self.calculateTargetCurrent(smoothed_grid_power)
             self.current_grid_power = smoothed_grid_power
 
