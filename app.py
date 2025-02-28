@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 import threading
 import time
-import queue
-
-# Import your existing code
-from octopus import main, web_command_queue, execState, nextSmartState, evseController
+# Import from octopus module
+from octopus import command_queue, main, execState, nextSmartState, evseController
 
 app = Flask(__name__)
 
@@ -20,7 +18,7 @@ def command():
     command = data.get('command')
     
     if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy']:
-        web_command_queue.put(command)
+        command_queue.put(command)
         return jsonify({"status": "success", "message": f"Command '{command}' received"})
     else:
         return jsonify({"status": "error", "message": "Invalid command"}), 400

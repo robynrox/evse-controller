@@ -242,8 +242,7 @@ class ExecState(Enum):
 
 
 nextSmartState = 0
-execQueue = queue.SimpleQueue()
-web_command_queue = queue.Queue()
+command_queue = queue.SimpleQueue()
 execState = ExecState.SMART
 tariffManager = TariffManager(configuration.DEFAULT_TARIFF)
 
@@ -253,10 +252,10 @@ class InputParser(threading.Thread):
         threading.Thread.__init__(self)
 
     def run(self):
-        global execQueue
+        global command_queue
         while True:
             try:
-                execQueue.put(input())
+                command_queue.put(input())
             except EOFError:
                 print("Standard input closed, exiting monitoring thread")
                 break
@@ -289,8 +288,8 @@ def main():
 
     while True:
         try:
-            dequeue = execQueue.get(True, 1)
-            match dequeue:
+            command = command_queue.get(timeout=1.0)
+            match command:
                 case "p" | "pause":
                     print("Entering pause state for ten minutes")
                     nextSmartState = time.time() + 600
@@ -305,9 +304,9 @@ def main():
                     print("Entering discharge state for one hour")
                     nextSmartState = time.time() + 3600
                     execState = ExecState.DISCHARGE_THEN_SMART
-                    nextStateCheck = time.time()                
+                    nextStateCheck = time.time()
                 case "s" | "smart":
-                    print("Enter the smart tariff controller state")
+                    print("Entering smart tariff controller state")
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
@@ -320,7 +319,7 @@ def main():
                     nextStateCheck = time.time()
                 case _:
                     try:
-                        currentAmps = int(dequeue)
+                        currentAmps = int(command)
                         print(f"Setting current to {currentAmps}")
                         if currentAmps > 0:
                             evseController.setControlState(ControlState.CHARGE)
@@ -341,42 +340,6 @@ def main():
                         print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
                         print("g | go | octgo: Switch to Octopus Go tariff")
                         print("cosy: Switch to Cosy Octopus tariff")
-        except queue.Empty:
-            pass
-
-        try:
-            # Check for commands from the web interface
-            if not web_command_queue.empty():
-                web_command = web_command_queue.get()
-                match web_command:
-                    case "pause":
-                        print("Web command: Entering pause state for ten minutes")
-                        nextSmartState = time.time() + 600
-                        execState = ExecState.PAUSE_THEN_SMART
-                        nextStateCheck = time.time()
-                    case "charge":
-                        print("Web command: Entering charge state for one hour")
-                        nextSmartState = time.time() + 3600
-                        execState = ExecState.CHARGE_THEN_SMART
-                        nextStateCheck = time.time()
-                    case "discharge":
-                        print("Web command: Entering discharge state for one hour")
-                        nextSmartState = time.time() + 3600
-                        execState = ExecState.DISCHARGE_THEN_SMART
-                        nextStateCheck = time.time()
-                    case "smart":
-                        print("Web command: Resume smart tariff controller state")
-                        execState = ExecState.SMART
-                        nextStateCheck = time.time()
-                    case "octgo":
-                        print("Web command: Switching to Octopus Go tariff")
-                        tariffManager.set_tariff("OCTGO")
-                        nextStateCheck = time.time()
-                    case "cosy":
-                        print("Web command: Switching to Cosy Octopus tariff")
-                        tariffManager.set_tariff("COSY")
-                        nextStateCheck = time.time()
-
         except queue.Empty:
             pass
 
