@@ -80,7 +80,7 @@ I removed the command-line argument parsing since interactive control and web co
 
 ## Deprecated samples
 
-These are older samples of code and are no longer guaranteed to work.
+These are older samples of code and are no longer guaranteed to work. These have been moved to the legacy-unsupported directory but would have to be moved back into the root directory as part of any process aimed at getting them to work again.
 
 * RemainDormant.py: Hold the wallbox in dormant state. (I used to use that to detach my vehicle.)
 * ChargeFull.py: Set the wallbox to charge at maximum rate.
@@ -88,6 +88,8 @@ These are older samples of code and are no longer guaranteed to work.
   Scheduler2.py.)
 * cosy.py: Control the wallbox in a way that works well with Cosy Octopus.
 * octgo.py: Control the wallbox in a way that works well with Octopus Go.
+* scheduler.py: Another old sample that used to work with Octopus Flux.
+* set-wallbox.py: A sample of how to use the modbus interface to control the wallbox.
 
 ## Roadmap
 
