@@ -1,15 +1,26 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 import threading
 import time
+from datetime import datetime
 # Import from octopus module
-from octopus import command_queue, main, execState, nextSmartState, evseController
+from octopus import (
+    execQueue, 
+    main, 
+    evseController, 
+    scheduler, 
+    ScheduledEvent,
+    get_system_state
+)
 
 app = Flask(__name__)
+# Add a secret key for flash messages
+app.secret_key = 'your-secret-key-here'  # Replace with a secure random key in production
 
 # Homepage route
 @app.route('/')
-def home():
-    return render_template('index.html')
+def index():
+    scheduled_events = scheduler.get_future_events()
+    return render_template('index.html', scheduled_events=scheduled_events)
 
 # API route to handle commands
 @app.route('/command', methods=['POST'])
@@ -18,7 +29,7 @@ def command():
     command = data.get('command')
     
     if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy']:
-        command_queue.put(command)
+        execQueue.put(command)
         return jsonify({"status": "success", "message": f"Command '{command}' received"})
     else:
         return jsonify({"status": "error", "message": "Invalid command"}), 400
@@ -26,12 +37,10 @@ def command():
 # API route to get current state
 @app.route('/status', methods=['GET'])
 def status():
-    global execState, nextSmartState
+    global execState
     current_state = execState.name
-    next_state_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(nextSmartState))
     return jsonify({
-        "current_state": current_state,
-        "next_state_time": next_state_time
+        "current_state": current_state
     })
 
 @app.route('/api/history', methods=['GET'])
@@ -73,6 +82,72 @@ def save_config():
         f.write(config_content)
 
     return redirect(url_for('config_form'))  # Redirect back to the configuration page
+
+@app.route('/schedule', methods=['GET', 'POST'])
+def schedule():
+    if request.method == 'POST':
+        datetime_str = request.form['datetime']
+        state = request.form['state']
+        
+        try:
+            # Convert HTML datetime-local format to Python datetime
+            timestamp = datetime.fromisoformat(datetime_str.replace('T', ' '))
+            if timestamp < datetime.now():
+                flash('Cannot schedule events in the past', 'error')
+                return redirect(url_for('schedule'))
+                
+            event = ScheduledEvent(timestamp, state)
+            scheduler.add_event(event)
+            scheduler.save_events()  # Make sure to save the events after adding
+            flash('Event scheduled successfully', 'success')
+        except ValueError as e:
+            flash(f'Invalid datetime format: {str(e)}', 'error')
+        except Exception as e:
+            flash(f'Error scheduling event: {str(e)}', 'error')
+        
+        return redirect(url_for('schedule'))
+    
+    # GET request - display the schedule page
+    try:
+        scheduled_events = scheduler.get_future_events()
+    except Exception as e:
+        scheduled_events = []
+        flash(f'Error loading scheduled events: {str(e)}', 'error')
+    
+    return render_template('schedule.html', scheduled_events=scheduled_events)
+
+@app.route('/schedule/delete/<timestamp>/<state>', methods=['DELETE'])
+def delete_schedule(timestamp, state):
+    try:
+        event_timestamp = datetime.fromisoformat(timestamp)
+        events = scheduler.get_future_events()
+        for event in events:
+            if (event.timestamp == event_timestamp and 
+                event.state == state):
+                scheduler.events.remove(event)
+                scheduler.save_events()
+                return jsonify({'status': 'success', 'message': 'Event deleted successfully'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    
+    return jsonify({'status': 'error', 'message': 'Event not found'}), 404
+
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    # Get current state using the proper interface
+    current_state = get_system_state()
+    
+    # Get next scheduled event
+    future_events = scheduler.get_future_events()
+    next_event = future_events[0] if future_events else None
+    
+    return jsonify({
+        'current_state': current_state,
+        'next_event': {
+            'timestamp': next_event.timestamp.isoformat(),
+            'state': next_event.state
+        } if next_event else None
+    })
 
 # Run the Flask app in a separate thread
 def run_flask():

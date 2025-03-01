@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EVSE Control</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
     <style>
         /* Ensure the chart container scales with the screen size */
         #chart {
@@ -15,22 +15,80 @@
             max-height: 600px;
             /* Limit maximum height for larger screens */
         }
+
+        .nav-links {
+            margin-bottom: 20px;
+        }
+
+        .nav-links a {
+            color: #0066cc;
+            text-decoration: none;
+            margin-right: 15px;
+        }
+
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+
+        .status-item .separator {
+            margin: 0 20px;
+            color: #dee2e6;
+        }
+
+        .status-info {
+            display: inline-block;
+            margin-right: 20px;
+        }
     </style>
 </head>
 
 <body>
     <h1>EVSE Control Interface</h1>
+    <div class="nav-links">
+        <a href="{{ url_for('schedule') }}">Schedule Events →</a>
+    </div>
+
+    <div class="status-panel">
+        <div class="status-item">
+            <span class="status-info">
+                <strong>Current State:</strong> <span id="current-state">Loading...</span>
+            </span>
+            <span class="separator">|</span>
+            <span class="status-info">
+                <strong>State of Charge:</strong> <span id="soc">Loading...</span>
+            </span>
+        </div>
+        <div class="status-item">
+            <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
+        </div>
+    </div>
+
     <button onclick="sendCommand('octgo')">Select and start Octopus Go</button>
     <button onclick="sendCommand('cosy')">Select and start Cosy Octopus</button>
-    <button onclick="sendCommand('pause')">Pause for 10 Minutes</button>
-    <button onclick="sendCommand('charge')">Charge for 1 Hour</button>
-    <button onclick="sendCommand('discharge')">Discharge for 1 Hour</button>
+    <button onclick="sendCommand('pause')">Pause</button>
+    <button onclick="sendCommand('charge')">Charge</button>
+    <button onclick="sendCommand('discharge')">Discharge</button>
 
     <h1>EVSE Power History</h1>
     <div id="chart" style="width:100%;height:600px;"></div>
-    <div class="info">
-        <p>Latest State of Charge: <span id="soc">Loading...</span></p>
-    </div>
+
+    <style>
+        .status-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+
+        .status-item {
+            margin: 10px 0;
+        }
+
+        .status-item strong {
+            color: #495057;
+        }
+    </style>
 
     <script>
         async function fetchHistory() {
@@ -124,6 +182,55 @@
         window.addEventListener('resize', () => {
             Plotly.relayout('chart', getLayout());
         });
+
+        async function sendCommand(command) {
+            try {
+                const response = await fetch('/command', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ command: command })
+                });
+
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Failed to send command');
+                }
+
+                // Immediately update the status after sending a command
+                updateStatus();
+            } catch (error) {
+                console.error('Error sending command:', error);
+                alert('Failed to send command: ' + error.message);
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // Update current state
+                const stateElement = document.getElementById('current-state');
+                stateElement.textContent = data.current_state.replace(/_/g, ' ');
+
+                // Update next event
+                const nextEventElement = document.getElementById('next-event');
+                if (data.next_event) {
+                    const eventTime = new Date(data.next_event.timestamp);
+                    nextEventElement.textContent = `${data.next_event.state} at ${eventTime.toLocaleString()}`;
+                } else {
+                    nextEventElement.textContent = 'No events scheduled';
+                }
+            } catch (error) {
+                console.error('Error fetching status:', error);
+            }
+        }
+
+        // Update status every 5 seconds
+        setInterval(updateStatus, 5000);
+        updateStatus(); // Initial call
     </script>
 </body>
 

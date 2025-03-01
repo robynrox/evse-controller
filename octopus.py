@@ -7,6 +7,69 @@ import configuration
 import math
 import queue
 import threading
+from datetime import datetime
+import json
+from pathlib import Path
+from typing import List, Dict
+
+# Add these new classes near the top of the file, after the existing imports
+
+class ScheduledEvent:
+    def __init__(self, timestamp, state):
+        self.timestamp = timestamp
+        self.state = state
+
+    def to_dict(self):
+        return {
+            'timestamp': self.timestamp.isoformat(),
+            'state': self.state
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            timestamp=datetime.fromisoformat(data['timestamp']),
+            state=data['state']
+        )
+
+class Scheduler:
+    def __init__(self, save_path):
+        self.events = []
+        self.save_path = Path(save_path)
+        self.load_events()
+
+    def add_event(self, event):
+        self.events.append(event)
+        self.events.sort(key=lambda x: x.timestamp)
+        self.save_events()
+
+    def get_future_events(self):
+        now = datetime.now()
+        return [event for event in self.events if event.timestamp > now]
+
+    def get_due_events(self) -> List[ScheduledEvent]:
+        """Get events that are due and remove them from the list"""
+        now = datetime.now()
+        due_events = [event for event in self.events if event.timestamp <= now]
+        self.events = [event for event in self.events if event.timestamp > now]
+        if due_events:
+            self.save_events()
+        return due_events
+
+    def load_events(self):
+        if self.save_path.exists():
+            try:
+                data = json.loads(self.save_path.read_text())
+                self.events = [ScheduledEvent.from_dict(event) for event in data]
+                # Sort events by timestamp
+                self.events.sort(key=lambda x: x.timestamp)
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"Error loading events: {e}")
+                self.events = []
+
+    def save_events(self):
+        data = [event.to_dict() for event in self.events]
+        self.save_path.write_text(json.dumps(data, indent=2))
 
 # Tariff base class
 class Tariff:
@@ -235,27 +298,36 @@ class TariffManager:
 # Main application
 class ExecState(Enum):
     SMART = 0
-    CHARGE_THEN_SMART = 1
-    DISCHARGE_THEN_SMART = 2
-    PAUSE_THEN_SMART = 3
+    CHARGE = 1
+    DISCHARGE = 2
+    PAUSE = 3
     FIXED = 4
 
 
-nextSmartState = 0
-command_queue = queue.SimpleQueue()
+execQueue = queue.SimpleQueue()
 execState = ExecState.SMART
 tariffManager = TariffManager(configuration.DEFAULT_TARIFF)
+scheduler = Scheduler('schedules.json')
 
+def get_system_state():
+    """
+    Returns the current system state information including active mode and tariff if applicable.
+    """
+    current_state = execState.name
+    if execState == ExecState.SMART:
+        current_tariff = tariffManager.get_tariff().__class__.__name__.replace('Tariff', '')
+        current_state = f"SMART ({current_tariff})"
+    return current_state
 
 class InputParser(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
 
     def run(self):
-        global command_queue
+        global execQueue
         while True:
             try:
-                command_queue.put(input())
+                execQueue.put(input())
             except EOFError:
                 print("Standard input closed, exiting monitoring thread")
                 break
@@ -282,28 +354,58 @@ evseController = EvseController(powerMonitor, powerMonitor2, evse, {
 }, tariffManager)
 
 
+def handle_schedule_command(command_parts):
+    """Handle schedule command: schedule 2025-03-01T17:30:00 discharge"""
+    if len(command_parts) != 3:
+        print("Usage: schedule YYYY-MM-DDTHH:MM:SS state")
+        return
+    
+    try:
+        timestamp = datetime.fromisoformat(command_parts[1])
+        state = command_parts[2]
+        event = ScheduledEvent(timestamp, state)
+        scheduler.add_event(event)
+        print(f"Scheduled state change to {state} at {timestamp}")
+    except ValueError:
+        print("Invalid datetime format. Use YYYY-MM-DDTHH:MM:SS")
+
+def handle_list_schedule_command():
+    """Handle list-schedule command"""
+    events = scheduler.get_future_events()
+    if not events:
+        print("No scheduled events")
+        return
+    
+    print("Scheduled events:")
+    for event in events:
+        print(f"- {event.timestamp.isoformat()} -> {event.state}")
+
 def main():
-    global nextSmartState, execState
+    global execState
     nextStateCheck = 0
 
     while True:
         try:
-            command = command_queue.get(timeout=1.0)
-            match command:
+            # Check for scheduled events
+            due_events = scheduler.get_due_events()
+            for event in due_events:
+                print(f"Executing scheduled event: changing to {event.state}")
+                execQueue.put(event.state)
+
+            # Existing command handling
+            command = execQueue.get(True, 1)
+            match command.lower():
                 case "p" | "pause":
-                    print("Entering pause state for ten minutes")
-                    nextSmartState = time.time() + 600
-                    execState = ExecState.PAUSE_THEN_SMART
+                    print("Entering pause state")
+                    execState = ExecState.PAUSE
                     nextStateCheck = time.time()
                 case "c" | "charge":
-                    print("Entering charge state for one hour")
-                    nextSmartState = time.time() + 3600
-                    execState = ExecState.CHARGE_THEN_SMART
+                    print("Entering charge state")
+                    execState = ExecState.CHARGE
                     nextStateCheck = time.time()
                 case "d" | "discharge":
-                    print("Entering discharge state for one hour")
-                    nextSmartState = time.time() + 3600
-                    execState = ExecState.DISCHARGE_THEN_SMART
+                    print("Entering discharge state")
+                    execState = ExecState.DISCHARGE
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     print("Entering smart tariff controller state")
@@ -312,11 +414,17 @@ def main():
                 case "g" | "go" | "octgo":
                     print("Switching to Octopus Go tariff")
                     tariffManager.set_tariff("OCTGO")
+                    execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "cosy":
                     print("Switching to Cosy Octopus tariff")
                     tariffManager.set_tariff("COSY")
+                    execState = ExecState.SMART
                     nextStateCheck = time.time()
+                case "schedule":
+                    handle_schedule_command(command.split())
+                case "list-schedule":
+                    handle_list_schedule_command()
                 case _:
                     try:
                         currentAmps = int(command)
@@ -348,18 +456,14 @@ def main():
         if nowInSeconds >= nextStateCheck:
             nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
 
-            if execState in [ExecState.PAUSE_THEN_SMART, ExecState.CHARGE_THEN_SMART, ExecState.DISCHARGE_THEN_SMART]:
-                seconds = math.ceil(nextSmartState - nowInSeconds)
-                if seconds > 0:
-                    evseController.writeLog(f"CONTROL {execState} for {seconds}s")
-                    if execState == ExecState.PAUSE_THEN_SMART:
-                        evseController.setControlState(ControlState.DORMANT)
-                    elif execState == ExecState.CHARGE_THEN_SMART:
-                        evseController.setControlState(ControlState.CHARGE)
-                    elif execState == ExecState.DISCHARGE_THEN_SMART:
-                        evseController.setControlState(ControlState.DISCHARGE)
-                else:
-                    execState = ExecState.SMART
+            if execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
+                evseController.writeLog(f"CONTROL {execState}")
+                if execState == ExecState.PAUSE:
+                    evseController.setControlState(ControlState.DORMANT)
+                elif execState == ExecState.CHARGE:
+                    evseController.setControlState(ControlState.CHARGE)
+                elif execState == ExecState.DISCHARGE:
+                    evseController.setControlState(ControlState.DISCHARGE)
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
