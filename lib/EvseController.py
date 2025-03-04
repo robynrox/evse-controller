@@ -15,6 +15,8 @@ except ImportError:
     pass
 
 from collections import deque
+import json
+from pathlib import Path
 
 
 class ControlState(Enum):
@@ -87,6 +89,8 @@ class EvseController(PowerMonitorObserver):
         self.current_grid_power = Power()
         self.previous_state = None
         self.waiting_for_disconnect = False
+        self.last_save_time = 0
+        self.save_interval = 10  # Save every 10 seconds
 
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
@@ -111,7 +115,44 @@ class EvseController(PowerMonitorObserver):
         self.socHistory = deque(maxlen=300)
         self.timestamps = deque(maxlen=300)
         self.tariffManager = tariffManager
+        self.history_file = Path("history.json")
+        self._load_history()
         log("INFO EvseController started")
+
+    def _load_history(self):
+        """Load historical data from file if it exists."""
+        if self.history_file.exists():
+            try:
+                data = json.loads(self.history_file.read_text())
+                self.timestamps = deque(data["timestamps"], maxlen=300)
+                self.gridPowerHistory = deque(data["grid_power"], maxlen=300)
+                self.evsePowerHistory = deque(data["evse_power"], maxlen=300)
+                self.heatPumpPowerHistory = deque(data["heat_pump_power"], maxlen=300)
+                self.solarPowerHistory = deque(data["solar_power"], maxlen=300)
+                self.socHistory = deque(data["soc"], maxlen=300)
+                log("INFO Historical data loaded successfully")
+            except Exception as e:
+                log(f"WARNING Failed to load historical data: {e}")
+
+    def _save_history(self):
+        """Save historical data to file if 10 seconds have passed since last save."""
+        current_time = time.time()
+        if current_time - self.last_save_time < self.save_interval:
+            return
+            
+        try:
+            data = {
+                "timestamps": list(self.timestamps),
+                "grid_power": list(self.gridPowerHistory),
+                "evse_power": list(self.evsePowerHistory),
+                "heat_pump_power": list(self.heatPumpPowerHistory),
+                "solar_power": list(self.solarPowerHistory),
+                "soc": list(self.socHistory)
+            }
+            self.history_file.write_text(json.dumps(data))
+            self.last_save_time = current_time
+        except Exception as e:
+            log(f"WARNING Failed to save historical data: {e}")
 
     def setHysteresisWindow(self, window):
         """
@@ -213,6 +254,9 @@ class EvseController(PowerMonitorObserver):
             self.solarPowerHistory.append(self.auxpower.ch2Watts)
             self.socHistory.append(power.soc)
             self.timestamps.append(power.unixtime)
+
+            # After updating the deques, save the history
+            self._save_history()
 
             if (time.time() >= self.nextHalfHourlyLog):
                 self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
