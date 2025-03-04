@@ -15,21 +15,24 @@ from typing import List, Dict
 # Add these new classes near the top of the file, after the existing imports
 
 class ScheduledEvent:
-    def __init__(self, timestamp, state):
+    def __init__(self, timestamp, state, enabled=True):
         self.timestamp = timestamp
         self.state = state
+        self.enabled = enabled
 
     def to_dict(self):
         return {
-            'timestamp': self.timestamp.isoformat(),
-            'state': self.state
+            "timestamp": self.timestamp.isoformat(),
+            "state": self.state,
+            "enabled": self.enabled
         }
 
     @classmethod
     def from_dict(cls, data):
         return cls(
-            timestamp=datetime.fromisoformat(data['timestamp']),
-            state=data['state']
+            datetime.fromisoformat(data["timestamp"]),
+            data["state"],
+            data.get("enabled", True)  # Default to True for backward compatibility
         )
 
 class Scheduler:
@@ -40,20 +43,33 @@ class Scheduler:
 
     def add_event(self, event):
         self.events.append(event)
-        self.events.sort(key=lambda x: x.timestamp)
+        self.events.sort(key=lambda x: x.timestamp)  # Sort after adding new event
         self.save_events()
 
     def get_future_events(self):
         now = datetime.now()
-        return [event for event in self.events if event.timestamp > now]
+        # Return sorted list of future events
+        future_events = [event for event in self.events if event.timestamp > now]
+        future_events.sort(key=lambda x: x.timestamp)
+        return future_events
 
-    def get_due_events(self) -> List[ScheduledEvent]:
-        """Get events that are due and remove them from the list"""
+    def get_due_events(self):
+        """Get all events that are due and remove them from the list."""
         now = datetime.now()
-        due_events = [event for event in self.events if event.timestamp <= now]
-        self.events = [event for event in self.events if event.timestamp > now]
-        if due_events:
-            self.save_events()
+        due_events = []
+        remaining_events = []
+        
+        # Sort events first to ensure chronological processing
+        self.events.sort(key=lambda x: x.timestamp)
+        
+        for event in self.events:
+            if event.timestamp <= now and event.enabled:
+                due_events.append(event)
+            else:
+                remaining_events.append(event)
+        
+        self.events = remaining_events
+        self.save_events()
         return due_events
 
     def load_events(self):
@@ -302,6 +318,7 @@ class ExecState(Enum):
     DISCHARGE = 2
     PAUSE = 3
     FIXED = 4
+    SOLAR = 5  # New state for solar charging
 
 
 execQueue = queue.SimpleQueue()
@@ -425,6 +442,13 @@ def main():
                     handle_schedule_command(command.split())
                 case "list-schedule":
                     handle_list_schedule_command()
+                case "u" | "unplug":
+                    print("Allow the vehicle to be unplugged")
+                    evseController.setControlState(ControlState.PAUSE_UNTIL_DISCONNECT)
+                case "solar":
+                    print("Entering solar charging state")
+                    execState = ExecState.SOLAR
+                    nextStateCheck = time.time()
                 case _:
                     try:
                         currentAmps = int(command)
@@ -448,6 +472,8 @@ def main():
                         print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
                         print("g | go | octgo: Switch to Octopus Go tariff")
                         print("cosy: Switch to Cosy Octopus tariff")
+                        print("u | unplug: Allow the vehicle to be unplugged")
+                        print("solar: Enter solar-only charging mode")
         except queue.Empty:
             pass
 
@@ -476,6 +502,11 @@ def main():
                         evseController.setChargeCurrentRange(min_current, max_current)
                     elif control_state == ControlState.DISCHARGE:
                         evseController.setDischargeCurrentRange(min_current, max_current)
+
+            if execState == ExecState.SOLAR:
+                evseController.writeLog("CONTROL SOLAR")
+                evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
+                evseController.setChargeCurrentRange(3, 16)  # Set min/max current range
 
 if __name__ == '__main__':
     main()

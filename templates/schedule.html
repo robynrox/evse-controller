@@ -129,6 +129,70 @@
             border: 1px solid #ebccd1;
             color: #a94442;
         }
+
+        .event-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .toggle-btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .toggle-btn.enabled {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .toggle-btn.disabled {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 5px;
+            width: 80%;
+            max-width: 500px;
+        }
+
+        .modal-buttons {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .edit-btn {
+            background-color: #ffc107;
+            color: black;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+
+        .edit-btn:hover {
+            background-color: #e0a800;
+        }
     </style>
 </head>
 
@@ -181,14 +245,50 @@
                 <span class="event-info">
                     {{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') }} → {{ event.state }}
                 </span>
-                <button onclick="deleteEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
-                    class="delete-btn">Delete</button>
+                <div class="event-actions">
+                    <button onclick="toggleEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                        class="toggle-btn {% if event.enabled %}enabled{% else %}disabled{% endif %}">
+                        {% if event.enabled %}Enabled{% else %}Disabled{% endif %}
+                    </button>
+                    <button onclick="editEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                        class="edit-btn">Edit</button>
+                    <button onclick="deleteEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                        class="delete-btn">Delete</button>
+                </div>
             </li>
             {% endfor %}
         </ul>
         {% else %}
         <p>No scheduled events</p>
         {% endif %}
+    </div>
+
+    <div id="editModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3>Edit Scheduled Event</h3>
+            <form id="editForm">
+                <div class="form-group">
+                    <label for="editDatetime">Date and Time:</label>
+                    <input type="datetime-local" id="editDatetime" name="datetime" required>
+                </div>
+                <div class="form-group">
+                    <label for="editState">State:</label>
+                    <select id="editState" name="state" required>
+                        <option value="charge">Charge</option>
+                        <option value="discharge">Discharge</option>
+                        <option value="pause">Pause</option>
+                        <option value="octgo">Octopus Go</option>
+                        <option value="cosy">Cosy Octopus</option>
+                    </select>
+                </div>
+                <input type="hidden" id="originalTimestamp">
+                <input type="hidden" id="originalState">
+                <div class="modal-buttons">
+                    <button type="submit">Save Changes</button>
+                    <button type="button" onclick="closeEditModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <script>
@@ -213,6 +313,91 @@
             } catch (error) {
                 alert('Error deleting event');
                 console.error('Error:', error);
+            }
+        }
+
+        async function toggleEvent(timestamp, state) {
+            try {
+                const response = await fetch(`/schedule/toggle/${timestamp}/${state}`, {
+                    method: 'POST',
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    // Reload the page to show updated list
+                    window.location.reload();
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+            } catch (error) {
+                alert('Error toggling event');
+                console.error('Error:', error);
+            }
+        }
+
+        function editEvent(timestamp, state) {
+            const modal = document.getElementById('editModal');
+            const datetimeInput = document.getElementById('editDatetime');
+            const stateSelect = document.getElementById('editState');
+            const originalTimestamp = document.getElementById('originalTimestamp');
+            const originalState = document.getElementById('originalState');
+
+            // Convert ISO timestamp to local datetime-local format
+            const date = new Date(timestamp);
+            const localDateTime = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+                .toISOString()
+                .slice(0, 16);
+
+            datetimeInput.value = localDateTime;
+            stateSelect.value = state;
+            originalTimestamp.value = timestamp;
+            originalState.value = state;
+
+            modal.style.display = 'block';
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+
+        document.getElementById('editForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            const formData = {
+                newDatetime: document.getElementById('editDatetime').value,
+                newState: document.getElementById('editState').value,
+                originalTimestamp: document.getElementById('originalTimestamp').value,
+                originalState: document.getElementById('originalState').value
+            };
+
+            try {
+                const response = await fetch('/schedule/edit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+            } catch (error) {
+                alert('Error updating event');
+                console.error('Error:', error);
+            }
+        });
+
+        // Close modal when clicking outside
+        window.onclick = function (event) {
+            const modal = document.getElementById('editModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
             }
         }
     </script>

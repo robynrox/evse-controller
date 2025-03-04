@@ -132,14 +132,82 @@ def delete_schedule(timestamp, state):
     
     return jsonify({'status': 'error', 'message': 'Event not found'}), 404
 
+@app.route('/schedule/toggle/<timestamp>/<state>', methods=['POST'])
+def toggle_schedule(timestamp, state):
+    try:
+        event_timestamp = datetime.fromisoformat(timestamp)
+        events = scheduler.get_future_events()
+        for event in events:
+            if (event.timestamp == event_timestamp and 
+                event.state == state):
+                event.enabled = not event.enabled
+                scheduler.save_events()
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Event toggled successfully',
+                    'enabled': event.enabled
+                })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    
+    return jsonify({'status': 'error', 'message': 'Event not found'}), 404
+
+@app.route('/schedule/edit', methods=['POST'])
+def edit_schedule():
+    try:
+        data = request.json
+        original_timestamp = datetime.fromisoformat(data['originalTimestamp'])
+        original_state = data['originalState']
+        new_timestamp = datetime.fromisoformat(data['newDatetime'].replace('T', ' '))
+        new_state = data['newState']
+
+        if new_timestamp < datetime.now():
+            return jsonify({
+                'status': 'error',
+                'message': 'Cannot schedule events in the past'
+            }), 400
+
+        # Find and update the event
+        events = scheduler.get_future_events()
+        for event in events:
+            if (event.timestamp == original_timestamp and 
+                event.state == original_state):
+                # Store the enabled state
+                was_enabled = event.enabled
+                # Remove the old event
+                scheduler.events.remove(event)
+                # Create new event with updated values but same enabled state
+                new_event = ScheduledEvent(new_timestamp, new_state)
+                new_event.enabled = was_enabled
+                scheduler.add_event(new_event)
+                scheduler.save_events()
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Event updated successfully'
+                })
+
+        return jsonify({
+            'status': 'error',
+            'message': 'Event not found'
+        }), 404
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
     # Get current state using the proper interface
     current_state = get_system_state()
     
-    # Get next scheduled event
-    future_events = scheduler.get_future_events()
-    next_event = future_events[0] if future_events else None
+    # Get next scheduled event (only enabled ones)
+    future_events = scheduler.get_future_events()  # Already sorted by timestamp
+    next_event = next(
+        (event for event in future_events if event.enabled), 
+        None
+    )
     
     return jsonify({
         'current_state': current_state,

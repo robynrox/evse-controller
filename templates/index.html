@@ -272,6 +272,18 @@
         // Update status every 5 seconds
         setInterval(updateStatus, 5000);
         updateStatus(); // Initial call
+
+        async function handlePauseToRemove() {
+            await sendCommand('unplug');
+        }
+
+        document.querySelector('button[title="Pause to remove plug"]').onclick = handlePauseToRemove;
+
+        async function handleSolarCharging() {
+            await sendCommand('solar');
+        }
+
+        document.querySelector('button[title="Solar only charging"]').onclick = handleSolarCharging;
     </script>
 </body>
 

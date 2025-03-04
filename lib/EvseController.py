@@ -35,6 +35,8 @@ class ControlState(Enum):
     # If the load goes too high in either direction, target current will be set to the maximum.
     # If the load goes too low in either direction, charging will be stopped.
     LOAD_FOLLOW_BIDIRECTIONAL = 5
+    # New state for pause-to-remove functionality
+    PAUSE_UNTIL_DISCONNECT = 6
 
 
 def log(msg):
@@ -83,6 +85,8 @@ class EvseController(PowerMonitorObserver):
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
         self.grid_power_history = deque(maxlen=3)  # To store up to three previous grid power readings
         self.current_grid_power = Power()
+        self.previous_state = None
+        self.waiting_for_disconnect = False
 
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
@@ -298,6 +302,16 @@ class EvseController(PowerMonitorObserver):
                     # Allow up to an hour for the EVSE to restart without trying to restart again
                     self.connectionErrors = -3600
 
+            # Handle pause-until-disconnect logic
+            if self.waiting_for_disconnect:
+                if self.chargerState == EvseState.DISCONNECTED:
+                    # Vehicle was disconnected, revert to previous state
+                    self.waiting_for_disconnect = False
+                    if self.previous_state is not None:
+                        self.setControlState(self.previous_state)
+                        self.previous_state = None
+                        log("CONTROL Reverting to previous state after disconnect")
+
             nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
             if nextWriteAllowed > 0:
                 logMsg += f"NextChgIn:{nextWriteAllowed}s "
@@ -327,6 +341,12 @@ class EvseController(PowerMonitorObserver):
                 self.evseCurrent = desiredEvseCurrent
 
     def setControlState(self, state: ControlState):
+        if state == ControlState.PAUSE_UNTIL_DISCONNECT:
+            self.previous_state = self.state
+            self.waiting_for_disconnect = True
+            # Set actual state to DORMANT
+            state = ControlState.DORMANT
+        
         self.state = state
         match state:
             case ControlState.DORMANT:
