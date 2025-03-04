@@ -69,6 +69,15 @@
     <button onclick="sendCommand('charge')">Charge</button>
     <button onclick="sendCommand('discharge')">Discharge</button>
 
+    <div class="svg-button-container">
+        <button class="svg-button" title="Pause to remove plug">
+            <img src="{{ url_for('static', filename='images/Pause to remove plug.svg') }}" alt="Pause to remove plug">
+        </button>
+        <button class="svg-button" title="Solar only charging">
+            <img src="{{ url_for('static', filename='images/Solar only charging.svg') }}" alt="Solar only charging">
+        </button>
+    </div>
+
     <h1>EVSE Power History</h1>
     <div id="chart" style="width:100%;height:600px;"></div>
 
@@ -87,6 +96,38 @@
 
         .status-item strong {
             color: #495057;
+        }
+
+        .svg-button-container {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .svg-button {
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+        }
+
+        .svg-button:hover {
+            background-color: #e9ecef;
+            transform: scale(1.05);
+        }
+
+        .svg-button:active {
+            transform: scale(0.95);
+        }
+
+        .svg-button img {
+            height: 24px;
+            width: auto;
         }
     </style>
 
