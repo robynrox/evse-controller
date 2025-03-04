@@ -292,6 +292,37 @@
     </div>
 
     <script>
+        // Function to set default datetime
+        function setDefaultDateTime() {
+            const now = new Date();
+            // Set to start of next hour
+            now.setHours(now.getHours() + 1);
+            now.setMinutes(0);
+            now.setSeconds(0);
+            now.setMilliseconds(0);
+
+            // Format the date as YYYY-MM-DDTHH:mm
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+
+            const defaultDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
+
+            // Set the value
+            const datetimeInput = document.getElementById('datetime');
+            if (datetimeInput) {
+                datetimeInput.value = defaultDateTime;
+            }
+        }
+
+        // Call immediately
+        setDefaultDateTime();
+
+        // Also call when the DOM is fully loaded to ensure the element exists
+        document.addEventListener('DOMContentLoaded', setDefaultDateTime);
+
         async function deleteEvent(timestamp, state) {
             if (!confirm('Are you sure you want to delete this event?')) {
                 return;
