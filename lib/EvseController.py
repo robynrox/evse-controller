@@ -405,20 +405,24 @@ class EvseController(PowerMonitorObserver):
                 self.batteryChargeLevel = power.soc
                 self.powerAtBatteryChargeLevel = power
             if self.configuration.get("USING_INFLUXDB", False) is True:
-                point = (
-                    influxdb_client.Point("measurement")
-                    .field("grid", power.ch1Watts)
-                    .field("grid_pf", power.ch1Pf)
-                    .field("evse", power.ch2Watts)
-                    .field("evse_pf", power.ch2Pf)
-                    .field("voltage", power.voltage)
-                    .field("evseTargetCurrent", self.evseCurrent)
-                    .field("evseDesiredCurrent", desiredEvseCurrent)
-                    .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
-                    .field("heatpump", self.auxpower.ch1Watts)
-                    .field("solar", self.auxpower.ch2Watts)
-                )
-                self.write_api.write(bucket="powerlog", record=point)
+                try:
+                    point = (
+                        influxdb_client.Point("measurement")
+                        .field("grid", power.ch1Watts)
+                        .field("grid_pf", power.ch1Pf)
+                        .field("evse", power.ch2Watts)
+                        .field("evse_pf", power.ch2Pf)
+                        .field("voltage", power.voltage)
+                        .field("evseTargetCurrent", self.evseCurrent)
+                        .field("evseDesiredCurrent", desiredEvseCurrent)
+                        .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+                        .field("heatpump", self.auxpower.ch1Watts)
+                        .field("solar", self.auxpower.ch2Watts)
+                    )
+                    self.write_api.write(bucket="powerlog", record=point)
+                except Exception as e:
+                    error(f"Failed to write to InfluxDB: {e}")
+                    # Continue execution even if InfluxDB write fails
 
             try:
                 self.chargerState = self.evse.getEvseState()

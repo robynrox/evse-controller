@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from lib.logging_config import setup_logging, debug, info, warning, error, critical
+import signal
+import sys
 
 # Setup logging before anything else
 logger = setup_logging(configuration)
@@ -408,6 +410,14 @@ def handle_list_schedule_command():
     print("Scheduled events:")
     for event in events:
         print(f"- {event.timestamp.isoformat()} -> {event.state}")
+
+def signal_handler(signum, frame):
+    info("Shutting down gracefully...")
+    evseController.stop()  # Add a stop method to your controller
+    inputThread.join(timeout=1)
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 def main():
     global execState
