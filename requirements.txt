@@ -1,6 +1,6 @@
 requests~=2.31.0
 pyModbusTCP~=0.2.0
-wallbox~=0.1.0
+wallbox~=0.8.0
 flask~=3.0.0
 flask-restx~=1.3.0
 influxdb-client~=1.36.0
