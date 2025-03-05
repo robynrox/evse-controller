@@ -3,6 +3,7 @@ import time
 
 from lib.Power import Power
 from lib.PowerMonitorInterface import PowerMonitorInterface
+from lib.logging_config import debug, info, warning, error, critical
 
 
 class PowerMonitorShelly(PowerMonitorInterface):
@@ -39,7 +40,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 break  # Exit the loop if the request is successful
             except requests.exceptions.RequestException as e:
                 if attempt == max_attempts - 1:
-                    print(f"Max attempts reached. Failed to fetch data from Shelly. Reason {e}")
+                    error(f"Max attempts reached. Failed to fetch data from Shelly. Reason {e}")
 
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:

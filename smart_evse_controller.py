@@ -11,6 +11,10 @@ from datetime import datetime
 import json
 from pathlib import Path
 from typing import List, Dict
+from lib.logging_config import setup_logging, debug, info, warning, error, critical
+
+# Setup logging before anything else
+logger = setup_logging(configuration)
 
 # Add these new classes near the top of the file, after the existing imports
 
@@ -80,7 +84,7 @@ class Scheduler:
                 # Sort events by timestamp
                 self.events.sort(key=lambda x: x.timestamp)
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Error loading events: {e}")
+                error(f"Error loading events: {e}")
                 self.events = []
 
     def save_events(self):
@@ -354,10 +358,10 @@ class InputParser(threading.Thread):
             try:
                 execQueue.put(input())
             except EOFError:
-                print("Standard input closed, exiting monitoring thread")
+                info("Standard input closed, exiting monitoring thread")
                 break
             except Exception as e:
-                print(f"Exception raised: {e}")
+                error(f"Exception raised: {e}")
 
 
 inputThread = InputParser()
@@ -475,13 +479,13 @@ def main():
                         print("p | pause: Enter pause state for ten minutes then resume smart tariff controller state")
                         print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
                         print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
-                        print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
-                        print("           (current is expressed in Amps)")
                         print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
                         print("g | go | octgo: Switch to Octopus Go tariff")
                         print("cosy: Switch to Cosy Octopus tariff")
                         print("u | unplug: Allow the vehicle to be unplugged")
                         print("solar: Enter solar-only charging mode")
+                        print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
+                        print("           (current is expressed in Amps)")
         except queue.Empty:
             pass
 
@@ -491,7 +495,7 @@ def main():
             nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
 
             if execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
-                evseController.writeLog(f"CONTROL {execState}")
+                info(f"CONTROL {execState}")
                 if execState == ExecState.PAUSE:
                     evseController.setControlState(ControlState.DORMANT)
                 elif execState == ExecState.CHARGE:
@@ -502,7 +506,7 @@ def main():
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
-                evseController.writeLog(log_message)
+                info(log_message)
                 evseController.setControlState(control_state)
                 tariffManager.get_tariff().set_home_demand_levels(evse, evseController, dayMinute)
                 if min_current is not None and max_current is not None:
@@ -512,7 +516,7 @@ def main():
                         evseController.setDischargeCurrentRange(min_current, max_current)
 
             if execState == ExecState.SOLAR:
-                evseController.writeLog("CONTROL SOLAR")
+                info("CONTROL SOLAR")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
                 evseController.setChargeCurrentRange(3, 16)  # Set min/max current range
 

@@ -3,10 +3,10 @@ from enum import Enum
 import math
 import time
 from lib.EvseInterface import EvseInterface, EvseState
-
 from lib.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
 from lib.Power import Power
 from lib.WallboxQuasar import EvseWallboxQuasar
+from lib.logging_config import debug, info, warning, error, critical
 
 try:
     import influxdb_client
@@ -17,7 +17,6 @@ except ImportError:
 from collections import deque
 import json
 from pathlib import Path
-
 
 class ControlState(Enum):
     # The EVSE will not charge or discharge the vehicle in DORMANT state (obviously).
@@ -39,15 +38,6 @@ class ControlState(Enum):
     LOAD_FOLLOW_BIDIRECTIONAL = 5
     # New state for pause-to-remove functionality
     PAUSE_UNTIL_DISCONNECT = 6
-
-
-def log(msg):
-    currentTime = datetime.now()
-    dateStr = currentTime.strftime('%Y%m%d')
-    with open(f"log/{dateStr}.txt", 'a') as f:
-        timeStr = currentTime.strftime('%H:%M:%S.%f ')
-        f.write(timeStr + msg + '\n')
-        print(timeStr + msg)
 
 
 class EvseController(PowerMonitorObserver):
@@ -119,7 +109,7 @@ class EvseController(PowerMonitorObserver):
         self._load_history()
         self.state_file = Path("evse_state.json")
         self._load_persistent_state()
-        log("INFO EvseController started")
+        info("EvseController started")
 
     def _load_history(self):
         """Load historical data from file if it exists."""
@@ -132,9 +122,9 @@ class EvseController(PowerMonitorObserver):
                 self.heatPumpPowerHistory = deque(data["heat_pump_power"], maxlen=300)
                 self.solarPowerHistory = deque(data["solar_power"], maxlen=300)
                 self.socHistory = deque(data["soc"], maxlen=300)
-                log("INFO Historical data loaded successfully")
+                info("Historical data loaded successfully")
             except Exception as e:
-                log(f"WARNING Failed to load historical data: {e}")
+                warning(f"Failed to load historical data: {e}")
 
     def _save_history(self):
         """Save historical data to file if 10 seconds have passed since last save."""
@@ -154,7 +144,7 @@ class EvseController(PowerMonitorObserver):
             self.history_file.write_text(json.dumps(data))
             self.last_save_time = current_time
         except Exception as e:
-            log(f"WARNING Failed to save historical data: {e}")
+            error(f"Failed to save historical data: {e}")
 
     def setHysteresisWindow(self, window):
         """
@@ -162,7 +152,7 @@ class EvseController(PowerMonitorObserver):
         :param window: Hysteresis window in watts.
         """
         self.hysteresisWindow = window
-        log(f"CONTROL Setting hysteresis window to {self.hysteresisWindow} W")
+        info(f"CONTROL Setting hysteresis window to {self.hysteresisWindow} W")
 
     def setHomeDemandLevels(self, levels):
         """
@@ -173,10 +163,10 @@ class EvseController(PowerMonitorObserver):
         try:
             if self.homeDemandLevels != newLevels:
                 self.homeDemandLevels = newLevels
-                log(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
+                info(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
         except: # if homeDemandLevels was unset
             self.homeDemandLevels = newLevels
-            log(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
+            info(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
 
     def calculateTargetCurrent(self, power):
         homeWatts = power.getHomeWatts()
@@ -195,7 +185,7 @@ class EvseController(PowerMonitorObserver):
                 desiredEvseCurrent = target_current
                 break
 
-        #log(f"DEBUG: lastTargetCurrent={self.lastTargetCurrent}; homeWatts={homeWatts}; desiredEvseCurrent={desiredEvseCurrent}")
+        debug(f"lastTargetCurrent={self.lastTargetCurrent}; homeWatts={homeWatts}; desiredEvseCurrent={desiredEvseCurrent}")
         self.lastTargetCurrent = desiredEvseCurrent  # Update last current level
 
         # Apply control state logic
@@ -259,12 +249,12 @@ class EvseController(PowerMonitorObserver):
             try:
                 data = json.loads(self.state_file.read_text())
                 self.persistent_state = default_state | data
-                log("INFO Persistent state loaded successfully")
+                info("Persistent state loaded successfully")
                 
                 # Restore relevant state with validation
                 loaded_soc = self.persistent_state["last_known_soc"]
                 self.batteryChargeLevel = loaded_soc if self._is_valid_soc(loaded_soc) else -1
-                log(f"INFO Restored battery charge level: {self.batteryChargeLevel}%")
+                info(f"Restored battery charge level: {self.batteryChargeLevel}%")
                 
                 # Restore last power state
                 last_power = self.persistent_state["last_power_state"]
@@ -278,7 +268,7 @@ class EvseController(PowerMonitorObserver):
                     unixtime=last_power["unixtime"]
                 )
             except Exception as e:
-                log(f"WARNING Failed to load persistent state: {e}")
+                warning(f"Failed to load persistent state: {e}")
                 self.persistent_state = default_state
                 self.batteryChargeLevel = -1
         else:
@@ -311,9 +301,9 @@ class EvseController(PowerMonitorObserver):
             self.persistent_state["last_power_state"] = power_state
             
             self.state_file.write_text(json.dumps(self.persistent_state))
-            #log(f"INFO Saved persistent state with SoC: {self.batteryChargeLevel}%")
+            debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
         except Exception as e:
-            log(f"WARNING Failed to save persistent state: {e}")
+            error(f"Failed to save persistent state: {e}")
 
     def update(self, monitor, power):
         # If monitor is the one that deals with solar and heat pump data,
@@ -334,7 +324,7 @@ class EvseController(PowerMonitorObserver):
             new_soc = self.evse.getBatteryChargeLevel()
             
             # Log the attempted update for debugging
-            #log(f"DEBUG SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
+            debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
             
             # Only update if we get a valid reading
             if self._is_valid_soc(new_soc):
@@ -359,9 +349,9 @@ class EvseController(PowerMonitorObserver):
 
             if (time.time() >= self.nextHalfHourlyLog):
                 self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
-                log(f"ENERGY {power.getAccumulatedEnergy()}")
+                info(f"ENERGY {power.getAccumulatedEnergy()}")
                 if (self.powerAtLastHalfHourlyLog is not None):
-                    log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
+                    info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
                 self.powerAtLastHalfHourlyLog = power
                 self._save_persistent_state()  # Save state after updating half-hourly log
 
@@ -411,7 +401,7 @@ class EvseController(PowerMonitorObserver):
 
             if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
                 if self.powerAtBatteryChargeLevel is not None:
-                    log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
+                    info(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
                 self.batteryChargeLevel = power.soc
                 self.powerAtBatteryChargeLevel = power
             if self.configuration.get("USING_INFLUXDB", False) is True:
@@ -436,10 +426,10 @@ class EvseController(PowerMonitorObserver):
                 logMsg += f"CS:{self.chargerState} "
             except ConnectionError:
                 self.connectionErrors += 1
-                log(f"WARNING Consecutive connection errors: {self.connectionErrors}")
+                error(f"Consecutive connection errors with EVSE: {self.connectionErrors}")
                 self.chargerState = EvseState.ERROR
                 if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                    log("ERROR Restarting EVSE")
+                    critical("Restarting EVSE (expect this to take 5-6 minutes)")
                     self.evse.resetViaWebApi(self.configuration["WALLBOX_USERNAME"],
                                             self.configuration["WALLBOX_PASSWORD"],
                                             self.configuration["WALLBOX_SERIAL"])
@@ -454,15 +444,15 @@ class EvseController(PowerMonitorObserver):
                     if self.previous_state is not None:
                         self.setControlState(self.previous_state)
                         self.previous_state = None
-                        log("CONTROL Reverting to previous state after disconnect")
+                        info("Reverting to previous state after disconnect")
 
             nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
             if nextWriteAllowed > 0:
                 logMsg += f"NextChgIn:{nextWriteAllowed}s "
-                log(logMsg)
+                info(logMsg)
                 return
 
-            log(logMsg)
+            info(logMsg)
             resetState = False
             if self.evseCurrent != desiredEvseCurrent:
                 resetState = True
@@ -480,7 +470,7 @@ class EvseController(PowerMonitorObserver):
                 resetState = True
             if resetState:
                 if (self.evseCurrent != desiredEvseCurrent):
-                    log(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+                    info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self.evse.setChargingCurrent(desiredEvseCurrent)
                 self.evseCurrent = desiredEvseCurrent
 
@@ -518,28 +508,25 @@ class EvseController(PowerMonitorObserver):
                 self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
                 self.minDischargeCurrent = 0
                 self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-        log(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
+        info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setDischargeCurrentRange(self, minCurrent, maxCurrent):
         self.minDischargeCurrent = minCurrent
         self.maxDischargeCurrent = maxCurrent
-        log(f"CONTROL Setting discharge current range: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}")
+        info(f"CONTROL Setting discharge current range: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}")
 
     def setChargeCurrentRange(self, minCurrent, maxCurrent):
         self.minChargeCurrent = minCurrent
         self.maxChargeCurrent = maxCurrent
-        log(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
+        info(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setChargeActivationPower(self, minChargeActivationPower):
         self.minChargeActivationPower = minChargeActivationPower
-        log(f"CONTROL Setting charge activation power to {self.minChargeActivationPower} W")
+        info(f"CONTROL Setting charge activation power to {self.minChargeActivationPower} W")
 
     def setDischargeActivationPower(self, minDischargeActivationPower):
         self.minDischargeActivationPower = minDischargeActivationPower
-        log(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
-
-    def writeLog(self, logString):
-        log(logString)
+        info(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
 
     def getHistory(self) -> dict:
         """

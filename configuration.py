@@ -30,8 +30,14 @@ OCTOPUS_IN_USE = False
 OCTOPUS_ACCOUNT = "A-12345678"
 OCTOPUS_API_KEY = "sk_live_your_key_here"
 
-# If you want logging to be enabled, set this to True:
-LOGGING = True
+# There are two logging systems, one to the console and one to a file.
+# You define the levels of logging here from DEBUG, INFO, WARNING, ERROR, CRITICAL.
+FILE_LOGGING = "INFO"
+CONSOLE_LOGGING = "WARNING"
+LOG_DIR = "log"  # Directory for log files
+LOG_FILE_PREFIX = "evse"  # Prefix for log files
+LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB per file
+LOG_BACKUP_COUNT = 30  # Number of backup files to keep
 
 # Set your default tariff here (at the time of writing, COSY or OCTGO):
 DEFAULT_TARIFF = "COSY"

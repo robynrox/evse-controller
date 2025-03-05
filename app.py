@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, f
 from flask_restx import Api, Resource, fields, Namespace
 import threading
 from datetime import datetime
+import logging
+from werkzeug.serving import WSGIRequestHandler
 
 from smart_evse_controller import (
     execQueue, 
@@ -11,6 +13,23 @@ from smart_evse_controller import (
     ScheduledEvent,
     get_system_state
 )
+
+# Completely disable Werkzeug logging
+log = logging.getLogger('werkzeug')
+log.disabled = True
+
+class CustomWSGIRequestHandler(WSGIRequestHandler):
+    def log(self, type, message, *args):
+        """Override the logging method"""
+        return
+
+    def log_request(self, *args, **kwargs):
+        """Override the request logging method"""
+        return
+
+    def log_error(self, format, *args):
+        """Keep error logging"""
+        logging.getLogger('werkzeug').error(format % args)
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
@@ -308,7 +327,7 @@ def get_status():
 
 # Run the Flask app in a separate thread
 def run_flask():
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000, threaded=True, request_handler=CustomWSGIRequestHandler)
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask)

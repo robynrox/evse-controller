@@ -2,6 +2,7 @@ import time
 from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
 from wallbox import Wallbox
+from lib.logging_config import debug, info, warning, error, critical
 
 
 class EvseWallboxQuasar(EvseInterface):
@@ -34,15 +35,15 @@ class EvseWallboxQuasar(EvseInterface):
             return
         if (self.battery_charge_level >= self.MAX_CHARGE_PERCENT and current > 0):
             if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
-                print(f"Cannot charge past {self.MAX_CHARGE_PERCENT}%, not charging")
+                info(f"Cannot charge past {self.MAX_CHARGE_PERCENT}%, not charging")
                 self.stopCharging()
             return
         if (self.battery_charge_level <= self.MIN_CHARGE_PERCENT and current < 0):
             if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
-                print(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
+                info(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
                 self.stopCharging()
             return
-        print(f"Setting charging current to {current}A")
+        info(f"Setting charging current to {current}A")
         # Take control
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
         # Set charging current
@@ -56,7 +57,7 @@ class EvseWallboxQuasar(EvseInterface):
         self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
         # Calculate time in seconds required before next change
         if self.current == 0 and current != 0:
-            print("Starting charging")
+            info("Starting charging")
             self.writeNextAllowed = time.time() + 21.9
         elif abs(self.current - current) <= 1:
             self.writeNextAllowed = time.time() + 5.9
@@ -76,7 +77,7 @@ class EvseWallboxQuasar(EvseInterface):
 
     def stopCharging(self):
         if (self.lastEvseState != EvseState.PAUSED):
-            print("Stopping charging")
+            info("Stopping charging")
             # Take control
             self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
             # Stop charging
