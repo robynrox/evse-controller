@@ -6,3 +6,5 @@ pyvenv.cfg
 lib64
 influxdata-archive_compat.key
 secret.py
+history.json
+schedules.json

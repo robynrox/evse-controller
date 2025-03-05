@@ -1,6 +1,6 @@
 # evse-controller
 
-This is an unfinished system whose purpose is to control "smart" EVSEs such as the Wallbox Quasar. I have referred to
+This is a system whose purpose is to control "smart" EVSEs such as the Wallbox Quasar. I have referred to
 the source code of the [v2g-liberty](https://github.com/SeitaBV/v2g-liberty/) project to create it, but none of the code
 is shared; this is intended to be simpler and more of a standalone project. In particular, this project is not intended
 to use Home Assistant; if your needs include using Home Assistant then the above project may well be more suited to your
@@ -88,16 +88,34 @@ These are older samples of code and are no longer guaranteed to work. These have
 * scheduler.py: Another old sample that used to work with Octopus Flux.
 * set-wallbox.py: A sample of how to use the modbus interface to control the wallbox.
 
+## API Documentation
+
+The system provides a REST API that can be explored and tested using the built-in Swagger UI:
+
+1. Start the application using `python app.py`
+2. Open a web browser and navigate to `http://localhost:5000/api/docs`
+3. The Swagger UI provides:
+   - Interactive documentation for all API endpoints
+   - The ability to test API calls directly from your browser
+   - Detailed request/response models
+   - Example values and expected responses
+
+Key API features include:
+- Control operations (charge, discharge, pause)
+- Status monitoring
+- Schedule management
+- Configuration
+
 ## Roadmap
 
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
-  the Shelly (complete)
+  the Shelly (the APIs are complete)
 * Add a user interface allowing for rapid termination of any current EV charging or discharging session (HTML seems to
   be the obvious way to go - this is now in progress and a working prototype is available)
 * Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
-  of the library routines)
+  of the library routines and is being added to the user interface)
 * Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
-  (flux.py shows an example of this but this wants putting into a proper UI)
+  (basic scheduling is now available)
 * I'm trying to attach greater importance to bug-fixing; it's more important for it to be solid than look pretty.
 
 The above is an ideal and some of it is sure to be done out of order!

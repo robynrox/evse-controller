@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
-from flask_restx import Api, Resource, fields
+from flask_restx import Api, Resource, fields, Namespace
 import threading
-import time
 from datetime import datetime
+
 from smart_evse_controller import (
     execQueue, 
     main, 
@@ -15,98 +15,103 @@ from smart_evse_controller import (
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 
-# Create API with documentation at /api/docs
+# Create API with documentation
 api = Api(
     app,
-    version='1.0',
+    version='0.1',
     title='EVSE Controller API',
     description='API for controlling EV charging and scheduling',
     doc='/api/docs',
     prefix='/api'
 )
 
-# Homepage route
+# Define namespaces
+control_ns = api.namespace('control', description='Control operations')
+status_ns = api.namespace('status', description='Status operations')
+schedule_ns = api.namespace('schedule', description='Schedule operations')
+
+# Define models
+command_model = api.model('Command', {
+    'command': fields.String(required=True, enum=['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar'],
+                           description='Control command to execute')
+})
+
+status_model = api.model('Status', {
+    'current_state': fields.String(required=True, description='Current system state'),
+    'next_event': fields.Nested(api.model('NextEvent', {
+        'timestamp': fields.DateTime(description='Next scheduled event time'),
+        'state': fields.String(description='Scheduled state')
+    }))
+})
+
+history_model = api.model('HistoryPoint', {
+    'timestamp': fields.DateTime(required=True),
+    'power': fields.Float(required=True),
+    'soc': fields.Float(),
+    'state': fields.String()
+})
+
+scheduled_event_model = api.model('ScheduledEvent', {
+    'timestamp': fields.DateTime(required=True, description='When the event should occur'),
+    'state': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'],
+                         description='State to transition to'),
+    'enabled': fields.Boolean(default=True, description='Whether the event is enabled')
+})
+
+schedule_create_model = api.model('ScheduleCreate', {
+    'datetime': fields.String(required=True, description='ISO format datetime (YYYY-MM-DDTHH:MM:SS)'),
+    'state': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'])
+})
+
+schedule_edit_model = api.model('ScheduleEdit', {
+    'originalTimestamp': fields.String(required=True, description='ISO format datetime of existing event'),
+    'originalState': fields.String(required=True, description='Current state of the event'),
+    'newDatetime': fields.String(required=True, description='New ISO format datetime for the event'),
+    'newState': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'])
+})
+
+@control_ns.route('/command')
+class CommandResource(Resource):
+    @control_ns.expect(command_model)
+    @control_ns.response(200, 'Success')
+    @control_ns.response(400, 'Invalid command')
+    def post(self):
+        """Execute a control command on the EVSE"""
+        data = request.json
+        command = data.get('command')
+        
+        if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar']:
+            execQueue.put(command)
+            return {"status": "success", "message": f"Command '{command}' received"}
+        return {"status": "error", "message": "Invalid command"}, 400
+
+@status_ns.route('/')
+class StatusResource(Resource):
+    @status_ns.marshal_with(status_model)
+    def get(self):
+        """Get current system status and next scheduled event"""
+        current_state = get_system_state()
+        next_event = scheduler.get_next_event()
+        
+        return {
+            "current_state": current_state,
+            "next_event": next_event.to_dict() if next_event else None
+        }
+
+@status_ns.route('/history')
+class HistoryResource(Resource):
+    @status_ns.marshal_with(history_model, as_list=True)
+    def get(self):
+        """Retrieve historical data from the EVSE controller"""
+        history = evseController.getHistory()
+        return history
+
+# Keep the existing route for the main page
 @app.route('/')
 def index():
-    """Render the main dashboard page.
-    
-    Displays:
-    - Current system status
-    - Real-time power monitoring
-    - Control buttons for charging/discharging
-    - List of upcoming scheduled events
-    
-    Returns:
-        Rendered HTML template with scheduled events data
-    """
+    """Render the main dashboard page"""
     scheduled_events = scheduler.get_future_events()
     return render_template('index.html', scheduled_events=scheduled_events)
-
-# API route to handle commands
-@app.route('/command', methods=['POST'])
-def command():
-    """Execute a control command on the EVSE.
-    
-    Accepted commands:
-    - pause: Stop charging/discharging
-    - charge: Start charging
-    - discharge: Start V2G discharge
-    - octgo: Switch to Octopus Go tariff mode
-    - cosy: Switch to Cosy Octopus tariff mode
-    - unplug: Pause charging to allow safe unplugging
-    - solar: Switch to solar-only charging mode
-    
-    Request body:
-        {
-            "command": "string"  // One of the accepted commands
-        }
-    
-    Returns:
-        Success: {"status": "success", "message": "Command '{command}' received"}
-        Error: {"status": "error", "message": "Invalid command"}
-    """
-    data = request.json
-    command = data.get('command')
-    
-    if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar']:
-        execQueue.put(command)
-        return jsonify({"status": "success", "message": f"Command '{command}' received"})
-    else:
-        return jsonify({"status": "error", "message": "Invalid command"}), 400
-
-# API route to get current state
-@app.route('/status', methods=['GET'])
-def status():
-    """Get the current execution state of the system.
-    
-    Returns:
-        JSON object containing:
-        - current_state: String name of the current execution state
-    
-    Example response:
-        {
-            "current_state": "CHARGING"
-        }
-    """
-    global execState
-    current_state = execState.name
-    return jsonify({
-        "current_state": current_state
-    })
-
-@app.route('/api/history', methods=['GET'])
-def get_history():
-    """Retrieve historical data from the EVSE controller.
-    
-    Returns:
-        JSON array containing historical data points with:
-        - timestamp
-        - power readings
-        - state of charge
-        - system state
-    """
-    history = evseController.getHistory()
-    return jsonify(history)
 
 # Route to display the configuration form
 @app.route('/config', methods=['GET'])
@@ -163,184 +168,113 @@ def save_config():
         f.write(config_content)
     return redirect(url_for('config_form'))  # Redirect back to the configuration page
 
-@app.route('/schedule', methods=['GET', 'POST'])
-def schedule():
-    """Manage scheduled charging events.
-    
-    GET:
-        Display the schedule management interface showing future events
-    
-    POST:
-        Create a new scheduled event with:
-        - datetime: When the event should occur
-        - state: The desired system state
-    
-    Returns:
-        GET: Rendered schedule page with list of events
-        POST: Redirects to schedule page with success/error message
-    
-    Flash Messages:
-        - Success: Event scheduled successfully
-        - Error: Cannot schedule events in the past
-        - Error: Invalid datetime format
-        - Error: Other scheduling errors
-    """
-    if request.method == 'POST':
-        datetime_str = request.form['datetime']
-        state = request.form['state']
-        
+@schedule_ns.route('/')
+class ScheduleResource(Resource):
+    @schedule_ns.marshal_list_with(scheduled_event_model)
+    def get(self):
+        """Get all future scheduled events"""
         try:
-            timestamp = datetime.fromisoformat(datetime_str.replace('T', ' '))
+            scheduled_events = scheduler.get_future_events()
+            return [event.__dict__ for event in scheduled_events]
+        except Exception as e:
+            api.abort(500, str(e))
+
+    @schedule_ns.expect(schedule_create_model)
+    @schedule_ns.response(201, 'Event scheduled successfully')
+    @schedule_ns.response(400, 'Invalid request')
+    def post(self):
+        """Create a new scheduled event"""
+        try:
+            data = request.json
+            timestamp = datetime.fromisoformat(data['datetime'].replace('T', ' '))
+            
             if timestamp < datetime.now():
-                flash('Cannot schedule events in the past', 'error')
-                return redirect(url_for('schedule'))
+                api.abort(400, 'Cannot schedule events in the past')
                 
-            event = ScheduledEvent(timestamp, state)
+            event = ScheduledEvent(timestamp, data['state'])
             scheduler.add_event(event)
             scheduler.save_events()
-            flash('Event scheduled successfully', 'success')
+            
+            return {'message': 'Event scheduled successfully'}, 201
         except ValueError as e:
-            flash(f'Invalid datetime format: {str(e)}', 'error')
+            api.abort(400, f'Invalid datetime format: {str(e)}')
         except Exception as e:
-            flash(f'Error scheduling event: {str(e)}', 'error')
-        
-        return redirect(url_for('schedule'))
-    
-    try:
-        scheduled_events = scheduler.get_future_events()
-    except Exception as e:
-        scheduled_events = []
-        flash(f'Error loading scheduled events: {str(e)}', 'error')
-    
-    return render_template('schedule.html', scheduled_events=scheduled_events)
+            api.abort(500, str(e))
 
-@app.route('/schedule/delete/<timestamp>/<state>', methods=['DELETE'])
-def delete_schedule(timestamp, state):
-    """Delete a scheduled event.
-    
-    Args:
-        timestamp: ISO format datetime string
-        state: The state of the event to delete
-    
-    Returns:
-        JSON object containing:
-        - status: 'success' or 'error'
-        - message: Description of the result
-    
-    Response Codes:
-        200: Event deleted successfully
-        400: Invalid request (e.g., bad timestamp format)
-        404: Event not found
-    """
-    try:
-        event_timestamp = datetime.fromisoformat(timestamp)
-        events = scheduler.get_future_events()
-        for event in events:
-            if (event.timestamp == event_timestamp and 
-                event.state == state):
-                scheduler.events.remove(event)
-                scheduler.save_events()
-                return jsonify({'status': 'success', 'message': 'Event deleted successfully'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
-    
-    return jsonify({'status': 'error', 'message': 'Event not found'}), 404
+@schedule_ns.route('/<string:timestamp>/<string:state>')
+class ScheduleItemResource(Resource):
+    @schedule_ns.response(200, 'Success')
+    @schedule_ns.response(404, 'Event not found')
+    def delete(self, timestamp, state):
+        """Delete a scheduled event"""
+        try:
+            event_timestamp = datetime.fromisoformat(timestamp)
+            events = scheduler.get_future_events()
+            for event in events:
+                if (event.timestamp == event_timestamp and 
+                    event.state == state):
+                    scheduler.events.remove(event)
+                    scheduler.save_events()
+                    return {'message': 'Event deleted successfully'}
+            api.abort(404, 'Event not found')
+        except Exception as e:
+            api.abort(400, str(e))
 
-@app.route('/schedule/toggle/<timestamp>/<state>', methods=['POST'])
-def toggle_schedule(timestamp, state):
-    """Toggle the enabled state of a scheduled event.
-    
-    Args:
-        timestamp: ISO format datetime string
-        state: The state of the event to toggle
-    
-    Returns:
-        JSON object containing:
-        - status: 'success' or 'error'
-        - message: Description of the result
-        - enabled: New enabled state (if successful)
-    
-    Response Codes:
-        200: Event toggled successfully
-        400: Invalid request
-        404: Event not found
-    """
-    try:
-        event_timestamp = datetime.fromisoformat(timestamp)
-        events = scheduler.get_future_events()
-        for event in events:
-            if (event.timestamp == event_timestamp and 
-                event.state == state):
-                event.enabled = not event.enabled
-                scheduler.save_events()
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Event toggled successfully',
-                    'enabled': event.enabled
-                })
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
-    
-    return jsonify({'status': 'error', 'message': 'Event not found'}), 404
+@schedule_ns.route('/toggle/<string:timestamp>/<string:state>')
+class ScheduleToggleResource(Resource):
+    @schedule_ns.response(200, 'Success')
+    @schedule_ns.response(404, 'Event not found')
+    def post(self, timestamp, state):
+        """Toggle enabled state of a scheduled event"""
+        try:
+            event_timestamp = datetime.fromisoformat(timestamp)
+            events = scheduler.get_future_events()
+            for event in events:
+                if (event.timestamp == event_timestamp and 
+                    event.state == state):
+                    event.enabled = not event.enabled
+                    scheduler.save_events()
+                    return {
+                        'message': 'Event toggled successfully',
+                        'enabled': event.enabled
+                    }
+            api.abort(404, 'Event not found')
+        except Exception as e:
+            api.abort(400, str(e))
 
-@app.route('/schedule/edit', methods=['POST'])
-def edit_schedule():
-    """Edit an existing scheduled event.
-    
-    Request Body:
-        - originalTimestamp: ISO format datetime of existing event
-        - originalState: Current state of the event
-        - newDatetime: New ISO format datetime for the event
-        - newState: New state for the event
-    
-    Returns:
-        JSON object containing:
-        - status: 'success' or 'error'
-        - message: Description of the result
-    
-    Response Codes:
-        200: Event updated successfully
-        400: Invalid request or cannot schedule in past
-        404: Original event not found
-    """
-    try:
-        data = request.json
-        original_timestamp = datetime.fromisoformat(data['originalTimestamp'])
-        original_state = data['originalState']
-        new_timestamp = datetime.fromisoformat(data['newDatetime'].replace('T', ' '))
-        new_state = data['newState']
+@schedule_ns.route('/edit')
+class ScheduleEditResource(Resource):
+    @schedule_ns.expect(schedule_edit_model)
+    @schedule_ns.response(200, 'Success')
+    @schedule_ns.response(400, 'Invalid request')
+    @schedule_ns.response(404, 'Event not found')
+    def post(self):
+        """Edit an existing scheduled event"""
+        try:
+            data = request.json
+            original_timestamp = datetime.fromisoformat(data['originalTimestamp'])
+            original_state = data['originalState']
+            new_timestamp = datetime.fromisoformat(data['newDatetime'].replace('T', ' '))
+            new_state = data['newState']
 
-        if new_timestamp < datetime.now():
-            return jsonify({
-                'status': 'error',
-                'message': 'Cannot schedule events in the past'
-            }), 400
+            if new_timestamp < datetime.now():
+                api.abort(400, 'Cannot schedule events in the past')
 
-        events = scheduler.get_future_events()
-        for event in events:
-            if (event.timestamp == original_timestamp and 
-                event.state == original_state):
-                was_enabled = event.enabled
-                scheduler.events.remove(event)
-                new_event = ScheduledEvent(new_timestamp, new_state)
-                new_event.enabled = was_enabled
-                scheduler.add_event(new_event)
-                scheduler.save_events()
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Event updated successfully'
-                })
+            events = scheduler.get_future_events()
+            for event in events:
+                if (event.timestamp == original_timestamp and 
+                    event.state == original_state):
+                    was_enabled = event.enabled
+                    scheduler.events.remove(event)
+                    new_event = ScheduledEvent(new_timestamp, new_state)
+                    new_event.enabled = was_enabled
+                    scheduler.add_event(new_event)
+                    scheduler.save_events()
+                    return {'message': 'Event updated successfully'}
 
-        return jsonify({
-            'status': 'error',
-            'message': 'Event not found'
-        }), 404
-
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 400
+            api.abort(404, 'Event not found')
+        except Exception as e:
+            api.abort(400, str(e))
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
