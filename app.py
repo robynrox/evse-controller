@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, f
 import threading
 import time
 from datetime import datetime
-# Import from octopus module
-from octopus import (
+# Import from smart_evse_controller module
+from smart_evse_controller import (
     execQueue, 
     main, 
     evseController, 
