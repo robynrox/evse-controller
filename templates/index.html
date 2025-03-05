@@ -45,7 +45,7 @@
 <body>
     <h1>EVSE Control Interface</h1>
     <div class="nav-links">
-        <a href="{{ url_for('schedule') }}">Schedule Events →</a>
+        <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
     </div>
 
     <div class="status-panel">
@@ -55,8 +55,9 @@
             </span>
             <span class="separator">|</span>
             <span class="status-info">
-                <strong>State of Charge:</strong> <span id="soc">Loading...</span>
+                <strong>Battery:</strong> <span id="battery-soc">Loading...</span>
             </span>
+            <span class="separator">|</span>
         </div>
         <div class="status-item">
             <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
@@ -78,7 +79,7 @@
         </button>
     </div>
 
-    <h1>EVSE Power History</h1>
+    <h1>Power History</h1>
     <div id="chart" style="width:100%;height:600px;"></div>
 
     <style>
@@ -133,7 +134,7 @@
 
     <script>
         async function fetchHistory() {
-            const response = await fetch('/api/history');
+            const response = await fetch('/api/status/history');
             return await response.json();
         }
 
@@ -144,23 +145,16 @@
         function getLayout() {
             const isMobileDevice = isMobile();
             return {
-                title: 'Power and SoC History',
+                title: 'Power History',
                 xaxis: {
                     title: 'Time',
                     tickmode: 'auto',
                     nticks: 10,
-                    titlefont: { size: isMobileDevice ? 12 : 14 }, // Smaller font for mobile
+                    titlefont: { size: isMobileDevice ? 12 : 14 },
                     tickfont: { size: isMobileDevice ? 10 : 12 }
                 },
                 yaxis: {
                     title: 'Power (W)',
-                    titlefont: { size: isMobileDevice ? 12 : 14 },
-                    tickfont: { size: isMobileDevice ? 10 : 12 }
-                },
-                yaxis2: {
-                    title: 'SoC (%)',
-                    overlaying: 'y',
-                    side: 'right',
                     titlefont: { size: isMobileDevice ? 12 : 14 },
                     tickfont: { size: isMobileDevice ? 10 : 12 }
                 },
@@ -170,120 +164,119 @@
             };
         }
 
-        function updateChart() {
-            fetchHistory().then(data => {
-                const timestamps = data.timestamps.map(t => new Date(t * 1000).toLocaleTimeString());
-                const gridPower = data.grid_power;
-                const evsePower = data.evse_power;
-                const heatPumpPower = data.heat_pump_power;
-                const solarPower = data.solar_power;
+        // Wrap all our initialization code in a DOMContentLoaded event handler
+        document.addEventListener('DOMContentLoaded', function () {
+            // Initialize the empty chart with all traces
+            Plotly.newPlot('chart', [
+                {
+                    x: [],
+                    y: [],
+                    name: 'Grid Power',
+                    type: 'scatter'
+                },
+                {
+                    x: [],
+                    y: [],
+                    name: 'EVSE Power',
+                    type: 'scatter'
+                },
+                {
+                    x: [],
+                    y: [],
+                    name: 'Solar Power',
+                    type: 'scatter'
+                },
+                {
+                    x: [],
+                    y: [],
+                    name: 'Heat Pump Power',
+                    type: 'scatter'
+                },
+                {
+                    x: [],
+                    y: [],
+                    name: 'Home Power',
+                    type: 'scatter'
+                }
+            ], getLayout());
 
-                // Calculate home power consumption
-                const homePower = gridPower.map((grid, index) => grid - evsePower[index] - heatPumpPower[index] - solarPower[index]);
+            async function updateChart() {
+                try {
+                    const history = await fetchHistory();
 
-                // Update the chart
-                const chartData = [
-                    { x: timestamps, y: gridPower, name: 'Grid pwr (W)', type: 'scatter' },
-                    { x: timestamps, y: evsePower, name: 'EVSE pwr (W)', type: 'scatter' },
-                    { x: timestamps, y: heatPumpPower, name: 'HP pwr (W)', type: 'scatter' },
-                    { x: timestamps, y: solarPower, name: 'Solar pwr (W)', type: 'scatter' },
-                    { x: timestamps, y: homePower, name: 'Home pwr (W)', type: 'scatter' }
-                ];
+                    const timestamps = history.timestamps.map(t => new Date(t));
 
-                const layout = {
-                    title: 'Power History',
-                    xaxis: {
-                        title: 'Time',
-                        tickmode: 'auto',
-                        nticks: 10  // Show a maximum of 10 ticks
-                    },
-                    yaxis: { title: 'Power (W)' },
-                    responsive: true, // Make the chart responsive
-                    autosize: true,  // Automatically adjust the chart size
-                    margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 } // Adjust margins for better fit
-                };
+                    // Calculate home power
+                    const homePower = history.grid_power.map((grid, i) =>
+                        grid - history.evse_power[i] - history.solar_power[i] - history.heat_pump_power[i]
+                    );
 
-                const config = {
-                    responsive: true // Ensure the chart is responsive
-                };
+                    // Update existing plot with all traces
+                    Plotly.update('chart', {
+                        x: [timestamps, timestamps, timestamps, timestamps, timestamps],
+                        y: [
+                            history.grid_power,
+                            history.evse_power,
+                            history.solar_power,
+                            history.heat_pump_power,
+                            homePower
+                        ]
+                    });
+                } catch (error) {
+                    console.error('Error updating chart:', error);
+                }
+            }
 
-                Plotly.newPlot('chart', chartData, layout, config);
+            async function updateStatus() {
+                try {
+                    const response = await fetch('/api/status');
+                    const data = await response.json();
 
-                // Update the latest SoC and home power consumption
-                const latestSoc = data.soc[data.soc.length - 1];
-                document.getElementById('soc').textContent = `${latestSoc}%`;
+                    // Update current state
+                    const stateElement = document.getElementById('current-state');
+                    stateElement.textContent = data.current_state.replace(/_/g, ' ');
+
+                    // Update battery SOC if available
+                    const socElement = document.getElementById('battery-soc');
+                    if (data.battery_soc !== undefined) {
+                        socElement.textContent = `${data.battery_soc}%`;
+                    } else {
+                        socElement.textContent = 'Unknown';
+                    }
+
+                    // Update next event
+                    const nextEventElement = document.getElementById('next-event');
+                    if (data.next_event) {
+                        const eventTime = new Date(data.next_event.timestamp);
+                        const formattedTime = eventTime.toLocaleString(undefined, {
+                            dateStyle: 'short',
+                            timeStyle: 'short'
+                        });
+                        nextEventElement.textContent = `${data.next_event.state} at ${formattedTime}`;
+                    } else {
+                        nextEventElement.textContent = 'No events scheduled';
+                    }
+                } catch (error) {
+                    console.error('Error fetching status:', error);
+                    document.getElementById('current-state').textContent = 'Error';
+                    document.getElementById('battery-soc').textContent = 'Error';
+                    document.getElementById('next-event').textContent = 'Unable to fetch status';
+                }
+            }
+
+            // Set up update intervals
+            setInterval(updateChart, 2000);  // Every 2 seconds
+            setInterval(updateStatus, 5000); // Every 5 seconds
+
+            // Initial calls
+            updateChart();
+            updateStatus();
+
+            // Add resize handler
+            window.addEventListener('resize', () => {
+                Plotly.relayout('chart', getLayout());
             });
-        }
-
-        // Update the chart every second
-        setInterval(updateChart, 1000);
-        updateChart(); // Initial call
-
-        // Adjust layout on window resize
-        window.addEventListener('resize', () => {
-            Plotly.relayout('chart', getLayout());
         });
-
-        async function sendCommand(command) {
-            try {
-                const response = await fetch('/command', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ command: command })
-                });
-
-                const result = await response.json();
-                if (!response.ok) {
-                    throw new Error(result.message || 'Failed to send command');
-                }
-
-                // Immediately update the status after sending a command
-                updateStatus();
-            } catch (error) {
-                console.error('Error sending command:', error);
-                alert('Failed to send command: ' + error.message);
-            }
-        }
-
-        async function updateStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-
-                // Update current state
-                const stateElement = document.getElementById('current-state');
-                stateElement.textContent = data.current_state.replace(/_/g, ' ');
-
-                // Update next event
-                const nextEventElement = document.getElementById('next-event');
-                if (data.next_event) {
-                    const eventTime = new Date(data.next_event.timestamp);
-                    nextEventElement.textContent = `${data.next_event.state} at ${eventTime.toLocaleString()}`;
-                } else {
-                    nextEventElement.textContent = 'No events scheduled';
-                }
-            } catch (error) {
-                console.error('Error fetching status:', error);
-            }
-        }
-
-        // Update status every 5 seconds
-        setInterval(updateStatus, 5000);
-        updateStatus(); // Initial call
-
-        async function handlePauseToRemove() {
-            await sendCommand('unplug');
-        }
-
-        document.querySelector('button[title="Pause to remove plug"]').onclick = handlePauseToRemove;
-
-        async function handleSolarCharging() {
-            await sendCommand('solar');
-        }
-
-        document.querySelector('button[title="Solar only charging"]').onclick = handleSolarCharging;
     </script>
 </body>
 

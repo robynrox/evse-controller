@@ -38,6 +38,7 @@ command_model = api.model('Command', {
 
 status_model = api.model('Status', {
     'current_state': fields.String(required=True, description='Current system state'),
+    'battery_soc': fields.Integer(description='Battery state of charge percentage'),
     'next_event': fields.Nested(api.model('NextEvent', {
         'timestamp': fields.DateTime(description='Next scheduled event time'),
         'state': fields.String(description='Scheduled state')
@@ -45,10 +46,11 @@ status_model = api.model('Status', {
 })
 
 history_model = api.model('HistoryPoint', {
-    'timestamp': fields.DateTime(required=True),
-    'power': fields.Float(required=True),
-    'soc': fields.Float(),
-    'state': fields.String()
+    'timestamps': fields.List(fields.String, required=True),
+    'grid_power': fields.List(fields.Float, required=True),
+    'evse_power': fields.List(fields.Float, required=True),
+    'solar_power': fields.List(fields.Float, required=True),
+    'heat_pump_power': fields.List(fields.Float, required=True)
 })
 
 scheduled_event_model = api.model('ScheduledEvent', {
@@ -92,81 +94,50 @@ class StatusResource(Resource):
         """Get current system status and next scheduled event"""
         current_state = get_system_state()
         next_event = scheduler.get_next_event()
+        battery_soc = evseController.evse.getBatteryChargeLevel()
         
         return {
             "current_state": current_state,
+            "battery_soc": battery_soc,
             "next_event": next_event.to_dict() if next_event else None
         }
 
 @status_ns.route('/history')
 class HistoryResource(Resource):
-    @status_ns.marshal_with(history_model, as_list=True)
+    @status_ns.marshal_with(history_model)
     def get(self):
         """Retrieve historical data from the EVSE controller"""
         history = evseController.getHistory()
-        return history
+        
+        # Convert Unix timestamps to ISO format strings
+        timestamps = [
+            datetime.fromtimestamp(ts).isoformat() 
+            for ts in history.get('timestamps', [])
+        ]
+        
+        return {
+            'timestamps': timestamps,
+            'grid_power': history.get('grid_power', []),
+            'evse_power': history.get('evse_power', []),
+            'solar_power': history.get('solar_power', []),
+            'heat_pump_power': history.get('heat_pump_power', [])
+        }
 
-# Keep the existing route for the main page
+# Add these route names for the web interface
+@app.route('/schedule')
+def schedule_page():
+    """Render the schedule management page"""
+    scheduled_events = scheduler.get_future_events()
+    return render_template('schedule.html', scheduled_events=scheduled_events)
+
 @app.route('/')
 def index():
     """Render the main dashboard page"""
     scheduled_events = scheduler.get_future_events()
-    return render_template('index.html', scheduled_events=scheduled_events)
-
-# Route to display the configuration form
-@app.route('/config', methods=['GET'])
-def config_form():
-    """Display the configuration interface.
-    
-    Renders a form allowing users to configure:
-    - Wallbox connection settings
-    - Shelly EM power monitor settings
-    - InfluxDB logging configuration
-    - Octopus Energy API credentials
-    - System logging preferences
-    
-    Returns:
-        Rendered configuration form HTML
-    """
-    return render_template('config.html')
-
-# Route to handle form submission and save the configuration
-@app.route('/config/save', methods=['POST'])
-def save_config():
-    """Save system configuration settings.
-    
-    Accepts form data for:
-    - WALLBOX_URL: URL of the Wallbox Quasar
-    - WALLBOX_USERNAME: Authentication username
-    - WALLBOX_PASSWORD: Authentication password
-    - WALLBOX_SERIAL: Device serial number
-    - SHELLY_URL: URL of the Shelly EM power monitor
-    - INFLUXDB_*: InfluxDB connection settings
-    - OCTOPUS_*: Octopus Energy API credentials
-    - LOGGING: Enable/disable system logging
-    
-    Returns:
-        Redirects to configuration form page
-    """
-    config_data = {
-        "WALLBOX_URL": request.form.get('wallbox_url'),
-        "WALLBOX_USERNAME": request.form.get('wallbox_username'),
-        "WALLBOX_PASSWORD": request.form.get('wallbox_password'),
-        "WALLBOX_SERIAL": request.form.get('wallbox_serial'),
-        "SHELLY_URL": request.form.get('shelly_url'),
-        "INFLUXDB_URL": request.form.get('influxdb_url'),
-        "INFLUXDB_TOKEN": request.form.get('influxdb_token'),
-        "INFLUXDB_ORG": request.form.get('influxdb_org'),
-        "USING_INFLUXDB": request.form.get('using_influxdb') == 'on',
-        "OCTOPUS_IN_USE": request.form.get('octopus_in_use') == 'on',
-        "OCTOPUS_ACCOUNT": request.form.get('octopus_account'),
-        "OCTOPUS_API_KEY": request.form.get('octopus_api_key'),
-        "LOGGING": request.form.get('logging') == 'on'
-    }
-    config_content = "\n".join([f"{key} = {repr(value)}" for key, value in config_data.items()])
-    with open('secret.py', 'w') as f:
-        f.write(config_content)
-    return redirect(url_for('config_form'))  # Redirect back to the configuration page
+    current_state = get_system_state()
+    return render_template('index.html', 
+                         scheduled_events=scheduled_events,
+                         current_state=current_state)
 
 @schedule_ns.route('/')
 class ScheduleResource(Resource):
@@ -283,6 +254,7 @@ def get_status():
     Returns:
         JSON object containing:
         - current_state: String representing the current system state
+        - battery_soc: Integer representing battery state of charge percentage
         - next_event: Object containing next scheduled event details, or null if none exists
             - timestamp: ISO format timestamp
             - state: String representing the scheduled state
@@ -290,6 +262,7 @@ def get_status():
     Example response:
         {
             "current_state": "CHARGING",
+            "battery_soc": 85,
             "next_event": {
                 "timestamp": "2024-01-20T22:00:00",
                 "state": "PAUSE"
@@ -302,9 +275,11 @@ def get_status():
         (event for event in future_events if event.enabled), 
         None
     )
+    battery_soc = evseController.evse.getBatteryChargeLevel()
     
     return jsonify({
         'current_state': current_state,
+        'battery_soc': battery_soc,
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),
             'state': next_event.state

@@ -222,6 +222,13 @@ class CosyOctopusTariff(Tariff):
             "low 3": {"start": "22:00", "end": "24:00", "import_rate":  low, "export_rate": 0.15},
         }
 
+    def get_max_charge_percent(self, dayMinute):
+        # Afternoon period (13:00-16:00)
+        if 13 * 60 <= dayMinute < 16 * 60:
+            return 80
+        # All other periods
+        return configuration.MAX_CHARGE_PERCENT
+
     def is_off_peak(self, dayMinute):
         # Off-peak periods: 04:00-07:00, 13:00-16:00, 22:00-24:00
         off_peak_periods = [
@@ -242,10 +249,11 @@ class CosyOctopusTariff(Tariff):
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "COSY SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < configuration.MAX_CHARGE_PERCENT:
-                return ControlState.CHARGE, None, None, "COSY Off-peak rate: charge at max rate"
+            max_charge = self.get_max_charge_percent(dayMinute)
+            if evse.getBatteryChargeLevel() < max_charge:
+                return ControlState.CHARGE, None, None, f"COSY Off-peak rate: charge to {max_charge}%"
             else:
-                return ControlState.DORMANT, None, None, "COSY Off-peak rate: SoC max, remain dormant"
+                return ControlState.DORMANT, None, None, f"COSY Off-peak rate: SoC at {max_charge}%, remain dormant"
         elif self.is_expensive_period(dayMinute):
             return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Expensive rate: load follow discharge"
         elif evse.getBatteryChargeLevel() <= 25:
