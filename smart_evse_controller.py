@@ -108,26 +108,98 @@ class Scheduler:
 
 # Tariff base class
 class Tariff:
+    """Base class for implementing electricity tariff logic.
+    
+    This class defines the interface and common functionality for different
+    electricity tariffs. Each tariff implementation should define its specific
+    time periods, rates, and control logic.
+
+    Attributes:
+        time_of_use (dict): Dictionary defining time periods and their rates.
+            Format: {
+                "period_name": {
+                    "start": "HH:MM",
+                    "end": "HH:MM",
+                    "import_rate": float,
+                    "export_rate": float
+                }
+            }
+    """
+
     def __init__(self):
-        # Dictionary of time periods with rates (sample shown of a typical variable rate tariff)
+        """Initialize base tariff with default time-of-use rates."""
         self.time_of_use = {
             "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
-        }  
+        }
 
-    def is_off_peak(self, dayMinute):
+    def is_off_peak(self, dayMinute: int) -> bool:
+        """Determine if current time is in off-peak period.
+
+        Args:
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            bool: True if current time is in off-peak period
+        """
         raise NotImplementedError
 
-    def is_expensive_period(self, dayMinute):
+    def is_expensive_period(self, dayMinute: int) -> bool:
+        """Determine if current time is in expensive rate period.
+
+        Args:
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            bool: True if current time is in expensive rate period
+        """
         raise NotImplementedError
 
-    def get_control_state(self, evse, dayMinute):
+    def get_control_state(self, evse, dayMinute: int) -> tuple:
+        """Determine the appropriate control state based on current conditions.
+
+        Args:
+            evse: EVSE device instance
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            tuple: (ControlState, min_current, max_current, reason_string)
+        """
         raise NotImplementedError
+
     
     def set_home_demand_levels(self, evse, evseController, dayMinute):
+        """Configure home demand power levels and corresponding charge/discharge currents.
+        
+        This method defines the relationship between home power demand and the
+        EVSE's charge/discharge behavior. Each tariff implementation should define
+        appropriate power thresholds and corresponding current levels based on its
+        specific requirements and time periods.
+
+        The levels are defined as tuples of (min_power, max_power, target_current),
+        where:
+        - min_power: Minimum home power demand in Watts for this level
+        - max_power: Maximum home power demand in Watts for this level
+        - target_current: Target EVSE current in Amps for this power range
+
+        Args:
+            evse: EVSE device instance for checking battery state
+            evseController: Controller instance for setting demand levels
+            dayMinute (int): Minutes since midnight (0-1439) for time-based decisions
+
+        Raises:
+            NotImplementedError: Must be implemented by tariff subclasses
+        """
         raise NotImplementedError
     
-    def get_import_rate(self, current_time):
-        """Get the import rate at the given time in £/kWh"""
+    def get_import_rate(self, current_time: datetime) -> float:
+        """Get the import rate at the given time.
+
+        Args:
+            current_time (datetime): Time to check rate for
+
+        Returns:
+            float: Import rate in £/kWh
+        """
         for period in self.time_of_use.values():
             if self.is_in_period(current_time, period["start"], period["end"]):
                 return period["import_rate"]
@@ -165,22 +237,52 @@ class Tariff:
 
 # Octopus Go tariff
 class OctopusGoTariff(Tariff):
+    """Implementation of Octopus Go tariff logic.
+    
+    Octopus Go provides a cheap rate between 00:30 and 05:30,
+    with a standard rate at other times.
+
+    Attributes:
+        time_of_use (dict): Dictionary defining Octopus Go time periods and rates
+    """
+
     def __init__(self):
+        """Initialize Octopus Go tariff with specific time periods and rates."""
         super().__init__()
         self.time_of_use = {
             "low":  {"start": "00:30", "end": "05:30", "import_rate": 0.0850, "export_rate": 0.15},
             "high": {"start": "05:30", "end": "00:30", "import_rate": 0.2627, "export_rate": 0.15}
         }
 
-    def is_off_peak(self, dayMinute):
-        # Off-peak period: 00:30-05:30
+    def is_off_peak(self, dayMinute: int) -> bool:
+        """Check if current time is during Octopus Go off-peak period.
+
+        Args:
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            bool: True if time is between 00:30-05:30
+        """
         return 30 <= dayMinute < 330
 
     def is_expensive_period(self, dayMinute):
         # No expensive period for Octopus Go
         return False
 
-    def get_control_state(self, evse, dayMinute):
+    def get_control_state(self, evse, dayMinute: int) -> tuple:
+        """Determine charging strategy based on time and battery level.
+
+        Args:
+            evse: EVSE device instance
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            tuple: (ControlState, min_current, max_current, reason_string)
+                ControlState: The operational state to set
+                min_current: Minimum charging current (None for default)
+                max_current: Maximum charging current (None for default)
+                reason_string: Human-readable explanation of the decision
+        """
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
@@ -189,7 +291,7 @@ class OctopusGoTariff(Tariff):
             else:
                 return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
         elif evse.getBatteryChargeLevel() <= 25:
-            return ControlState.DORMANT, None, None, "OCTGO Battery depleted, remain dormant"
+            return ControlState.DORMANT, None, None, "OCTGO Day rate: SoC low, remain dormant"
         elif 330 <= dayMinute < 19 * 60:
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, "OCTGO Day rate before 16:00: load follow discharge"
         else:
@@ -201,6 +303,17 @@ class OctopusGoTariff(Tariff):
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
 
     def set_home_demand_levels(self, evse, evseController, dayMinute):
+        """Configure home demand power levels and corresponding charge/discharge currents.
+        
+        This method sets up the relationship between home power demand and the
+        EVSE's response in terms of charging or discharging current. The levels
+        determine at what power thresholds the system changes its behavior.
+
+        Args:
+            evse: EVSE device instance
+            evseController: Controller instance managing the EVSE
+            dayMinute (int): Minutes since midnight (0-1439)
+        """
         # If SoC > 50%:
         if evse.getBatteryChargeLevel() >= 50:
             # Start discharging at a home demand level of 416W. Cover all of the home demand as far as possible.
@@ -281,6 +394,17 @@ class CosyOctopusTariff(Tariff):
             return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Standard rate: load follow discharge"
         
     def set_home_demand_levels(self, evse, evseController, dayMinute):
+        """Configure home demand power levels and corresponding charge/discharge currents.
+        
+        This method sets up the relationship between home power demand and the
+        EVSE's response in terms of charging or discharging current. The levels
+        determine at what power thresholds the system changes its behavior.
+
+        Args:
+            evse: EVSE device instance
+            evseController: Controller instance managing the EVSE
+            dayMinute (int): Minutes since midnight (0-1439)
+        """
         # If in expensive period:
         if self.is_expensive_period(dayMinute):
             # Start discharging at a home demand level of 192W. Cover all of the home demand as far as possible.
