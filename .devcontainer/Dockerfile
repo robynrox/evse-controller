@@ -8,5 +8,8 @@ RUN apt update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /usr/bin/bash ${USER} \
     && echo "${USER} ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/${USER} \
-    && chmod 0440 /etc/sudoers.d/${USER} \
-    && pip install --no-cache-dir requests pyModbusTCP wallbox influxdb-client
+    && chmod 0440 /etc/sudoers.d/${USER}
+
+# Copy requirements.txt and install dependencies
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt

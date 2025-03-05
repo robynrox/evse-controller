@@ -43,18 +43,15 @@ version 1, so I would suggest installing as per the official instructions on the
 This isn't yet designed for end-users, only for software engineers and the like. You need to know at least a little
 Python to use this.
 
+### Option 1: Using Dev Container
 Configuration files are provided to spin up a [dev container](https://code.visualstudio.com/docs/devcontainers/containers)
-that contains the dependencies required to develop, test, and run this in a Docker container. Alternatively, you can
-install the following on your system:
+that contains the dependencies required to develop, test, and run this in a Docker container.
 
+### Option 2: Manual Setup
 * Python 3.11.7 / 3.12.3
-* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment for Python at the root path
-  of this repository (i.e., the directory that contains this README file). The dot at the end of the command is required and
-  the spaces are important.
-* Run `source bin/activate` to use the virtual environment.
-* Use `pip install requests pyModbusTCP wallbox flask` to install the required libraries into the virtual environment.
-* If you are using InfluxDB version 2, also use `pip install influxdb-client`.
-* If you want to use flake8 for linting, use `pip install flake8`.
+* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment
+* Run `source bin/activate` to use the virtual environment
+* Install dependencies with: `pip install -r requirements.txt`
 
 IP addresses are in `configuration.py`, so if your setup happens to be very close to mine, you can feel free to make
 changes.
