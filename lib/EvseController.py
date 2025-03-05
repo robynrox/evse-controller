@@ -19,7 +19,19 @@ import json
 from pathlib import Path
 
 class ControlState(Enum):
-    # The EVSE will not charge or discharge the vehicle in DORMANT state (obviously).
+    """Defines possible operational states for the EVSE controller.
+
+    These states determine how the EVSE responds to power demand and grid conditions:
+
+    DORMANT: No charging or discharging
+    CHARGE: Charge at specified rate within min/max range
+    DISCHARGE: Discharge at specified rate within min/max range
+    LOAD_FOLLOW_CHARGE: Charge while following grid load, stop if load too low
+    LOAD_FOLLOW_DISCHARGE: Discharge while following grid load, stop if load too low
+    LOAD_FOLLOW_BIDIRECTIONAL: Bidirectional power flow following grid load
+    PAUSE_UNTIL_DISCONNECT: Temporary pause state for safe cable removal
+    """
+    
     DORMANT = 0
     # The EVSE will charge the vehicle and follow the grid load between the ranges specified.
     # If the load moves out of range, target current will be set to the minimum or maximum as appropriate.
@@ -41,9 +53,34 @@ class ControlState(Enum):
 
 
 class EvseController(PowerMonitorObserver):
-    def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, evse: EvseInterface, configuration, tariffManager):
-        """
-        Initialize the EVSE controller.
+    """Controls an EVSE (Electric Vehicle Supply Equipment) based on power monitoring data.
+    
+    This class manages the charging and discharging behavior of an EVSE by monitoring
+    power consumption and following configured demand levels. It supports various control
+    states including smart charging, load following, and bidirectional power flow.
+
+    Attributes:
+        pmon (PowerMonitorInterface): Primary power monitor for grid and EVSE consumption
+        pmon2 (PowerMonitorInterface): Secondary power monitor for optional solar generation and heat pump consumption
+          (could be used for other devices)
+        evse (EvseInterface): The EVSE device being controlled
+        configuration (dict): System configuration parameters
+        controlState (ControlState): Current operational state of the controller
+        homeDemandLevels (list): List of (min_power, max_power, target_current) tuples
+        hysteresisWindow (int): Power window in Watts to prevent oscillation
+        grid_power_history (deque): Recent grid power readings for smoothing
+    """
+
+    def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
+                 evse: EvseInterface, configuration, tariffManager):
+        """Initialize the EVSE controller.
+
+        Args:
+            pmon (PowerMonitorInterface): Primary power monitor for grid consumption
+            pmon2 (PowerMonitorInterface): Secondary power monitor for EVSE consumption
+            evse (EvseInterface): The EVSE device to control
+            configuration (dict): System configuration parameters
+            tariffManager: Manager for electricity tariff rules
         """
         self.pmon = pmon
         self.pmon2 = pmon2
@@ -155,20 +192,34 @@ class EvseController(PowerMonitorObserver):
         info(f"CONTROL Setting hysteresis window to {self.hysteresisWindow} W")
 
     def setHomeDemandLevels(self, levels):
-        """
-        Set power ranges and corresponding fixed current levels.
-        :param levels: List of tuples [(min_power, max_power, target_current), ...]
+        """Set power demand levels that determine charging behavior.
+
+        Args:
+            levels (list): List of tuples (min_power, max_power, target_current) where:
+                - min_power (int): Minimum grid power demand in Watts
+                - max_power (int): Maximum grid power demand in Watts
+                - target_current (int): Target EVSE current in Amps for this range
         """
         newLevels = sorted(levels, key=lambda x: x[0])
         try:
             if self.homeDemandLevels != newLevels:
                 self.homeDemandLevels = newLevels
                 info(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
-        except: # if homeDemandLevels was unset
+        except:
             self.homeDemandLevels = newLevels
             info(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
 
     def calculateTargetCurrent(self, power):
+        """Calculate target EVSE current based on home power demand.
+
+        Uses hysteresis to prevent oscillation when power demand is near level boundaries.
+
+        Args:
+            power (Power): Current power readings from monitors
+
+        Returns:
+            int: Target current in Amps for the EVSE
+        """
         homeWatts = power.getHomeWatts()
         desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
 
