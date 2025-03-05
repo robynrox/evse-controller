@@ -18,10 +18,23 @@ import sys
 # Setup logging before anything else
 logger = setup_logging(configuration)
 
-# Add these new classes near the top of the file, after the existing imports
-
 class ScheduledEvent:
+    """Represents a scheduled state change event for the EVSE controller.
+
+    Attributes:
+        timestamp (datetime): When the event should occur
+        state (str): The state to change to ('charge', 'discharge', etc.)
+        enabled (bool): Whether this event is active
+    """
+
     def __init__(self, timestamp, state, enabled=True):
+        """Initialize a scheduled event.
+
+        Args:
+            timestamp (datetime): When the event should occur
+            state (str): The state to change to
+            enabled (bool, optional): Whether this event is active. Defaults to True.
+        """
         self.timestamp = timestamp
         self.state = state
         self.enabled = enabled

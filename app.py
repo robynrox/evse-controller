@@ -92,12 +92,27 @@ schedule_edit_model = api.model('ScheduleEdit', {
 })
 
 @control_ns.route('/command')
-class CommandResource(Resource):
+class ControlResource(Resource):
+    """Endpoint for sending control commands to the EVSE."""
+
     @control_ns.expect(command_model)
-    @control_ns.response(200, 'Success')
-    @control_ns.response(400, 'Invalid command')
+    @control_ns.doc(responses={
+        200: 'Command successfully executed',
+        400: 'Invalid command',
+        500: 'Internal server error'
+    })
     def post(self):
-        """Execute a control command on the EVSE"""
+        """Execute a control command on the EVSE.
+        
+        Commands:
+        - pause: Stop charging/discharging
+        - charge: Start charging at maximum rate
+        - discharge: Start discharging at maximum rate
+        - octgo: Configure for Octopus Go tariff
+        - cosy: Configure for Cosy Octopus tariff
+        - unplug: Prepare for cable removal after which return to the previous state
+        - solar: Solar-only charging mode
+        """
         data = request.json
         command = data.get('command')
         

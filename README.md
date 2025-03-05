@@ -38,23 +38,71 @@ I have also added logging to InfluxDB OSS version 2. This is the open-source var
 I do not believe it will work with version 1. If you just try `apt install influxdb`, it is likely that you will get
 version 1, so I would suggest installing as per the official instructions on the page above.
 
-## How to use and develop
+## Detailed Setup Instructions
 
-This isn't yet designed for end-users, only for software engineers and the like. You need to know at least a little
-Python to use this.
+### Prerequisites
+- Python 3.11.7 or 3.12.3
+- An EVSE device (currently supports Wallbox Quasar)
+- A power monitor (currently supports Shelly EM)
+- Optional: InfluxDB OSS v2 for logging
 
-### Option 1: Using Dev Container
-Configuration files are provided to spin up a [dev container](https://code.visualstudio.com/docs/devcontainers/containers)
-that contains the dependencies required to develop, test, and run this in a Docker container.
+### Installation Steps
 
-### Option 2: Manual Setup
-* Python 3.11.7 / 3.12.3
-* Use `python3 -m venv .` or if that fails try `python -m venv .` to create a virtual environment
-* Run `source bin/activate` to use the virtual environment
-* Install dependencies with: `pip install -r requirements.txt`
+1. **Clone the Repository (or download it)**
+   ```bash
+   git clone https://github.com/robynrox/evse-controller.git
+   cd evse-controller
+   ```
 
-IP addresses are in `configuration.py`, so if your setup happens to be very close to mine, you can feel free to make
-changes.
+   Alternatively download the ZIP file from GitHub by navigating to
+   https://github.com/robynrox/evse-controller, clicking the Code dropdown and selecting Download ZIP. Then unpack it.
+
+2. **Choose Setup Method**
+
+   A. Using Dev Container (Recommended):
+   - Install Docker and VS Code with Dev Containers extension
+   - Open project in VS Code
+   - Click "Reopen in Container" when prompted
+   - Container will automatically install dependencies
+
+   B. Manual Setup:
+   ```bash
+   python3 -m venv .
+   source bin/activate  # On Windows: .\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+3. **Configuration**
+   - Copy `configuration.py` to `secret.py`
+   - Edit `secret.py` with your device settings:
+     - WALLBOX_URL
+     - SHELLY_URL
+     - InfluxDB settings (if used)
+     - Octopus API settings (not used at present, for future expansion)
+
+4. **Start the Application**
+   ```bash
+   python app.py
+   ```
+   Access the web interface at http://localhost:5000
+
+   It is also possible to start the application with `python smart_evse_controller.py` if the web interface is not required.
+
+### Configuration Options
+
+Detailed explanation of each configuration option:
+
+- `WALLBOX_URL`: IP address or hostname of your Wallbox Quasar
+- `SHELLY_URL`: IP address or hostname of your Shelly EM
+- `SHELLY_2_URL`: IP address or hostname of your second Shelly EM (optional)
+- `INFLUXDB_URL`: URL of your InfluxDB instance (if using InfluxDB)
+- `INFLUXDB_TOKEN`: Authentication token for InfluxDB (if using InfluxDB)
+- `INFLUXDB_ORG`: Organization name for InfluxDB (if using InfluxDB)
+- `INFLUXDB_BUCKET`: Bucket name for InfluxDB (if using InfluxDB)
+- `OCTOPUS_API_KEY`: API key for Octopus Energy (if using Octopus integration, not yet implemented)
+- `OCTOPUS_METER_ID`: Your Octopus Energy meter ID (if using Octopus integration, not yet implemented)
+
+Please refer to the comments within the `configuration.py` file for more details.
 
 ## Provided samples
 
