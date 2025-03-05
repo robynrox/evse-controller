@@ -8,3 +8,4 @@ influxdata-archive_compat.key
 secret.py
 history.json
 schedules.json
+.vscode/settings.json

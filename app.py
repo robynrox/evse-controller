@@ -124,9 +124,29 @@ class HistoryResource(Resource):
         }
 
 # Add these route names for the web interface
-@app.route('/schedule')
+@app.route('/schedule', methods=['GET', 'POST'])
 def schedule_page():
     """Render the schedule management page"""
+    if request.method == 'POST':
+        try:
+            timestamp = datetime.fromisoformat(request.form['datetime'].replace('T', ' '))
+            state = request.form['state']
+            
+            if timestamp < datetime.now():
+                flash('Cannot schedule events in the past', 'error')
+                return redirect(url_for('schedule_page'))
+                
+            event = ScheduledEvent(timestamp, state)
+            scheduler.add_event(event)
+            scheduler.save_events()
+            flash('Event scheduled successfully', 'success')
+        except ValueError as e:
+            flash(f'Invalid datetime format: {str(e)}', 'error')
+        except Exception as e:
+            flash(f'Error scheduling event: {str(e)}', 'error')
+        
+        return redirect(url_for('schedule_page'))
+    
     scheduled_events = scheduler.get_future_events()
     return render_template('schedule.html', scheduled_events=scheduled_events)
 
