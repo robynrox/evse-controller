@@ -117,6 +117,8 @@ class EvseController(PowerMonitorObserver):
         self.tariffManager = tariffManager
         self.history_file = Path("history.json")
         self._load_history()
+        self.state_file = Path("evse_state.json")
+        self._load_persistent_state()
         log("INFO EvseController started")
 
     def _load_history(self):
@@ -230,6 +232,89 @@ class EvseController(PowerMonitorObserver):
 
         return desiredEvseCurrent
 
+    def _is_valid_soc(self, soc):
+        """
+        Validate SoC reading.
+        Returns True if the SoC reading is valid (between 5% and 100% inclusive).
+        """
+        return 5 <= soc <= 100
+
+    def _load_persistent_state(self):
+        """Load persistent state data from file if it exists."""
+        default_state = {
+            "last_known_soc": -1,
+            "last_soc_timestamp": 0,
+            "last_power_state": {
+                "ch1Watts": 0,
+                "ch2Watts": 0,
+                "posEnergyJoulesCh0": 0,
+                "negEnergyJoulesCh0": 0,
+                "posEnergyJoulesCh1": 0,
+                "negEnergyJoulesCh1": 0,
+                "unixtime": 0
+            }
+        }
+        
+        if self.state_file.exists():
+            try:
+                data = json.loads(self.state_file.read_text())
+                self.persistent_state = default_state | data
+                log("INFO Persistent state loaded successfully")
+                
+                # Restore relevant state with validation
+                loaded_soc = self.persistent_state["last_known_soc"]
+                self.batteryChargeLevel = loaded_soc if self._is_valid_soc(loaded_soc) else -1
+                log(f"INFO Restored battery charge level: {self.batteryChargeLevel}%")
+                
+                # Restore last power state
+                last_power = self.persistent_state["last_power_state"]
+                self.powerAtLastHalfHourlyLog = Power(
+                    ch1Watts=last_power["ch1Watts"],
+                    ch2Watts=last_power["ch2Watts"],
+                    posEnergyJoulesCh0=last_power["posEnergyJoulesCh0"],
+                    negEnergyJoulesCh0=last_power["negEnergyJoulesCh0"],
+                    posEnergyJoulesCh1=last_power["posEnergyJoulesCh1"],
+                    negEnergyJoulesCh1=last_power["negEnergyJoulesCh1"],
+                    unixtime=last_power["unixtime"]
+                )
+            except Exception as e:
+                log(f"WARNING Failed to load persistent state: {e}")
+                self.persistent_state = default_state
+                self.batteryChargeLevel = -1
+        else:
+            self.persistent_state = default_state
+            self.batteryChargeLevel = -1
+
+    def _save_persistent_state(self):
+        """Save persistent state to file."""
+        try:
+            if self.powerAtLastHalfHourlyLog:
+                power_state = {
+                    "ch1Watts": self.powerAtLastHalfHourlyLog.ch1Watts,
+                    "ch2Watts": self.powerAtLastHalfHourlyLog.ch2Watts,
+                    "posEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh0,
+                    "negEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh0,
+                    "posEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh1,
+                    "negEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh1,
+                    "unixtime": self.powerAtLastHalfHourlyLog.unixtime
+                }
+            else:
+                power_state = self.persistent_state["last_power_state"]
+            
+            # Only update SoC if we have a valid reading
+            if self._is_valid_soc(self.batteryChargeLevel):
+                self.persistent_state.update({
+                    "last_known_soc": self.batteryChargeLevel,
+                    "last_soc_timestamp": time.time(),
+                })
+            
+            self.persistent_state["last_power_state"] = power_state
+            
+            self.state_file.write_text(json.dumps(self.persistent_state))
+            #log(f"INFO Saved persistent state with SoC: {self.batteryChargeLevel}%")
+        except Exception as e:
+            log(f"WARNING Failed to save persistent state: {e}")
+
     def update(self, monitor, power):
         # If monitor is the one that deals with solar and heat pump data,
         if monitor == self.pmon2:
@@ -245,8 +330,22 @@ class EvseController(PowerMonitorObserver):
             # I am not sure how to generalise this at present for the circumstances of others.
 
             # When power was instantiated, the SoC was not known, so update it here.
-            power.soc = self.evse.getBatteryChargeLevel()
-
+            # Only update if we get a valid reading from the EVSE
+            new_soc = self.evse.getBatteryChargeLevel()
+            
+            # Log the attempted update for debugging
+            #log(f"DEBUG SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
+            
+            # Only update if we get a valid reading
+            if self._is_valid_soc(new_soc):
+                power.soc = new_soc
+            elif self._is_valid_soc(self.batteryChargeLevel):
+                # If we have a valid persisted value, use that
+                power.soc = self.batteryChargeLevel
+            else:
+                # If no valid current or persisted value, use -1
+                power.soc = -1
+            
             # Append new data to the history buffers
             self.gridPowerHistory.append(power.ch1Watts)
             self.evsePowerHistory.append(power.ch2Watts)
@@ -264,6 +363,7 @@ class EvseController(PowerMonitorObserver):
                 if (self.powerAtLastHalfHourlyLog is not None):
                     log(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
                 self.powerAtLastHalfHourlyLog = power
+                self._save_persistent_state()  # Save state after updating half-hourly log
 
             # We need to determine the grid power that will be used for the EVSE state calculation.
             # This is to eliminate spikes in the data (e.g. from a fridge powering up).
@@ -309,7 +409,7 @@ class EvseController(PowerMonitorObserver):
 
             logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
 
-            if power.soc != self.batteryChargeLevel:
+            if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
                 if self.powerAtBatteryChargeLevel is not None:
                     log(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
                 self.batteryChargeLevel = power.soc
@@ -383,6 +483,9 @@ class EvseController(PowerMonitorObserver):
                     log(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self.evse.setChargingCurrent(desiredEvseCurrent)
                 self.evseCurrent = desiredEvseCurrent
+
+        # After processing updates, save persistent state
+        self._save_persistent_state()
 
     def setControlState(self, state: ControlState):
         if state == ControlState.PAUSE_UNTIL_DISCONNECT:

@@ -9,3 +9,4 @@ secret.py
 history.json
 schedules.json
 .vscode/settings.json
+evse_state.json
