@@ -53,6 +53,8 @@ def command():
     - discharge: Start V2G discharge
     - octgo: Switch to Octopus Go tariff mode
     - cosy: Switch to Cosy Octopus tariff mode
+    - unplug: Pause charging to allow safe unplugging
+    - solar: Switch to solar-only charging mode
     
     Request body:
         {
@@ -66,7 +68,7 @@ def command():
     data = request.json
     command = data.get('command')
     
-    if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy']:
+    if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar']:
         execQueue.put(command)
         return jsonify({"status": "success", "message": f"Command '{command}' received"})
     else:
