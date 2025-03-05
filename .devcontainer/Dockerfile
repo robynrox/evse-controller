@@ -13,3 +13,6 @@ RUN apt update \
 # Copy requirements.txt and install dependencies
 COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Expose the Flask port
+EXPOSE 5000
