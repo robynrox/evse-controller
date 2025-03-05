@@ -71,10 +71,10 @@
     <button onclick="sendCommand('discharge')">Discharge</button>
 
     <div class="svg-button-container">
-        <button class="svg-button" title="Pause to remove plug">
+        <button class="svg-button" onclick="sendCommand('unplug')" title="Pause to remove plug">
             <img src="{{ url_for('static', filename='images/Remove_plug.svg') }}" alt="Pause to remove plug">
         </button>
-        <button class="svg-button" title="Solar only charging">
+        <button class="svg-button" onclick="sendCommand('solar')" title="Solar only charging">
             <img src="{{ url_for('static', filename='images/Solar_only_charging.svg') }}" alt="Solar only charging">
         </button>
     </div>
@@ -133,6 +133,27 @@
     </style>
 
     <script>
+        async function sendCommand(command) {
+            try {
+                const response = await fetch('/api/control/command', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ command: command })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Failed to send command');
+                }
+            } catch (error) {
+                console.error('Error sending command:', error);
+                alert('Failed to send command: ' + error.message);
+            }
+        }
+
         async function fetchHistory() {
             const response = await fetch('/api/status/history');
             return await response.json();
