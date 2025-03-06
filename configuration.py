@@ -32,7 +32,7 @@ OCTOPUS_API_KEY = "sk_live_your_key_here"
 
 # There are two logging systems, one to the console and one to a file.
 # You define the levels of logging here from DEBUG, INFO, WARNING, ERROR, CRITICAL.
-FILE_LOGGING = "INFO"
+FILE_LOGGING = "DEBUG"
 CONSOLE_LOGGING = "WARNING"
 LOG_DIR = "log"  # Directory for log files
 LOG_FILE_PREFIX = "evse"  # Prefix for log files

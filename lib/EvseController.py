@@ -352,7 +352,7 @@ class EvseController(PowerMonitorObserver):
             self.persistent_state["last_power_state"] = power_state
             
             self.state_file.write_text(json.dumps(self.persistent_state))
-            debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
+            #debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
         except Exception as e:
             error(f"Failed to save persistent state: {e}")
 
@@ -504,10 +504,10 @@ class EvseController(PowerMonitorObserver):
             nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
             if nextWriteAllowed > 0:
                 logMsg += f"NextChgIn:{nextWriteAllowed}s "
-                info(logMsg)
+                debug(logMsg)
                 return
 
-            info(logMsg)
+            debug(logMsg)
             resetState = False
             if self.evseCurrent != desiredEvseCurrent:
                 resetState = True

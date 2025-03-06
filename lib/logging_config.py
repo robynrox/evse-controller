@@ -37,7 +37,8 @@ def setup_logging(config):
         filename=log_dir / f"{prefix}_{current_date}.log",
         maxBytes=max_bytes,
         backupCount=backup_count,
-        encoding='utf-8'
+        encoding='utf-8',
+        mode='a'  # 'a' for append instead of 'w' for write/overwrite
     )
     file_handler.setFormatter(file_formatter)
     
