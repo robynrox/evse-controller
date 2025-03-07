@@ -573,12 +573,13 @@ class TariffManager:
 
 # Main application
 class ExecState(Enum):
-    SMART = 0
-    CHARGE = 1
-    DISCHARGE = 2
-    PAUSE = 3
-    FIXED = 4
-    SOLAR = 5  # New state for solar charging
+    SMART = 1
+    CHARGE = 2
+    DISCHARGE = 3
+    PAUSE = 4
+    FIXED = 5
+    SOLAR = 6
+    PAUSE_UNTIL_DISCONNECT = 7  # New state for unplug functionality
 
 
 execQueue = queue.SimpleQueue()
@@ -668,46 +669,47 @@ signal.signal(signal.SIGINT, signal_handler)
 def main():
     global execState
     nextStateCheck = 0
+    previous_state = None  # Store previous state for pause-until-disconnect
 
     while True:
         try:
             # Check for scheduled events
             due_events = scheduler.get_due_events()
             for event in due_events:
-                print(f"Executing scheduled event: changing to {event.state}")
+                info(f"Executing scheduled event: changing to {event.state}")
                 execQueue.put(event.state)
 
             # Command handling
             command = execQueue.get(True, 1)
             match command.lower():
                 case "p" | "pause":
-                    print("Entering pause state")
+                    info("Entering pause state")
                     execState = ExecState.PAUSE
                     nextStateCheck = time.time()
                 case "c" | "charge":
-                    print("Entering charge state")
+                    info("Entering charge state")
                     execState = ExecState.CHARGE
                     nextStateCheck = time.time()
                 case "d" | "discharge":
-                    print("Entering discharge state")
+                    info("Entering discharge state")
                     execState = ExecState.DISCHARGE
                     nextStateCheck = time.time()
                 case "s" | "smart":
-                    print("Entering smart tariff controller state")
+                    info("Entering smart tariff controller state")
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
-                    print("Switching to Octopus Go tariff")
+                    info("Switching to Octopus Go tariff")
                     tariffManager.set_tariff("OCTGO")
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "f" | "flux":
-                    print("Switching to Octopus Flux tariff")
+                    info("Switching to Octopus Flux tariff")
                     tariffManager.set_tariff("FLUX")
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "cosy":
-                    print("Switching to Cosy Octopus tariff")
+                    info("Switching to Cosy Octopus tariff")
                     tariffManager.set_tariff("COSY")
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
@@ -716,16 +718,18 @@ def main():
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
-                    print("Allow the vehicle to be unplugged")
-                    evseController.setControlState(ControlState.PAUSE_UNTIL_DISCONNECT)
+                    info("Entering pause-until-disconnect state")
+                    previous_state = execState
+                    execState = ExecState.PAUSE_UNTIL_DISCONNECT
+                    nextStateCheck = time.time()
                 case "solar":
-                    print("Entering solar charging state")
+                    info("Entering solar charging state")
                     execState = ExecState.SOLAR
                     nextStateCheck = time.time()
                 case _:
                     try:
                         currentAmps = int(command)
-                        print(f"Setting current to {currentAmps}")
+                        info(f"Setting current to {currentAmps}")
                         if currentAmps > 0:
                             evseController.setControlState(ControlState.CHARGE)
                             evseController.setChargeCurrentRange(currentAmps, currentAmps)
@@ -748,6 +752,8 @@ def main():
                         print("solar: Enter solar-only charging mode")
                         print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
                         print("           (current is expressed in Amps)")
+                        print("schedule YYYY-MM-DDTHH:MM:SS state: Schedule a state change at a specific time")
+                        print("list-schedule: List all scheduled events")
         except queue.Empty:
             pass
 
@@ -756,7 +762,19 @@ def main():
         if nowInSeconds >= nextStateCheck:
             nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
 
-            if execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
+            if execState == ExecState.PAUSE_UNTIL_DISCONNECT:
+                info("CONTROL PAUSE_UNTIL_DISCONNECT")
+                evseController.setControlState(ControlState.DORMANT)
+                
+                # Check if vehicle is disconnected
+                if evse.getEvseState() == EvseState.DISCONNECTED:
+                    info(f"Vehicle disconnected, will revert to {previous_state} when reconnected")
+                    if evse.getEvseState() != EvseState.DISCONNECTED:  # Vehicle reconnected
+                        info(f"Vehicle reconnected, reverting to {previous_state}")
+                        execState = previous_state
+                        previous_state = None
+
+            elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
                 info(f"CONTROL {execState}")
                 if execState == ExecState.PAUSE:
                     evseController.setControlState(ControlState.DORMANT)

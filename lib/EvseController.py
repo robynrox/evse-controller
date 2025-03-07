@@ -114,8 +114,6 @@ class EvseController(PowerMonitorObserver):
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
         self.grid_power_history = deque(maxlen=3)  # To store up to three previous grid power readings
         self.current_grid_power = Power()
-        self.previous_state = None
-        self.waiting_for_disconnect = False
         self.last_save_time = 0
         self.save_interval = 10  # Save every 10 seconds
 
@@ -491,16 +489,6 @@ class EvseController(PowerMonitorObserver):
                     # Allow up to an hour for the EVSE to restart without trying to restart again
                     self.connectionErrors = -3600
 
-            # Handle pause-until-disconnect logic
-            if self.waiting_for_disconnect:
-                if self.chargerState == EvseState.DISCONNECTED:
-                    # Vehicle was disconnected, revert to previous state
-                    self.waiting_for_disconnect = False
-                    if self.previous_state is not None:
-                        self.setControlState(self.previous_state)
-                        self.previous_state = None
-                        info("Reverting to previous state after disconnect")
-
             nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
             if nextWriteAllowed > 0:
                 logMsg += f"NextChgIn:{nextWriteAllowed}s "
@@ -533,12 +521,6 @@ class EvseController(PowerMonitorObserver):
         self._save_persistent_state()
 
     def setControlState(self, state: ControlState):
-        if state == ControlState.PAUSE_UNTIL_DISCONNECT:
-            self.previous_state = self.state
-            self.waiting_for_disconnect = True
-            # Set actual state to DORMANT
-            state = ControlState.DORMANT
-        
         self.state = state
         match state:
             case ControlState.DORMANT:
