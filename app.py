@@ -14,6 +14,18 @@ from smart_evse_controller import (
     get_system_state
 )
 
+VALID_COMMANDS = {
+    'pause': 'Stop charging/discharging',
+    'charge': 'Start charging at maximum rate',
+    'discharge': 'Start discharging at maximum rate',
+    'smart': 'Enter smart tariff control mode',
+    'octgo': 'Switch to Octopus Go tariff',
+    'flux': 'Switch to Octopus Flux tariff',
+    'cosy': 'Switch to Cosy Octopus tariff',
+    'unplug': 'Prepare for cable removal',
+    'solar': 'Solar-only charging mode'
+}
+
 # Completely disable Werkzeug logging
 log = logging.getLogger('werkzeug')
 log.disabled = True
@@ -51,8 +63,11 @@ schedule_ns = api.namespace('schedule', description='Schedule operations')
 
 # Define models
 command_model = api.model('Command', {
-    'command': fields.String(required=True, enum=['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar'],
-                           description='Control command to execute')
+    'command': fields.String(
+        required=True, 
+        enum=list(VALID_COMMANDS.keys()),
+        description='Control command to execute'
+    )
 })
 
 status_model = api.model('Status', {
@@ -74,21 +89,30 @@ history_model = api.model('HistoryPoint', {
 
 scheduled_event_model = api.model('ScheduledEvent', {
     'timestamp': fields.DateTime(required=True, description='When the event should occur'),
-    'state': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'],
-                         description='State to transition to'),
+    'state': fields.String(
+        required=True, 
+        enum=list(VALID_COMMANDS.keys()),
+        description='State to transition to'
+    ),
     'enabled': fields.Boolean(default=True, description='Whether the event is enabled')
 })
 
 schedule_create_model = api.model('ScheduleCreate', {
     'datetime': fields.String(required=True, description='ISO format datetime (YYYY-MM-DDTHH:MM:SS)'),
-    'state': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'])
+    'state': fields.String(
+        required=True, 
+        enum=list(VALID_COMMANDS.keys())
+    )
 })
 
 schedule_edit_model = api.model('ScheduleEdit', {
     'originalTimestamp': fields.String(required=True, description='ISO format datetime of existing event'),
     'originalState': fields.String(required=True, description='Current state of the event'),
     'newDatetime': fields.String(required=True, description='New ISO format datetime for the event'),
-    'newState': fields.String(required=True, enum=['charge', 'discharge', 'pause', 'octgo', 'cosy'])
+    'newState': fields.String(
+        required=True, 
+        enum=list(VALID_COMMANDS.keys())
+    )
 })
 
 @control_ns.route('/command')
@@ -102,24 +126,19 @@ class ControlResource(Resource):
         500: 'Internal server error'
     })
     def post(self):
-        """Execute a control command on the EVSE.
-        
-        Commands:
-        - pause: Stop charging/discharging
-        - charge: Start charging at maximum rate
-        - discharge: Start discharging at maximum rate
-        - octgo: Configure for Octopus Go tariff
-        - cosy: Configure for Cosy Octopus tariff
-        - unplug: Prepare for cable removal after which return to the previous state
-        - solar: Solar-only charging mode
-        """
+        """Execute a control command on the EVSE."""
         data = request.json
         command = data.get('command')
         
-        if command in ['pause', 'charge', 'discharge', 'octgo', 'cosy', 'unplug', 'solar']:
+        if command in VALID_COMMANDS:
             execQueue.put(command)
             return {"status": "success", "message": f"Command '{command}' received"}
         return {"status": "error", "message": "Invalid command"}, 400
+
+    @control_ns.doc(description='Get list of valid commands')
+    def get(self):
+        """Get list of available commands and their descriptions"""
+        return VALID_COMMANDS
 
 @status_ns.route('/')
 class StatusResource(Resource):
