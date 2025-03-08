@@ -798,7 +798,7 @@ def main():
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
-                info(log_message)
+                debug(log_message)
                 evseController.setControlState(control_state)
                 tariffManager.get_tariff().set_home_demand_levels(evse, evseController, dayMinute)
                 if min_current is not None and max_current is not None:

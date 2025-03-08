@@ -64,22 +64,95 @@
         </div>
     </div>
 
-    <button onclick="sendCommand('octgo')">Select and start Octopus Go</button>
-    <button onclick="sendCommand('flux')">Select and start Octopus Flux</button>
-    <button onclick="sendCommand('cosy')">Select and start Cosy Octopus</button>
-    <button onclick="sendCommand('pause')">Pause</button>
-    <button onclick="sendCommand('charge')">Charge</button>
-    <button onclick="sendCommand('discharge')">Discharge</button>
-
     <div class="svg-button-container">
-        <button class="svg-button" onclick="sendCommand('unplug')" title="Pause to remove plug">
+        <button class="svg-button" onclick="sendCommand('unplug')"
+            title="Pause charging to allow the plug to be removed">
             <img src="{{ url_for('static', filename='images/Remove_plug.svg') }}" alt="Pause to remove plug">
         </button>
-        <button class="svg-button" onclick="sendCommand('solar')" title="Solar only charging">
-            <img src="{{ url_for('static', filename='images/Solar_only_charging.svg') }}" alt="Solar only charging">
+        <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
+            <img src="{{ url_for('static', filename='images/Solar_only_charging_black.svg') }}"
+                alt="Solar only charging">
         </button>
-        <button onclick="sendCommand('power-home')">Power Home</button>
-        <button onclick="sendCommand('balance')">Balance</button>
+        <button class="svg-button" onclick="sendCommand('charge')"
+            title="Charge battery at maximum rate using all power sources">
+            <img src="{{ url_for('static', filename='images/Solar+Grid_to_Battery_black.svg') }}"
+                alt="Charge at maximum rate">
+        </button>
+        <button onclick="sendCommand('discharge')"
+            title="Discharge battery at maximum rate to power the home and send any excess back to the grid">Discharge</button>
+        <button onclick="sendCommand('power-home')"
+            title="Discharge battery when necessary to power the home only">Power Home</button>
+        <button onclick="sendCommand('balance')"
+            title="Minimise use of the grid (charge from solar and power the home)">Balance</button>
+        <button onclick="sendCommand('pause')" title="Pause all charging/discharging">Pause</button>
+        <button onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">Octopus Go</button>
+        <button onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">Octopus Flux</button>
+        <button onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">Cosy Octopus</button>
+        <button onclick="toggleLegend()">Show/Hide Command Reference</button>
+    </div>
+
+    <div class="legend-container">
+        <div id="command-legend" class="command-legend collapsed">
+            <h2>Command Reference</h2>
+            <div class="legend-grid">
+                <div class="legend-item">
+                    <img src="{{ url_for('static', filename='images/Remove_plug.svg') }}" alt="Remove plug icon">
+                    <div class="legend-text">
+                        <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <img src="{{ url_for('static', filename='images/Solar_only_charging_black.svg') }}"
+                        alt="Solar charging icon">
+                    <div class="legend-text">
+                        <strong>Solar Only:</strong> Charge using only solar power
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <img src="{{ url_for('static', filename='images/Solar+Grid_to_Battery_black.svg') }}"
+                        alt="Maximum charge icon">
+                    <div class="legend-text">
+                        <strong>Charge:</strong> Charge battery at maximum rate using all power sources
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
+                        excess back to the grid
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Power Home:</strong> Discharge battery when necessary to power the home only
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Pause:</strong> Pause all charging/discharging
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-text">
+                        <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <h1>Power History</h1>
@@ -106,10 +179,16 @@
             margin-top: 15px;
             display: flex;
             gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .svg-button-container button {
+            height: 48px;
         }
 
         .svg-button {
-            padding: 4px;
+            padding: 4px !important;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -117,7 +196,6 @@
             border: 1px solid #dee2e6;
             border-radius: 4px;
             cursor: pointer;
-            transition: all 0.2s ease-in-out;
         }
 
         .svg-button:hover {
@@ -132,6 +210,87 @@
         .svg-button img {
             height: 40px;
             width: auto;
+        }
+
+        .legend-container {
+            margin-top: 10px;
+        }
+
+        .legend-toggle {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.2s;
+            margin-left: auto;
+        }
+
+        .legend-toggle:hover {
+            background-color: #e9ecef;
+        }
+
+        .command-legend {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 20px;
+            margin-top: 10px;
+            max-height: 2000px;
+            transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
+            overflow: hidden;
+            opacity: 1;
+        }
+
+        .command-legend.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin-top: 0;
+            padding: 0;
+            border: none;
+        }
+
+        .legend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .legend-item img {
+            height: 30px;
+            width: auto;
+        }
+
+        .legend-text {
+            flex: 1;
+        }
+
+        .legend-text strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        @media (max-width: 768px) {
+            .legend-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .legend-toggle {
+                margin-left: 0;
+                width: 100%;
+            }
+
+            .svg-button-container button:last-child {
+                width: 100%;
+            }
         }
     </style>
 
@@ -301,6 +460,11 @@
                 Plotly.relayout('chart', getLayout());
             });
         });
+
+        function toggleLegend() {
+            const legend = document.getElementById('command-legend');
+            legend.classList.toggle('collapsed');
+        }
     </script>
 </body>
 
