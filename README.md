@@ -73,12 +73,49 @@ version 1, so I would suggest installing as per the official instructions on the
    ```
 
 3. **Configuration**
-   - Copy `configuration.py` to `secret.py`
-   - Edit `secret.py` with your device settings:
-     - WALLBOX_URL
-     - SHELLY_URL
-     - InfluxDB settings (if used)
-     - Octopus API settings (not used at present, for future expansion)
+   There are two ways to configure the application:
+
+   A. Interactive Configuration (Recommended):
+   ```bash
+   python configure.py
+   ```
+   This will guide you through setting up:
+   - Wallbox connection details
+   - Shelly EM configuration
+   - InfluxDB settings (optional)
+   - Charging preferences
+   
+   B. Manual Configuration:
+   - Edit `config.yaml` directly (created by configure.py)
+   - Configuration structure:
+     ```yaml
+     wallbox:
+       url: "192.168.0.123"
+       username: "myemail@address.com"  # Optional, for auto-restart
+       password: "yourpassword"         # Optional, for auto-restart
+       serial: 12345                    # Optional, for auto-restart
+     shelly:
+       primary_url: "192.168.0.124"
+       secondary_url: null              # Optional second Shelly
+     influxdb:
+       enabled: false
+       url: "http://localhost:8086"
+       token: ""
+       org: ""
+     logging:
+       file_level: "DEBUG"
+       console_level: "WARNING"
+       directory: "log"
+       file_prefix: "evse"
+       max_bytes: 10485760             # 10MB
+       backup_count: 30
+     charging:
+       max_charge_percent: 90          # Maximum battery charge percentage
+       solar_period_max_charge: 80     # Maximum charge during solar generation periods
+       default_tariff: "COSY"          # COSY or OCTGO
+     ```
+
+   Note: The old `configuration.py`/`secret.py` method is deprecated and will be removed in a future version.
 
 4. **Start the Application**
    ```bash

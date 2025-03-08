@@ -1,9 +1,9 @@
+import signal
 from enum import Enum
 from lib.EvseController import ControlState, EvseController
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.Shelly import PowerMonitorShelly
 import time
-import configuration
 import math
 import queue
 import threading
@@ -11,12 +11,24 @@ from datetime import datetime
 import json
 from pathlib import Path
 from typing import List, Dict
-from lib.logging_config import setup_logging, debug, info, warning, error, critical
-import signal
+from lib.paths import ensure_data_dirs
 import sys
 
-# Setup logging before anything else
-logger = setup_logging(configuration)
+# Ensure data directories exist before anything else
+print("Ensuring data directories exist...", file=sys.stderr)
+ensure_data_dirs()
+
+# Now import the rest of the modules
+from lib.logging_config import setup_logging, debug, info, warning, error, critical
+from lib.config import Config
+
+# Setup logging
+logger = setup_logging()
+info("Starting EVSE controller...")
+
+# Get config instance
+config = Config()
+info(f"Using config file: {config.CONFIG_FILE}")
 
 class ScheduledEvent:
     """Represents a scheduled state change event for the EVSE controller.
@@ -55,15 +67,16 @@ class ScheduledEvent:
         )
 
 class Scheduler:
-    def __init__(self, save_path):
+    def __init__(self):
+        config = Config()
+        self.schedule_file = config.SCHEDULE_FILE
         self.events = []
-        self.save_path = Path(save_path)
-        self.load_events()
+        self._load_schedule()
 
     def add_event(self, event):
         self.events.append(event)
         self.events.sort(key=lambda x: x.timestamp)  # Sort after adding new event
-        self.save_events()
+        self._save_schedule()
 
     def get_future_events(self):
         now = datetime.now()
@@ -88,13 +101,13 @@ class Scheduler:
                 remaining_events.append(event)
         
         self.events = remaining_events
-        self.save_events()
+        self._save_schedule()
         return due_events
 
-    def load_events(self):
-        if self.save_path.exists():
+    def _load_schedule(self):
+        if self.schedule_file.exists():
             try:
-                data = json.loads(self.save_path.read_text())
+                data = json.loads(self.schedule_file.read_text())
                 self.events = [ScheduledEvent.from_dict(event) for event in data]
                 # Sort events by timestamp
                 self.events.sort(key=lambda x: x.timestamp)
@@ -102,9 +115,9 @@ class Scheduler:
                 error(f"Error loading events: {e}")
                 self.events = []
 
-    def save_events(self):
+    def _save_schedule(self):
         data = [event.to_dict() for event in self.events]
-        self.save_path.write_text(json.dumps(data, indent=2))
+        self.schedule_file.write_text(json.dumps(data, indent=2))
 
 # Tariff base class
 class Tariff:
@@ -128,6 +141,7 @@ class Tariff:
 
     def __init__(self):
         """Initialize base tariff with default time-of-use rates."""
+        self.config = Config()  # Add this
         self.time_of_use = {
             "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
         }
@@ -286,7 +300,7 @@ class OctopusGoTariff(Tariff):
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < configuration.MAX_CHARGE_PERCENT:
+            if evse.getBatteryChargeLevel() < self.config.MAX_CHARGE_PERCENT:  # Use self.config instead of config
                 return ControlState.CHARGE, None, None, "OCTGO Night rate: charge at max rate"
             else:
                 return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
@@ -357,9 +371,9 @@ class CosyOctopusTariff(Tariff):
     def get_max_charge_percent(self, dayMinute):
         # Afternoon period (13:00-16:00)
         if 13 * 60 <= dayMinute < 16 * 60:
-            return 80
+            return self.config.SOLAR_PERIOD_MAX_CHARGE
         # All other periods
-        return configuration.MAX_CHARGE_PERCENT
+        return self.config.MAX_CHARGE_PERCENT
 
     def is_off_peak(self, dayMinute):
         # Off-peak periods: 04:00-07:00, 13:00-16:00, 22:00-24:00
@@ -497,7 +511,7 @@ class OctopusFluxTariff(Tariff):
         
         # Night rate charging period (02:00-05:00)
         if self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < configuration.MAX_CHARGE_PERCENT:
+            if evse.getBatteryChargeLevel() < self.config.MAX_CHARGE_PERCENT:  # Use self.config instead of config
                 return ControlState.CHARGE, None, None, "FLUX Night rate: charge at max rate"
             else:
                 return ControlState.DORMANT, None, None, "FLUX Night rate: SoC max, remain dormant"
@@ -550,13 +564,14 @@ class OctopusFluxTariff(Tariff):
 
 # Tariff manager
 class TariffManager:
-    def __init__(self, initial_tariff):
+    def __init__(self):
+        config = Config()  # Get singleton instance
         self.tariffs = {
             "OCTGO": OctopusGoTariff(),
             "COSY": CosyOctopusTariff(),
             "FLUX": OctopusFluxTariff()
         }
-        self.current_tariff = self.tariffs[initial_tariff]
+        self.current_tariff = self.tariffs[config.DEFAULT_TARIFF]
 
     def set_tariff(self, tariff_name):
         if tariff_name in self.tariffs:
@@ -586,8 +601,8 @@ class ExecState(Enum):
 
 execQueue = queue.SimpleQueue()
 execState = ExecState.SMART
-tariffManager = TariffManager(configuration.DEFAULT_TARIFF)
-scheduler = Scheduler('schedules.json')
+tariffManager = TariffManager()
+scheduler = Scheduler()
 
 def get_system_state():
     """
@@ -618,20 +633,34 @@ class InputParser(threading.Thread):
 inputThread = InputParser()
 inputThread.start()
 
-evse = EvseWallboxQuasar(configuration.WALLBOX_URL)
-powerMonitor = PowerMonitorShelly(configuration.SHELLY_URL)
-powerMonitor2 = None
-if configuration.SHELLY_2_URL:
-    powerMonitor2 = PowerMonitorShelly(configuration.SHELLY_2_URL)
-evseController = EvseController(powerMonitor, powerMonitor2, evse, {
-    "WALLBOX_USERNAME": configuration.WALLBOX_USERNAME,
-    "WALLBOX_PASSWORD": configuration.WALLBOX_PASSWORD,
-    "WALLBOX_SERIAL": configuration.WALLBOX_SERIAL,
-    "USING_INFLUXDB": configuration.USING_INFLUXDB,
-    "INFLUXDB_URL": configuration.INFLUXDB_URL,
-    "INFLUXDB_TOKEN": configuration.INFLUXDB_TOKEN,
-    "INFLUXDB_ORG": configuration.INFLUXDB_ORG
-}, tariffManager)
+config = Config()
+evse = EvseWallboxQuasar()
+
+# Initialize primary Shelly
+primary_url = config.config.get("shelly", {}).get("primary_url")
+if not primary_url:
+    error("No primary Shelly URL configured")
+    sys.exit(1)
+debug(f"Initializing primary Shelly with URL: {primary_url}")
+try:
+    powerMonitor = PowerMonitorShelly(primary_url)
+except Exception as e:
+    error(f"Failed to initialize primary Shelly: {e}")
+    sys.exit(1)
+
+# Initialize secondary Shelly if configured
+secondary_url = config.config.get("shelly", {}).get("secondary_url")
+if secondary_url:
+    debug(f"Initializing secondary Shelly with URL: {secondary_url}")
+    try:
+        powerMonitor2 = PowerMonitorShelly(secondary_url)
+    except Exception as e:
+        warning(f"Failed to initialize secondary Shelly: {e}")
+        powerMonitor2 = None
+else:
+    powerMonitor2 = None
+
+evseController = EvseController(powerMonitor, powerMonitor2, evse, tariffManager)
 
 
 def handle_schedule_command(command_parts):

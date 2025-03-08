@@ -1,9 +1,13 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
-from flask_restx import Api, Resource, fields, Namespace
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
+from flask_restx import Api, Resource, fields
+from werkzeug.serving import WSGIRequestHandler
+from lib.paths import ensure_data_dirs
+import logging
 import threading
 from datetime import datetime
-import logging
-from werkzeug.serving import WSGIRequestHandler
+
+# Ensure data directories exist before anything else
+ensure_data_dirs()
 
 from smart_evse_controller import (
     execQueue, 

@@ -1,3 +1,12 @@
+import warnings
+
+warnings.warn(
+    "The configuration.py file is deprecated and will be removed in a future version. "
+    "Please use config.yaml instead. See README.md for migration instructions.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 # You may want to copy the configuration variables listed here, make a new file called secret.py, and paste them there.
 # The idea is that secret.py is excluded from version control and you will not be prompted to check them in if you
 # cloned the repository.

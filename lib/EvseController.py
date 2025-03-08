@@ -7,6 +7,7 @@ from lib.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserve
 from lib.Power import Power
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.logging_config import debug, info, warning, error, critical
+from lib.config import Config
 
 try:
     import influxdb_client
@@ -72,16 +73,16 @@ class EvseController(PowerMonitorObserver):
     """
 
     def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
-                 evse: EvseInterface, configuration, tariffManager):
+                 evse: EvseInterface, tariffManager):
         """Initialize the EVSE controller.
 
         Args:
             pmon (PowerMonitorInterface): Primary power monitor for grid consumption
             pmon2 (PowerMonitorInterface): Secondary power monitor for EVSE consumption
             evse (EvseInterface): The EVSE device to control
-            configuration (dict): System configuration parameters
             tariffManager: Manager for electricity tariff rules
         """
+        config = Config()  # Get singleton instance
         self.pmon = pmon
         self.pmon2 = pmon2
         self.auxpower = Power()
@@ -97,7 +98,7 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.configuration = configuration
+        self.configuration = config.config
         self.thread = PowerMonitorPollingThread(pmon)
         self.thread.start()
         self.thread.attach(self)
@@ -126,12 +127,25 @@ class EvseController(PowerMonitorObserver):
             levels.append((start, end, current))
         levels.append((7680, 99999, 32))
         self.setHomeDemandLevels(levels)
+        # Initialize InfluxDB if enabled
+        self.write_api = None
+        if config.config.get('influxdb', {}).get('enabled', False):
+            try:
+                client = influxdb_client.InfluxDBClient(
+                    url=config.config['influxdb']['url'],
+                    token=config.config['influxdb']['token'],
+                    org=config.config['influxdb']['org']
+                )
+                self.write_api = client.write_api(write_options=SYNCHRONOUS)
+            except Exception as e:
+                error(f"Failed to initialize InfluxDB: {e}")
 
-        if self.configuration.get("USING_INFLUXDB", False) is True:
-            self.client = influxdb_client.InfluxDBClient(url=self.configuration["INFLUXDB_URL"],
-                                                         token=self.configuration["INFLUXDB_TOKEN"],
-                                                         org=self.configuration["INFLUXDB_ORG"])
-            self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+        # Initialize the persistent state
+        self.persistent_state = {
+            'last_soc': -1,
+            'last_update_time': 0
+        }
+
         # Data for the last 300 readings
         self.gridPowerHistory = deque(maxlen=300)
         self.evsePowerHistory = deque(maxlen=300)
@@ -140,9 +154,9 @@ class EvseController(PowerMonitorObserver):
         self.socHistory = deque(maxlen=300)
         self.timestamps = deque(maxlen=300)
         self.tariffManager = tariffManager
-        self.history_file = Path("history.json")
+        self.history_file = config.HISTORY_FILE
         self._load_history()
-        self.state_file = Path("evse_state.json")
+        self.state_file = config.EVSE_STATE_FILE
         self._load_persistent_state()
         info("EvseController started")
 
@@ -327,40 +341,29 @@ class EvseController(PowerMonitorObserver):
     def _save_persistent_state(self):
         """Save persistent state to file."""
         try:
-            if self.powerAtLastHalfHourlyLog:
-                power_state = {
-                    "ch1Watts": self.powerAtLastHalfHourlyLog.ch1Watts,
-                    "ch2Watts": self.powerAtLastHalfHourlyLog.ch2Watts,
-                    "posEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh0,
-                    "negEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh0,
-                    "posEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh1,
-                    "negEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh1,
-                    "unixtime": self.powerAtLastHalfHourlyLog.unixtime
-                }
-            else:
-                power_state = self.persistent_state["last_power_state"]
-            
-            # Only update SoC if we have a valid reading
-            if self._is_valid_soc(self.batteryChargeLevel):
-                self.persistent_state.update({
-                    "last_known_soc": self.batteryChargeLevel,
-                    "last_soc_timestamp": time.time(),
-                })
-            
-            self.persistent_state["last_power_state"] = power_state
-            
-            self.state_file.write_text(json.dumps(self.persistent_state))
-            #debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
+            current_time = time.time()
+            if current_time - self.last_save_time >= self.save_interval:
+                self.persistent_state['last_soc'] = self.evse.getBatteryChargeLevel()
+                self.persistent_state['last_update_time'] = current_time
+                
+                state_dir = Path(Config().config['logging']['directory']) / 'state'
+                state_dir.mkdir(parents=True, exist_ok=True)
+                state_file = state_dir / 'evse_state.json'
+                
+                with open(state_file, 'w') as f:
+                    json.dump(self.persistent_state, f)
+                
+                self.last_save_time = current_time
         except Exception as e:
             error(f"Failed to save persistent state: {e}")
 
-    def update(self, monitor, power):
-        # If monitor is the one that deals with solar and heat pump data,
-        if monitor == self.pmon2:
-            # Log the values.
-            self.auxpower = power
-        #Else
-        else:
+    def update(self, subject, result):
+        """Update method called by the power monitor when new readings are available."""
+        power = result
+        if isinstance(power, Power):
+            self.current_grid_power = power
+            self.grid_power_history.append(power.ch1Watts)
+            
             # At present, channels are allocated as follows:
             #   power.ch1 is grid power
             #   power.ch2 is EVSE power
@@ -453,7 +456,7 @@ class EvseController(PowerMonitorObserver):
                     info(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
                 self.batteryChargeLevel = power.soc
                 self.powerAtBatteryChargeLevel = power
-            if self.configuration.get("USING_INFLUXDB", False) is True:
+            if self.write_api:
                 try:
                     point = (
                         influxdb_client.Point("measurement")
@@ -471,7 +474,6 @@ class EvseController(PowerMonitorObserver):
                     self.write_api.write(bucket="powerlog", record=point)
                 except Exception as e:
                     error(f"Failed to write to InfluxDB: {e}")
-                    # Continue execution even if InfluxDB write fails
 
             try:
                 self.chargerState = self.evse.getEvseState()

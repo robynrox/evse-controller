@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EVSE Controller Configuration</title>
+    <style>
+        /* Reuse existing styles from schedule.html */
+    </style>
+</head>
+
+<body>
+    <div class="nav-links">
+        <a href="/">← Back to Dashboard</a>
+    </div>
+
+    <h1>EVSE Controller Configuration</h1>
+
+    <div class="config-form">
+        <form id="configForm" method="POST">
+            <h2>Device Settings</h2>
+            <div class="form-group">
+                <label for="wallbox_url">Wallbox URL:</label>
+                <input type="text" id="wallbox_url" name="WALLBOX_URL" value="{{ config.WALLBOX_URL }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="shelly_url">Shelly EM URL:</label>
+                <input type="text" id="shelly_url" name="SHELLY_URL" value="{{ config.SHELLY_URL }}" required>
+            </div>
+
+            <h2>Optional Settings</h2>
+            <div class="form-group">
+                <label for="shelly_2_url">Second Shelly EM URL (optional):</label>
+                <input type="text" id="shelly_2_url" name="SHELLY_2_URL" value="{{ config.SHELLY_2_URL }}">
+            </div>
+
+            <h2>Wallbox Authentication</h2>
+            <div class="form-group">
+                <label for="wallbox_username">Username:</label>
+                <input type="text" id="wallbox_username" name="WALLBOX_USERNAME" value="{{ config.WALLBOX_USERNAME }}">
+            </div>
+
+            <div class="form-group">
+                <label for="wallbox_password">Password:</label>
+                <input type="password" id="wallbox_password" name="WALLBOX_PASSWORD"
+                    value="{{ config.WALLBOX_PASSWORD }}">
+            </div>
+
+            <h2>InfluxDB Settings</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="USING_INFLUXDB" {% if config.USING_INFLUXDB %}checked{% endif %}>
+                    Enable InfluxDB logging
+                </label>
+            </div>
+
+            <div id="influxdb-settings" {% if not config.USING_INFLUXDB %}style="display:none" {% endif %}>
+                <!-- InfluxDB settings fields -->
+            </div>
+
+            <button type="submit">Save Configuration</button>
+        </form>
+    </div>
+
+    <script>
+        // Toggle InfluxDB settings visibility
+        document.querySelector('[name="USING_INFLUXDB"]').addEventListener('change', function (e) {
+            document.getElementById('influxdb-settings').style.display = e.target.checked ? 'block' : 'none';
+        });
+    </script>
+</body>
+
+</html>

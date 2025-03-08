@@ -3,12 +3,17 @@ from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
 from wallbox import Wallbox
 from lib.logging_config import debug, info, warning, error, critical
+from lib.config import Config
 
 
 class EvseWallboxQuasar(EvseInterface):
-    def __init__(self, host: str):
-        self.host = host
-        self.client = ModbusClient(host=host, auto_open=True, auto_close=False, timeout=2)
+    def __init__(self):
+        config = Config()
+        self.url = config.WALLBOX_URL
+        self.username = config.WALLBOX_USERNAME
+        self.password = config.WALLBOX_PASSWORD
+        self.serial = config.WALLBOX_SERIAL
+        self.client = ModbusClient(host=self.url, auto_open=True, auto_close=False, timeout=2)
         self.CONTROL_LOCKOUT_REG = 0x51
         self.MODBUS_CONTROL = 1
         self.USER_CONTROL = 0
