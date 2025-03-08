@@ -579,7 +579,9 @@ class ExecState(Enum):
     PAUSE = 4
     FIXED = 5
     SOLAR = 6
-    PAUSE_UNTIL_DISCONNECT = 7  # New state for unplug functionality
+    POWER_HOME = 7
+    BALANCE = 8
+    PAUSE_UNTIL_DISCONNECT = 9
 
 
 execQueue = queue.SimpleQueue()
@@ -726,6 +728,14 @@ def main():
                     info("Entering solar charging state")
                     execState = ExecState.SOLAR
                     nextStateCheck = time.time()
+                case "power-home" | "ph":
+                    info("Entering power home state")
+                    execState = ExecState.POWER_HOME
+                    nextStateCheck = time.time()
+                case "balance" | "b":
+                    info("Entering power balance state")
+                    execState = ExecState.BALANCE
+                    nextStateCheck = time.time()
                 case _:
                     try:
                         currentAmps = int(command)
@@ -750,6 +760,8 @@ def main():
                         print("cosy: Switch to Cosy Octopus tariff")
                         print("u | unplug: Allow the vehicle to be unplugged")
                         print("solar: Enter solar-only charging mode")
+                        print("power-home: Enter power home state")
+                        print("balance: Enter power balance state")
                         print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
                         print("           (current is expressed in Amps)")
                         print("schedule YYYY-MM-DDTHH:MM:SS state: Schedule a state change at a specific time")
@@ -798,7 +810,18 @@ def main():
             if execState == ExecState.SOLAR:
                 info("CONTROL SOLAR")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-                evseController.setChargeCurrentRange(3, 16)  # Set min/max current range
+                evseController.setChargeCurrentRange(3, 16)
+
+            if execState == ExecState.POWER_HOME:
+                info("CONTROL POWER_HOME")
+                evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+                evseController.setDischargeCurrentRange(3, 16)
+
+            if execState == ExecState.BALANCE:
+                info("CONTROL BALANCE")
+                evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
+                evseController.setChargeCurrentRange(3, 16)
+                evseController.setDischargeCurrentRange(3, 16)
 
 if __name__ == '__main__':
     main()
