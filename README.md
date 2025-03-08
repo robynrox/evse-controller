@@ -154,6 +154,14 @@ Key API features include:
 - Schedule management
 - Configuration
 
+## Limitations
+
+- Currently only supports Wallbox Quasar for EVSE and Shelly EM for power monitoring. Other devices would require new interface implementations.
+- The scheduling system supports Octopus Go, Cosy Octopus, and Octopus Flux tariff patterns. Agile tariff support is not implemented. Tariffs from other suppliers are also not implemented. There is an interface allowing for reasonably straightforward implementation of additional tariff support.
+- The Wallbox occasionally requires automatic restarts due to Modbus communication issues, causing approximately 6 minutes of downtime when this occurs. Manual power cycling might be needed 3-4 times per year.
+- The web interface is designed for local network use and doesn't include authentication or security features for remote access.
+- The web interface currently has limited accessibility features. Users requiring screen readers or keyboard-only navigation may experience difficulties. If you need accessibility features, please open an issue on GitHub to discuss your requirements.
+
 ## Roadmap
 
 * Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
