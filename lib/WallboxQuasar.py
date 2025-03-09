@@ -3,12 +3,11 @@ from pyModbusTCP.client import ModbusClient
 from lib.EvseInterface import EvseInterface, EvseState
 from wallbox import Wallbox
 from lib.logging_config import debug, info, warning, error, critical
-from lib.config import Config
+from lib.config import config
 
 
 class EvseWallboxQuasar(EvseInterface):
     def __init__(self):
-        config = Config()
         self.url = config.WALLBOX_URL
         self.username = config.WALLBOX_USERNAME
         self.password = config.WALLBOX_PASSWORD
@@ -30,7 +29,7 @@ class EvseWallboxQuasar(EvseInterface):
         self.lastEvseState = EvseState.UNKNOWN
         # Hard limit of maximum charge percentage (might have to adjust to avoid cycling if charger keeps turning
         # on and off after a certain level, e.g. 97%)
-        self.MAX_CHARGE_PERCENT = 100
+        self.MAX_CHARGE_PERCENT = 97
         # Hard limit of minimum charge percentage (it is not good for the EV battery to go too low and stay there)
         self.MIN_CHARGE_PERCENT = 20
 

@@ -4,7 +4,6 @@ import time
 from lib.Power import Power
 from lib.PowerMonitorInterface import PowerMonitorInterface
 from lib.logging_config import debug, info, warning, error, critical
-from lib.config import Config
 
 
 class PowerMonitorShelly(PowerMonitorInterface):

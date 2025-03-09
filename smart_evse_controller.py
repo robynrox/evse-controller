@@ -20,14 +20,12 @@ ensure_data_dirs()
 
 # Now import the rest of the modules
 from lib.logging_config import setup_logging, debug, info, warning, error, critical
-from lib.config import Config
+from lib.config import config
 
 # Setup logging
 logger = setup_logging()
 info("Starting EVSE controller...")
 
-# Get config instance
-config = Config()
 info(f"Using config file: {config.CONFIG_FILE}")
 
 class ScheduledEvent:
@@ -68,7 +66,6 @@ class ScheduledEvent:
 
 class Scheduler:
     def __init__(self):
-        config = Config()
         self.schedule_file = config.SCHEDULE_FILE
         self.events = []
         self._load_schedule()
@@ -141,7 +138,6 @@ class Tariff:
 
     def __init__(self):
         """Initialize base tariff with default time-of-use rates."""
-        self.config = Config()  # Add this
         self.time_of_use = {
             "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
         }
@@ -300,7 +296,7 @@ class OctopusGoTariff(Tariff):
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < self.config.MAX_CHARGE_PERCENT:  # Use self.config instead of config
+            if evse.getBatteryChargeLevel() < config.MAX_CHARGE_PERCENT:
                 return ControlState.CHARGE, None, None, "OCTGO Night rate: charge at max rate"
             else:
                 return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
@@ -371,9 +367,9 @@ class CosyOctopusTariff(Tariff):
     def get_max_charge_percent(self, dayMinute):
         # Afternoon period (13:00-16:00)
         if 13 * 60 <= dayMinute < 16 * 60:
-            return self.config.SOLAR_PERIOD_MAX_CHARGE
+            return config.SOLAR_PERIOD_MAX_CHARGE
         # All other periods
-        return self.config.MAX_CHARGE_PERCENT
+        return config.MAX_CHARGE_PERCENT
 
     def is_off_peak(self, dayMinute):
         # Off-peak periods: 04:00-07:00, 13:00-16:00, 22:00-24:00
@@ -511,7 +507,7 @@ class OctopusFluxTariff(Tariff):
         
         # Night rate charging period (02:00-05:00)
         if self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < self.config.MAX_CHARGE_PERCENT:  # Use self.config instead of config
+            if evse.getBatteryChargeLevel() < config.MAX_CHARGE_PERCENT:
                 return ControlState.CHARGE, None, None, "FLUX Night rate: charge at max rate"
             else:
                 return ControlState.DORMANT, None, None, "FLUX Night rate: SoC max, remain dormant"
@@ -565,7 +561,6 @@ class OctopusFluxTariff(Tariff):
 # Tariff manager
 class TariffManager:
     def __init__(self):
-        config = Config()  # Get singleton instance
         self.tariffs = {
             "OCTGO": OctopusGoTariff(),
             "COSY": CosyOctopusTariff(),
@@ -633,11 +628,20 @@ class InputParser(threading.Thread):
 inputThread = InputParser()
 inputThread.start()
 
-config = Config()
-evse = EvseWallboxQuasar()
+# Initialize Wallbox
+wallbox_url = config.WALLBOX_URL
+if not wallbox_url:
+    error("No Wallbox URL configured")
+    sys.exit(1)
+debug(f"Initializing Wallbox with URL: {wallbox_url}")
+try:
+    evse = EvseWallboxQuasar()
+except Exception as e:
+    error(f"Failed to initialize Wallbox: {e}")
+    sys.exit(1)
 
 # Initialize primary Shelly
-primary_url = config.config.get("shelly", {}).get("primary_url")
+primary_url = config.SHELLY_URL
 if not primary_url:
     error("No primary Shelly URL configured")
     sys.exit(1)
@@ -649,7 +653,7 @@ except Exception as e:
     sys.exit(1)
 
 # Initialize secondary Shelly if configured
-secondary_url = config.config.get("shelly", {}).get("secondary_url")
+secondary_url = config.SHELLY_2_URL
 if secondary_url:
     debug(f"Initializing secondary Shelly with URL: {secondary_url}")
     try:

@@ -112,7 +112,7 @@ version 1, so I would suggest installing as per the official instructions on the
      charging:
        max_charge_percent: 90          # Maximum battery charge percentage
        solar_period_max_charge: 80     # Maximum charge during solar generation periods
-       default_tariff: "COSY"          # COSY or OCTGO
+       default_tariff: "COSY"          # COSY, OCTGO or FLUX
      ```
 
    Note: The old `configuration.py`/`secret.py` method is deprecated and will be removed in a future version.

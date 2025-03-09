@@ -2,21 +2,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
-import yaml
+from lib.config import config
 import sys
-
-def get_config_value(key: str, default: str) -> str:
-    """Get config value without using Config class to avoid circular imports."""
-    try:
-        config_file = Path.home() / ".local" / "share" / "evse-controller" / "config" / "config.yaml"
-        print(f"Looking for config file at: {config_file}", file=sys.stderr)
-        if config_file.exists():
-            with config_file.open('r') as f:
-                config = yaml.safe_load(f)
-                return config.get("logging", {}).get(key, default)
-    except Exception as e:
-        print(f"Error reading config: {e}", file=sys.stderr)
-    return default
 
 def setup_logging():
     """Setup logging configuration"""
@@ -43,12 +30,12 @@ def setup_logging():
     )
 
     # File handler
-    file_level = getattr(logging, get_config_value("file_level", "DEBUG").upper())
-    log_file = log_dir / f"{get_config_value('file_prefix', 'evse')}.log"
+    file_level = getattr(logging, config.FILE_LOGGING.upper())
+    log_file = log_dir / f"{config.get('logging.file_prefix', 'evse')}.log"
     file_handler = RotatingFileHandler(
         log_file,
-        maxBytes=int(get_config_value("max_bytes", "10485760")),
-        backupCount=int(get_config_value("backup_count", "30"))
+        maxBytes=int(config.get('logging.max_bytes', 10485760)),
+        backupCount=int(config.get('logging.backup_count', 30))
     )
     file_handler.setFormatter(file_formatter)
     file_handler.setLevel(file_level)

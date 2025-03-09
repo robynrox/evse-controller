@@ -7,7 +7,7 @@ from lib.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserve
 from lib.Power import Power
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.logging_config import debug, info, warning, error, critical
-from lib.config import Config
+from lib.config import config
 
 try:
     import influxdb_client
@@ -60,16 +60,22 @@ class EvseController(PowerMonitorObserver):
     power consumption and following configured demand levels. It supports various control
     states including smart charging, load following, and bidirectional power flow.
 
-    Attributes:
-        pmon (PowerMonitorInterface): Primary power monitor for grid and EVSE consumption
-        pmon2 (PowerMonitorInterface): Secondary power monitor for optional solar generation and heat pump consumption
-          (could be used for other devices)
+    Args:
+        pmon (PowerMonitorInterface): Primary power monitor for grid consumption
+        pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
         evse (EvseInterface): The EVSE device being controlled
-        configuration (dict): System configuration parameters
-        controlState (ControlState): Current operational state of the controller
+        tariffManager: Manager for electricity tariff rules and scheduling
+
+    Attributes:
+        pmon (PowerMonitorInterface): Primary power monitor for grid consumption
+        pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
+        evse (EvseInterface): The EVSE device being controlled
+        state (ControlState): Current operational state of the controller
         homeDemandLevels (list): List of (min_power, max_power, target_current) tuples
         hysteresisWindow (int): Power window in Watts to prevent oscillation
-        grid_power_history (deque): Recent grid power readings for smoothing
+        tariffManager: Manager for electricity tariff rules and scheduling
+        batteryChargeLevel (int): Current battery charge level percentage
+        evseCurrent (float): Current EVSE charging/discharging rate
     """
 
     def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
@@ -82,7 +88,6 @@ class EvseController(PowerMonitorObserver):
             evse (EvseInterface): The EVSE device to control
             tariffManager: Manager for electricity tariff rules
         """
-        config = Config()  # Get singleton instance
         self.pmon = pmon
         self.pmon2 = pmon2
         self.auxpower = Power()
@@ -98,7 +103,6 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.configuration = config.config
         self.thread = PowerMonitorPollingThread(pmon)
         self.thread.start()
         self.thread.attach(self)
@@ -113,7 +117,6 @@ class EvseController(PowerMonitorObserver):
         self.state = ControlState.DORMANT
         self.hysteresisWindow = 50 # Default hysteresis in Watts
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
-        self.grid_power_history = deque(maxlen=3)  # To store up to three previous grid power readings
         self.current_grid_power = Power()
         self.last_save_time = 0
         self.save_interval = 10  # Save every 10 seconds
@@ -129,12 +132,12 @@ class EvseController(PowerMonitorObserver):
         self.setHomeDemandLevels(levels)
         # Initialize InfluxDB if enabled
         self.write_api = None
-        if config.config.get('influxdb', {}).get('enabled', False):
+        if config.INFLUXDB_ENABLED:
             try:
                 client = influxdb_client.InfluxDBClient(
-                    url=config.config['influxdb']['url'],
-                    token=config.config['influxdb']['token'],
-                    org=config.config['influxdb']['org']
+                    url=config.INFLUXDB_URL,
+                    token=config.INFLUXDB_TOKEN,
+                    org=config.INFLUXDB_ORG
                 )
                 self.write_api = client.write_api(write_options=SYNCHRONOUS)
             except Exception as e:
@@ -346,7 +349,7 @@ class EvseController(PowerMonitorObserver):
                 self.persistent_state['last_soc'] = self.evse.getBatteryChargeLevel()
                 self.persistent_state['last_update_time'] = current_time
                 
-                state_dir = Path(Config().config['logging']['directory']) / 'state'
+                state_dir = config.LOG_DIR / 'state'
                 state_dir.mkdir(parents=True, exist_ok=True)
                 state_file = state_dir / 'evse_state.json'
                 
@@ -362,7 +365,6 @@ class EvseController(PowerMonitorObserver):
         power = result
         if isinstance(power, Power):
             self.current_grid_power = power
-            self.grid_power_history.append(power.ch1Watts)
             
             # At present, channels are allocated as follows:
             #   power.ch1 is grid power
@@ -407,40 +409,11 @@ class EvseController(PowerMonitorObserver):
                 self.powerAtLastHalfHourlyLog = power
                 self._save_persistent_state()  # Save state after updating half-hourly log
 
-            # We need to determine the grid power that will be used for the EVSE state calculation.
-            # This is to eliminate spikes in the data (e.g. from a fridge powering up).
-            # Experimentally it has been found that spikes can affect one or two adjacent samples.
-            smoothed_grid_power = power
-            self.grid_power_history.append(power)
+            # Use the latest power reading directly
 
-            # Current power on which the set point is based.
-            set_point_power = power.getHomeWatts()
-            # Check all available readings to see if all are above or below the set point.
-            # Only if that is true should we use a new reading, and that reading should then
-            # be the reading that deviates least from the existing set point.
-            all_above = True
-            all_below = True
-            min_sample = power
-            max_sample = power
-            for sample in self.grid_power_history:
-                sample_power = sample.getHomeWatts()
-                if sample_power <= set_point_power:
-                    all_above = False
-                if sample_power >= set_point_power:
-                    all_below = False
-                if sample_power < min_sample.getHomeWatts():
-                    min_sample = sample
-                if sample_power > max_sample.getHomeWatts():
-                    max_sample = sample
-            if all_above:
-                smoothed_grid_power = min_sample
-            elif all_below:
-                smoothed_grid_power = max_sample
-            else:
-                smoothed_grid_power = power
-                
-            desiredEvseCurrent = self.calculateTargetCurrent(smoothed_grid_power)
-            self.current_grid_power = smoothed_grid_power
+            # Calculate desired current based on latest reading
+            desiredEvseCurrent = self.calculateTargetCurrent(power)
+            self.current_grid_power = power
 
             gridPower = round(power.ch1Watts)
             evsePower = round(power.ch2Watts)
@@ -460,16 +433,16 @@ class EvseController(PowerMonitorObserver):
                 try:
                     point = (
                         influxdb_client.Point("measurement")
-                        .field("grid", power.ch1Watts)
-                        .field("grid_pf", power.ch1Pf)
-                        .field("evse", power.ch2Watts)
-                        .field("evse_pf", power.ch2Pf)
-                        .field("voltage", power.voltage)
+                        .field("grid", float(power.ch1Watts))
+                        .field("grid_pf", float(power.ch1Pf))
+                        .field("evse", float(power.ch2Watts))
+                        .field("evse_pf", float(power.ch2Pf))
+                        .field("voltage", float(power.voltage))
                         .field("evseTargetCurrent", self.evseCurrent)
                         .field("evseDesiredCurrent", desiredEvseCurrent)
                         .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
-                        .field("heatpump", self.auxpower.ch1Watts)
-                        .field("solar", self.auxpower.ch2Watts)
+                        .field("heatpump", float(self.auxpower.ch1Watts))
+                        .field("solar", float(self.auxpower.ch2Watts))
                     )
                     self.write_api.write(bucket="powerlog", record=point)
                 except Exception as e:
@@ -485,9 +458,9 @@ class EvseController(PowerMonitorObserver):
                 self.chargerState = EvseState.ERROR
                 if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
                     critical("Restarting EVSE (expect this to take 5-6 minutes)")
-                    self.evse.resetViaWebApi(self.configuration["WALLBOX_USERNAME"],
-                                            self.configuration["WALLBOX_PASSWORD"],
-                                            self.configuration["WALLBOX_SERIAL"])
+                    self.evse.resetViaWebApi(config.WALLBOX_USERNAME,
+                                           config.WALLBOX_PASSWORD,
+                                           config.WALLBOX_SERIAL)
                     # Allow up to an hour for the EVSE to restart without trying to restart again
                     self.connectionErrors = -3600
 
