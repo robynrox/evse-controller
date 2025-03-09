@@ -1,5 +1,5 @@
 from enum import Enum
-from lib.EvseController import ControlState, EvseController
+from lib.EvseController import ControlState, EvseController, EvseState
 from lib.WallboxQuasar import EvseWallboxQuasar
 from lib.Shelly import PowerMonitorShelly
 import time
@@ -779,12 +779,13 @@ def main():
                 evseController.setControlState(ControlState.DORMANT)
                 
                 # Check if vehicle is disconnected
-                if evse.getEvseState() == EvseState.DISCONNECTED:
+                evse_state = evse.getEvseState()
+                if evse_state == EvseState.DISCONNECTED:
                     info(f"Vehicle disconnected, will revert to {previous_state} when reconnected")
-                    if evse.getEvseState() != EvseState.DISCONNECTED:  # Vehicle reconnected
-                        info(f"Vehicle reconnected, reverting to {previous_state}")
-                        execState = previous_state
-                        previous_state = None
+                elif previous_state is not None:  # Vehicle was previously disconnected
+                    info(f"Vehicle reconnected, reverting to {previous_state}")
+                    execState = previous_state
+                    previous_state = None
 
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
                 info(f"CONTROL {execState}")
