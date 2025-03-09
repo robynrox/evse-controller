@@ -120,7 +120,7 @@ class EvseController(PowerMonitorObserver):
         self.current_grid_power = Power()
         self.last_save_time = 0
         self.save_interval = 10  # Save every 10 seconds
-
+        self.chargerState = EvseState.UNKNOWN
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
         levels = [(0, 720, 0)]
@@ -360,137 +360,142 @@ class EvseController(PowerMonitorObserver):
         except Exception as e:
             error(f"Failed to save persistent state: {e}")
 
-    def update(self, subject, result):
-        """Update method called by the power monitor when new readings are available."""
-        power = result
-        if isinstance(power, Power):
-            self.current_grid_power = power
-            
-            # At present, channels are allocated as follows:
-            #   power.ch1 is grid power
-            #   power.ch2 is EVSE power
-            #   self.auxpower.ch1 is heat pump power
-            #   self.auxpower.ch2 is solar power
-            # I am not sure how to generalise this at present for the circumstances of others.
+    def update(self, monitor, power):
+        """Update controller state based on power monitor readings.
+        
+        Args:
+            monitor: The Shelly power monitor that's reporting
+            power: Power readings from the monitor
+        """
+        # If this update is from the secondary monitor (solar/heat pump)
+        if monitor == self.pmon2:
+            # Just store the auxiliary power readings and return
+            self.auxpower = power
+            return
+        
+        # From here on, we're handling the primary monitor update
+        # At present, channels are allocated as follows:
+        #   power.ch1 is grid power
+        #   power.ch2 is EVSE power
+        #   self.auxpower.ch1 is heat pump power (if secondary monitor present)
+        #   self.auxpower.ch2 is solar power (if secondary monitor present)
+        
+        # When power was instantiated, the SoC was not known, so update it here.
+        # Only update if we get a valid reading from the EVSE
+        new_soc = self.evse.getBatteryChargeLevel()
+        
+        # Log the attempted update for debugging
+        debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
+        
+        # Only update if we get a valid reading
+        if self._is_valid_soc(new_soc):
+            power.soc = new_soc
+        elif self._is_valid_soc(self.batteryChargeLevel):
+            # If we have a valid persisted value, use that
+            power.soc = self.batteryChargeLevel
+        else:
+            # If no valid current or persisted value, use -1
+            power.soc = -1
+        
+        # Append new data to the history buffers
+        self.gridPowerHistory.append(power.ch1Watts)
+        self.evsePowerHistory.append(power.ch2Watts)
+        self.heatPumpPowerHistory.append(self.auxpower.ch1Watts)
+        self.solarPowerHistory.append(self.auxpower.ch2Watts)
+        self.socHistory.append(power.soc)
+        self.timestamps.append(power.unixtime)
 
-            # When power was instantiated, the SoC was not known, so update it here.
-            # Only update if we get a valid reading from the EVSE
-            new_soc = self.evse.getBatteryChargeLevel()
-            
-            # Log the attempted update for debugging
-            debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
-            
-            # Only update if we get a valid reading
-            if self._is_valid_soc(new_soc):
-                power.soc = new_soc
-            elif self._is_valid_soc(self.batteryChargeLevel):
-                # If we have a valid persisted value, use that
-                power.soc = self.batteryChargeLevel
-            else:
-                # If no valid current or persisted value, use -1
-                power.soc = -1
-            
-            # Append new data to the history buffers
-            self.gridPowerHistory.append(power.ch1Watts)
-            self.evsePowerHistory.append(power.ch2Watts)
-            self.heatPumpPowerHistory.append(self.auxpower.ch1Watts)
-            self.solarPowerHistory.append(self.auxpower.ch2Watts)
-            self.socHistory.append(power.soc)
-            self.timestamps.append(power.unixtime)
+        # After updating the deques, save the history
+        self._save_history()
 
-            # After updating the deques, save the history
-            self._save_history()
+        if (time.time() >= self.nextHalfHourlyLog):
+            self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
+            info(f"ENERGY {power.getAccumulatedEnergy()}")
+            if (self.powerAtLastHalfHourlyLog is not None):
+                info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
+            self.powerAtLastHalfHourlyLog = power
+            self._save_persistent_state()  # Save state after updating half-hourly log
 
-            if (time.time() >= self.nextHalfHourlyLog):
-                self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
-                info(f"ENERGY {power.getAccumulatedEnergy()}")
-                if (self.powerAtLastHalfHourlyLog is not None):
-                    info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
-                self.powerAtLastHalfHourlyLog = power
-                self._save_persistent_state()  # Save state after updating half-hourly log
+        # Use the latest power reading directly
 
-            # Use the latest power reading directly
+        # Calculate desired current based on latest reading
+        desiredEvseCurrent = self.calculateTargetCurrent(power)
+        self.current_grid_power = power
 
-            # Calculate desired current based on latest reading
-            desiredEvseCurrent = self.calculateTargetCurrent(power)
-            self.current_grid_power = power
+        gridPower = round(power.ch1Watts)
+        evsePower = round(power.ch2Watts)
+        hpPower = round(self.auxpower.ch1Watts)
+        solarPower = round(self.auxpower.ch2Watts)
 
-            gridPower = round(power.ch1Watts)
-            evsePower = round(power.ch2Watts)
-            hpPower = round(self.auxpower.ch1Watts)
-            solarPower = round(self.auxpower.ch2Watts)
+        homePower = round(gridPower - evsePower - hpPower - solarPower)
 
-            homePower = round(gridPower - evsePower - hpPower - solarPower)
+        logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
 
-            logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
-
-            if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
-                if self.powerAtBatteryChargeLevel is not None:
-                    info(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
-                self.batteryChargeLevel = power.soc
-                self.powerAtBatteryChargeLevel = power
-            if self.write_api:
-                try:
-                    point = (
-                        influxdb_client.Point("measurement")
-                        .field("grid", float(power.ch1Watts))
-                        .field("grid_pf", float(power.ch1Pf))
-                        .field("evse", float(power.ch2Watts))
-                        .field("evse_pf", float(power.ch2Pf))
-                        .field("voltage", float(power.voltage))
-                        .field("evseTargetCurrent", self.evseCurrent)
-                        .field("evseDesiredCurrent", desiredEvseCurrent)
-                        .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
-                        .field("heatpump", float(self.auxpower.ch1Watts))
-                        .field("solar", float(self.auxpower.ch2Watts))
-                    )
-                    self.write_api.write(bucket="powerlog", record=point)
-                except Exception as e:
-                    error(f"Failed to write to InfluxDB: {e}")
-
+        if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
+            if self.powerAtBatteryChargeLevel is not None:
+                info(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
+            self.batteryChargeLevel = power.soc
+            self.powerAtBatteryChargeLevel = power
+        if self.write_api:
             try:
-                self.chargerState = self.evse.getEvseState()
-                self.connectionErrors = 0
-                logMsg += f"CS:{self.chargerState} "
-            except ConnectionError:
-                self.connectionErrors += 1
-                error(f"Consecutive connection errors with EVSE: {self.connectionErrors}")
-                self.chargerState = EvseState.ERROR
-                if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                    critical("Restarting EVSE (expect this to take 5-6 minutes)")
-                    self.evse.resetViaWebApi(config.WALLBOX_USERNAME,
-                                           config.WALLBOX_PASSWORD,
-                                           config.WALLBOX_SERIAL)
-                    # Allow up to an hour for the EVSE to restart without trying to restart again
-                    self.connectionErrors = -3600
+                point = (
+                    influxdb_client.Point("measurement")
+                    .field("grid", float(power.ch1Watts))
+                    .field("grid_pf", float(power.ch1Pf))
+                    .field("evse", float(power.ch2Watts))
+                    .field("evse_pf", float(power.ch2Pf))
+                    .field("voltage", float(power.voltage))
+                    .field("evseTargetCurrent", self.evseCurrent)
+                    .field("evseDesiredCurrent", desiredEvseCurrent)
+                    .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+                    .field("heatpump", float(self.auxpower.ch1Watts))
+                    .field("solar", float(self.auxpower.ch2Watts))
+                )
+                self.write_api.write(bucket="powerlog", record=point)
+            except Exception as e:
+                error(f"Failed to write to InfluxDB: {e}")
 
-            nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
-            if nextWriteAllowed > 0:
-                logMsg += f"NextChgIn:{nextWriteAllowed}s "
-                debug(logMsg)
-                return
+        try:
+            self.chargerState = self.evse.getEvseState()
+            self.connectionErrors = 0
+            logMsg += f"CS:{self.chargerState} "
+        except ConnectionError as e:
+            self.connectionErrors += 1
+            error(f"Consecutive connection errors with EVSE: {self.connectionErrors} - {e}")
+            self.chargerState = EvseState.ERROR
+            if self.connectionErrors > 100 and isinstance(self.evse, EvseWallboxQuasar):
+                critical("Restarting EVSE (expect this to take 5-6 minutes)")
+                self.evse.resetViaWebApi()
+                # Allow up to an hour for the EVSE to restart without trying to restart again
+                self.connectionErrors = -3600
 
+        nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
+        if nextWriteAllowed > 0:
+            logMsg += f"NextChgIn:{nextWriteAllowed}s "
             debug(logMsg)
-            resetState = False
-            if self.evseCurrent != desiredEvseCurrent:
-                resetState = True
-            if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
-                resetState = True
-                if self.evse.isFull():
-                    desiredEvseCurrent = 0
-            if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
-                resetState = True
-                if self.evse.isEmpty():
-                    desiredEvseCurrent = 0
-            if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
-                resetState = True
-            if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
-                resetState = True
-            if resetState:
-                if (self.evseCurrent != desiredEvseCurrent):
-                    info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-                self.evse.setChargingCurrent(desiredEvseCurrent)
-                self.evseCurrent = desiredEvseCurrent
+            return
+
+        debug(logMsg)
+        resetState = False
+        if self.evseCurrent != desiredEvseCurrent:
+            resetState = True
+        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
+            resetState = True
+            if self.evse.isFull():
+                desiredEvseCurrent = 0
+        if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
+            resetState = True
+            if self.evse.isEmpty():
+                desiredEvseCurrent = 0
+        if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
+            resetState = True
+        if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
+            resetState = True
+        if resetState:
+            if (self.evseCurrent != desiredEvseCurrent):
+                info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
+            self.evse.setChargingCurrent(desiredEvseCurrent)
+            self.evseCurrent = desiredEvseCurrent
 
         # After processing updates, save persistent state
         self._save_persistent_state()
@@ -559,3 +564,7 @@ class EvseController(PowerMonitorObserver):
             "solar_power": list(self.solarPowerHistory),
             "soc": list(self.socHistory)
         }
+
+    def getEvseState(self) -> EvseState:
+        """Get the current EVSE state"""
+        return self.chargerState

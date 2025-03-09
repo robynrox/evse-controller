@@ -812,7 +812,7 @@ def main():
                 evseController.setControlState(ControlState.DORMANT)
                 
                 # Check if vehicle is disconnected
-                evse_state = evse.getEvseState()
+                evse_state = evseController.getEvseState()  # Use controller instead of direct access
                 if evse_state == EvseState.DISCONNECTED:
                     info(f"Vehicle disconnected, will revert to {previous_state} when reconnected")
                 elif previous_state is not None:  # Vehicle was previously disconnected
