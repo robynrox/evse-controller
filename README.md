@@ -67,10 +67,23 @@ version 1, so I would suggest installing as per the official instructions on the
 
    B. Manual Setup:
    ```bash
+   # Navigate to your project directory (wherever you cloned/downloaded it)
+   cd path/to/evse-controller
+   
+   # Create virtual environment in the project directory
    python3 -m venv .
-   source bin/activate  # On Windows: .\Scripts\activate
+   
+   # Activate the virtual environment
+   # On Linux/macOS:
+   source bin/activate
+   # On Windows:
+   .\Scripts\activate
+   
+   # Install dependencies
    pip install -r requirements.txt
    ```
+
+   Note: The virtual environment will be created in your project directory, regardless of its location. You can clone or download this repository to any location on your system.
 
 3. **Configuration**
    There are two ways to configure the application:
@@ -160,19 +173,6 @@ To get this running after setting up the configuration file, you would run the f
 
 I removed the command-line argument parsing since interactive control and web control are now available.
 
-## Deprecated samples
-
-These are older samples of code and are no longer guaranteed to work. These have been moved to the legacy-unsupported directory but would have to be moved back into the root directory as part of any process aimed at getting them to work again.
-
-* RemainDormant.py: Hold the wallbox in dormant state. (I used to use that to detach my vehicle.)
-* ChargeFull.py: Set the wallbox to charge at maximum rate.
-* flux.py: Control the wallbox in a way that works well with Octopus Flux. (I use this one! It was at one time called
-  Scheduler2.py.)
-* cosy.py: Control the wallbox in a way that works well with Cosy Octopus.
-* octgo.py: Control the wallbox in a way that works well with Octopus Go.
-* scheduler.py: Another old sample that used to work with Octopus Flux.
-* set-wallbox.py: A sample of how to use the modbus interface to control the wallbox.
-
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
@@ -190,6 +190,15 @@ Key API features include:
 - Status monitoring
 - Schedule management
 - Configuration
+
+### Development Environment Notes
+
+If using VS Code (recommended):
+1. The Dev Container configuration will automatically set up the correct environment
+2. If developing outside the Dev Container, you'll need to select the correct Python interpreter:
+   - Open Command Palette (View > Command Palette, or `Ctrl+Shift+P` / `Cmd+Shift+P`)
+   - Type "Python: Select Interpreter"
+   - Choose the interpreter from your virtual environment (in the project's `bin` or `Scripts` directory)
 
 ## Limitations
 

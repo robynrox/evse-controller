@@ -8,8 +8,20 @@ from lib.config import config
 
 
 class EvseWallboxQuasar(EvseInterface):
+    """Interface for controlling Wallbox Quasar EV charger via Modbus.
+    
+    This class implements communication with a Wallbox Quasar charger using Modbus TCP.
+    Note: This class is not thread-safe. Callers must ensure proper synchronization if
+    used from multiple threads. Future versions may implement async/await pattern for
+    better concurrency handling.
+
+    Attributes:
+        url: Modbus TCP connection URL for the charger
+        username: Wallbox cloud API username (for reset fallback)
+        password: Wallbox cloud API password
+        serial: Wallbox charger serial number
+    """
     def __init__(self):
-        self._lock = threading.Lock()  # Add lock for thread safety
         self.url = config.WALLBOX_URL
         info(f"Initializing WallboxQuasar with URL: {self.url}")
         if not self.url:
@@ -66,45 +78,44 @@ class EvseWallboxQuasar(EvseInterface):
         self.MIN_CHARGE_PERCENT = 20
 
     def setChargingCurrent(self, current: int):
-        with self._lock:  # Add thread safety
-            if (current == 0):
+        if (current == 0):
+            self.stopCharging()
+            return
+        if (self.battery_charge_level >= self.MAX_CHARGE_PERCENT and current > 0):
+            if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
+                info(f"Cannot charge past {self.MAX_CHARGE_PERCENT}%, not charging")
                 self.stopCharging()
-                return
-            if (self.battery_charge_level >= self.MAX_CHARGE_PERCENT and current > 0):
-                if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
-                    info(f"Cannot charge past {self.MAX_CHARGE_PERCENT}%, not charging")
-                    self.stopCharging()
-                return
-            if (self.battery_charge_level <= self.MIN_CHARGE_PERCENT and current < 0):
-                if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
-                    info(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
-                    self.stopCharging()
-                return
-            info(f"Setting charging current to {current}A")
-            # Take control
-            self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
-            # Set charging current
-            if current >= 0:
-                self.client.write_single_register(self.CONTROL_CURRENT_REG, current)
-            else:
-                self.client.write_single_register(self.CONTROL_CURRENT_REG, 65536 + current)
-            # Start charging
-            self.client.write_single_register(self.CONTROL_STATE_REG, self.START_CHARGING)
-            # Return control
-            self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
-            # Calculate time in seconds required before next change
-            if self.current == 0 and current != 0:
-                info("Starting charging")
-                self.writeNextAllowed = time.time() + 21.9
-            elif abs(self.current - current) <= 1:
-                self.writeNextAllowed = time.time() + 5.9
-            elif abs(self.current - current) <= 2:
-                self.writeNextAllowed = time.time() + 7.9
-            else:
-                self.writeNextAllowed = time.time() + 10.9
-            self.current = current
-            self.readNextAllowed = time.time() + 0.9
-            self.client.close()
+            return
+        if (self.battery_charge_level <= self.MIN_CHARGE_PERCENT and current < 0):
+            if (self.lastEvseState == EvseState.CHARGING or self.lastEvseState == EvseState.DISCHARGING):
+                info(f"Will not discharge past {self.MIN_CHARGE_PERCENT}%, not discharging")
+                self.stopCharging()
+            return
+        info(f"Setting charging current to {current}A")
+        # Take control
+        self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
+        # Set charging current
+        if current >= 0:
+            self.client.write_single_register(self.CONTROL_CURRENT_REG, current)
+        else:
+            self.client.write_single_register(self.CONTROL_CURRENT_REG, 65536 + current)
+        # Start charging
+        self.client.write_single_register(self.CONTROL_STATE_REG, self.START_CHARGING)
+        # Return control
+        self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
+        # Calculate time in seconds required before next change
+        if self.current == 0 and current != 0:
+            info("Starting charging")
+            self.writeNextAllowed = time.time() + 21.9
+        elif abs(self.current - current) <= 1:
+            self.writeNextAllowed = time.time() + 5.9
+        elif abs(self.current - current) <= 2:
+            self.writeNextAllowed = time.time() + 7.9
+        else:
+            self.writeNextAllowed = time.time() + 10.9
+        self.current = current
+        self.readNextAllowed = time.time() + 0.9
+        self.client.close()
 
     def getWriteNextAllowed(self) -> float:
         return self.writeNextAllowed
@@ -113,87 +124,84 @@ class EvseWallboxQuasar(EvseInterface):
         return self.readNextAllowed
 
     def stopCharging(self):
-        with self._lock:  # Add thread safety
-            if (self.lastEvseState != EvseState.PAUSED):
-                info("Stopping charging")
-                # Take control
-                self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
-                # Stop charging
-                self.client.write_single_register(self.CONTROL_STATE_REG, self.STOP_CHARGING)
-                # Set charging current to 0
-                self.client.write_single_register(self.CONTROL_CURRENT_REG, 0)
-                # Return control
-                self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
-                self.current = 0
-                # Configure guard time
-                self.writeNextAllowed = time.time() + 10.9
-                self.readNextAllowed = time.time() + 0.9
-                self.client.close()
+        if (self.lastEvseState != EvseState.PAUSED):
+            info("Stopping charging")
+            # Take control
+            self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.MODBUS_CONTROL)
+            # Stop charging
+            self.client.write_single_register(self.CONTROL_STATE_REG, self.STOP_CHARGING)
+            # Set charging current to 0
+            self.client.write_single_register(self.CONTROL_CURRENT_REG, 0)
+            # Return control
+            self.client.write_single_register(self.CONTROL_LOCKOUT_REG, self.USER_CONTROL)
+            self.current = 0
+            # Configure guard time
+            self.writeNextAllowed = time.time() + 10.9
+            self.readNextAllowed = time.time() + 0.9
+            self.client.close()
 
     def getEvseState(self) -> EvseState:
-        with self._lock:
-            current_time = time.time()
-            if current_time < self.readNextAllowed:
+        current_time = time.time()
+        if current_time < self.readNextAllowed:
+            return self.lastEvseState
+        
+        try:
+            regs = self.client.read_holding_registers(self.READ_STATE_REG)
+            if regs is None:
+                error("Failed to read EVSE state registers")
                 return self.lastEvseState
             
+            current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)
+            if current_regs is None:
+                error("Failed to read current registers")
+                return self.lastEvseState
+            
+            self.current = current_regs[0]
+            self.lastEvseState = EvseState(regs[0])
+            if self.lastEvseState == EvseState.PAUSED:
+                self.current = 0
+            
+            self.readNextAllowed = current_time + 0.9
+            return self.lastEvseState
+        
+        except Exception as e:
+            error(f"Error reading EVSE state: {str(e)}")
+            return self.lastEvseState
+        finally:
             try:
-                regs = self.client.read_holding_registers(self.READ_STATE_REG)
-                if regs is None:
-                    error("Failed to read EVSE state registers")
-                    return self.lastEvseState
-                
-                current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)
-                if current_regs is None:
-                    error("Failed to read current registers")
-                    return self.lastEvseState
-                
-                self.current = current_regs[0]
-                self.lastEvseState = EvseState(regs[0])
-                if self.lastEvseState == EvseState.PAUSED:
-                    self.current = 0
-                
-                self.readNextAllowed = current_time + 0.9
-                return self.lastEvseState
-            
-            except Exception as e:
-                error(f"Error reading EVSE state: {str(e)}")
-                return self.lastEvseState
-            finally:
-                try:
-                    self.client.close()
-                except:
-                    pass
+                self.client.close()
+            except:
+                pass
 
     def getEvseCurrent(self) -> int:
         return self.current
 
     def getBatteryChargeLevel(self) -> int:
-        with self._lock:
-            current_time = time.time()
-            if current_time < self.readNextAllowed:
+        current_time = time.time()
+        if current_time < self.readNextAllowed:
+            return self.battery_charge_level
+        
+        try:
+            regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
+            if regs is None:
+                error("Failed to read battery registers")
                 return self.battery_charge_level
             
+            battery_charge_level = regs[0]
+            if battery_charge_level > 4:
+                self.battery_charge_level = battery_charge_level
+            
+            self.readNextAllowed = current_time + 0.9
+            return self.battery_charge_level
+        
+        except Exception as e:
+            error(f"Error reading battery level: {str(e)}")
+            return self.battery_charge_level
+        finally:
             try:
-                regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
-                if regs is None:
-                    error("Failed to read battery registers")
-                    return self.battery_charge_level
-                
-                battery_charge_level = regs[0]
-                if battery_charge_level > 4:
-                    self.battery_charge_level = battery_charge_level
-                
-                self.readNextAllowed = current_time + 0.9
-                return self.battery_charge_level
-            
-            except Exception as e:
-                error(f"Error reading battery level: {str(e)}")
-                return self.battery_charge_level
-            finally:
-                try:
-                    self.client.close()
-                except:
-                    pass
+                self.client.close()
+            except:
+                pass
 
     def resetViaWebApi(self):
         """Reset the Wallbox via cloud API when Modbus communication fails"""

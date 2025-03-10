@@ -251,9 +251,6 @@ class EvseController(PowerMonitorObserver):
                 desiredEvseCurrent = target_current
                 break
 
-        debug(f"lastTargetCurrent={self.lastTargetCurrent}; homeWatts={homeWatts}; desiredEvseCurrent={desiredEvseCurrent}")
-        self.lastTargetCurrent = desiredEvseCurrent  # Update last current level
-
         # Apply control state logic
         match self.state:
             case ControlState.LOAD_FOLLOW_CHARGE:
@@ -286,6 +283,7 @@ class EvseController(PowerMonitorObserver):
             case ControlState.DORMANT:
                 desiredEvseCurrent = 0
 
+        self.lastTargetCurrent = desiredEvseCurrent  # Update last current level with final value
         return desiredEvseCurrent
 
     def _is_valid_soc(self, soc):
@@ -344,19 +342,30 @@ class EvseController(PowerMonitorObserver):
     def _save_persistent_state(self):
         """Save persistent state to file."""
         try:
-            current_time = time.time()
-            if current_time - self.last_save_time >= self.save_interval:
-                self.persistent_state['last_soc'] = self.evse.getBatteryChargeLevel()
-                self.persistent_state['last_update_time'] = current_time
-                
-                state_dir = config.LOG_DIR / 'state'
-                state_dir.mkdir(parents=True, exist_ok=True)
-                state_file = state_dir / 'evse_state.json'
-                
-                with open(state_file, 'w') as f:
-                    json.dump(self.persistent_state, f)
-                
-                self.last_save_time = current_time
+            if self.powerAtLastHalfHourlyLog:
+                power_state = {
+                    "ch1Watts": self.powerAtLastHalfHourlyLog.ch1Watts,
+                    "ch2Watts": self.powerAtLastHalfHourlyLog.ch2Watts,
+                    "posEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh0,
+                    "negEnergyJoulesCh0": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh0,
+                    "posEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.posEnergyJoulesCh1,
+                    "negEnergyJoulesCh1": self.powerAtLastHalfHourlyLog.negEnergyJoulesCh1,
+                    "unixtime": self.powerAtLastHalfHourlyLog.unixtime
+                }
+            else:
+                power_state = self.persistent_state["last_power_state"]
+            
+            # Only update SoC if we have a valid reading
+            if self._is_valid_soc(self.batteryChargeLevel):
+                self.persistent_state.update({
+                    "last_known_soc": self.batteryChargeLevel,
+                    "last_soc_timestamp": time.time(),
+                })
+            
+            self.persistent_state["last_power_state"] = power_state
+            
+            self.state_file.write_text(json.dumps(self.persistent_state))
+            #debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
         except Exception as e:
             error(f"Failed to save persistent state: {e}")
 
@@ -501,6 +510,9 @@ class EvseController(PowerMonitorObserver):
         self._save_persistent_state()
 
     def setControlState(self, state: ControlState):
+        if state == self.state:
+            return
+            
         self.state = state
         match state:
             case ControlState.DORMANT:
@@ -528,22 +540,26 @@ class EvseController(PowerMonitorObserver):
         info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setDischargeCurrentRange(self, minCurrent, maxCurrent):
-        self.minDischargeCurrent = minCurrent
-        self.maxDischargeCurrent = maxCurrent
-        info(f"CONTROL Setting discharge current range: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}")
+        if self.minDischargeCurrent != minCurrent or self.maxDischargeCurrent != maxCurrent:
+            self.minDischargeCurrent = minCurrent
+            self.maxDischargeCurrent = maxCurrent
+            info(f"CONTROL Setting discharge current range: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}")
 
     def setChargeCurrentRange(self, minCurrent, maxCurrent):
-        self.minChargeCurrent = minCurrent
-        self.maxChargeCurrent = maxCurrent
-        info(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
+        if self.minChargeCurrent != minCurrent or self.maxChargeCurrent != maxCurrent:
+            self.minChargeCurrent = minCurrent
+            self.maxChargeCurrent = maxCurrent
+            info(f"CONTROL Setting charge current range: minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setChargeActivationPower(self, minChargeActivationPower):
-        self.minChargeActivationPower = minChargeActivationPower
-        info(f"CONTROL Setting charge activation power to {self.minChargeActivationPower} W")
+        if self.minChargeActivationPower != minChargeActivationPower:
+            self.minChargeActivationPower = minChargeActivationPower
+            info(f"CONTROL Setting charge activation power to {self.minChargeActivationPower} W")
 
     def setDischargeActivationPower(self, minDischargeActivationPower):
-        self.minDischargeActivationPower = minDischargeActivationPower
-        info(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
+        if self.minDischargeActivationPower != minDischargeActivationPower:
+            self.minDischargeActivationPower = minDischargeActivationPower
+            info(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
 
     def getHistory(self) -> dict:
         """
