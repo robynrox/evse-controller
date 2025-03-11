@@ -86,9 +86,13 @@ version 1, so I would suggest installing as per the official instructions on the
    Note: The virtual environment will be created in your project directory, regardless of its location. You can clone or download this repository to any location on your system.
 
 3. **Configuration**
+
+   Before configuring, you may want to use the discovery tool to find your devices.
+   See `evse-discovery/README.md` for detailed information about the discovery process.
+
    There are two ways to configure the application:
 
-   A. Interactive Configuration (Recommended):
+   A. Interactive Configuration:
    ```bash
    python configure.py
    ```
@@ -103,12 +107,12 @@ version 1, so I would suggest installing as per the official instructions on the
    - Configuration structure:
      ```yaml
      wallbox:
-       url: "192.168.0.123"
+       url: "WB012345.ultrahub"  # Hostname or IP address
        username: "myemail@address.com"  # Optional, for auto-restart
        password: "yourpassword"         # Optional, for auto-restart
        serial: 12345                    # Optional, for auto-restart
      shelly:
-       primary_url: "192.168.0.124"
+       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hame or Io  IPdadrress
        secondary_url: null              # Optional second Shelly
      influxdb:
        enabled: false

@@ -22,17 +22,33 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-__pycache__
-log
-bin
-lib/python*
+.venv/
+venv/
+
+# Virtual environment
+bin/
+lib/
+lib64/
 pyvenv.cfg
-lib64
-influxdata-archive_compat.key
+include/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and state files
+log/
+*.log
 history.json
 schedules.json
-.vscode/settings.json
 evse_state.json
 
+# System-specific
+.DS_Store
+Thumbs.db
 
-
+# Package management
+poetry.lock
+influxdata-archive_compat.key
+state/schedule.json
+lib64
