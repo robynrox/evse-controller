@@ -36,3 +36,17 @@ The tool will scan your local network and provide a summary of discovered device
 ## Network Compatibility
 
 This tool has been tested on typical home networks (192.168.1.x). If you encounter issues with different network configurations, please open an issue on GitHub with details about your network setup.
+
+## Quick Start
+
+On Linux/MacOS:
+```bash
+./discover.sh
+```
+
+On Windows (PowerShell):
+```powershell
+.\discover.ps1
+```
+
+For manual installation and usage, see below.
