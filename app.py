@@ -6,15 +6,6 @@ from lib.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
-import yaml
-from pathlib import Path
-import os
-import sys
-
-def restart_application():
-    """Restart the current program"""
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -249,13 +240,15 @@ def config_page():
             config.SOLAR_PERIOD_MAX_CHARGE = int(request.form.get('charging[solar_period_max_charge]', 80))
             config.DEFAULT_TARIFF = request.form.get('charging[default_tariff]', 'COSY')
 
+            # Update logging settings
+            config.FILE_LOGGING = request.form.get('logging[file_level]', 'INFO')
+            config.CONSOLE_LOGGING = request.form.get('logging[console_level]', 'WARNING')
+
             # Save the updated configuration
             config.save()
             
-            flash('Configuration saved. Restarting application...', 'success')
-            return render_template('restart.html'), 200, {
-                'Refresh': '5; url=/'
-            }
+            flash('Configuration saved.', 'success')
+            return redirect(url_for('config_page'))
 
         except Exception as e:
             logging.error(f"Error saving configuration: {str(e)}")

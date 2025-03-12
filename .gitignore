@@ -52,3 +52,4 @@ poetry.lock
 influxdata-archive_compat.key
 state/schedule.json
 lib64
+config.yaml.bak

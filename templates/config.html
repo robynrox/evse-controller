@@ -118,6 +118,36 @@
             </div>
         </div>
 
+        <div class="config-section">
+            <h2>Logging Configuration</h2>
+            <div class="form-group">
+                <label for="file_logging">File Logging Level:</label>
+                <select id="file_logging" name="logging[file_level]" required>
+                    <option value="DEBUG" {% if config.logging.file_level=='DEBUG' %}selected{% endif %}>DEBUG</option>
+                    <option value="INFO" {% if config.logging.file_level=='INFO' %}selected{% endif %}>INFO</option>
+                    <option value="WARNING" {% if config.logging.file_level=='WARNING' %}selected{% endif %}>WARNING
+                    </option>
+                    <option value="ERROR" {% if config.logging.file_level=='ERROR' %}selected{% endif %}>ERROR</option>
+                    <option value="CRITICAL" {% if config.logging.file_level=='CRITICAL' %}selected{% endif %}>CRITICAL
+                    </option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="console_logging">Console Logging Level:</label>
+                <select id="console_logging" name="logging[console_level]" required>
+                    <option value="DEBUG" {% if config.logging.console_level=='DEBUG' %}selected{% endif %}>DEBUG
+                    </option>
+                    <option value="INFO" {% if config.logging.console_level=='INFO' %}selected{% endif %}>INFO</option>
+                    <option value="WARNING" {% if config.logging.console_level=='WARNING' %}selected{% endif %}>WARNING
+                    </option>
+                    <option value="ERROR" {% if config.logging.console_level=='ERROR' %}selected{% endif %}>ERROR
+                    </option>
+                    <option value="CRITICAL" {% if config.logging.console_level=='CRITICAL' %}selected{% endif %}>
+                        CRITICAL</option>
+                </select>
+            </div>
+        </div>
+
         <button type="submit">Save Configuration</button>
     </form>
 

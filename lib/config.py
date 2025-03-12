@@ -75,10 +75,24 @@ class Config:
         """Get file logging level from config."""
         return self.get("logging.file_level", "INFO")
 
+    @FILE_LOGGING.setter
+    def FILE_LOGGING(self, value: str):
+        """Set file logging level in config."""
+        if 'logging' not in self._config_data:
+            self._config_data['logging'] = {}
+        self._config_data['logging']['file_level'] = value
+
     @property
     def CONSOLE_LOGGING(self) -> str:
         """Get console logging level from config."""
         return self.get("logging.console_level", "WARNING")
+
+    @CONSOLE_LOGGING.setter
+    def CONSOLE_LOGGING(self, value: str):
+        """Set console logging level in config."""
+        if 'logging' not in self._config_data:
+            self._config_data['logging'] = {}
+        self._config_data['logging']['console_level'] = value
 
     @property
     def MAX_CHARGE_PERCENT(self) -> int:
@@ -108,7 +122,6 @@ class Config:
     def WALLBOX_URL(self) -> str:
         """Get Wallbox URL from config."""
         url = self.get("wallbox.url")
-        print(f"Debug: Getting WALLBOX_URL from config: '{url}' (type: {type(url)})", file=sys.stderr)
         return str(url) if url is not None else None
 
     @WALLBOX_URL.setter
@@ -248,16 +261,23 @@ class Config:
         self._config_data['influxdb']['bucket'] = value
 
     def save(self):
-        """Save current configuration to YAML file."""
+        """Save configuration to YAML file with backup."""
+        config_path = Path('config.yaml')
+        backup_path = Path('config.yaml.bak')
+        
+        # Create backup of existing config if it exists
+        if config_path.exists():
+            backup_path.write_text(config_path.read_text())
+        
+        # Save new configuration
         try:
-            # Ensure parent directory exists
-            self.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            
-            with self.CONFIG_FILE.open('w') as f:
-                yaml.safe_dump(self._config_data, f)
+            with config_path.open('w') as f:
+                yaml.dump(self._config_data, f, default_flow_style=False)
         except Exception as e:
-            print(f"Error: Failed to save config: {e}", file=sys.stderr)
-            raise
+            # If save fails and backup exists, restore from backup
+            if backup_path.exists():
+                config_path.write_text(backup_path.read_text())
+            raise e
 
     def as_dict(self) -> dict:
         """Return the current configuration as a dictionary."""
@@ -282,6 +302,10 @@ class Config:
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
                 'solar_period_max_charge': self.SOLAR_PERIOD_MAX_CHARGE,
                 'default_tariff': self.DEFAULT_TARIFF
+            },
+            'logging': {
+                'file_level': self.FILE_LOGGING,
+                'console_level': self.CONSOLE_LOGGING
             }
         }
 
