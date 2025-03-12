@@ -131,18 +131,6 @@ class Scheduler:
         except Exception as e:
             error(f"Error saving schedule: {e}")
 
-    def _save_schedule(self):
-        """Save events to file"""
-        try:
-            data = [event.to_dict() for event in self.events]
-            # Ensure the parent directory exists
-            self.schedule_file.parent.mkdir(parents=True, exist_ok=True)
-            # Write the data
-            with self.schedule_file.open('w') as f:
-                json.dump(data, f, default=str)
-        except Exception as e:
-            error(f"Error saving schedule: {e}")
-
 # Tariff base class
 class Tariff:
     """Base class for implementing electricity tariff logic.
