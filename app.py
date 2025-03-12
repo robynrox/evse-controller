@@ -5,6 +5,15 @@ from lib.paths import ensure_data_dirs
 import logging
 import threading
 from datetime import datetime
+import yaml
+from pathlib import Path
+import os
+import sys
+
+def restart_application():
+    """Restart the current program"""
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -209,6 +218,79 @@ def schedule_page():
     scheduled_events = scheduler.get_future_events()
     return render_template('schedule.html', scheduled_events=scheduled_events)
 
+CONFIG_FILE = "config.yaml"
+
+@app.route('/config', methods=['GET', 'POST'])
+def config_page():
+    """Handle configuration page display and updates."""
+    if request.method == 'POST':
+        try:
+            # Convert form data to nested dictionary structure
+            new_config = {
+                'wallbox': {
+                    'url': request.form.get('wallbox[url]'),
+                    'username': request.form.get('wallbox[username]'),
+                    'password': request.form.get('wallbox[password]'),
+                    'serial': request.form.get('wallbox[serial]')
+                },
+                'shelly': {
+                    'url': request.form.get('shelly[url]'),
+                    'secondary_url': request.form.get('shelly[secondary_url]')
+                },
+                'influxdb': {
+                    'enabled': bool(request.form.get('influxdb[enabled]')),
+                    'url': request.form.get('influxdb[url]'),
+                    'token': request.form.get('influxdb[token]'),
+                    'org': request.form.get('influxdb[org]')
+                },
+                'charging': {
+                    'max_charge_percent': int(request.form.get('charging[max_charge_percent]', 90)),
+                    'solar_period_max_charge': int(request.form.get('charging[solar_period_max_charge]', 80)),
+                    'default_tariff': request.form.get('charging[default_tariff]', 'COSY')
+                }
+            }
+
+            # Save configuration
+            config_path = Path(CONFIG_FILE)
+            with config_path.open('w') as f:
+                yaml.dump(new_config, f, default_flow_style=False)
+
+            flash('Configuration saved. Restarting application...', 'success')
+            
+            # Return restart page with auto-refresh
+            return render_template('restart.html'), 200, {
+                'Refresh': '5; url=/'  # Redirect to home page after 5 seconds
+            }
+
+        except Exception as e:
+            flash(f'Error saving configuration: {str(e)}', 'error')
+            return redirect(url_for('config_page'))
+
+    # GET request - display current configuration
+    try:
+        config_path = Path(CONFIG_FILE)
+        if config_path.exists():
+            with config_path.open('r') as f:
+                config = yaml.safe_load(f)
+        else:
+            # Provide default configuration if file doesn't exist
+            config = {
+                'wallbox': {'url': '', 'username': '', 'password': '', 'serial': None},
+                'shelly': {'url': '', 'secondary_url': None},
+                'influxdb': {'enabled': False, 'url': '', 'token': '', 'org': ''},
+                'charging': {
+                    'max_charge_percent': 90,
+                    'solar_period_max_charge': 80,
+                    'default_tariff': 'COSY'
+                }
+            }
+        
+        return render_template('config.html', config=config)
+
+    except Exception as e:
+        flash(f'Error loading configuration: {str(e)}', 'error')
+        return redirect(url_for('index'))
+    
 @app.route('/')
 def index():
     """Render the main dashboard page"""
@@ -371,7 +453,6 @@ def run_flask():
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask)
-flask_thread.daemon = True
 flask_thread.start()
 
 # Start the main program

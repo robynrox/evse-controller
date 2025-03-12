@@ -6,59 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Schedule EVSE Events</title>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        h1 {
-            color: #333;
-        }
-
-        .schedule-form {
-            background: #f5f5f5;
-            padding: 20px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }
-
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-
-        input[type="datetime-local"],
-        select {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: #45a049;
-        }
-
+        /* Schedule-specific styles */
         .scheduled-events {
-            margin-top: 30px;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 4px;
         }
 
         .event-list {
@@ -79,56 +34,6 @@
 
         .event-info {
             flex-grow: 1;
-        }
-
-        .delete-btn {
-            background-color: #dc3545;
-            color: white;
-            padding: 5px 10px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-left: 10px;
-        }
-
-        .delete-btn:hover {
-            background-color: #c82333;
-        }
-
-        .nav-links {
-            margin-bottom: 20px;
-        }
-
-        .nav-links a {
-            color: #0066cc;
-            text-decoration: none;
-            margin-right: 15px;
-        }
-
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
-
-        .flash-messages {
-            margin-bottom: 20px;
-        }
-
-        .flash-message {
-            padding: 10px;
-            margin-bottom: 10px;
-            border-radius: 4px;
-        }
-
-        .flash-success {
-            background-color: #dff0d8;
-            border: 1px solid #d6e9c6;
-            color: #3c763d;
-        }
-
-        .flash-error {
-            background-color: #f2dede;
-            border: 1px solid #ebccd1;
-            color: #a94442;
         }
 
         .event-actions {
@@ -154,6 +59,25 @@
             color: white;
         }
 
+        .edit-btn {
+            background-color: #ffc107;
+            color: black;
+        }
+
+        .edit-btn:hover {
+            background-color: #e0a800;
+        }
+
+        .delete-btn {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .delete-btn:hover {
+            background-color: #c82333;
+        }
+
+        /* Modal styles */
         .modal {
             display: none;
             position: fixed;
@@ -179,20 +103,6 @@
             display: flex;
             gap: 10px;
             justify-content: flex-end;
-        }
-
-        .edit-btn {
-            background-color: #ffc107;
-            color: black;
-            padding: 5px 10px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-left: 10px;
-        }
-
-        .edit-btn:hover {
-            background-color: #e0a800;
         }
     </style>
 </head>
