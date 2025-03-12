@@ -63,6 +63,13 @@ class Config:
         """Get default tariff from config."""
         return self.get("charging.default_tariff", "COSY")
 
+    @DEFAULT_TARIFF.setter
+    def DEFAULT_TARIFF(self, value: str):
+        """Set default tariff in config."""
+        if 'charging' not in self._config_data:
+            self._config_data['charging'] = {}
+        self._config_data['charging']['default_tariff'] = value
+
     @property
     def FILE_LOGGING(self) -> str:
         """Get file logging level from config."""
@@ -78,10 +85,24 @@ class Config:
         """Get maximum charge percentage from config."""
         return self.get("charging.max_charge_percent", 90)
 
+    @MAX_CHARGE_PERCENT.setter
+    def MAX_CHARGE_PERCENT(self, value: int):
+        """Set maximum charge percentage in config."""
+        if 'charging' not in self._config_data:
+            self._config_data['charging'] = {}
+        self._config_data['charging']['max_charge_percent'] = value
+
     @property
     def SOLAR_PERIOD_MAX_CHARGE(self) -> int:
         """Get solar period maximum charge percentage from config."""
         return self.get("charging.solar_period_max_charge", 80)
+
+    @SOLAR_PERIOD_MAX_CHARGE.setter
+    def SOLAR_PERIOD_MAX_CHARGE(self, value: int):
+        """Set solar period maximum charge percentage in config."""
+        if 'charging' not in self._config_data:
+            self._config_data['charging'] = {}
+        self._config_data['charging']['solar_period_max_charge'] = value
 
     @property
     def WALLBOX_URL(self) -> str:
@@ -90,71 +111,17 @@ class Config:
         print(f"Debug: Getting WALLBOX_URL from config: '{url}' (type: {type(url)})", file=sys.stderr)
         return str(url) if url is not None else None
 
-    @property
-    def WALLBOX_USERNAME(self) -> str:
-        """Get Wallbox username from config."""
-        return self.get("wallbox.username", "")
-
-    @property
-    def WALLBOX_PASSWORD(self) -> str:
-        """Get Wallbox password from config."""
-        return self.get("wallbox.password", "")
-
-    @property
-    def WALLBOX_SERIAL(self) -> int:
-        """Get Wallbox serial number from config."""
-        serial = self.get("wallbox.serial", None)
-        return int(serial) if serial is not None else None
-
-    @property
-    def SHELLY_URL(self) -> str:
-        """Get primary Shelly URL from config."""
-        return self.get("shelly.primary_url")
-
-    @property
-    def SHELLY_2_URL(self) -> str:
-        """Get secondary Shelly URL from config."""
-        return self.get("shelly.secondary_url")
-
-    @property
-    def INFLUXDB_ENABLED(self) -> bool:
-        """Get InfluxDB enabled status."""
-        return self._config_data.get('influxdb', {}).get('enabled', False)
-
-    @property
-    def INFLUXDB_URL(self) -> str:
-        """Get InfluxDB URL from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.url", "http://localhost:8086")
-
-    @property
-    def INFLUXDB_TOKEN(self) -> str:
-        """Get InfluxDB token from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.token", "")
-
-    @property
-    def INFLUXDB_ORG(self) -> str:
-        """Get InfluxDB organization from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.org", "")
-
-    @property
-    def INFLUXDB_BUCKET(self) -> str:
-        """Get InfluxDB bucket from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.bucket", "")
-
     @WALLBOX_URL.setter
     def WALLBOX_URL(self, value: str):
         """Set Wallbox URL in config."""
         if 'wallbox' not in self._config_data:
             self._config_data['wallbox'] = {}
         self._config_data['wallbox']['url'] = value
+
+    @property
+    def WALLBOX_USERNAME(self) -> str:
+        """Get Wallbox username from config."""
+        return self.get("wallbox.username", "")
 
     @WALLBOX_USERNAME.setter
     def WALLBOX_USERNAME(self, value: str):
@@ -163,12 +130,23 @@ class Config:
             self._config_data['wallbox'] = {}
         self._config_data['wallbox']['username'] = value
 
+    @property
+    def WALLBOX_PASSWORD(self) -> str:
+        """Get Wallbox password from config."""
+        return self.get("wallbox.password", "")
+
     @WALLBOX_PASSWORD.setter
     def WALLBOX_PASSWORD(self, value: str):
         """Set Wallbox password in config."""
         if 'wallbox' not in self._config_data:
             self._config_data['wallbox'] = {}
         self._config_data['wallbox']['password'] = value
+
+    @property
+    def WALLBOX_SERIAL(self) -> int:
+        """Get Wallbox serial number from config."""
+        serial = self.get("wallbox.serial", None)
+        return int(serial) if serial is not None else None
 
     @WALLBOX_SERIAL.setter
     def WALLBOX_SERIAL(self, value: int):
@@ -177,12 +155,22 @@ class Config:
             self._config_data['wallbox'] = {}
         self._config_data['wallbox']['serial'] = value
 
+    @property
+    def SHELLY_URL(self) -> str:
+        """Get primary Shelly URL from config."""
+        return self.get("shelly.primary_url")
+
     @SHELLY_URL.setter
     def SHELLY_URL(self, value: str):
         """Set primary Shelly URL in config."""
         if 'shelly' not in self._config_data:
             self._config_data['shelly'] = {}
         self._config_data['shelly']['primary_url'] = value
+
+    @property
+    def SHELLY_2_URL(self) -> str:
+        """Get secondary Shelly URL from config."""
+        return self.get("shelly.secondary_url")
 
     @SHELLY_2_URL.setter
     def SHELLY_2_URL(self, value: str):
@@ -191,12 +179,24 @@ class Config:
             self._config_data['shelly'] = {}
         self._config_data['shelly']['secondary_url'] = value
 
+    @property
+    def INFLUXDB_ENABLED(self) -> bool:
+        """Get InfluxDB enabled status."""
+        return self._config_data.get('influxdb', {}).get('enabled', False)
+
     @INFLUXDB_ENABLED.setter
     def INFLUXDB_ENABLED(self, value: bool):
         """Set InfluxDB enabled status in config."""
         if 'influxdb' not in self._config_data:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['enabled'] = value
+
+    @property
+    def INFLUXDB_URL(self) -> str:
+        """Get InfluxDB URL from config."""
+        if not self.INFLUXDB_ENABLED:
+            return ""
+        return self.get("influxdb.url", "http://localhost:8086")
 
     @INFLUXDB_URL.setter
     def INFLUXDB_URL(self, value: str):
@@ -205,12 +205,26 @@ class Config:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['url'] = value
 
+    @property
+    def INFLUXDB_TOKEN(self) -> str:
+        """Get InfluxDB token from config."""
+        if not self.INFLUXDB_ENABLED:
+            return ""
+        return self.get("influxdb.token", "")
+
     @INFLUXDB_TOKEN.setter
     def INFLUXDB_TOKEN(self, value: str):
         """Set InfluxDB token in config."""
         if 'influxdb' not in self._config_data:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['token'] = value
+
+    @property
+    def INFLUXDB_ORG(self) -> str:
+        """Get InfluxDB organization from config."""
+        if not self.INFLUXDB_ENABLED:
+            return ""
+        return self.get("influxdb.org", "")
 
     @INFLUXDB_ORG.setter
     def INFLUXDB_ORG(self, value: str):
@@ -219,12 +233,12 @@ class Config:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['org'] = value
 
-    @INFLUXDB_BUCKET.setter
-    def INFLUXDB_BUCKET(self, value: str):
-        """Set InfluxDB bucket in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['bucket'] = value
+    @property
+    def INFLUXDB_BUCKET(self) -> str:
+        """Get InfluxDB bucket from config."""
+        if not self.INFLUXDB_ENABLED:
+            return ""
+        return self.get("influxdb.bucket", "")
 
     @INFLUXDB_BUCKET.setter
     def INFLUXDB_BUCKET(self, value: str):
@@ -232,20 +246,6 @@ class Config:
         if 'influxdb' not in self._config_data:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['bucket'] = value
-
-    @MAX_CHARGE_PERCENT.setter
-    def MAX_CHARGE_PERCENT(self, value: int):
-        """Set maximum charge percentage in config."""
-        if 'charging' not in self._config_data:
-            self._config_data['charging'] = {}
-        self._config_data['charging']['max_charge_percent'] = value
-
-    @SOLAR_PERIOD_MAX_CHARGE.setter
-    def SOLAR_PERIOD_MAX_CHARGE(self, value: int):
-        """Set solar period maximum charge percentage in config."""
-        if 'charging' not in self._config_data:
-            self._config_data['charging'] = {}
-        self._config_data['charging']['solar_period_max_charge'] = value
 
     def save(self):
         """Save current configuration to YAML file."""
