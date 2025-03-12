@@ -121,9 +121,19 @@ button {
     cursor: pointer;
 }
 
-button:hover {
+/* Remove the global button hover style */
+/* button:hover {
+    background: #45a049;
+} */
+
+/* Add specific styles for form and action buttons */
+.schedule-form button:hover,
+.config-form button:hover,
+.modal-buttons button:hover {
     background: #45a049;
 }
+
+/* Keep other button styles as needed */
 
 /* Flash messages */
 .flash-messages {
@@ -146,4 +156,40 @@ button:hover {
     background: #f2dede;
     border: 1px solid #ebccd1;
     color: #a94442;
+}
+
+/* SVG button container styles */
+.svg-button-container button {
+    height: 48px;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.svg-button-container button:hover {
+    background-color: #e9ecef;
+    transform: scale(1.05);
+}
+
+.svg-button-container button:active {
+    transform: scale(0.95);
+}
+
+/* Remove the global button styles for this container */
+.svg-button-container button {
+    background: inherit;
+    /* Override the global green background */
+    color: inherit;
+    /* Override the global white text */
+}
+
+/* Specific adjustments for text-only buttons */
+.svg-button-container button:not(.svg-button) {
+    padding: 4px 12px;
+    /* Slightly more padding for text buttons */
 }
