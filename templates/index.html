@@ -9,6 +9,13 @@
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
     <style>
+        /* Override the default body constraints for the dashboard */
+        body {
+            max-width: none;
+            margin: 20px;
+            /* Keep some margin from the window edges */
+        }
+
         /* Page-specific styles only */
         #chart {
             width: 100%;
@@ -19,9 +26,9 @@
         .svg-button-container {
             margin-top: 15px;
             display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
         }
-
-        /* Any other page-specific styles... */
     </style>
 </head>
 
@@ -338,31 +345,31 @@
                 {
                     x: [],
                     y: [],
-                    name: 'Grid Power',
+                    name: 'Grid',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'EVSE Power',
+                    name: 'EVSE',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Solar Power',
+                    name: 'Solar',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Heat Pump Power',
+                    name: 'Heat Pump',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Home Power',
+                    name: 'Home',
                     type: 'scatter'
                 }
             ], getLayout());
