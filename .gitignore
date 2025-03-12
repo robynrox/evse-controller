@@ -27,7 +27,7 @@ venv/
 
 # Virtual environment
 bin/
-lib/
+lib/python*/
 lib64/
 pyvenv.cfg
 include/
