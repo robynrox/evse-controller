@@ -225,7 +225,13 @@ def config_page():
     """Handle configuration page display and updates."""
     if request.method == 'POST':
         try:
-            # Convert form data to nested dictionary structure
+            # Load existing config to preserve sensitive values
+            current_config = {}
+            config_path = Path(CONFIG_FILE)
+            if config_path.exists():
+                with config_path.open('r') as f:
+                    current_config = yaml.safe_load(f)
+
             new_config = {
                 'wallbox': {
                     'url': request.form.get('wallbox[url]'),
@@ -250,11 +256,17 @@ def config_page():
                 }
             }
 
+            # Preserve existing sensitive values if masked values are submitted
+            if new_config['wallbox']['password'] == '********':
+                new_config['wallbox']['password'] = current_config.get('wallbox', {}).get('password', '')
+            
+            if new_config['influxdb']['token'] == '********':
+                new_config['influxdb']['token'] = current_config.get('influxdb', {}).get('token', '')
+
             # Save configuration
-            config_path = Path(CONFIG_FILE)
             with config_path.open('w') as f:
                 yaml.dump(new_config, f, default_flow_style=False)
-
+                        
             flash('Configuration saved. Restarting application...', 'success')
             
             # Return restart page with auto-refresh
@@ -272,6 +284,11 @@ def config_page():
         if config_path.exists():
             with config_path.open('r') as f:
                 config = yaml.safe_load(f)
+                # Mask sensitive fields
+                if config.get('wallbox'):
+                    config['wallbox']['password'] = '********' if config['wallbox'].get('password') else ''
+                if config.get('influxdb'):
+                    config['influxdb']['token'] = '********' if config['influxdb'].get('token') else ''
         else:
             # Provide default configuration if file doesn't exist
             config = {
