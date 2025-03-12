@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify, flash, redirect, url
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
 from lib.paths import ensure_data_dirs
+from lib.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
@@ -218,93 +219,55 @@ def schedule_page():
     scheduled_events = scheduler.get_future_events()
     return render_template('schedule.html', scheduled_events=scheduled_events)
 
-CONFIG_FILE = "config.yaml"
-
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
     """Handle configuration page display and updates."""
     if request.method == 'POST':
         try:
-            # Load existing config to preserve sensitive values
-            current_config = {}
-            config_path = Path(CONFIG_FILE)
-            if config_path.exists():
-                with config_path.open('r') as f:
-                    current_config = yaml.safe_load(f)
+            # Update Wallbox settings
+            config.WALLBOX_URL = request.form.get('wallbox[url]')
+            if request.form.get('wallbox[username]'):  # Only update if provided
+                config.WALLBOX_USERNAME = request.form.get('wallbox[username]')
+            if request.form.get('wallbox[password]'):  # Only update if provided
+                config.WALLBOX_PASSWORD = request.form.get('wallbox[password]')
+            if request.form.get('wallbox[serial]'):
+                config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
 
-            new_config = {
-                'wallbox': {
-                    'url': request.form.get('wallbox[url]'),
-                    'username': request.form.get('wallbox[username]'),
-                    'password': request.form.get('wallbox[password]'),
-                    'serial': request.form.get('wallbox[serial]')
-                },
-                'shelly': {
-                    'url': request.form.get('shelly[url]'),
-                    'secondary_url': request.form.get('shelly[secondary_url]')
-                },
-                'influxdb': {
-                    'enabled': bool(request.form.get('influxdb[enabled]')),
-                    'url': request.form.get('influxdb[url]'),
-                    'token': request.form.get('influxdb[token]'),
-                    'org': request.form.get('influxdb[org]')
-                },
-                'charging': {
-                    'max_charge_percent': int(request.form.get('charging[max_charge_percent]', 90)),
-                    'solar_period_max_charge': int(request.form.get('charging[solar_period_max_charge]', 80)),
-                    'default_tariff': request.form.get('charging[default_tariff]', 'COSY')
-                }
-            }
+            # Update Shelly settings
+            config.SHELLY_URL = request.form.get('shelly[primary_url]')
+            config.SHELLY_2_URL = request.form.get('shelly[secondary_url]')
 
-            # Preserve existing sensitive values if masked values are submitted
-            if new_config['wallbox']['password'] == '********':
-                new_config['wallbox']['password'] = current_config.get('wallbox', {}).get('password', '')
+            # Update InfluxDB settings
+            config.INFLUXDB_ENABLED = bool(request.form.get('influxdb[enabled]'))
+            config.INFLUXDB_URL = request.form.get('influxdb[url]')
+            if request.form.get('influxdb[token]'):  # Only update if provided
+                config.INFLUXDB_TOKEN = request.form.get('influxdb[token]')
+            config.INFLUXDB_ORG = request.form.get('influxdb[org]')
+
+            # Update charging settings
+            config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))
+            config.SOLAR_PERIOD_MAX_CHARGE = int(request.form.get('charging[solar_period_max_charge]', 80))
+            config.DEFAULT_TARIFF = request.form.get('charging[default_tariff]', 'COSY')
+
+            # Save the updated configuration
+            config.save()
             
-            if new_config['influxdb']['token'] == '********':
-                new_config['influxdb']['token'] = current_config.get('influxdb', {}).get('token', '')
-
-            # Save configuration
-            with config_path.open('w') as f:
-                yaml.dump(new_config, f, default_flow_style=False)
-                        
             flash('Configuration saved. Restarting application...', 'success')
-            
-            # Return restart page with auto-refresh
             return render_template('restart.html'), 200, {
-                'Refresh': '5; url=/'  # Redirect to home page after 5 seconds
+                'Refresh': '5; url=/'
             }
 
         except Exception as e:
+            logging.error(f"Error saving configuration: {str(e)}")
             flash(f'Error saving configuration: {str(e)}', 'error')
             return redirect(url_for('config_page'))
 
     # GET request - display current configuration
     try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with config_path.open('r') as f:
-                config = yaml.safe_load(f)
-                # Mask sensitive fields
-                if config.get('wallbox'):
-                    config['wallbox']['password'] = '********' if config['wallbox'].get('password') else ''
-                if config.get('influxdb'):
-                    config['influxdb']['token'] = '********' if config['influxdb'].get('token') else ''
-        else:
-            # Provide default configuration if file doesn't exist
-            config = {
-                'wallbox': {'url': '', 'username': '', 'password': '', 'serial': None},
-                'shelly': {'url': '', 'secondary_url': None},
-                'influxdb': {'enabled': False, 'url': '', 'token': '', 'org': ''},
-                'charging': {
-                    'max_charge_percent': 90,
-                    'solar_period_max_charge': 80,
-                    'default_tariff': 'COSY'
-                }
-            }
-        
-        return render_template('config.html', config=config)
-
+        config_dict = config.as_dict()
+        return render_template('config.html', config=config_dict)
     except Exception as e:
+        logging.error(f"Error loading configuration page: {str(e)}")
         flash(f'Error loading configuration: {str(e)}', 'error')
         return redirect(url_for('index'))
     
