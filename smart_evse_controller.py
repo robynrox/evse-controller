@@ -97,8 +97,11 @@ class Scheduler:
             else:
                 remaining_events.append(event)
         
-        self.events = remaining_events
-        self._save_schedule()
+        # Only save if we actually found and removed due events
+        if due_events:        
+            self.events = remaining_events
+            self._save_schedule()
+        
         return due_events
 
     def _load_schedule(self):
@@ -112,9 +115,21 @@ class Scheduler:
                 error(f"Error loading events: {e}")
                 self.events = []
 
+    def save_events(self):
+        """Public method to save events to file"""
+        self._save_schedule()
+
     def _save_schedule(self):
-        data = [event.to_dict() for event in self.events]
-        self.schedule_file.write_text(json.dumps(data, indent=2))
+        """Save events to file"""
+        try:
+            data = [event.to_dict() for event in self.events]
+            # Ensure the parent directory exists
+            self.schedule_file.parent.mkdir(parents=True, exist_ok=True)
+            # Write the data
+            with self.schedule_file.open('w') as f:
+                json.dump(data, f, default=str)
+        except Exception as e:
+            error(f"Error saving schedule: {e}")
 
 # Tariff base class
 class Tariff:

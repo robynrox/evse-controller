@@ -3,20 +3,22 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 from lib.config import config
-import sys
 
 def setup_logging():
     """Setup logging configuration"""
-    # During initial setup, force DEBUG level to console
+    # Get configured console level
+    console_level = getattr(logging, config.CONSOLE_LOGGING.upper())
+    file_level = getattr(logging, config.FILE_LOGGING.upper())
+    
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(
         '%(asctime)s.%(msecs)03d %(levelname)8s - %(message)s',
         datefmt='%H:%M:%S'
     ))
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(console_level)
 
     logger = logging.getLogger('evse_controller')
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)  # Keep root logger at DEBUG to allow all potential levels
     logger.addHandler(console_handler)
 
     # Rest of your logging setup...
@@ -30,7 +32,6 @@ def setup_logging():
     )
 
     # File handler
-    file_level = getattr(logging, config.FILE_LOGGING.upper())
     log_file = log_dir / f"{config.get('logging.file_prefix', 'evse')}.log"
     file_handler = RotatingFileHandler(
         log_file,

@@ -27,7 +27,7 @@ venv/
 
 # Virtual environment
 bin/
-lib/
+lib/python*/
 lib64/
 pyvenv.cfg
 include/
@@ -52,3 +52,4 @@ poetry.lock
 influxdata-archive_compat.key
 state/schedule.json
 lib64
+config.yaml.bak
