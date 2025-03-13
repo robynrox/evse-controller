@@ -13,14 +13,14 @@ DEFAULT_CONFIG = {
         "serial": "",
     },
     "shelly": {
-        "url": "",
+        "primary_url": "",
         "secondary_url": "",
     },
     "influxdb": {
         "url": "http://localhost:8086",
         "token": "",
         "org": "",
-        "bucket": "",
+        "bucket": "evse_monitoring",  # Meaningful default bucket name
         "enabled": False
     },
     "charging": {
@@ -40,15 +40,23 @@ DEFAULT_CONFIG = {
 
 def load_existing_config() -> Dict[str, Any]:
     """Load existing configuration if available."""
+    config = DEFAULT_CONFIG.copy()  # Start with defaults
     config_path = Path(CONFIG_FILE)
     if config_path.exists():
         try:
             with config_path.open('r') as f:
-                return yaml.safe_load(f)
+                existing_config = yaml.safe_load(f)
+                # Deep merge the existing config with defaults
+                for section in config:
+                    if section in existing_config:
+                        if isinstance(config[section], dict):
+                            config[section].update(existing_config[section])
+                        else:
+                            config[section] = existing_config[section]
         except yaml.YAMLError as e:
             print(f"Error reading existing configuration: {e}")
             sys.exit(1)
-    return DEFAULT_CONFIG.copy()
+    return config
 
 def save_config(config: Dict[str, Any]):
     """Save configuration to YAML file."""
@@ -96,25 +104,99 @@ def interactive_config():
         if config["wallbox"]["serial"]:
             config["wallbox"]["serial"] = int(config["wallbox"]["serial"])
     
-    # Shelly configuration
+    # Updated Shelly configuration
     print("\nShelly Configuration")
-    config["shelly"]["url"] = questionary.text(
-        "Enter your Shelly EM URL (IP or hostname):",
-        default=config["shelly"]["url"],
+    
+    # Shelly 1
+    config["shelly"]["shelly1"] = config.get("shelly", {}).get("shelly1", {})  # Migration from old config
+    config["shelly"]["shelly1"]["url"] = questionary.text(
+        "Enter Shelly 1 URL:",
+        default=config["shelly"].get("primary_url", ""),  # Try old config first
         validate=lambda text: len(text) > 0
     ).ask()
     
-    if questionary.confirm(
-        "Configure a second Shelly EM?",
-        default=bool(config["shelly"]["secondary_url"])
-    ).ask():
-        # Fix: Handle None value for secondary_url
-        secondary_url_default = config["shelly"]["secondary_url"] if config["shelly"]["secondary_url"] else ""
-        config["shelly"]["secondary_url"] = questionary.text(
-            "Enter your second Shelly EM URL:",
-            default=secondary_url_default
+    # Configure channels for Shelly 1
+    print("\nConfiguring Shelly 1 channels:")
+    for channel in [1, 2]:
+        channel_key = f"channel{channel}"
+        config["shelly"]["shelly1"][channel_key] = config["shelly"]["shelly1"].get(channel_key, {})
+        config["shelly"]["shelly1"][channel_key]["name"] = questionary.text(
+            f"Channel {channel} name:",
+            default=config["shelly"]["shelly1"][channel_key].get("name", "")
+        ).ask()
+        config["shelly"]["shelly1"][channel_key]["description"] = questionary.text(
+            f"Channel {channel} description (optional):",
+            default=config["shelly"]["shelly1"][channel_key].get("description", "")
+        ).ask()
+        config["shelly"]["shelly1"][channel_key]["active"] = questionary.confirm(
+            f"Is channel {channel} active?",
+            default=config["shelly"]["shelly1"][channel_key].get("active", True)
         ).ask()
     
+    # Shelly 2
+    if questionary.confirm(
+        "Configure a second Shelly?",
+        default=bool(config["shelly"].get("secondary_url", ""))
+    ).ask():
+        config["shelly"]["shelly2"] = config.get("shelly", {}).get("shelly2", {})  # Migration from old config
+        config["shelly"]["shelly2"]["url"] = questionary.text(
+            "Enter Shelly 2 URL:",
+            default=config["shelly"].get("secondary_url", "")  # Fall back to old config
+        ).ask()
+        
+        # Configure channels for Shelly 2
+        if questionary.confirm("Configure Shelly 2 channels?", default=True).ask():
+            for channel in [1, 2]:
+                channel_key = f"channel{channel}"
+                config["shelly"]["shelly2"][channel_key] = config["shelly"]["shelly2"].get(channel_key, {})
+                if questionary.confirm(f"Configure channel {channel}?", default=True).ask():
+                    config["shelly"]["shelly2"][channel_key]["name"] = questionary.text(
+                        f"Channel {channel} name:",
+                        default=config["shelly"]["shelly2"][channel_key].get("name", "")
+                    ).ask()
+                    config["shelly"]["shelly2"][channel_key]["description"] = questionary.text(
+                        f"Channel {channel} description (optional):",
+                        default=config["shelly"]["shelly2"][channel_key].get("description", "")
+                    ).ask()
+                    config["shelly"]["shelly2"][channel_key]["active"] = questionary.confirm(
+                        f"Is channel {channel} active?",
+                        default=config["shelly"]["shelly2"][channel_key].get("active", True)
+                    ).ask()
+    
+    # Grid and EVSE channel assignment
+    print("\nChannel Assignment")
+    config["shelly"]["grid"] = config["shelly"].get("grid", {})
+    config["shelly"]["grid"]["device"] = questionary.select(
+        "Which Shelly monitors the grid?",
+        choices=["shelly1", "shelly2"],
+        default=config["shelly"]["grid"].get("device", "shelly1")
+    ).ask()
+    config["shelly"]["grid"]["channel"] = int(questionary.select(
+        "Which channel monitors the grid?",
+        choices=["1", "2"],
+        default=str(config["shelly"]["grid"].get("channel", 1))
+    ).ask())
+    
+    # Make EVSE monitoring optional
+    if questionary.confirm(
+        "Do you want to monitor EVSE power consumption?",
+        default=bool(config["shelly"].get("evse", {}))
+    ).ask():
+        config["shelly"]["evse"] = config["shelly"].get("evse", {})
+        config["shelly"]["evse"]["device"] = questionary.select(
+            "Which Shelly monitors the EVSE?",
+            choices=["shelly1", "shelly2"],
+            default=config["shelly"]["evse"].get("device", "shelly1")
+        ).ask()
+        config["shelly"]["evse"]["channel"] = int(questionary.select(
+            "Which channel monitors the EVSE?",
+            choices=["1", "2"],
+            default=str(config["shelly"]["evse"].get("channel", 2))
+        ).ask())
+    else:
+        config["shelly"].pop("evse", None)  # Remove EVSE config if it exists
+
+    # Rest of the configuration (unchanged)
     # InfluxDB configuration
     print("\nInfluxDB Configuration")
     config["influxdb"]["enabled"] = questionary.confirm(
@@ -135,6 +217,10 @@ def interactive_config():
             "InfluxDB organization:",
             default=config["influxdb"]["org"]
         ).ask()
+        config["influxdb"]["bucket"] = questionary.text(
+            "InfluxDB bucket:",
+            default=config["influxdb"]["bucket"]
+        ).ask()
     
     # Charging configuration
     print("\nCharging Configuration")
@@ -144,9 +230,23 @@ def interactive_config():
         validate=lambda text: text.isdigit() and 0 <= int(text) <= 100
     ).ask())
     
+    use_different_daytime = questionary.confirm(
+        "Do you want to set a different maximum charge level for daytime?",
+        default=config["charging"]["solar_period_max_charge"] != config["charging"]["max_charge_percent"]
+    ).ask()
+    
+    if use_different_daytime:
+        config["charging"]["solar_period_max_charge"] = int(questionary.text(
+            "Maximum charge level during daytime:",
+            default=str(config["charging"]["solar_period_max_charge"]),
+            validate=lambda text: text.isdigit() and 0 <= int(text) <= 100
+        ).ask())
+    else:
+        config["charging"]["solar_period_max_charge"] = config["charging"]["max_charge_percent"]
+    
     config["charging"]["default_tariff"] = questionary.select(
         "Default tariff:",
-        choices=["COSY", "OCTGO", "FLUX"],  # Added FLUX as an option
+        choices=["COSY", "OCTGO", "FLUX"],
         default=config["charging"]["default_tariff"]
     ).ask()
     

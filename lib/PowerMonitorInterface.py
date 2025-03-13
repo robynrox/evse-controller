@@ -1,4 +1,5 @@
 from lib.Power import Power
+from lib.logging_config import debug, error
 
 from abc import ABC, abstractmethod
 
@@ -20,18 +21,23 @@ class PowerMonitorInterface(ABC):
 
 
 class PowerMonitorPollingThread(threading.Thread):
-    def __init__(self, powerMonitor: PowerMonitorInterface):
-        threading.Thread.__init__(self)
-        self.powerMonitor = powerMonitor
-        self.running = True
+    def __init__(self, monitor: PowerMonitorInterface, name: str):
+        super().__init__(name=f"PowerMonitor-{name}")
+        self.monitor = monitor
         self.observers = []
+        self.running = True
+        debug(f"Created {self.name} thread")
 
     def run(self):
+        debug(f"Starting {self.name} thread with ID {threading.get_ident()}")
         while self.running:
-            result = self.powerMonitor.getPowerLevels()
-            self.notify(result)
-            now = datetime.datetime.now()
-            time.sleep((1000000 - now.microsecond) / 1000000.0)
+            try:
+                power = self.monitor.getPower()
+                for observer in self.observers:
+                    observer.update(self.monitor, power)
+            except Exception as e:
+                error(f"Error in {self.name} thread: {e}")
+            time.sleep(1)
 
     def stop(self):
         self.running = False
@@ -48,4 +54,4 @@ class PowerMonitorPollingThread(threading.Thread):
 
     def notify(self, result):
         for observer in self.observers:
-            observer.update(self.powerMonitor, result)
+            observer.update(self.monitor, result)

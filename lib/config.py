@@ -10,6 +10,20 @@ class Config:
 
     # Define configuration structure
     _config_structure = {
+        # Wallbox configuration
+        'WALLBOX_URL': ('wallbox.url', '', str),
+        'WALLBOX_USERNAME': ('wallbox.username', '', str),
+        'WALLBOX_PASSWORD': ('wallbox.password', '', str),
+        'WALLBOX_SERIAL': ('wallbox.serial', None, lambda x: x),  # Allow None or int
+        
+        # Existing configuration entries...
+        # Wallbox configuration
+        'WALLBOX_URL': ('wallbox.url', '', str),
+        'WALLBOX_USERNAME': ('wallbox.username', '', str),
+        'WALLBOX_PASSWORD': ('wallbox.password', '', str),
+        'WALLBOX_SERIAL': ('wallbox.serial', None, lambda x: x),  # Allow None or int
+        
+        # Existing configuration entries...
         'DEFAULT_TARIFF': ('charging.default_tariff', 'COSY', str),
         'FILE_LOGGING': ('logging.file_level', 'INFO', str),
         'CONSOLE_LOGGING': ('logging.console_level', 'WARNING', str),
@@ -20,7 +34,32 @@ class Config:
         'INFLUXDB_TOKEN': ('influxdb.token', '', str),
         'INFLUXDB_ORG': ('influxdb.org', '', str),
         'INFLUXDB_BUCKET': ('influxdb.bucket', '', str),
-        # Add other config items here...
+        
+        # Legacy Shelly config (keeping for backward compatibility)
+        'SHELLY_URL': ('shelly.primary_url', '', str),
+        'SHELLY_2_URL': ('shelly.secondary_url', '', str),
+        
+        # New Shelly configuration
+        'SHELLY1_URL': ('shelly.shelly1.url', '', str),
+        'SHELLY1_CH1_NAME': ('shelly.shelly1.channel1.name', '', str),
+        'SHELLY1_CH1_DESC': ('shelly.shelly1.channel1.description', '', str),
+        'SHELLY1_CH1_ACTIVE': ('shelly.shelly1.channel1.active', True, bool),
+        'SHELLY1_CH2_NAME': ('shelly.shelly1.channel2.name', '', str),
+        'SHELLY1_CH2_DESC': ('shelly.shelly1.channel2.description', '', str),
+        'SHELLY1_CH2_ACTIVE': ('shelly.shelly1.channel2.active', True, bool),
+        
+        'SHELLY2_URL': ('shelly.shelly2.url', '', str),
+        'SHELLY2_CH1_NAME': ('shelly.shelly2.channel1.name', '', str),
+        'SHELLY2_CH1_DESC': ('shelly.shelly2.channel1.description', '', str),
+        'SHELLY2_CH1_ACTIVE': ('shelly.shelly2.channel1.active', True, bool),
+        'SHELLY2_CH2_NAME': ('shelly.shelly2.channel2.name', '', str),
+        'SHELLY2_CH2_DESC': ('shelly.shelly2.channel2.description', '', str),
+        'SHELLY2_CH2_ACTIVE': ('shelly.shelly2.channel2.active', True, bool),
+        
+        'SHELLY_GRID_DEVICE': ('shelly.grid.device', 'shelly1', str),
+        'SHELLY_GRID_CHANNEL': ('shelly.grid.channel', 1, int),
+        'SHELLY_EVSE_DEVICE': ('shelly.evse.device', 'shelly1', str),
+        'SHELLY_EVSE_CHANNEL': ('shelly.evse.channel', 2, int),
     }
 
     def __new__(cls):
@@ -131,14 +170,47 @@ class Config:
                 'serial': self.WALLBOX_SERIAL
             },
             'shelly': {
-                'primary_url': self.SHELLY_URL,
-                'secondary_url': self.SHELLY_2_URL
+                'shelly1': {
+                    'url': self.SHELLY1_URL,
+                    'channel1': {
+                        'name': self.SHELLY1_CH1_NAME,
+                        'description': self.SHELLY1_CH1_DESC,
+                        'active': self.SHELLY1_CH1_ACTIVE
+                    },
+                    'channel2': {
+                        'name': self.SHELLY1_CH2_NAME,
+                        'description': self.SHELLY1_CH2_DESC,
+                        'active': self.SHELLY1_CH2_ACTIVE
+                    }
+                },
+                'shelly2': {
+                    'url': self.SHELLY2_URL,
+                    'channel1': {
+                        'name': self.SHELLY2_CH1_NAME,
+                        'description': self.SHELLY2_CH1_DESC,
+                        'active': self.SHELLY2_CH1_ACTIVE
+                    },
+                    'channel2': {
+                        'name': self.SHELLY2_CH2_NAME,
+                        'description': self.SHELLY2_CH2_DESC,
+                        'active': self.SHELLY2_CH2_ACTIVE
+                    }
+                },
+                'grid': {
+                    'device': self.SHELLY_GRID_DEVICE,
+                    'channel': self.SHELLY_GRID_CHANNEL
+                },
+                'evse': {
+                    'device': self.SHELLY_EVSE_DEVICE,
+                    'channel': self.SHELLY_EVSE_CHANNEL
+                }
             },
             'influxdb': {
                 'enabled': self.INFLUXDB_ENABLED,
                 'url': self.INFLUXDB_URL,
                 'token': self.INFLUXDB_TOKEN,
-                'org': self.INFLUXDB_ORG
+                'org': self.INFLUXDB_ORG,
+                'bucket': self.INFLUXDB_BUCKET
             },
             'charging': {
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
@@ -150,6 +222,51 @@ class Config:
                 'console_level': self.CONSOLE_LOGGING
             }
         }
+
+    # Add new methods for channel configuration
+    def get_channel_config(self, device: str, channel: int) -> dict:
+        """Get configuration for a specific channel."""
+        if device not in ['shelly1', 'shelly2']:
+            raise ValueError("Device must be 'shelly1' or 'shelly2'")
+        if channel not in [1, 2]:
+            raise ValueError("Channel must be 1 or 2")
+            
+        channel_path = f'shelly.{device}.channel{channel}'
+        return {
+            'name': self._get_nested_value(f'{channel_path}.name', ''),
+            'description': self._get_nested_value(f'{channel_path}.description', ''),
+            'active': self._get_nested_value(f'{channel_path}.active', True)
+        }
+
+    def get_grid_channel(self) -> tuple:
+        """Get the device and channel number for grid monitoring."""
+        device = self._get_nested_value('shelly.grid.device', 'shelly1')
+        channel = self._get_nested_value('shelly.grid.channel', 1)
+        return device, channel
+
+    def get_evse_channel(self) -> tuple:
+        """Get the device and channel number for EVSE monitoring."""
+        device = self._get_nested_value('shelly.evse.device', 'shelly1')
+        channel = self._get_nested_value('shelly.evse.channel', 2)
+        return device, channel
+
+    def get_device_url(self, device: str) -> str:
+        """Get URL for a specific Shelly device with backward compatibility."""
+        if device == 'shelly1':
+            # Try new config first, fall back to old
+            return self._get_nested_value('shelly.shelly1.url') or self._get_nested_value('shelly.primary_url', '')
+        elif device == 'shelly2':
+            # Try new config first, fall back to old
+            return self._get_nested_value('shelly.shelly2.url') or self._get_nested_value('shelly.secondary_url', '')
+        raise ValueError("Device must be 'shelly1' or 'shelly2'")
+
+    def get(self, path: str, default: Any = None) -> Any:
+        """Get a configuration value using dot notation with a default value."""
+        return self._get_nested_value(path, default)
+
+    def get(self, path: str, default: Any = None) -> Any:
+        """Get a configuration value using dot notation with a default value."""
+        return self._get_nested_value(path, default)
 
 # Create the singleton instance
 config = Config()

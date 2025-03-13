@@ -57,15 +57,18 @@ class EvseWallboxQuasar(EvseInterface):
             error(f"ModbusClient initialization failed with exception: {str(e)}")
             raise
         
-        self.CONTROL_LOCKOUT_REG = 0x51
+        # Wallbox Quasar Modbus Register Map
+        # Control registers
+        self.CONTROL_LOCKOUT_REG = 0x51    # Control lockout
         self.MODBUS_CONTROL = 1
         self.USER_CONTROL = 0
-        self.CONTROL_CURRENT_REG = 0x102
-        self.CONTROL_STATE_REG = 0x101
+        self.CONTROL_CURRENT_REG = 0x102   # Set charging current
+        self.CONTROL_STATE_REG = 0x101     # Control charging state
         self.START_CHARGING = 1
         self.STOP_CHARGING = 2
-        self.READ_STATE_REG = 0x0219
-        self.READ_BATTERY_REG = 0x021a
+        # Status registers (sequential)
+        self.READ_STATE_REG = 0x0219       # EVSE state
+        self.READ_BATTERY_REG = 0x021a     # Battery charge level
         self.battery_charge_level = -1
         self.current = 0
         self.writeNextAllowed = 0
@@ -145,63 +148,16 @@ class EvseWallboxQuasar(EvseInterface):
         if current_time < self.readNextAllowed:
             return self.lastEvseState
         
-        try:
-            regs = self.client.read_holding_registers(self.READ_STATE_REG)
-            if regs is None:
-                error("Failed to read EVSE state registers")
-                return self.lastEvseState
-            
-            current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)
-            if current_regs is None:
-                error("Failed to read current registers")
-                return self.lastEvseState
-            
-            self.current = current_regs[0]
-            self.lastEvseState = EvseState(regs[0])
-            if self.lastEvseState == EvseState.PAUSED:
-                self.current = 0
-            
+        if self._read_all_registers():
             self.readNextAllowed = current_time + 0.9
-            return self.lastEvseState
         
-        except Exception as e:
-            error(f"Error reading EVSE state: {str(e)}")
-            return self.lastEvseState
-        finally:
-            try:
-                self.client.close()
-            except:
-                pass
+        return self.lastEvseState
 
     def getEvseCurrent(self) -> int:
         return self.current
 
     def getBatteryChargeLevel(self) -> int:
-        current_time = time.time()
-        if current_time < self.readNextAllowed:
-            return self.battery_charge_level
-        
-        try:
-            regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
-            if regs is None:
-                error("Failed to read battery registers")
-                return self.battery_charge_level
-            
-            battery_charge_level = regs[0]
-            if battery_charge_level > 4:
-                self.battery_charge_level = battery_charge_level
-            
-            self.readNextAllowed = current_time + 0.9
-            return self.battery_charge_level
-        
-        except Exception as e:
-            error(f"Error reading battery level: {str(e)}")
-            return self.battery_charge_level
-        finally:
-            try:
-                self.client.close()
-            except:
-                pass
+        return self.battery_charge_level
 
     def resetViaWebApi(self):
         """Reset the Wallbox via cloud API when Modbus communication fails"""
@@ -214,3 +170,35 @@ class EvseWallboxQuasar(EvseInterface):
 
     def isEmpty(self) -> bool:
         return self.battery_charge_level <= self.MIN_CHARGE_PERCENT
+
+    def _read_all_registers(self):
+        """Read all necessary registers in one go"""
+        try:
+            # Read state and battery registers (they're sequential: 0x0219, 0x021a)
+            regs = self.client.read_holding_registers(self.READ_STATE_REG, 2)
+            if regs is None:
+                error("Failed to read state and battery registers")
+                return False
+                
+            # Read current register separately since it's in a different range
+            current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG, 1)
+            if current_regs is None:
+                error("Failed to read current register")
+                return False
+            
+            # Update all values
+            self.lastEvseState = EvseState(regs[0])
+            if 5 <= regs[1] <= 100:  # Valid battery reading
+                self.battery_charge_level = regs[1]
+            
+            self.current = current_regs[0]
+            if self.lastEvseState == EvseState.PAUSED:
+                self.current = 0
+                
+            return True
+            
+        except Exception as e:
+            error(f"Error reading registers: {str(e)}")
+            return False
+        finally:
+            self.client.close()

@@ -3,7 +3,8 @@ import os
 import sys
 
 # Check for development mode
-DEV_MODE = os.getenv('EVSE_DEV_MODE', '').lower() in ('true', '1', 'yes')
+#DEV_MODE = os.getenv('EVSE_DEV_MODE', '').lower() in ('true', '1', 'yes')
+DEV_MODE = True
 
 def get_data_dir() -> Path:
     """Get the data directory for the application."""
@@ -17,19 +18,21 @@ def get_data_dir() -> Path:
 def get_log_dir() -> Path:
     """Get the log directory for the application."""
     base_dir = get_data_dir()
-    return base_dir / "log" if DEV_MODE else base_dir / "logs"
+    return base_dir / "logs"  # Always use "logs" for consistency
 
 def ensure_data_dirs():
     """Ensure all required data directories exist."""
     data_dir = get_data_dir()
+    log_dir = get_log_dir()
     
     # Create all required directories
     (data_dir / "config").mkdir(parents=True, exist_ok=True)
-    (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "state").mkdir(parents=True, exist_ok=True)
     
     if DEV_MODE:
         print(f"Running in development mode. Using data directory: {data_dir}", file=sys.stderr)
+        print(f"Logs will be written to: {log_dir}", file=sys.stderr)
     
     # If config.yaml doesn't exist in the config directory, copy it from the source
     config_file = data_dir / "config" / "config.yaml"

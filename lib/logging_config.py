@@ -3,6 +3,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 from lib.config import config
+from lib.paths import get_log_dir
 
 def setup_logging():
     """Setup logging configuration"""
@@ -21,8 +22,8 @@ def setup_logging():
     logger.setLevel(logging.DEBUG)  # Keep root logger at DEBUG to allow all potential levels
     logger.addHandler(console_handler)
 
-    # Rest of your logging setup...
-    log_dir = Path.home() / ".local" / "share" / "evse-controller" / "logs"
+    # Use the log directory from paths module
+    log_dir = get_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create formatters
@@ -42,6 +43,10 @@ def setup_logging():
     file_handler.setLevel(file_level)
 
     logger.addHandler(file_handler)
+    
+    # Log the paths being used
+    logger.info(f"Log directory: {log_dir}")
+    logger.info(f"Log file: {log_file}")
     
     return logger
 

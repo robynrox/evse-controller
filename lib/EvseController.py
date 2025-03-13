@@ -103,10 +103,12 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.thread = PowerMonitorPollingThread(pmon)
+        self.thread = PowerMonitorPollingThread(pmon, "primary")
+        debug(f"Starting primary monitor thread {self.thread.name}")
         self.thread.start()
         self.thread.attach(self)
-        self.thread2 = PowerMonitorPollingThread(pmon2)
+        self.thread2 = PowerMonitorPollingThread(pmon2, "secondary")
+        debug(f"Starting secondary monitor thread {self.thread2.name}")
         self.thread2.start()
         self.thread2.attach(self)
         self.connectionErrors = 0
@@ -137,7 +139,8 @@ class EvseController(PowerMonitorObserver):
                 client = influxdb_client.InfluxDBClient(
                     url=config.INFLUXDB_URL,
                     token=config.INFLUXDB_TOKEN,
-                    org=config.INFLUXDB_ORG
+                    org=config.INFLUXDB_ORG,
+                    bucket=config.INFLUXDB_BUCKET
                 )
                 self.write_api = client.write_api(write_options=SYNCHRONOUS)
             except Exception as e:
@@ -393,10 +396,6 @@ class EvseController(PowerMonitorObserver):
         # Only update if we get a valid reading from the EVSE
         new_soc = self.evse.getBatteryChargeLevel()
         
-        # Log the attempted update for debugging
-        debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
-        
-        # Only update if we get a valid reading
         if self._is_valid_soc(new_soc):
             power.soc = new_soc
         elif self._is_valid_soc(self.batteryChargeLevel):
