@@ -8,6 +8,21 @@ class Config:
     _instance = None
     _initialized = False
 
+    # Define configuration structure
+    _config_structure = {
+        'DEFAULT_TARIFF': ('charging.default_tariff', 'COSY', str),
+        'FILE_LOGGING': ('logging.file_level', 'INFO', str),
+        'CONSOLE_LOGGING': ('logging.console_level', 'WARNING', str),
+        'MAX_CHARGE_PERCENT': ('charging.max_charge_percent', 90, int),
+        'SOLAR_PERIOD_MAX_CHARGE': ('charging.solar_period_max_charge', 80, int),
+        'INFLUXDB_ENABLED': ('influxdb.enabled', False, bool),
+        'INFLUXDB_URL': ('influxdb.url', 'http://localhost:8086', str),
+        'INFLUXDB_TOKEN': ('influxdb.token', '', str),
+        'INFLUXDB_ORG': ('influxdb.org', '', str),
+        'INFLUXDB_BUCKET': ('influxdb.bucket', '', str),
+        # Add other config items here...
+    }
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -47,9 +62,9 @@ class Config:
             print(f"Error: Failed to load config: {e}", file=sys.stderr)
             return {}
 
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get a value from config with dot notation support."""
-        keys = key.split('.')
+    def _get_nested_value(self, path: str, default: Any = None) -> Any:
+        """Get a nested value from config using dot notation."""
+        keys = path.split('.')
         value = self._config_data
         for k in keys:
             if isinstance(value, dict):
@@ -58,207 +73,34 @@ class Config:
                 return default
         return value
 
-    @property
-    def DEFAULT_TARIFF(self) -> str:
-        """Get default tariff from config."""
-        return self.get("charging.default_tariff", "COSY")
+    def _set_nested_value(self, path: str, value: Any):
+        """Set a nested value in config using dot notation."""
+        keys = path.split('.')
+        current = self._config_data
+        
+        # Navigate to the deepest dict, creating intermediate dicts if needed
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        
+        # Set the value
+        current[keys[-1]] = value
 
-    @DEFAULT_TARIFF.setter
-    def DEFAULT_TARIFF(self, value: str):
-        """Set default tariff in config."""
-        if 'charging' not in self._config_data:
-            self._config_data['charging'] = {}
-        self._config_data['charging']['default_tariff'] = value
+    def __getattr__(self, name: str) -> Any:
+        """Handle dynamic property access."""
+        if name in self._config_structure:
+            path, default, type_cast = self._config_structure[name]
+            return type_cast(self._get_nested_value(path, default))
+        raise AttributeError(f"'Config' object has no attribute '{name}'")
 
-    @property
-    def FILE_LOGGING(self) -> str:
-        """Get file logging level from config."""
-        return self.get("logging.file_level", "INFO")
-
-    @FILE_LOGGING.setter
-    def FILE_LOGGING(self, value: str):
-        """Set file logging level in config."""
-        if 'logging' not in self._config_data:
-            self._config_data['logging'] = {}
-        self._config_data['logging']['file_level'] = value
-
-    @property
-    def CONSOLE_LOGGING(self) -> str:
-        """Get console logging level from config."""
-        return self.get("logging.console_level", "WARNING")
-
-    @CONSOLE_LOGGING.setter
-    def CONSOLE_LOGGING(self, value: str):
-        """Set console logging level in config."""
-        if 'logging' not in self._config_data:
-            self._config_data['logging'] = {}
-        self._config_data['logging']['console_level'] = value
-
-    @property
-    def MAX_CHARGE_PERCENT(self) -> int:
-        """Get maximum charge percentage from config."""
-        return self.get("charging.max_charge_percent", 90)
-
-    @MAX_CHARGE_PERCENT.setter
-    def MAX_CHARGE_PERCENT(self, value: int):
-        """Set maximum charge percentage in config."""
-        if 'charging' not in self._config_data:
-            self._config_data['charging'] = {}
-        self._config_data['charging']['max_charge_percent'] = value
-
-    @property
-    def SOLAR_PERIOD_MAX_CHARGE(self) -> int:
-        """Get solar period maximum charge percentage from config."""
-        return self.get("charging.solar_period_max_charge", 80)
-
-    @SOLAR_PERIOD_MAX_CHARGE.setter
-    def SOLAR_PERIOD_MAX_CHARGE(self, value: int):
-        """Set solar period maximum charge percentage in config."""
-        if 'charging' not in self._config_data:
-            self._config_data['charging'] = {}
-        self._config_data['charging']['solar_period_max_charge'] = value
-
-    @property
-    def WALLBOX_URL(self) -> str:
-        """Get Wallbox URL from config."""
-        url = self.get("wallbox.url")
-        return str(url) if url is not None else None
-
-    @WALLBOX_URL.setter
-    def WALLBOX_URL(self, value: str):
-        """Set Wallbox URL in config."""
-        if 'wallbox' not in self._config_data:
-            self._config_data['wallbox'] = {}
-        self._config_data['wallbox']['url'] = value
-
-    @property
-    def WALLBOX_USERNAME(self) -> str:
-        """Get Wallbox username from config."""
-        return self.get("wallbox.username", "")
-
-    @WALLBOX_USERNAME.setter
-    def WALLBOX_USERNAME(self, value: str):
-        """Set Wallbox username in config."""
-        if 'wallbox' not in self._config_data:
-            self._config_data['wallbox'] = {}
-        self._config_data['wallbox']['username'] = value
-
-    @property
-    def WALLBOX_PASSWORD(self) -> str:
-        """Get Wallbox password from config."""
-        return self.get("wallbox.password", "")
-
-    @WALLBOX_PASSWORD.setter
-    def WALLBOX_PASSWORD(self, value: str):
-        """Set Wallbox password in config."""
-        if 'wallbox' not in self._config_data:
-            self._config_data['wallbox'] = {}
-        self._config_data['wallbox']['password'] = value
-
-    @property
-    def WALLBOX_SERIAL(self) -> int:
-        """Get Wallbox serial number from config."""
-        serial = self.get("wallbox.serial", None)
-        return int(serial) if serial is not None else None
-
-    @WALLBOX_SERIAL.setter
-    def WALLBOX_SERIAL(self, value: int):
-        """Set Wallbox serial number in config."""
-        if 'wallbox' not in self._config_data:
-            self._config_data['wallbox'] = {}
-        self._config_data['wallbox']['serial'] = value
-
-    @property
-    def SHELLY_URL(self) -> str:
-        """Get primary Shelly URL from config."""
-        return self.get("shelly.primary_url")
-
-    @SHELLY_URL.setter
-    def SHELLY_URL(self, value: str):
-        """Set primary Shelly URL in config."""
-        if 'shelly' not in self._config_data:
-            self._config_data['shelly'] = {}
-        self._config_data['shelly']['primary_url'] = value
-
-    @property
-    def SHELLY_2_URL(self) -> str:
-        """Get secondary Shelly URL from config."""
-        return self.get("shelly.secondary_url")
-
-    @SHELLY_2_URL.setter
-    def SHELLY_2_URL(self, value: str):
-        """Set secondary Shelly URL in config."""
-        if 'shelly' not in self._config_data:
-            self._config_data['shelly'] = {}
-        self._config_data['shelly']['secondary_url'] = value
-
-    @property
-    def INFLUXDB_ENABLED(self) -> bool:
-        """Get InfluxDB enabled status."""
-        return self._config_data.get('influxdb', {}).get('enabled', False)
-
-    @INFLUXDB_ENABLED.setter
-    def INFLUXDB_ENABLED(self, value: bool):
-        """Set InfluxDB enabled status in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['enabled'] = value
-
-    @property
-    def INFLUXDB_URL(self) -> str:
-        """Get InfluxDB URL from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.url", "http://localhost:8086")
-
-    @INFLUXDB_URL.setter
-    def INFLUXDB_URL(self, value: str):
-        """Set InfluxDB URL in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['url'] = value
-
-    @property
-    def INFLUXDB_TOKEN(self) -> str:
-        """Get InfluxDB token from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.token", "")
-
-    @INFLUXDB_TOKEN.setter
-    def INFLUXDB_TOKEN(self, value: str):
-        """Set InfluxDB token in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['token'] = value
-
-    @property
-    def INFLUXDB_ORG(self) -> str:
-        """Get InfluxDB organization from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.org", "")
-
-    @INFLUXDB_ORG.setter
-    def INFLUXDB_ORG(self, value: str):
-        """Set InfluxDB organization in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['org'] = value
-
-    @property
-    def INFLUXDB_BUCKET(self) -> str:
-        """Get InfluxDB bucket from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.bucket", "")
-
-    @INFLUXDB_BUCKET.setter
-    def INFLUXDB_BUCKET(self, value: str):
-        """Set InfluxDB bucket in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['bucket'] = value
+    def __setattr__(self, name: str, value: Any):
+        """Handle dynamic property setting."""
+        if name in self._config_structure:
+            path, _, type_cast = self._config_structure[name]
+            self._set_nested_value(path, type_cast(value))
+        else:
+            super().__setattr__(name, value)
 
     def save(self):
         """Save configuration to YAML file with backup."""
@@ -308,10 +150,6 @@ class Config:
                 'console_level': self.CONSOLE_LOGGING
             }
         }
-
-    def __getattr__(self, name):
-        """Handle attributes not explicitly defined."""
-        raise AttributeError(f"'Config' object has no attribute '{name}'")
 
 # Create the singleton instance
 config = Config()
