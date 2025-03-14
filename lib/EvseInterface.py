@@ -13,6 +13,7 @@ class EvseState(Enum):
     ERROR = 7
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
+    COMMS_FAILURE = 998
     UNKNOWN = 999
 
 

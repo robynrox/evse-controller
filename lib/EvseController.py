@@ -472,7 +472,7 @@ class EvseController(PowerMonitorObserver):
             self.connectionErrors += 1
             error(f"Consecutive connection errors with EVSE: {self.connectionErrors} - {e}")
             self.chargerState = EvseState.ERROR
-            if self.connectionErrors > 100 and isinstance(self.evse, EvseWallboxQuasar):
+            if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
                 critical("Restarting EVSE (expect this to take 5-6 minutes)")
                 self.evse.resetViaWebApi()
                 # Allow up to an hour for the EVSE to restart without trying to restart again

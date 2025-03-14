@@ -149,12 +149,12 @@ class EvseWallboxQuasar(EvseInterface):
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
             if regs is None:
                 error("Failed to read EVSE state registers")
-                return self.lastEvseState
+                raise ConnectionError("Failed to read EVSE state registers")
             
             current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)
             if current_regs is None:
                 error("Failed to read current registers")
-                return self.lastEvseState
+                raise ConnectionError("Failed to read current registers")
             
             self.current = current_regs[0]
             self.lastEvseState = EvseState(regs[0])
@@ -164,9 +164,11 @@ class EvseWallboxQuasar(EvseInterface):
             self.readNextAllowed = current_time + 0.9
             return self.lastEvseState
         
+        except ConnectionError:
+            raise  # Re-raise ConnectionError to be caught by the controller
         except Exception as e:
             error(f"Error reading EVSE state: {str(e)}")
-            return self.lastEvseState
+            raise ConnectionError(f"Communication error: {str(e)}")
         finally:
             try:
                 self.client.close()
