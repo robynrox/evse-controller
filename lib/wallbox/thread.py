@@ -28,7 +28,8 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
 
     def __init__(self, host: str, modbus_client=None, poll_interval: float = 1.0,
                  wallbox_username: str = None, wallbox_password: str = None, 
-                 wallbox_serial: str = None, wallbox_api_client=None):
+                 wallbox_serial: str = None, wallbox_api_client=None,
+                 time_scale: float = 1.0):
         # Initialize the Thread parent class with default arguments
         threading.Thread.__init__(self)
         # Initialize our attributes
@@ -46,8 +47,10 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         self._wallbox_serial = wallbox_serial
         self._wallbox_api_client = wallbox_api_client
         
-        # Number of consecutive errors before attempting reset
-        self.MAX_CONSECUTIVE_ERRORS = 10
+        # Add tracking for reset attempts
+        self._last_reset_attempt = 0
+        self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
+        self._reset_cooldown_period = 420  # 7 minutes in seconds
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51
@@ -59,6 +62,16 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         self._STOP_CHARGING = 2
         self._READ_STATE_REG = 0x0219
         self._READ_BATTERY_REG = 0x021a
+
+        # State change timing configuration
+        self._time_scale = time_scale
+        self._state_change_delays = {
+            'start_charging': 21.9,  # Starting from zero
+            'small_change': 5.9,     # Current change <= 1A
+            'medium_change': 7.9,    # Current change <= 2A
+            'large_change': 10.9     # Current change > 2A
+        }
+        self._next_state_change_allowed = 0
 
     def get_state(self) -> WallboxState:
         with self._state_lock:
@@ -87,11 +100,7 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
     def run(self):
         while self._running.is_set():
             try:
-                if self._state.consecutive_connection_errors >= self.MAX_CONSECUTIVE_ERRORS:
-                    if not self._handle_comms_failure():
-                        with self._state_lock:
-                            self._state.consecutive_connection_errors = 0
-
+                self._check_and_handle_comms_failures()
                 time.sleep(self._poll_interval)
                 self._ensure_connection()
                 self._process_commands()
@@ -99,6 +108,31 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
                 self._handle_error()
+
+    def _check_and_handle_comms_failures(self):
+        """Check if we need to handle communication failures and do so if appropriate"""
+        with self._state_lock:
+            consecutive_errors = self._state.consecutive_connection_errors
+            
+        if consecutive_errors < self._reset_attempt_threshold:
+            return
+
+        current_time = time.time()
+        scaled_cooldown = self._get_scaled_delay(self._reset_cooldown_period)
+        time_since_last_reset = current_time - self._last_reset_attempt
+
+        if time_since_last_reset < scaled_cooldown:
+            debug(f"Too soon to attempt another reset. Waiting {scaled_cooldown - time_since_last_reset:.1f}s")
+            return
+
+        self._last_reset_attempt = current_time
+        reset_successful = self._handle_comms_failure()
+        
+        if reset_successful:
+            info("Reset attempt successful - continuing to monitor")
+        else:
+            warning("Reset attempt failed - will retry after cooldown period")
+            # Keep the consecutive errors count high so we'll try again after cooldown
 
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""
@@ -182,9 +216,43 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
             except:
                 pass
 
+    def _get_scaled_delay(self, delay: float) -> float:
+        """Convert a standard delay into a scaled delay."""
+        return delay * self._time_scale
+
+    def _calculate_next_state_change_time(self, current_value: int, new_value: int) -> float:
+        """Calculate when the next state change will be allowed."""
+        if current_value == 0 and new_value != 0:
+            delay = self._state_change_delays['start_charging']
+        elif abs(current_value - new_value) <= 1:
+            delay = self._state_change_delays['small_change']
+        elif abs(current_value - new_value) <= 2:
+            delay = self._state_change_delays['medium_change']
+        else:
+            delay = self._state_change_delays['large_change']
+        
+        return time.time() + self._get_scaled_delay(delay)
+
+    def get_time_until_current_change_allowed(self) -> float:
+        """
+        Returns the number of seconds remaining until the next current change is allowed.
+        Returns 0 if a change is currently allowed.
+        """
+        remaining = self._next_state_change_allowed - time.time()
+        return max(0, remaining)
+
     def _execute_command(self, cmd: WallboxCommandData):
-        # Command execution logic
+        # Check if we're allowed to change state yet
+        if time.time() < self._next_state_change_allowed:
+            warning(f"Command received before minimum delay period elapsed. "
+                   f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
+            return
+
         if cmd.command == WallboxCommand.SET_CURRENT:
+            current_value = self._state.current
+            self._next_state_change_allowed = self._calculate_next_state_change_time(
+                current_value, cmd.value)
+            debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
             self._set_current(cmd.value)
 
     def _set_current(self, current: int):

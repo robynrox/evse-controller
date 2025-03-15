@@ -112,9 +112,6 @@ class TestWallboxThread(TestCase):
 
     def test_current_control_commands(self):
         """Test all current control scenarios"""
-        self.thread.start()
-        time.sleep(0.1)  # Allow thread to start
-
         test_cases = [
             (0, "stop charging"),           # Stop charging
             (16, "start charging"),         # Start charging at 16A
@@ -123,23 +120,42 @@ class TestWallboxThread(TestCase):
 
         for current, scenario in test_cases:
             with self.subTest(scenario=scenario):
+                # Create fresh thread for each test case to avoid waiting for cooldown
+                mock_client = MockModbusClient()
+                thread = WallboxThread(
+                    "dummy_host", 
+                    modbus_client=mock_client, 
+                    poll_interval=0.1,
+                    time_scale=0.1  # 10x faster for testing
+                )
+                thread.start()
+                time.sleep(thread._poll_interval * 2)  # Allow thread to start
+
                 cmd = WallboxCommandData(command=WallboxCommand.SET_CURRENT, value=current)
-                success = self.thread.send_command(cmd)
+                success = thread.send_command(cmd)
                 self.assertTrue(success)
                 time.sleep(0.2)  # Allow command to process
                 
                 if current == 0:
-                    self.assertEqual(self.mock_client._registers[0x101], [2])  # STOP_CHARGING
-                    self.assertEqual(self.mock_client._registers[0x102], [0])  # Current set to 0
+                    self.assertEqual(mock_client._registers[0x101], [2])  # STOP_CHARGING
+                    self.assertEqual(mock_client._registers[0x102], [0])  # Current set to 0
                 else:
                     if current > 0:
-                        self.assertEqual(self.mock_client._registers[0x102], [current])
+                        self.assertEqual(mock_client._registers[0x102], [current])
                     else:
-                        self.assertEqual(self.mock_client._registers[0x102], [65536 + current])  # Two's complement for negative
-                    self.assertEqual(self.mock_client._registers[0x101], [1])  # START_CHARGING
+                        self.assertEqual(mock_client._registers[0x102], [65536 + current])  # Two's complement for negative
+                    self.assertEqual(mock_client._registers[0x101], [1])  # START_CHARGING
                 
                 # Verify control is returned to user after command execution
-                self.assertEqual(self.mock_client._registers[0x51], [0])  # USER_CONTROL
+                self.assertEqual(mock_client._registers[0x51], [0])  # USER_CONTROL
+
+                # Clean up
+                thread.stop()
+                time.sleep(thread._poll_interval)  # Allow thread to stop
+
+                # Clean up
+                thread.stop()
+                time.sleep(thread._poll_interval)  # Allow thread to stop
 
     def test_communication_failures(self):
         """Test behavior when communication fails repeatedly"""
@@ -234,17 +250,20 @@ class TestWallboxThread(TestCase):
         # Wait for reset attempt
         time.sleep(self.thread._poll_interval * 12)
         
+        # If reset failed, we should maintain high consecutive connection errors
+        # so that another attempt to reset can be made after the cooldown period
         state = self.thread.get_state()
         self.assertGreaterEqual(state.consecutive_connection_errors, 10)
         self.assertEqual(state.evse_state, EvseState.COMMS_FAILURE)
 
-    def test_automatic_reset(self):
-        """Test automatic reset after consecutive failures"""
+    def test_comms_failure_handling(self):
+        """Test the communication failure handling logic"""
         mock_api = MockWallboxApi("test_user", "test_pass")
         self.thread = WallboxThread(
             "dummy_host",
             modbus_client=self.mock_client,
             poll_interval=0.1,
+            time_scale=0.1,  # 10x faster for testing
             wallbox_username="test_user",
             wallbox_password="test_pass",
             wallbox_serial="TEST123",
@@ -278,31 +297,112 @@ class TestWallboxThread(TestCase):
         self.assertEqual(state.consecutive_connection_errors, 0)
         self.assertEqual(state.evse_state, EvseState.DISCONNECTED)
 
-    def test_reset_failure_handling(self):
-        """Test handling of failed reset attempts"""
-        class FailingMockWallboxApi(MockWallboxApi):
-            def restartCharger(self, serial: str):
-                raise Exception("API Error")
-
-        mock_api = FailingMockWallboxApi("test_user", "test_pass")
+    def test_state_change_timing(self):
+        """Test that state changes respect the required delays"""
+        # Use a very short time scale for faster testing
         self.thread = WallboxThread(
             "dummy_host",
             modbus_client=self.mock_client,
             poll_interval=0.1,
-            wallbox_username="test_user",
-            wallbox_password="test_pass",
-            wallbox_serial="TEST123",
-            wallbox_api_client=mock_api
+            time_scale=0.1  # 10x faster than normal
         )
-        
         self.thread.start()
-        self.mock_client.simulate_communication_failure(True)
-        
-        # Wait for reset attempt
-        time.sleep(self.thread._poll_interval * 12)
-        
-        # If reset failed, we should have reset consecutive connection errors
-        # so that another attempt to reset can be attempted.
+        time.sleep(self.thread._poll_interval * 2)  # Initial startup
+
+        # Try to set current to 16A
+        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 16))
+        time.sleep(self.thread._poll_interval)
         state = self.thread.get_state()
-        self.assertLessEqual(state.consecutive_connection_errors, 10)
-        self.assertEqual(state.evse_state, EvseState.COMMS_FAILURE)
+        self.assertEqual(state.current, 16)
+
+        # Try to immediately change to 17A - should be ignored
+        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        time.sleep(self.thread._poll_interval)
+        state = self.thread.get_state()
+        self.assertEqual(state.current, 16)  # Should still be 16
+
+        # Wait for small change delay (5.9 * 0.1 = 0.59 seconds)
+        time.sleep(0.6)
+        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        time.sleep(self.thread._poll_interval)
+        state = self.thread.get_state()
+        self.assertEqual(state.current, 17)  # Now should be 17
+
+    def test_state_change_timing_comprehensive(self):
+        """Test all state change timing scenarios with scaled time"""
+        self.thread = WallboxThread(
+            "dummy_host",
+            modbus_client=self.mock_client,
+            poll_interval=0.1,
+            time_scale=0.1  # 10x faster than normal
+        )
+        self.thread.start()
+        time.sleep(self.thread._poll_interval * 2)  # Initial startup
+
+        test_scenarios = [
+            # (current_state, new_state, expected_delay, description)
+            (0, 16, 21.9, "start from zero"),
+            (16, 17, 5.9, "small change (<=1A)"),
+            (16, 18, 7.9, "medium change (<=2A)"),
+            (16, 20, 10.9, "large change (>2A)"),
+            (16, 0, 10.9, "stop charging"),
+            (-10, -11, 5.9, "small negative change"),
+            (-10, -13, 10.9, "large negative change"),
+        ]
+
+        for current, new, delay, scenario in test_scenarios:
+            with self.subTest(scenario=scenario):
+                # Set initial state
+                self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [current]
+                time.sleep(self.thread._poll_interval)
+                
+                # Attempt state change
+                self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, new))
+                time.sleep(self.thread._poll_interval)
+                
+                # Verify timing
+                scaled_delay = delay * self.thread._time_scale
+                remaining_time = self.thread.get_time_until_current_change_allowed()
+                self.assertGreater(remaining_time, 0)
+                self.assertLess(remaining_time, scaled_delay + 0.1)  # Allow small timing variance
+                
+                # Verify immediate retry fails
+                initial_current = self.thread.get_state().current
+                self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, new + 1))
+                time.sleep(self.thread._poll_interval)
+                self.assertEqual(self.thread.get_state().current, initial_current)
+                
+                # Wait for delay and verify change is then allowed
+                time.sleep(scaled_delay + 0.1)
+                self.assertAlmostEqual(self.thread.get_time_until_current_change_allowed(), 0)
+
+    def test_get_time_until_current_change_allowed(self):
+        """Test the get_time_until_current_change_allowed method behavior"""
+        self.thread = WallboxThread(
+            "dummy_host",
+            modbus_client=self.mock_client,
+            poll_interval=0.1,
+            time_scale=0.1
+        )
+        self.thread.start()
+        time.sleep(self.thread._poll_interval * 2)
+
+        # Initially should be allowed
+        self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
+
+        # After change, should return positive delay
+        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 16))
+        time.sleep(self.thread._poll_interval)
+        self.assertGreater(self.thread.get_time_until_current_change_allowed(), 0)
+
+        # After delay expires, should return 0
+        time.sleep(self.thread._state_change_delays['start_charging'] * self.thread._time_scale + 0.1)
+        self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
+
+        # Test decreasing value over time
+        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        time.sleep(self.thread._poll_interval)
+        initial_wait = self.thread.get_time_until_current_change_allowed()
+        time.sleep(0.2)  # Wait a bit
+        later_wait = self.thread.get_time_until_current_change_allowed()
+        self.assertGreater(initial_wait, later_wait)

@@ -46,3 +46,11 @@ class WallboxThreadInterface(ABC):
     def is_running(self) -> bool:
         """Check if thread is running"""
         pass
+
+    @abstractmethod
+    def get_time_until_current_change_allowed(self) -> float:
+        """
+        Returns the number of seconds remaining until the next current change is allowed.
+        Returns 0 if a change is currently allowed.
+        """
+        pass
