@@ -99,12 +99,22 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
 
     def run(self):
         while self._running.is_set():
+            loop_start_time = time.time()
             try:
                 self._check_and_handle_comms_failures()
-                time.sleep(self._poll_interval)
                 self._ensure_connection()
                 self._process_commands()
                 self._update_state()
+                
+                # Calculate remaining time until next iteration should start
+                elapsed = time.time() - loop_start_time
+                sleep_time = self._poll_interval - elapsed
+                
+                if sleep_time < 0:
+                    warning(f"Wallbox thread loop overrun by {-sleep_time:.3f} seconds")
+                else:
+                    time.sleep(sleep_time)
+                    
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
                 self._handle_error()
