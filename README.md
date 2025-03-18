@@ -45,6 +45,7 @@ version 1, so I would suggest installing as per the official instructions on the
 - An EVSE device (currently supports Wallbox Quasar)
 - A power monitor (currently supports Shelly EM)
 - Optional: InfluxDB OSS v2 for logging
+- Optional: poetry (an alternative installation method to pip)
 
 ### Installation Steps
 
@@ -65,9 +66,9 @@ version 1, so I would suggest installing as per the official instructions on the
    - Click "Reopen in Container" when prompted
    - Container will automatically install dependencies
 
-   B. Manual Setup:
+   B. Using pip:
    ```bash
-   # Navigate to your project directory (wherever you cloned/downloaded it)
+   # Navigate to your project directory
    cd path/to/evse-controller
    
    # Create virtual environment in the project directory
@@ -83,12 +84,35 @@ version 1, so I would suggest installing as per the official instructions on the
    pip install -r requirements.txt
    ```
 
-   Note: The virtual environment will be created in your project directory, regardless of its location. You can clone or download this repository to any location on your system.
+   C. Using Poetry (Alternative):
+   ```bash
+   # Install Poetry if you haven't already
+   # On Linux/macOS/WSL:
+   curl -sSL https://install.python-poetry.org | python3 -
+
+   # On Windows (PowerShell):
+   (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+
+   # Navigate to project directory
+   cd path/to/evse-controller
+
+   # Install dependencies using Poetry
+   poetry install
+
+   # Activate the virtual environment
+   poetry shell
+   ```
+
+   Note: The virtual environment will be created in your project directory, regardless of which installation method you choose. You can clone or download this repository to any location on your system.
 
 3. **Configuration**
+
+   Before configuring, you may want to use the discovery tool to find your devices.
+   See `evse-discovery/README.md` for detailed information about the discovery process.
+
    There are two ways to configure the application:
 
-   A. Interactive Configuration (Recommended):
+   A. Interactive Configuration:
    ```bash
    python configure.py
    ```
@@ -103,12 +127,12 @@ version 1, so I would suggest installing as per the official instructions on the
    - Configuration structure:
      ```yaml
      wallbox:
-       url: "192.168.0.123"
+       url: "WB012345.ultrahub"  # Hostname or IP address
        username: "myemail@address.com"  # Optional, for auto-restart
        password: "yourpassword"         # Optional, for auto-restart
        serial: 12345                    # Optional, for auto-restart
      shelly:
-       primary_url: "192.168.0.124"
+       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hame or Io  IPdadrress
        secondary_url: null              # Optional second Shelly
      influxdb:
        enabled: false

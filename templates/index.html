@@ -7,38 +7,27 @@
     <title>EVSE Control</title>
     <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
     <style>
-        /* Ensure the chart container scales with the screen size */
+        /* Override the default body constraints for the dashboard */
+        body {
+            max-width: none;
+            margin: 20px;
+            /* Keep some margin from the window edges */
+        }
+
+        /* Page-specific styles only */
         #chart {
             width: 100%;
             height: 80vh;
-            /* Use 80% of the viewport height */
             max-height: 600px;
-            /* Limit maximum height for larger screens */
         }
 
-        .nav-links {
-            margin-bottom: 20px;
-        }
-
-        .nav-links a {
-            color: #0066cc;
-            text-decoration: none;
-            margin-right: 15px;
-        }
-
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
-
-        .status-item .separator {
-            margin: 0 20px;
-            color: #dee2e6;
-        }
-
-        .status-info {
-            display: inline-block;
-            margin-right: 20px;
+        .svg-button-container {
+            margin-top: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
         }
     </style>
 </head>
@@ -47,6 +36,7 @@
     <h1>EVSE Control Interface</h1>
     <div class="nav-links">
         <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
+        <a href="{{ url_for('config_page') }}">Configuration →</a>
     </div>
 
     <div class="status-panel">
@@ -355,31 +345,31 @@
                 {
                     x: [],
                     y: [],
-                    name: 'Grid Power',
+                    name: 'Grid',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'EVSE Power',
+                    name: 'EVSE',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Solar Power',
+                    name: 'Solar',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Heat Pump Power',
+                    name: 'Heat Pump',
                     type: 'scatter'
                 },
                 {
                     x: [],
                     y: [],
-                    name: 'Home Power',
+                    name: 'Home',
                     type: 'scatter'
                 }
             ], getLayout());

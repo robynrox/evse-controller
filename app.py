@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify, flash, redirect, url
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
 from lib.paths import ensure_data_dirs
+from lib.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
@@ -209,6 +210,60 @@ def schedule_page():
     scheduled_events = scheduler.get_future_events()
     return render_template('schedule.html', scheduled_events=scheduled_events)
 
+@app.route('/config', methods=['GET', 'POST'])
+def config_page():
+    """Handle configuration page display and updates."""
+    if request.method == 'POST':
+        try:
+            # Update Wallbox settings
+            config.WALLBOX_URL = request.form.get('wallbox[url]')
+            if request.form.get('wallbox[username]'):  # Only update if provided
+                config.WALLBOX_USERNAME = request.form.get('wallbox[username]')
+            if request.form.get('wallbox[password]'):  # Only update if provided
+                config.WALLBOX_PASSWORD = request.form.get('wallbox[password]')
+            if request.form.get('wallbox[serial]'):
+                config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
+
+            # Update Shelly settings
+            config.SHELLY_URL = request.form.get('shelly[primary_url]')
+            config.SHELLY_2_URL = request.form.get('shelly[secondary_url]')
+
+            # Update InfluxDB settings
+            config.INFLUXDB_ENABLED = bool(request.form.get('influxdb[enabled]'))
+            config.INFLUXDB_URL = request.form.get('influxdb[url]')
+            if request.form.get('influxdb[token]'):  # Only update if provided
+                config.INFLUXDB_TOKEN = request.form.get('influxdb[token]')
+            config.INFLUXDB_ORG = request.form.get('influxdb[org]')
+
+            # Update charging settings
+            config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))
+            config.SOLAR_PERIOD_MAX_CHARGE = int(request.form.get('charging[solar_period_max_charge]', 80))
+            config.DEFAULT_TARIFF = request.form.get('charging[default_tariff]', 'COSY')
+
+            # Update logging settings
+            config.FILE_LOGGING = request.form.get('logging[file_level]', 'INFO')
+            config.CONSOLE_LOGGING = request.form.get('logging[console_level]', 'WARNING')
+
+            # Save the updated configuration
+            config.save()
+            
+            flash('Configuration saved.', 'success')
+            return redirect(url_for('config_page'))
+
+        except Exception as e:
+            logging.error(f"Error saving configuration: {str(e)}")
+            flash(f'Error saving configuration: {str(e)}', 'error')
+            return redirect(url_for('config_page'))
+
+    # GET request - display current configuration
+    try:
+        config_dict = config.as_dict()
+        return render_template('config.html', config=config_dict)
+    except Exception as e:
+        logging.error(f"Error loading configuration page: {str(e)}")
+        flash(f'Error loading configuration: {str(e)}', 'error')
+        return redirect(url_for('index'))
+    
 @app.route('/')
 def index():
     """Render the main dashboard page"""
@@ -371,7 +426,6 @@ def run_flask():
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask)
-flask_thread.daemon = True
 flask_thread.start()
 
 # Start the main program

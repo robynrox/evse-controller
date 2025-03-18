@@ -46,13 +46,28 @@ venv.bak/
 log/
 bin/
 lib/python*
+
 pyvenv.cfg
-lib64
-influxdata-archive_compat.key
+include/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and state files
+log/
+*.log
 history.json
 schedules.json
 evse_state.json
 
-# Misc
+# System-specific
 .DS_Store
 Thumbs.db
+
+# Package management
+poetry.lock
+influxdata-archive_compat.key
+state/schedule.json
+lib64
+config.yaml.bak
