@@ -1,8 +1,9 @@
 from unittest import TestCase
 import time
 from typing import Optional, List
-from lib.wallbox.modbus_interface import ModbusClientInterface
-from lib.wallbox.thread import WallboxThread, WallboxCommand, WallboxCommandData
+from lib.evse.wallbox.thread import WallboxThread
+from lib.evse.wallbox.modbus_interface import ModbusClientInterface
+from lib.evse.async_interface import EvseAsyncState, EvseCommand, EvseCommandData
 from lib.EvseInterface import EvseState
 
 class MockModbusClient(ModbusClientInterface):
@@ -131,7 +132,7 @@ class TestWallboxThread(TestCase):
                 thread.start()
                 time.sleep(thread._poll_interval * 2)  # Allow thread to start
 
-                cmd = WallboxCommandData(command=WallboxCommand.SET_CURRENT, value=current)
+                cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=current)
                 success = thread.send_command(cmd)
                 self.assertTrue(success)
                 time.sleep(0.2)  # Allow command to process
@@ -310,20 +311,20 @@ class TestWallboxThread(TestCase):
         time.sleep(self.thread._poll_interval * 2)  # Initial startup
 
         # Try to set current to 16A
-        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 16))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
         time.sleep(self.thread._poll_interval)
         state = self.thread.get_state()
         self.assertEqual(state.current, 16)
 
         # Try to immediately change to 17A - should be ignored
-        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
         time.sleep(self.thread._poll_interval)
         state = self.thread.get_state()
         self.assertEqual(state.current, 16)  # Should still be 16
 
         # Wait for small change delay (5.9 * 0.1 = 0.59 seconds)
         time.sleep(0.6)
-        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
         time.sleep(self.thread._poll_interval)
         state = self.thread.get_state()
         self.assertEqual(state.current, 17)  # Now should be 17
@@ -357,7 +358,7 @@ class TestWallboxThread(TestCase):
                 time.sleep(self.thread._poll_interval)
                 
                 # Attempt state change
-                self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, new))
+                self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, new))
                 time.sleep(self.thread._poll_interval)
                 
                 # Verify timing
@@ -368,7 +369,7 @@ class TestWallboxThread(TestCase):
                 
                 # Verify immediate retry fails
                 initial_current = self.thread.get_state().current
-                self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, new + 1))
+                self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, new + 1))
                 time.sleep(self.thread._poll_interval)
                 self.assertEqual(self.thread.get_state().current, initial_current)
                 
@@ -391,7 +392,7 @@ class TestWallboxThread(TestCase):
         self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
         # After change, should return positive delay
-        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 16))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
         time.sleep(self.thread._poll_interval)
         self.assertGreater(self.thread.get_time_until_current_change_allowed(), 0)
 
@@ -400,7 +401,7 @@ class TestWallboxThread(TestCase):
         self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
         # Test decreasing value over time
-        self.thread.send_command(WallboxCommandData(WallboxCommand.SET_CURRENT, 17))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
         time.sleep(self.thread._poll_interval)
         initial_wait = self.thread.get_time_until_current_change_allowed()
         time.sleep(0.2)  # Wait a bit

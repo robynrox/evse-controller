@@ -5,30 +5,32 @@ from typing import Optional
 from lib.EvseInterface import EvseState
 
 @dataclass
-class WallboxState:
+class EvseAsyncState:
     """Thread-safe data container for Wallbox state"""
     evse_state: EvseState = EvseState.UNKNOWN
     current: int = 0
     battery_level: int = 0
     last_update: float = 0
     consecutive_connection_errors: int = 0
+    power_watts: float = 0.0  # Add power information
+    power_factor: float = 1.0  # Add power factor information
 
-class WallboxCommand(Enum):
+class EvseCommand(Enum):
     SET_CURRENT = auto()
 
 @dataclass
-class WallboxCommandData:
-    command: WallboxCommand = WallboxCommand.SET_CURRENT
+class EvseCommandData:
+    command: EvseCommand = EvseCommand.SET_CURRENT
     value: int = 0
 
-class WallboxThreadInterface(ABC):
+class EvseThreadInterface(ABC):
     @abstractmethod
-    def get_state(self) -> WallboxState:
+    def get_state(self) -> EvseAsyncState:
         """Get current cached state"""
         pass
 
     @abstractmethod
-    def send_command(self, command: WallboxCommandData) -> bool:
+    def send_command(self, command: EvseCommandData) -> bool:
         """Queue a command to be executed by the thread"""
         pass
 

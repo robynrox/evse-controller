@@ -3,13 +3,15 @@ import queue
 import time
 from typing import Optional
 from pyModbusTCP.client import ModbusClient
-from .thread_interface import WallboxThreadInterface, WallboxState, WallboxCommand, WallboxCommandData
+from lib.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from lib.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from lib.EvseInterface import EvseState
 from wallbox import Wallbox
+from .PowerModel import WallboxPowerModel
+from lib.Power import Power
 
-class WallboxThread(threading.Thread, WallboxThreadInterface):
+class WallboxThread(threading.Thread, EvseThreadInterface):
     @staticmethod
     def convert_to_16_bit_twos_complement(value: int) -> int:
         """Convert a signed integer to its 16-bit two's complement representation.
@@ -38,8 +40,11 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         self._running = threading.Event()
         self._state_lock = threading.Lock()
         self._command_queue = queue.Queue()
-        self._state = WallboxState()
+        self._state = EvseAsyncState()
         self._client = modbus_client if modbus_client else ModbusClientWrapper(host=host)
+        
+        # Initialize power model
+        self._power_model = WallboxPowerModel()
         
         # Wallbox API credentials for reset functionality
         self._wallbox_username = wallbox_username
@@ -73,11 +78,11 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         }
         self._next_state_change_allowed = 0
 
-    def get_state(self) -> WallboxState:
+    def get_state(self) -> EvseAsyncState:
         with self._state_lock:
             return self._state
 
-    def send_command(self, command: WallboxCommandData) -> bool:
+    def send_command(self, command: EvseCommandData) -> bool:
         if not self.is_running():
             return False
         self._command_queue.put(command)
@@ -201,7 +206,12 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
             debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
 
             with self._state_lock:
-                self._state.evse_state = EvseState(state_reg)
+                new_state = EvseState(state_reg)
+                # Update power model if state or current changed
+                if new_state != self._state.evse_state or current_reg != self._state.current:
+                    self._power_model.record_state_change(new_state, current_reg)
+                
+                self._state.evse_state = new_state
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg
                 if self._state.evse_state == EvseState.PAUSED:
@@ -251,14 +261,14 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         remaining = self._next_state_change_allowed - time.time()
         return max(0, remaining)
 
-    def _execute_command(self, cmd: WallboxCommandData):
+    def _execute_command(self, cmd: EvseCommandData):
         # Check if we're allowed to change state yet
         if time.time() < self._next_state_change_allowed:
             warning(f"Command received before minimum delay period elapsed. "
                    f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
             return
 
-        if cmd.command == WallboxCommand.SET_CURRENT:
+        if cmd.command == EvseCommand.SET_CURRENT:
             current_value = self._state.current
             self._next_state_change_allowed = self._calculate_next_state_change_time(
                 current_value, cmd.value)
@@ -273,12 +283,17 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
             if current == 0:
                 self._client.write_single_register(self._CONTROL_STATE_REG, self._STOP_CHARGING)
                 self._client.write_single_register(self._CONTROL_CURRENT_REG, 0)
+                # Update power model for stopped state
+                self._power_model.record_state_change(EvseState.PAUSED, 0)
             else:
                 # Set charging current as 16-bit value
                 reg_value = self.convert_to_16_bit_twos_complement(current)
                 self._client.write_single_register(self._CONTROL_CURRENT_REG, reg_value)
                 # Start charging
                 self._client.write_single_register(self._CONTROL_STATE_REG, self._START_CHARGING)
+                # Update power model with new state
+                new_state = EvseState.CHARGING if current > 0 else EvseState.DISCHARGING
+                self._power_model.record_state_change(new_state, current)
 
         except ConnectionError:
             with self._state_lock:
@@ -302,3 +317,13 @@ class WallboxThread(threading.Thread, WallboxThreadInterface):
         # Error handling and auto-reset logic
         # Implementation coming in next step
         pass
+
+    # Add new methods for power model access
+    def get_modelled_power(self) -> Power:
+        """Get the estimated power consumption based on current state."""
+        return self._power_model.get_modelled_power()
+
+    def get_battery_energy_stats(self) -> tuple[float, float]:
+        """Get total energy charged and discharged (in kWh)."""
+        battery_state = self._power_model.get_battery_state()
+        return (battery_state.energy_in_kwh, battery_state.energy_out_kwh)
