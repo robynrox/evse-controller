@@ -3,8 +3,8 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any
 import sys
+from evse_controller.utils.paths import get_data_dir, ensure_data_dirs
 
-CONFIG_FILE = "config.yaml"
 DEFAULT_CONFIG = {
     "wallbox": {
         "url": "",
@@ -40,7 +40,8 @@ DEFAULT_CONFIG = {
 
 def load_existing_config() -> Dict[str, Any]:
     """Load existing configuration if available."""
-    config_path = Path(CONFIG_FILE)
+    ensure_data_dirs()  # Ensure directories exist and default config is copied
+    config_path = get_data_dir() / "config" / "config.yaml"
     if config_path.exists():
         try:
             with config_path.open('r') as f:
@@ -52,7 +53,7 @@ def load_existing_config() -> Dict[str, Any]:
 
 def save_config(config: Dict[str, Any]):
     """Save configuration to YAML file."""
-    config_path = Path(CONFIG_FILE)
+    config_path = get_data_dir() / "config" / "config.yaml"
     try:
         with config_path.open('w') as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -191,7 +192,8 @@ def interactive_config():
 def main():
     config = interactive_config()
     save_config(config)
-    print(f"\nConfiguration saved to {CONFIG_FILE}")
+    config_path = get_data_dir() / "config" / "config.yaml"
+    print(f"\nConfiguration saved to {config_path}")
     print("You can now start the EVSE controller.")
 
 if __name__ == "__main__":

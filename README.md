@@ -39,6 +39,46 @@ I have also added logging to InfluxDB OSS version 2. This is the open-source var
 I do not believe it will work with version 1. If you just try `apt install influxdb`, it is likely that you will get
 version 1, so I would suggest installing as per the official instructions on the page above.
 
+## Data Storage
+
+### Default Location
+All variable data (configuration, logs, and state) is stored in a `data` directory within the project root. This includes:
+- `data/config/` - Configuration files including `config.yaml`
+- `data/logs/` - Log files
+- `data/state/` - State files including schedule and EVSE state
+
+### Container Deployment
+When running in a container (either via Docker Compose or Dev Container), the data is stored in a persistent volume:
+
+- Docker Compose: Uses the `evse-data` volume mounted at `/workspace/data`
+- Dev Container: Uses the `evse-controller-devdata` volume mounted at `/workspace/data`
+
+This ensures data persists between container restarts and rebuilds.
+
+### Custom Data Location
+You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
+
+```bash
+# Linux/macOS
+export EVSE_DATA_DIR=/path/to/custom/data
+python -m evse_controller.app
+
+# Windows (PowerShell)
+$env:EVSE_DATA_DIR = "C:\path\to\custom\data"
+python -m evse_controller.app
+```
+
+When using Docker Compose, you can modify the volume mount point in `docker-compose.yml`:
+
+```yaml
+services:
+  evse-controller:
+    environment:
+      - EVSE_DATA_DIR=/custom/data/path
+    volumes:
+      - evse-data:/custom/data/path
+```
+
 ## Detailed Setup Instructions
 
 ### Prerequisites

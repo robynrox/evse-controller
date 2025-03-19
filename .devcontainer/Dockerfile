@@ -12,6 +12,7 @@ RUN apt update \
 
 WORKDIR /workspace
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . \
+    && mkdir -p /workspace/data
 
 EXPOSE 5000

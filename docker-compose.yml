@@ -3,9 +3,9 @@ services:
   evse-controller:
     build: .
     volumes:
-      - evse-data:/data
+      - evse-data:/workspace/data
     environment:
-      - EVSE_DATA_DIR=/data
+      - EVSE_DATA_DIR=/workspace/data
     ports:
       - "5000:5000"
 
