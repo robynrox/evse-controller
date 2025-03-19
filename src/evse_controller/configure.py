@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
         "serial": "",
     },
     "shelly": {
-        "url": "",
+        "primary_url": "",
         "secondary_url": "",
     },
     "influxdb": {
@@ -99,9 +99,9 @@ def interactive_config():
     
     # Shelly configuration
     print("\nShelly Configuration")
-    config["shelly"]["url"] = questionary.text(
-        "Enter your Shelly EM URL (IP or hostname):",
-        default=config["shelly"]["url"],
+    config["shelly"]["primary_url"] = questionary.text(
+        "Enter your primary (or only) Shelly EM URL (IP or hostname):",
+        default=config["shelly"]["primary_url"],
         validate=lambda text: len(text) > 0
     ).ask()
     
