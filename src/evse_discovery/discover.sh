@@ -10,10 +10,15 @@ fi
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install dependencies if needed
-if [ ! -f ".venv/lib/python*/site-packages/pymodbus" ]; then
-    echo "Installing dependencies..."
-    pip install -r requirements.txt
+# Check if Poetry is available
+if command -v poetry >/dev/null 2>&1; then
+    echo "Installing with Poetry..."
+    poetry install
+else
+    echo "Installing with pip..."
+    if [ ! -d ".venv/lib/python*/site-packages/pymodbus" ]; then
+        pip install -r requirements.txt
+    fi
 fi
 
 # Run discovery

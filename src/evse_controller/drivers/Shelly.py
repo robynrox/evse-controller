@@ -1,9 +1,9 @@
 import requests
 import time
 
-from lib.Power import Power
-from lib.PowerMonitorInterface import PowerMonitorInterface
-from lib.logging_config import debug, info, warning, error, critical
+from evse_controller.drivers.Power import Power
+from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface
+from evse_controller.utils.logging_config import debug, info, warning, error, critical
 
 
 class PowerMonitorShelly(PowerMonitorInterface):

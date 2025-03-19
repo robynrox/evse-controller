@@ -3,13 +3,13 @@ import queue
 import time
 from typing import Optional
 from pyModbusTCP.client import ModbusClient
-from lib.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
-from lib.logging_config import debug, info, warning, error, critical
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
+from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
-from lib.EvseInterface import EvseState
+from evse_controller.drivers.EvseInterface import EvseState
 from wallbox import Wallbox
 from .PowerModel import WallboxPowerModel
-from lib.Power import Power
+from evse_controller.drivers.Power import Power
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
     @staticmethod

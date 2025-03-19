@@ -1,8 +1,8 @@
 import signal
 from enum import Enum
-from lib.EvseController import ControlState, EvseController, EvseState
-from lib.WallboxQuasar import EvseWallboxQuasar
-from lib.Shelly import PowerMonitorShelly
+from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
+from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
+from evse_controller.drivers.Shelly import PowerMonitorShelly
 import time
 import math
 import queue
@@ -11,7 +11,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 from typing import List, Dict
-from lib.paths import ensure_data_dirs
+from evse_controller.utils.paths import ensure_data_dirs
 import sys
 
 # Ensure data directories exist before anything else
@@ -19,8 +19,8 @@ print("Ensuring data directories exist...", file=sys.stderr)
 ensure_data_dirs()
 
 # Now import the rest of the modules
-from lib.logging_config import setup_logging, debug, info, warning, error, critical
-from lib.config import config
+from evse_controller.utils.logging_config import setup_logging, debug, info, warning, error, critical
+from evse_controller.utils.config import config
 
 # Setup logging
 logger = setup_logging()

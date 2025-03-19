@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
 import time
-from lib.EvseInterface import EvseState
-from lib.Power import Power
-from lib.logging_config import debug, info, warning, error
+from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.Power import Power
+from evse_controller.utils.logging_config import debug, info, warning, error
 
 class TransitionState(Enum):
     STEADY = 0

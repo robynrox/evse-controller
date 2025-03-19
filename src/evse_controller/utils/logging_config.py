@@ -2,7 +2,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
-from lib.config import config
+from evse_controller.utils.config import config
 
 def setup_logging():
     """Setup logging configuration"""

@@ -1,10 +1,10 @@
 from unittest import TestCase
 import time
 from typing import Optional, List
-from lib.evse.wallbox.thread import WallboxThread
-from lib.evse.wallbox.modbus_interface import ModbusClientInterface
-from lib.evse.async_interface import EvseAsyncState, EvseCommand, EvseCommandData
-from lib.EvseInterface import EvseState
+from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.modbus_interface import ModbusClientInterface
+from evse_controller.drivers.evse.async_interface import EvseAsyncState, EvseCommand, EvseCommandData
+from evse_controller.drivers.EvseInterface import EvseState
 
 class MockModbusClient(ModbusClientInterface):
     def __init__(self):

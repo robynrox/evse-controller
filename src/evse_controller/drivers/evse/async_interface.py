@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
-from lib.EvseInterface import EvseState
+from evse_controller.drivers.EvseInterface import EvseState
 
 @dataclass
 class EvseAsyncState:

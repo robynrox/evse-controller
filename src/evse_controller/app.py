@@ -1,8 +1,8 @@
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
-from lib.paths import ensure_data_dirs
-from lib.config import config  # Import the config object
+from evse_controller.utils.paths import ensure_data_dirs
+from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
@@ -10,7 +10,7 @@ from datetime import datetime
 # Ensure data directories exist before anything else
 ensure_data_dirs()
 
-from smart_evse_controller import (
+from evse_controller.smart_evse_controller import (
     execQueue, 
     main, 
     evseController, 

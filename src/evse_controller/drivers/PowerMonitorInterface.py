@@ -1,4 +1,4 @@
-from lib.Power import Power
+from evse_controller.drivers.Power import Power
 
 from abc import ABC, abstractmethod
 

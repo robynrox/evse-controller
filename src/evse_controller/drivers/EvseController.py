@@ -2,12 +2,13 @@ from datetime import datetime
 from enum import Enum
 import math
 import time
-from lib.EvseInterface import EvseInterface, EvseState
-from lib.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
-from lib.Power import Power
-from lib.WallboxQuasar import EvseWallboxQuasar
-from lib.logging_config import debug, info, warning, error, critical
-from lib.config import config
+from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
+from evse_controller.drivers.Power import Power
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
+from evse_controller.utils.logging_config import debug, info, warning, error, critical
+from evse_controller.utils.config import config
 
 try:
     import influxdb_client
@@ -63,13 +64,13 @@ class EvseController(PowerMonitorObserver):
     Args:
         pmon (PowerMonitorInterface): Primary power monitor for grid consumption
         pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
-        evse (EvseInterface): The EVSE device being controlled
+        evse (EvseThreadInterface): The EVSE device being controlled
         tariffManager: Manager for electricity tariff rules and scheduling
 
     Attributes:
         pmon (PowerMonitorInterface): Primary power monitor for grid consumption
         pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
-        evse (EvseInterface): The EVSE device being controlled
+        evse (EvseThreadInterface): The EVSE device being controlled
         state (ControlState): Current operational state of the controller
         homeDemandLevels (list): List of (min_power, max_power, target_current) tuples
         hysteresisWindow (int): Power window in Watts to prevent oscillation
@@ -79,19 +80,19 @@ class EvseController(PowerMonitorObserver):
     """
 
     def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
-                 evse: EvseInterface, tariffManager):
+                 evseThread: EvseThreadInterface, tariffManager):
         """Initialize the EVSE controller.
 
         Args:
             pmon (PowerMonitorInterface): Primary power monitor for grid consumption
             pmon2 (PowerMonitorInterface): Secondary power monitor for EVSE consumption
-            evse (EvseInterface): The EVSE device to control
+            evse (EvseThreadInterface): The EVSE device to control
             tariffManager: Manager for electricity tariff rules
         """
         self.pmon = pmon
         self.pmon2 = pmon2
         self.auxpower = Power()
-        self.evse = evse
+        self.evseThread = evseThread
         # Minimum current in either direction
         self.MIN_CURRENT = 3
         # Maximum charging current
@@ -581,6 +582,42 @@ class EvseController(PowerMonitorObserver):
             "soc": list(self.socHistory)
         }
 
+    def getWriteNextAllowed(self) -> float:
+        """Get timestamp when next write operation is allowed."""
+        if isinstance(self.evse, EvseWallboxQuasar):
+            return self.evse.get_next_state_change_allowed()
+        return 0  # Default for other EVSE types
+
     def getEvseState(self) -> EvseState:
-        """Get the current EVSE state"""
-        return self.chargerState
+        """Get current EVSE state."""
+        try:
+            if isinstance(self.evse, EvseWallboxQuasar):
+                state = self.evse.get_state()
+                return state.evse_state
+            return self.evse.getEvseState()
+        except Exception as e:
+            error(f"Failed to get EVSE state: {e}")
+            return EvseState.ERROR
+
+    def getBatteryChargeLevel(self) -> int:
+        """Get current battery charge level."""
+        try:
+            if isinstance(self.evse, EvseWallboxQuasar):
+                state = self.evse.get_state()
+                return state.battery_level
+            return self.evse.getBatteryChargeLevel()
+        except Exception as e:
+            error(f"Failed to get battery charge level: {e}")
+            return -1
+
+    def _setCurrent(self, current: float):
+        """Set the EVSE current."""
+        try:
+            if isinstance(self.evse, EvseWallboxQuasar):
+                self.evse.set_current(int(abs(current)))
+            else:
+                self.evse.setCurrent(current)
+            self.evseCurrent = current
+        except Exception as e:
+            error(f"Failed to set current: {e}")
+            self.connectionErrors += 1

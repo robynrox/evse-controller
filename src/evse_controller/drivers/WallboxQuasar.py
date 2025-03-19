@@ -1,10 +1,10 @@
 import time
 import threading
 from pyModbusTCP.client import ModbusClient
-from lib.EvseInterface import EvseInterface, EvseState
+from evse_controller.drivers.EvseInterface import EvseInterface, EvseState
 from wallbox import Wallbox
-from lib.logging_config import debug, info, warning, error, critical
-from lib.config import config
+from evse_controller.utils.logging_config import debug, info, warning, error, critical
+from evse_controller.utils.config import config
 
 
 class EvseWallboxQuasar(EvseInterface):

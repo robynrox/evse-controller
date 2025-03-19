@@ -2,7 +2,7 @@ import yaml
 import sys
 from pathlib import Path
 from typing import Dict, Any
-from lib.paths import get_data_dir
+from evse_controller.utils.paths import get_data_dir
 
 class Config:
     _instance = None

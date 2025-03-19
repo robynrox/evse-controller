@@ -14,7 +14,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib64/
 parts/
 sdist/
 var/
@@ -28,12 +27,20 @@ htmlcov/
 
 # Virtual Environment
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+.python-version
+pyvenv.cfg
+/bin/
+/include/
+/Scripts/
+/lib/
+/lib64/
+/share/
 
 # IDE
 .idea/
@@ -43,18 +50,6 @@ venv.bak/
 *~
 
 # Project-specific
-log/
-bin/
-lib/python*
-
-pyvenv.cfg
-include/
-
-# IDE
-.vscode/
-.idea/
-
-# Logs and state files
 log/
 *.log
 history.json
@@ -69,5 +64,4 @@ Thumbs.db
 poetry.lock
 influxdata-archive_compat.key
 state/schedule.json
-lib64
 config.yaml.bak

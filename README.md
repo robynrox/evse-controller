@@ -15,8 +15,9 @@ monitors and I have implemented these for the following devices:
   channel 1. The EVSE channel is only used for monitoring and reporting and could be substituted with the solar power, for
   example.
 
-I have also started work on a basic scheduler example and a basic load follower (for doing V2G and S2V) which can be
-seen in files Scheduler.py and LoadFollower.py respectively.
+There's also a complete project that uses those libraries to provide V2X
+functions along with logging, scheduled events, and web or console control
+and its installation and basic use are detailed below.
 
 This code may look more Javaesque than Pythonesque - I have more expertise in Java but I've chosen Python so that I can
 learn a little bit more.
@@ -60,11 +61,14 @@ version 1, so I would suggest installing as per the official instructions on the
 
 2. **Choose Setup Method**
 
-   A. Using Dev Container (Recommended):
+   A. Using Dev Container (Experimental):
    - Install Docker and VS Code with Dev Containers extension
    - Open project in VS Code
    - Click "Reopen in Container" when prompted
    - Container will automatically install dependencies
+   
+   Note: Container support is currently experimental and hasn't been thoroughly tested. 
+   For production use, we recommend using either the pip or Poetry installation methods.
 
    B. Using pip:
    ```bash
@@ -80,8 +84,8 @@ version 1, so I would suggest installing as per the official instructions on the
    # On Windows:
    .\.venv\Activate.ps1
    
-   # Install dependencies
-   pip install -r requirements.txt
+   # Install in development mode
+   pip install -e .
    ```
 
    C. Using Poetry (Alternative):
@@ -99,8 +103,14 @@ version 1, so I would suggest installing as per the official instructions on the
    # Install dependencies using Poetry
    poetry install
 
+   # Install development dependencies (includes pytest for testing)
+   poetry install --with dev
+
    # Activate the virtual environment
    poetry shell
+
+   # Run unit tests as desired
+   pytest
    ```
 
    Note: The virtual environment will be created in your project directory, regardless of which installation method you choose. You can clone or download this repository to any location on your system.
@@ -156,44 +166,58 @@ version 1, so I would suggest installing as per the official instructions on the
 
 4. **Start the Application**
    ```bash
-   python app.py
+   python -m evse_controller.app
    ```
    Access the web interface at http://localhost:5000
 
-   It is also possible to start the application with `python smart_evse_controller.py` if the web interface is not required.
+   It is also possible to start the application with `python -m evse_controller.smart_evse_controller` if the web interface is not required.
 
 ### Configuration Options
 
 Detailed explanation of each configuration option:
 
-- `WALLBOX_URL`: IP address or hostname of your Wallbox Quasar
-- `SHELLY_URL`: IP address or hostname of your Shelly EM
-- `SHELLY_2_URL`: IP address or hostname of your second Shelly EM (optional)
-- `INFLUXDB_URL`: URL of your InfluxDB instance (if using InfluxDB)
-- `INFLUXDB_TOKEN`: Authentication token for InfluxDB (if using InfluxDB)
-- `INFLUXDB_ORG`: Organization name for InfluxDB (if using InfluxDB)
-- `INFLUXDB_BUCKET`: Bucket name for InfluxDB (if using InfluxDB)
-- `OCTOPUS_API_KEY`: API key for Octopus Energy (if using Octopus integration, not yet implemented)
-- `OCTOPUS_METER_ID`: Your Octopus Energy meter ID (if using Octopus integration, not yet implemented)
+#### Wallbox Section
+- `url`: IP address or hostname of your Wallbox Quasar
+- `username`: Your Wallbox account email (optional, for auto-restart feature)
+- `password`: Your Wallbox account password (optional, for auto-restart feature)
+- `serial`: Your Wallbox serial number (optional, for auto-restart feature)
 
-Please refer to the comments within the `configuration.py` file for more details.
+#### Shelly Section
+- `primary_url`: IP address or hostname of your primary Shelly EM
+- `secondary_url`: IP address or hostname of your second Shelly EM (optional)
+
+#### InfluxDB Section
+- `enabled`: Whether to enable InfluxDB logging (true/false)
+- `url`: URL of your InfluxDB instance (default: http://localhost:8086)
+- `token`: Authentication token for InfluxDB
+- `org`: Organization name for InfluxDB
+
+#### Charging Section
+- `max_charge_percent`: Maximum battery charge percentage (0-100)
+- `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
+- `default_tariff`: Default electricity tariff (COSY, OCTGO, or FLUX)
+
+#### Logging Section
+- `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `directory`: Directory for log files
+- `file_prefix`: Prefix for log filenames
+- `max_bytes`: Maximum size of each log file in bytes (default: 10MB)
+- `backup_count`: Number of backup log files to keep
+
+Note: The configuration file is automatically generated by running 
+`configure.py`, which provides an interactive setup process. You can also
+edit the `config.yaml` file directly if you prefer.
 
 ## Provided samples
 
 The following samples are provided:
 
-* octopus.py: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
-  It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point - at the time
-  of writing, it doesn't seem to be the case that the use of the Agile tariff is favourable.
-* app.py: At the time of writing, this runs the controller along with a web interface that allows the same basic
-  controls that you can type interactively into the terminal. You can access that web interface on port 5000. For example,
-  on the host system, point your web browser to http://127.0.0.1:5000/. On another system on your local network,
-  it might be accessed by using the name of the server, e.g. http://evserver:5000/, or alternatively I believe it
-  tells you at the time of startup what IP address you can use.
+* `src/evse_controller/smart_evse_controller.py`: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
+  It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point.
+* `src/evse_controller/app.py`: At the time of writing, this runs the controller along with a web interface that allows the same basic
+  controls that you can type interactively into the terminal.
 
-To get this running after setting up the configuration file, you would run the following command:
-
-* `python3 app.py` or `python app.py` (whichever works for you but you must use python 3)
 
 I removed the command-line argument parsing since interactive control and web control are now available.
 
@@ -201,7 +225,7 @@ I removed the command-line argument parsing since interactive control and web co
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
 
-1. Start the application using `python app.py`
+1. Start the application using `python -m evse_controller.app`
 2. Open a web browser and navigate to `http://localhost:5000/api/docs`
 3. The Swagger UI provides:
    - Interactive documentation for all API endpoints
@@ -222,7 +246,7 @@ If using VS Code (recommended):
 2. If developing outside the Dev Container, you'll need to select the correct Python interpreter:
    - Open Command Palette (View > Command Palette, or `Ctrl+Shift+P` / `Cmd+Shift+P`)
    - Type "Python: Select Interpreter"
-   - Choose the interpreter from your virtual environment (in the project's `bin` or `Scripts` directory)
+   - Choose the interpreter from your virtual environment (in the project's `.venv` directory)
 
 ## Limitations
 
