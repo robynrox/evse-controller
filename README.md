@@ -68,7 +68,7 @@ version 1, so I would suggest installing as per the official instructions on the
    - Container will automatically install dependencies
    
    Note: Container support is currently experimental and hasn't been thoroughly tested. 
-   For production use, we recommend using either the pip or Poetry installation methods.
+   For production use, I recommend using either the pip or Poetry installation methods.
 
    B. Using pip:
    ```bash
@@ -247,6 +247,29 @@ If using VS Code (recommended):
    - Open Command Palette (View > Command Palette, or `Ctrl+Shift+P` / `Cmd+Shift+P`)
    - Type "Python: Select Interpreter"
    - Choose the interpreter from your virtual environment (in the project's `.venv` directory)
+
+### Docker Compose Support (Experimental)
+
+A Docker Compose configuration is available but has not been thoroughly tested recently:
+
+```yaml
+version: '3.8'
+services:
+  evse-controller:
+    build: .
+    volumes:
+      - evse-data:/data
+    environment:
+      - EVSE_DATA_DIR=/data
+    ports:
+      - "5000:5000"
+
+volumes:
+  evse-data:
+    name: evse-controller-data
+```
+
+For production use, I recommend using either the pip or Poetry installation methods.
 
 ## Limitations
 

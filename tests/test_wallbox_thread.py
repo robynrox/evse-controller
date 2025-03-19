@@ -30,8 +30,7 @@ class MockModbusClient(ModbusClientInterface):
     def _read_single_register(self, reg_addr: int) -> int:
         """Helper method to read a single register"""
         if reg_addr not in self._registers:
-            from pymodbus.exceptions import IllegalAddressException
-            raise IllegalAddressException(f"Register {hex(reg_addr)} does not exist")
+            raise ValueError(f"Register {hex(reg_addr)} does not exist")
         return self._registers[reg_addr][0]
 
     def read_holding_registers(self, reg_addr: int, reg_nb: int = 1) -> Optional[List[int]]:
