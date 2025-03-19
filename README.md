@@ -340,3 +340,31 @@ scheduler. Note that it is long at 66 minutes! It is somewhat outdated now, but 
 that here:
 
 * https://youtu.be/4bIpY-AyUUw
+
+## Shelly EM Housing
+
+For safety reasons, the Shelly EM devices must be properly enclosed, especially since they monitor mains voltage. The repository includes OpenSCAD files for a 3D-printable housing solution in the `shelly-housing` directory:
+
+- `shelly-housing-top.scad`: Creates a solid top piece for safety
+- `shelly-housing-bottom.scad`: Creates a bottom piece with access holes for LEDs and buttons
+- Pre-generated STL files are provided for immediate printing
+- No guarantees as to suitability are provided - use at your own risk
+
+### Assembly Notes
+- The two halves need to be secured together with screws (specific hardware requirements TBD)
+- Orient the bottom piece (with holes) facing away from potential sources of conductive materials
+- Ensure all cables are properly strain-relieved
+
+### Alternative Enclosure Options
+If you don't have access to a 3D printer, you MUST still properly enclose the Shelly EM devices. Alternatives include:
+- Using a sealed electrical junction box with appropriate cable glands
+- Using any suitable enclosure rated for electrical equipment
+- Professional installation in a proper electrical enclosure
+
+⚠️ **SAFETY WARNING**: Operating Shelly EM devices without proper enclosure is:
+- Dangerous due to exposed mains voltage connections
+- Likely illegal in most jurisdictions
+- A potential fire hazard
+- NOT supported by this project
+
+Always follow local electrical codes and safety regulations when installing power monitoring equipment.
