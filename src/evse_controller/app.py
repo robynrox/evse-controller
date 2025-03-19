@@ -6,6 +6,7 @@ from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
+import os
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -50,7 +51,13 @@ class CustomWSGIRequestHandler(WSGIRequestHandler):
         """Keep error logging"""
         logging.getLogger('werkzeug').error(format % args)
 
-app = Flask(__name__)
+# Get the directory containing this file
+template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+
+app = Flask(__name__,
+           template_folder=template_dir,
+           static_folder=static_dir)
 app.secret_key = 'your-secret-key-here'
 
 # Create API with documentation
