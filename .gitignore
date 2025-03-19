@@ -61,7 +61,6 @@ evse_state.json
 Thumbs.db
 
 # Package management
-poetry.lock
 influxdata-archive_compat.key
 state/schedule.json
 config.yaml.bak
