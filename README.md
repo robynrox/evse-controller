@@ -71,14 +71,14 @@ version 1, so I would suggest installing as per the official instructions on the
    # Navigate to your project directory
    cd path/to/evse-controller
    
-   # Create virtual environment in the project directory
-   python3 -m venv .
+   # Create virtual environment in a .venv subdirectory
+   python3 -m venv .venv
    
    # Activate the virtual environment
    # On Linux/macOS:
-   source bin/activate
+   source .venv/bin/activate
    # On Windows:
-   .\Scripts\activate
+   .\.venv\Activate.ps1
    
    # Install dependencies
    pip install -r requirements.txt
