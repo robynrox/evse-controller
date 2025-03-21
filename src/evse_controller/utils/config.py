@@ -1,7 +1,7 @@
 import yaml
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from evse_controller.utils.paths import get_data_dir
 
 class Config:
@@ -169,28 +169,84 @@ class Config:
         self._config_data['wallbox']['serial'] = value
 
     @property
-    def SHELLY_URL(self) -> str:
+    def SHELLY_PRIMARY_URL(self) -> str:
         """Get primary Shelly URL from config."""
         return self.get("shelly.primary_url")
 
-    @SHELLY_URL.setter
-    def SHELLY_URL(self, value: str):
+    @SHELLY_PRIMARY_URL.setter
+    def SHELLY_PRIMARY_URL(self, value: str):
         """Set primary Shelly URL in config."""
         if 'shelly' not in self._config_data:
             self._config_data['shelly'] = {}
         self._config_data['shelly']['primary_url'] = value
 
     @property
-    def SHELLY_2_URL(self) -> str:
+    def SHELLY_SECONDARY_URL(self) -> str:
         """Get secondary Shelly URL from config."""
         return self.get("shelly.secondary_url")
 
-    @SHELLY_2_URL.setter
-    def SHELLY_2_URL(self, value: str):
+    @SHELLY_SECONDARY_URL.setter
+    def SHELLY_SECONDARY_URL(self, value: str):
         """Set secondary Shelly URL in config."""
         if 'shelly' not in self._config_data:
             self._config_data['shelly'] = {}
         self._config_data['shelly']['secondary_url'] = value
+
+    @property
+    def SHELLY_GRID_DEVICE(self) -> str:
+        """Get grid monitoring device from config."""
+        return self.get("shelly.grid.device", "primary")
+
+    @SHELLY_GRID_DEVICE.setter
+    def SHELLY_GRID_DEVICE(self, value: str):
+        """Set grid monitoring device in config."""
+        if 'shelly' not in self._config_data:
+            self._config_data['shelly'] = {}
+        if 'grid' not in self._config_data['shelly']:
+            self._config_data['shelly']['grid'] = {}
+        self._config_data['shelly']['grid']['device'] = value
+
+    @property
+    def SHELLY_GRID_CHANNEL(self) -> int:
+        """Get grid monitoring channel from config."""
+        return self.get("shelly.grid.channel", 1)
+
+    @SHELLY_GRID_CHANNEL.setter
+    def SHELLY_GRID_CHANNEL(self, value: int):
+        """Set grid monitoring channel in config."""
+        if 'shelly' not in self._config_data:
+            self._config_data['shelly'] = {}
+        if 'grid' not in self._config_data['shelly']:
+            self._config_data['shelly']['grid'] = {}
+        self._config_data['shelly']['grid']['channel'] = value
+
+    @property
+    def SHELLY_EVSE_DEVICE(self) -> str:
+        """Get EVSE monitoring device from config."""
+        return self.get("shelly.evse.device", "")
+
+    @SHELLY_EVSE_DEVICE.setter
+    def SHELLY_EVSE_DEVICE(self, value: str):
+        """Set EVSE monitoring device in config."""
+        if 'shelly' not in self._config_data:
+            self._config_data['shelly'] = {}
+        if 'evse' not in self._config_data['shelly']:
+            self._config_data['shelly']['evse'] = {}
+        self._config_data['shelly']['evse']['device'] = value
+
+    @property
+    def SHELLY_EVSE_CHANNEL(self) -> Optional[int]:
+        """Get EVSE monitoring channel from config."""
+        return self.get("shelly.evse.channel", None)
+
+    @SHELLY_EVSE_CHANNEL.setter
+    def SHELLY_EVSE_CHANNEL(self, value: Optional[int]):
+        """Set EVSE monitoring channel in config."""
+        if 'shelly' not in self._config_data:
+            self._config_data['shelly'] = {}
+        if 'evse' not in self._config_data['shelly']:
+            self._config_data['shelly']['evse'] = {}
+        self._config_data['shelly']['evse']['channel'] = value
 
     @property
     def INFLUXDB_ENABLED(self) -> bool:
@@ -246,20 +302,6 @@ class Config:
             self._config_data['influxdb'] = {}
         self._config_data['influxdb']['org'] = value
 
-    @property
-    def INFLUXDB_BUCKET(self) -> str:
-        """Get InfluxDB bucket from config."""
-        if not self.INFLUXDB_ENABLED:
-            return ""
-        return self.get("influxdb.bucket", "")
-
-    @INFLUXDB_BUCKET.setter
-    def INFLUXDB_BUCKET(self, value: str):
-        """Set InfluxDB bucket in config."""
-        if 'influxdb' not in self._config_data:
-            self._config_data['influxdb'] = {}
-        self._config_data['influxdb']['bucket'] = value
-
     def save(self):
         """Save configuration to YAML file with backup."""
         config_path = Path('config.yaml')
@@ -289,8 +331,16 @@ class Config:
                 'serial': self.WALLBOX_SERIAL
             },
             'shelly': {
-                'primary_url': self.SHELLY_URL,
-                'secondary_url': self.SHELLY_2_URL
+                'primary_url': self.SHELLY_PRIMARY_URL,
+                'secondary_url': self.SHELLY_SECONDARY_URL,
+                'grid': {
+                    'device': self.SHELLY_GRID_DEVICE,
+                    'channel': self.SHELLY_GRID_CHANNEL
+                },
+                'evse': {
+                    'device': self.SHELLY_EVSE_DEVICE,
+                    'channel': self.SHELLY_EVSE_CHANNEL
+                }
             },
             'influxdb': {
                 'enabled': self.INFLUXDB_ENABLED,

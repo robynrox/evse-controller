@@ -232,8 +232,17 @@ def config_page():
                 config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
 
             # Update Shelly settings
-            config.SHELLY_URL = request.form.get('shelly[primary_url]')
-            config.SHELLY_2_URL = request.form.get('shelly[secondary_url]')
+            config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
+            config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')
+            
+            # Update Grid monitoring settings
+            config.SHELLY_GRID_DEVICE = request.form.get('shelly[grid][device]')
+            config.SHELLY_GRID_CHANNEL = int(request.form.get('shelly[grid][channel]'))
+            
+            # Update EVSE monitoring settings
+            config.SHELLY_EVSE_DEVICE = request.form.get('shelly[evse][device]') or ""
+            evse_channel = request.form.get('shelly[evse][channel]')
+            config.SHELLY_EVSE_CHANNEL = int(evse_channel) if evse_channel else None
 
             # Update InfluxDB settings
             config.INFLUXDB_ENABLED = bool(request.form.get('influxdb[enabled]'))

@@ -65,6 +65,56 @@
                 <input type="text" id="shelly_secondary_url" name="shelly[secondary_url]"
                     value="{{ config.shelly.secondary_url }}">
             </div>
+
+            <!-- Grid Monitoring Configuration -->
+            <div class="form-group">
+                <label for="grid_device">Grid Monitoring Device:</label>
+                <select id="grid_device" name="shelly[grid][device]" required>
+                    <option value="primary" {% if config.shelly.grid.device=="primary" %}selected{% endif %}>Primary
+                        Shelly</option>
+                    {% if config.shelly.secondary_url %}
+                    <option value="secondary" {% if config.shelly.grid.device=="secondary" %}selected{% endif %}>
+                        Secondary Shelly</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="grid_channel">Grid Monitoring Channel:</label>
+                <select id="grid_channel" name="shelly[grid][channel]" required>
+                    <option value="1" {% if config.shelly.grid.channel==1 %}selected{% endif %}>Channel 1</option>
+                    <option value="2" {%- if config.shelly.grid.channel==2 -%}selected{%- endif -%}>Channel 2</option>
+                </select>
+            </div>
+
+            <!-- EVSE Monitoring Configuration -->
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="evse_enabled" {% if config.shelly.evse.device %}checked{% endif %}>
+                    Enable EVSE Monitoring
+                </label>
+            </div>
+            <div id="evse_settings" style="display: {% if config.shelly.evse.device %}block{% else %}none{% endif %}">
+                <div class="form-group">
+                    <label for="evse_device">EVSE Monitoring Device:</label>
+                    <select id="evse_device" name="shelly[evse][device]">
+                        <option value="" {% if not config.shelly.evse.device %}selected{% endif %}>None</option>
+                        <option value="primary" {% if config.shelly.evse.device=="primary" %}selected{% endif %}>Primary
+                            Shelly</option>
+                        {% if config.shelly.secondary_url %}
+                        <option value="secondary" {% if config.shelly.evse.device=="secondary" %}selected{% endif %}>
+                            Secondary Shelly</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="evse_channel">EVSE Monitoring Channel:</label>
+                    <select id="evse_channel" name="shelly[evse][channel]">
+                        <option value="" {% if not config.shelly.evse.channel %}selected{% endif %}>None</option>
+                        <option value="1" {% if config.shelly.evse.channel==1 %}selected{% endif %}>Channel 1</option>
+                        <option value="2" {% if config.shelly.evse.channel==2 %}selected{% endif %}>Channel 2</option>
+                    </select>
+                </div>
+            </div>
         </div>
 
         <div class="config-section">
@@ -154,6 +204,18 @@
     <script>
         document.getElementById('influxdb_enabled').addEventListener('change', function () {
             document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
+        });
+        document.getElementById('evse_enabled').addEventListener('change', function () {
+            const evseSettings = document.getElementById('evse_settings');
+            const evseDevice = document.getElementById('evse_device');
+            const evseChannel = document.getElementById('evse_channel');
+
+            evseSettings.style.display = this.checked ? 'block' : 'none';
+
+            if (!this.checked) {
+                evseDevice.value = '';
+                evseChannel.value = '';
+            }
         });
     </script>
 </body>

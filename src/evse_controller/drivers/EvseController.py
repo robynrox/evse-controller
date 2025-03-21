@@ -7,6 +7,7 @@ from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface,
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface
 from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
+from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from evse_controller.utils.config import config
 
@@ -163,6 +164,8 @@ class EvseController(PowerMonitorObserver):
         self.state_file = config.EVSE_STATE_FILE
         self._load_persistent_state()
         info("EvseController started")
+
+        self.evse_power_model = SimpleEvseModel()  # Add this line
 
     def _load_history(self):
         """Load historical data from file if it exists."""
@@ -377,21 +380,39 @@ class EvseController(PowerMonitorObserver):
             monitor: The Shelly power monitor that's reporting
             power: Power readings from the monitor
         """
-        # If this update is from the secondary monitor (solar/heat pump)
-        if monitor == self.pmon2:
-            # Just store the auxiliary power readings and return
+        # Determine if this update is from the grid monitoring device
+        is_grid_monitor = (
+            (monitor == self.pmon and config.SHELLY_GRID_DEVICE == "primary") or
+            (monitor == self.pmon2 and config.SHELLY_GRID_DEVICE == "secondary")
+        )
+
+        if not is_grid_monitor:
+            # Just cache the non-grid power readings and return
             self.auxpower = power
             return
         
-        # From here on, we're handling the primary monitor update
-        # At present, channels are allocated as follows:
-        #   power.ch1 is grid power
-        #   power.ch2 is EVSE power
-        #   self.auxpower.ch1 is heat pump power (if secondary monitor present)
-        #   self.auxpower.ch2 is solar power (if secondary monitor present)
+        # From here on, we're handling the grid monitor update
+        # Use configured channels instead of fixed assignments
+        grid_channel = config.SHELLY_GRID_CHANNEL
+        evse_channel = config.SHELLY_EVSE_CHANNEL if config.SHELLY_EVSE_DEVICE else None
         
+        # Get grid power from configured channel
+        grid_power = power.ch1Watts if grid_channel == 1 else power.ch2Watts
+        
+        # Get EVSE power - either from monitoring or model
+        if evse_channel is not None:
+            if config.SHELLY_EVSE_DEVICE == config.SHELLY_GRID_DEVICE:
+                # EVSE is on same device as grid
+                evse_power = power.ch1Watts if evse_channel == 1 else power.ch2Watts
+            else:
+                # EVSE is on the other device
+                evse_power = self.auxpower.ch1Watts if evse_channel == 1 else self.auxpower.ch2Watts
+        else:
+            # No EVSE monitoring configured, use power model
+            self.evse_power_model.set_voltage(power.voltage)
+            evse_power = self.evse_power_model.get_power()
+
         # When power was instantiated, the SoC was not known, so update it here.
-        # Only update if we get a valid reading from the EVSE
         new_soc = self.evse.getBatteryChargeLevel()
         
         # Log the attempted update for debugging
@@ -401,15 +422,13 @@ class EvseController(PowerMonitorObserver):
         if self._is_valid_soc(new_soc):
             power.soc = new_soc
         elif self._is_valid_soc(self.batteryChargeLevel):
-            # If we have a valid persisted value, use that
             power.soc = self.batteryChargeLevel
         else:
-            # If no valid current or persisted value, use -1
             power.soc = -1
         
         # Append new data to the history buffers
-        self.gridPowerHistory.append(power.ch1Watts)
-        self.evsePowerHistory.append(power.ch2Watts)
+        self.gridPowerHistory.append(grid_power)
+        self.evsePowerHistory.append(evse_power)
         self.heatPumpPowerHistory.append(self.auxpower.ch1Watts)
         self.solarPowerHistory.append(self.auxpower.ch2Watts)
         self.socHistory.append(power.soc)
@@ -476,6 +495,7 @@ class EvseController(PowerMonitorObserver):
             if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
                 critical("Restarting EVSE (expect this to take 5-6 minutes)")
                 self.evse.resetViaWebApi()
+                self.evse_power_model.set_current(0)  # Zero the current in power model when resetting
                 # Allow up to an hour for the EVSE to restart without trying to restart again
                 self.connectionErrors = -3600
 
@@ -618,6 +638,7 @@ class EvseController(PowerMonitorObserver):
             else:
                 self.evse.setCurrent(current)
             self.evseCurrent = current
+            self.evse_power_model.set_current(current)  # Update the power model
         except Exception as e:
             error(f"Failed to set current: {e}")
             self.connectionErrors += 1

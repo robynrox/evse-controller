@@ -656,7 +656,7 @@ except Exception as e:
     sys.exit(1)
 
 # Initialize primary Shelly
-primary_url = config.SHELLY_URL
+primary_url = config.SHELLY_PRIMARY_URL
 if not primary_url:
     error("No primary Shelly URL configured")
     sys.exit(1)
@@ -668,7 +668,7 @@ except Exception as e:
     sys.exit(1)
 
 # Initialize secondary Shelly if configured
-secondary_url = config.SHELLY_2_URL
+secondary_url = config.SHELLY_SECONDARY_URL
 if secondary_url:
     debug(f"Initializing secondary Shelly with URL: {secondary_url}")
     try:

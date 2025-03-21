@@ -182,8 +182,14 @@ services:
        password: "yourpassword"         # Optional, for auto-restart
        serial: 12345                    # Optional, for auto-restart
      shelly:
-       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hame or Io  IPdadrress
+       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
        secondary_url: null              # Optional second Shelly
+       grid:
+         device: "primary"             # primary or secondary
+         channel: 1                    # 1 or 2
+       evse:
+         device: ""                    # primary or secondary, empty if not used
+         channel: null                 # 1 or 2, null if not used
      influxdb:
        enabled: false
        url: "http://localhost:8086"

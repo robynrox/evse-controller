@@ -15,12 +15,19 @@ DEFAULT_CONFIG = {
     "shelly": {
         "primary_url": "",
         "secondary_url": "",
+        "grid": {
+            "device": "primary",  # primary or secondary
+            "channel": 1          # 1 or 2
+        },
+        "evse": {
+            "device": "",         # primary or secondary, empty if not used
+            "channel": None       # 1 or 2, None if not used
+        }
     },
     "influxdb": {
         "url": "http://localhost:8086",
         "token": "",
         "org": "",
-        "bucket": "",
         "enabled": False
     },
     "charging": {
@@ -45,7 +52,27 @@ def load_existing_config() -> Dict[str, Any]:
     if config_path.exists():
         try:
             with config_path.open('r') as f:
-                return yaml.safe_load(f)
+                config = yaml.safe_load(f)
+                
+                # Ensure Shelly monitoring configuration exists with defaults
+                if "shelly" not in config:
+                    config["shelly"] = DEFAULT_CONFIG["shelly"]
+                else:
+                    # Ensure grid monitoring config exists
+                    if "grid" not in config["shelly"]:
+                        config["shelly"]["grid"] = {
+                            "device": "primary",
+                            "channel": 1
+                        }
+                    
+                    # Ensure EVSE monitoring config exists
+                    if "evse" not in config["shelly"]:
+                        config["shelly"]["evse"] = {
+                            "device": "",
+                            "channel": None
+                        }
+                
+                return config
         except yaml.YAMLError as e:
             print(f"Error reading existing configuration: {e}")
             sys.exit(1)
@@ -115,6 +142,47 @@ def interactive_config():
             "Enter your second Shelly EM URL:",
             default=secondary_url_default
         ).ask()
+    
+    # After configuring Shelly URLs
+    if config["shelly"]["primary_url"]:
+        print("\nShelly Channel Configuration")
+        
+        # Configure grid monitoring (mandatory)
+        available_devices = ["primary"]
+        if config["shelly"]["secondary_url"]:
+            available_devices.append("secondary")
+            
+        config["shelly"]["grid"]["device"] = questionary.select(
+            "Select Shelly device for grid monitoring:",
+            choices=available_devices,
+            default=config["shelly"]["grid"]["device"]
+        ).ask()
+        
+        config["shelly"]["grid"]["channel"] = questionary.select(
+            "Select channel for grid monitoring:",
+            choices=["1", "2"],
+            default=str(config["shelly"]["grid"]["channel"])
+        ).ask()
+        
+        # Configure EVSE monitoring (optional)
+        if questionary.confirm(
+            "Configure EVSE power monitoring?",
+            default=bool(config["shelly"]["evse"]["device"])
+        ).ask():
+            config["shelly"]["evse"]["device"] = questionary.select(
+                "Select Shelly device for EVSE monitoring:",
+                choices=available_devices,
+                default=config["shelly"]["evse"]["device"] or available_devices[0]
+            ).ask()
+            
+            config["shelly"]["evse"]["channel"] = int(questionary.select(
+                "Select channel for EVSE monitoring:",
+                choices=["1", "2"],
+                default=str(config["shelly"]["evse"]["channel"] or "1")
+            ).ask())
+        else:
+            config["shelly"]["evse"]["device"] = ""
+            config["shelly"]["evse"]["channel"] = None
     
     # InfluxDB configuration
     print("\nInfluxDB Configuration")

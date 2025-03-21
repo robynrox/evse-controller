@@ -4,6 +4,8 @@
 - [ ] Increase unit test coverage
 - [ ] Fix schedule not being persisted
 - [ ] Fix log location, config location, and other files that need to be persisted
+- [ ] Allow naming of channels not being used for grid and EVSE power selection
+- [ ] Fix reporting of values to the database when only primary Shelly is used
 
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
