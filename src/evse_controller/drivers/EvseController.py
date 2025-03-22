@@ -514,10 +514,10 @@ class EvseController(PowerMonitorObserver):
         nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
         if nextWriteAllowed > 0:
             logMsg += f"NextChgIn:{nextWriteAllowed}s "
-            info(logMsg)
+            debug(logMsg)
             return
 
-        info(logMsg)
+        debug(logMsg)
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:
             resetState = True
