@@ -148,12 +148,12 @@ class EvseWallboxQuasar(EvseInterface):
         try:
             regs = self.client.read_holding_registers(self.READ_STATE_REG)
             if regs is None:
-                error("Failed to read EVSE state registers")
+                warning("Failed to read EVSE state registers")  # Changed from error to warning
                 raise ConnectionError("Failed to read EVSE state registers")
             
             current_regs = self.client.read_holding_registers(self.CONTROL_CURRENT_REG)
             if current_regs is None:
-                error("Failed to read current registers")
+                warning("Failed to read current registers")  # Changed from error to warning
                 raise ConnectionError("Failed to read current registers")
             
             self.current = current_regs[0]
@@ -194,7 +194,7 @@ class EvseWallboxQuasar(EvseInterface):
         try:
             regs = self.client.read_holding_registers(self.READ_BATTERY_REG)
             if regs is None:
-                error("Failed to read battery registers")
+                warning("Failed to read battery registers")  # Changed from error to warning
                 return self.battery_charge_level
             
             battery_charge_level = regs[0]

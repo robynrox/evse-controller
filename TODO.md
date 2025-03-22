@@ -1,19 +1,17 @@
 # TODO List
 
 ## High Priority
-- [ ] Increase unit test coverage
-- [ ] Fix schedule not being persisted
-- [ ] Fix log location, config location, and other files that need to be persisted
+- [ ] Increase unit test coverage (ongoing)
 - [ ] Allow naming of channels not being used for grid and EVSE power selection
 - [ ] Fix reporting of values to the database when only primary Shelly is used
+- [ ] Test functionality that models the EVSE power when not being monitored
+- [ ] Move to new thread-based Wallbox driver which will reduce modbus errors
 
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
 
 ## Low Priority
 - [ ] Improve Docker container support and testing
-- [ ] Add comprehensive API documentation
-- [ ] Add more unit tests for edge cases
 - [ ] Add authentication to web interface for remote access security
 - [ ] Improve accessibility features in web interface
 - [ ] Migrate from pyModbusTCP to pymodbus for consistency and better maintainability
@@ -24,6 +22,10 @@
 - [x] Basic scheduling functionality
 - [x] V2G and S2V capabilities
 - [x] Web interface prototype
+- [x] Add comprehensive API documentation (I'm considering this done because the Swagger UI is available)
+- [x] Add more unit tests for edge cases
+- [x] Fix schedule not being persisted
+- [x] Fix log location, config location, and other files that need to be persisted
 
 ## Notes
 - Priority levels are suggestions and may change based on user needs (please get in touch if you need something)
