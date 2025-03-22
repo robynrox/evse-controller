@@ -8,7 +8,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.EvseInterface import EvseState
 from wallbox import Wallbox
-from .PowerModel import WallboxPowerModel
+from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
@@ -44,7 +44,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._client = modbus_client if modbus_client else ModbusClientWrapper(host=host)
         
         # Initialize power model
-        self._power_model = WallboxPowerModel()
+        self._power_model = SimpleEvseModel()
         
         # Wallbox API credentials for reset functionality
         self._wallbox_username = wallbox_username
@@ -207,15 +207,16 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
             with self._state_lock:
                 new_state = EvseState(state_reg)
-                # Update power model if state or current changed
+                # Update power model with new current
                 if new_state != self._state.evse_state or current_reg != self._state.current:
-                    self._power_model.record_state_change(new_state, current_reg)
+                    self._power_model.set_current(float(current_reg))
                 
                 self._state.evse_state = new_state
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg
                 if self._state.evse_state == EvseState.PAUSED:
                     self._state.current = 0
+                    self._power_model.set_current(0.0)
                 else:
                     self._state.current = current_reg
                 self._state.last_update = time.time()
@@ -283,17 +284,16 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             if current == 0:
                 self._client.write_single_register(self._CONTROL_STATE_REG, self._STOP_CHARGING)
                 self._client.write_single_register(self._CONTROL_CURRENT_REG, 0)
-                # Update power model for stopped state
-                self._power_model.record_state_change(EvseState.PAUSED, 0)
+                # Update power model
+                self._power_model.set_current(0.0)
             else:
                 # Set charging current as 16-bit value
                 reg_value = self.convert_to_16_bit_twos_complement(current)
                 self._client.write_single_register(self._CONTROL_CURRENT_REG, reg_value)
                 # Start charging
                 self._client.write_single_register(self._CONTROL_STATE_REG, self._START_CHARGING)
-                # Update power model with new state
-                new_state = EvseState.CHARGING if current > 0 else EvseState.DISCHARGING
-                self._power_model.record_state_change(new_state, current)
+                # Update power model
+                self._power_model.set_current(float(current))
 
         except ConnectionError:
             with self._state_lock:
@@ -319,11 +319,6 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         pass
 
     # Add new methods for power model access
-    def get_modelled_power(self) -> Power:
-        """Get the estimated power consumption based on current state."""
-        return self._power_model.get_modelled_power()
-
-    def get_battery_energy_stats(self) -> tuple[float, float]:
-        """Get total energy charged and discharged (in kWh)."""
-        battery_state = self._power_model.get_battery_state()
-        return (battery_state.energy_in_kwh, battery_state.energy_out_kwh)
+    def get_modelled_power(self) -> float:
+        """Get the estimated power consumption in watts based on current state."""
+        return self._power_model.get_power()

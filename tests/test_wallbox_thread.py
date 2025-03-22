@@ -406,3 +406,68 @@ class TestWallboxThread(TestCase):
         time.sleep(0.2)  # Wait a bit
         later_wait = self.thread.get_time_until_current_change_allowed()
         self.assertGreater(initial_wait, later_wait)
+
+    def test_state_mapping(self):
+        """Test that all expected Modbus register values map to correct states"""
+        test_cases = [
+            (0, EvseState.DISCONNECTED, "Disconnected state"),
+            (1, EvseState.CHARGING, "Charging state"),
+            (2, EvseState.WAITING_FOR_CAR_DEMAND, "Waiting for car demand"),
+            (3, EvseState.WAITING_FOR_SCHEDULE, "Waiting for schedule"),
+            (4, EvseState.PAUSED, "Paused state"),
+            (7, EvseState.ERROR, "Error state"),
+            (11, EvseState.DISCHARGING, "Discharging state"),
+            (999, EvseState.UNKNOWN, "Unknown state")
+        ]
+        
+        for register_value, expected_state, description in test_cases:
+            with self.subTest(description):
+                # Set the mock register value
+                self.mock_client._registers[self.thread._READ_STATE_REG] = [register_value]
+                
+                # Wait for a poll cycle
+                time.sleep(self.thread._poll_interval * 2)
+                
+                # Check the mapped state
+                state = self.thread.get_state()
+                self.assertEqual(state.evse_state, expected_state)
+
+    def test_state_persistence_during_current_change(self):
+        """Test that state remains correctly mapped while changing current"""
+        # Set initial state to charging
+        self.mock_client._registers[self.thread._READ_STATE_REG] = [1]  # Charging
+        self.thread.start()
+        time.sleep(self.thread._poll_interval * 2)
+        
+        # Verify initial state
+        state = self.thread.get_state()
+        self.assertEqual(state.evse_state, EvseState.CHARGING)
+        
+        # Change current
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
+        time.sleep(self.thread._poll_interval)
+        
+        # Verify state remains correct
+        state = self.thread.get_state()
+        self.assertEqual(state.evse_state, EvseState.CHARGING)
+
+    def test_state_transition_to_paused(self):
+        """Test transition to paused state when stopping charging"""
+        # Start in charging state
+        self.mock_client._registers[self.thread._READ_STATE_REG] = [1]  # Charging
+        self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [16]
+        self.thread.start()
+        time.sleep(self.thread._poll_interval * 2)
+        
+        # Simulate device transitioning to paused state
+        self.mock_client._registers[self.thread._READ_STATE_REG] = [4]  # Paused
+        self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [0]
+        
+        # Send stop command
+        self.thread.send_command(EvseCommandData(EvseCommand.STOP))
+        time.sleep(self.thread._poll_interval * 2)
+        
+        # Verify state
+        state = self.thread.get_state()
+        self.assertEqual(state.evse_state, EvseState.PAUSED)
+        self.assertEqual(state.current, 0)

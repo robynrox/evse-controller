@@ -1,3 +1,5 @@
+import os
+import signal
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
@@ -6,7 +8,15 @@ from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
-import os
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    info("Shutting down Flask server...")
+    os._exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -161,7 +171,7 @@ class StatusResource(Resource):
         """Get current system status and next scheduled event"""
         current_state = get_system_state()
         next_event = scheduler.get_next_event()
-        battery_soc = evseController.evse.getBatteryChargeLevel()
+        battery_soc = evseController.getBatteryChargeLevel()  # Changed from evseController.evse.getBatteryChargeLevel()
         
         return {
             "current_state": current_state,
@@ -441,7 +451,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=5000, threaded=True, request_handler=CustomWSGIRequestHandler)
 
 # Start the Flask server in a separate thread
-flask_thread = threading.Thread(target=run_flask)
+flask_thread = threading.Thread(target=run_flask, daemon=True)  # Make it a daemon thread
 flask_thread.start()
 
 # Start the main program

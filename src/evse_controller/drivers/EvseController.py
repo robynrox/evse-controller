@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from enum import Enum
 import math
@@ -20,6 +21,9 @@ except ImportError:
 from collections import deque
 import json
 from pathlib import Path
+import sys
+import threading
+from typing import Optional
 
 class ControlState(Enum):
     """Defines possible operational states for the EVSE controller.
@@ -94,6 +98,7 @@ class EvseController(PowerMonitorObserver):
         self.pmon2 = pmon2
         self.auxpower = Power()
         self.evseThread = evseThread
+        self.evse = evseThread  # Add this line to maintain compatibility
         # Minimum current in either direction
         self.MIN_CURRENT = 3
         # Maximum charging current
@@ -166,6 +171,7 @@ class EvseController(PowerMonitorObserver):
         info("EvseController started")
 
         self.evse_power_model = SimpleEvseModel()  # Add this line
+        self._shutdown_event = threading.Event()
 
     def _load_history(self):
         """Load historical data from file if it exists."""
@@ -387,8 +393,9 @@ class EvseController(PowerMonitorObserver):
         )
 
         if not is_grid_monitor:
-            # Just cache the non-grid power readings and return
+            # Update auxiliary power readings
             self.auxpower = power
+            #debug(f"Auxiliary power: {self.auxpower}")
             return
         
         # From here on, we're handling the grid monitor update
@@ -412,11 +419,10 @@ class EvseController(PowerMonitorObserver):
             self.evse_power_model.set_voltage(power.voltage)
             evse_power = self.evse_power_model.get_power()
 
+        #debug(f"Grid power: {grid_power}, EVSE power: {evse_power}")
+
         # When power was instantiated, the SoC was not known, so update it here.
         new_soc = self.evse.getBatteryChargeLevel()
-        
-        # Log the attempted update for debugging
-        debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
         
         # Only update if we get a valid reading
         if self._is_valid_soc(new_soc):
@@ -425,6 +431,9 @@ class EvseController(PowerMonitorObserver):
             power.soc = self.batteryChargeLevel
         else:
             power.soc = -1
+        
+        # Log the attempted update for debugging
+        #debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
         
         # Append new data to the history buffers
         self.gridPowerHistory.append(grid_power)
@@ -485,7 +494,10 @@ class EvseController(PowerMonitorObserver):
                 error(f"Failed to write to InfluxDB: {e}")
 
         try:
-            self.chargerState = self.evse.getEvseState()
+            new_state = self.getEvseState()
+            if new_state != self.chargerState:
+                info(f"EVSE state changed from {self.chargerState} to {new_state}")
+            self.chargerState = new_state
             self.connectionErrors = 0
             logMsg += f"CS:{self.chargerState} "
         except ConnectionError as e:
@@ -502,10 +514,10 @@ class EvseController(PowerMonitorObserver):
         nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
         if nextWriteAllowed > 0:
             logMsg += f"NextChgIn:{nextWriteAllowed}s "
-            debug(logMsg)
+            info(logMsg)
             return
 
-        debug(logMsg)
+        info(logMsg)
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:
             resetState = True
@@ -531,34 +543,34 @@ class EvseController(PowerMonitorObserver):
         self._save_persistent_state()
 
     def setControlState(self, state: ControlState):
-        if state == self.state:
-            return
-            
-        self.state = state
-        match state:
-            case ControlState.DORMANT:
-                self.minDischargeCurrent = 0
-                self.maxDischargeCurrent = 0
-                self.minChargeCurrent = 0
-                self.maxChargeCurrent = 0
-            case ControlState.CHARGE:
-                self.minChargeCurrent = self.MAX_CHARGE_CURRENT
-                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
-            case ControlState.DISCHARGE:
-                self.minDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-            case ControlState.LOAD_FOLLOW_CHARGE:
-                self.minChargeCurrent = 0
-                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
-            case ControlState.LOAD_FOLLOW_DISCHARGE:
-                self.minDischargeCurrent = 0
-                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-            case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
-                self.minChargeCurrent = 0
-                self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
-                self.minDischargeCurrent = 0
-                self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-        info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
+        """Set the control state and log the transition."""
+        if state != self.state:
+            info(f"CONTROL Setting control state to {state}")
+            self.state = state
+            match state:
+                case ControlState.DORMANT:
+                    self.minDischargeCurrent = 0
+                    self.maxDischargeCurrent = 0
+                    self.minChargeCurrent = 0
+                    self.maxChargeCurrent = 0
+                case ControlState.CHARGE:
+                    self.minChargeCurrent = self.MAX_CHARGE_CURRENT
+                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                case ControlState.DISCHARGE:
+                    self.minDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                case ControlState.LOAD_FOLLOW_CHARGE:
+                    self.minChargeCurrent = 0
+                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                case ControlState.LOAD_FOLLOW_DISCHARGE:
+                    self.minDischargeCurrent = 0
+                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
+                    self.minChargeCurrent = 0
+                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                    self.minDischargeCurrent = 0
+                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+            info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setDischargeCurrentRange(self, minCurrent, maxCurrent):
         if self.minDischargeCurrent != minCurrent or self.maxDischargeCurrent != maxCurrent:
@@ -604,16 +616,11 @@ class EvseController(PowerMonitorObserver):
 
     def getWriteNextAllowed(self) -> float:
         """Get timestamp when next write operation is allowed."""
-        if isinstance(self.evse, EvseWallboxQuasar):
-            return self.evse.get_next_state_change_allowed()
-        return 0  # Default for other EVSE types
+        return self.evse.getWriteNextAllowed()
 
     def getEvseState(self) -> EvseState:
         """Get current EVSE state."""
         try:
-            if isinstance(self.evse, EvseWallboxQuasar):
-                state = self.evse.get_state()
-                return state.evse_state
             return self.evse.getEvseState()
         except Exception as e:
             error(f"Failed to get EVSE state: {e}")
@@ -622,9 +629,6 @@ class EvseController(PowerMonitorObserver):
     def getBatteryChargeLevel(self) -> int:
         """Get current battery charge level."""
         try:
-            if isinstance(self.evse, EvseWallboxQuasar):
-                state = self.evse.get_state()
-                return state.battery_level
             return self.evse.getBatteryChargeLevel()
         except Exception as e:
             error(f"Failed to get battery charge level: {e}")
@@ -633,12 +637,39 @@ class EvseController(PowerMonitorObserver):
     def _setCurrent(self, current: float):
         """Set the EVSE current."""
         try:
-            if isinstance(self.evse, EvseWallboxQuasar):
-                self.evse.set_current(int(abs(current)))
-            else:
-                self.evse.setCurrent(current)
+            self.evse.setChargingCurrent(int(abs(current)))
+            self.evse_power_model.set_current(current)
             self.evseCurrent = current
-            self.evse_power_model.set_current(current)  # Update the power model
         except Exception as e:
             error(f"Failed to set current: {e}")
             self.connectionErrors += 1
+
+    def stop(self):
+        """Stop the controller and cleanup resources."""
+        if self._shutdown_event.is_set():
+            return  # Already shutting down
+            
+        self._shutdown_event.set()
+        info("Stopping charging")
+        
+        try:
+            # Stop charging before cleanup
+            if hasattr(self.evse, 'stopCharging'):
+                self.evse.stopCharging()
+            elif hasattr(self.evse, 'setChargingCurrent'):
+                self.evse.setChargingCurrent(0)
+            
+            # Stop threads first
+            if hasattr(self.thread, 'stop'):
+                self.thread.stop()
+            if hasattr(self.thread2, 'stop'):
+                self.thread2.stop()
+            
+            # Stop power monitors
+            if hasattr(self.pmon, 'stop'):
+                self.pmon.stop()
+            if hasattr(self.pmon2, 'stop'):
+                self.pmon2.stop()
+            
+        except Exception as e:
+            error(f"Error during controller shutdown: {e}")

@@ -1,6 +1,7 @@
 # Define the interface class
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Dict
 
 
 class EvseState(Enum):
@@ -15,6 +16,20 @@ class EvseState(Enum):
     DISCHARGING = 11
     COMMS_FAILURE = 998
     UNKNOWN = 999
+
+    @classmethod
+    def from_modbus_register(cls, register_value: int) -> 'EvseState':
+        """Convert a Modbus register value to an EvseState."""
+        mapping = {
+            0: cls.DISCONNECTED,
+            1: cls.CHARGING,
+            2: cls.WAITING_FOR_CAR_DEMAND,
+            3: cls.WAITING_FOR_SCHEDULE,
+            4: cls.PAUSED,
+            7: cls.ERROR,
+            11: cls.DISCHARGING
+        }
+        return mapping.get(register_value, cls.UNKNOWN)
 
 
 class EvseInterface(ABC):

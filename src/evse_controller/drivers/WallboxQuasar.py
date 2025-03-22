@@ -157,7 +157,15 @@ class EvseWallboxQuasar(EvseInterface):
                 raise ConnectionError("Failed to read current registers")
             
             self.current = current_regs[0]
-            self.lastEvseState = EvseState(regs[0])
+            
+            # Add debug logging for raw state value
+            raw_state = regs[0]
+            debug(f"Raw EVSE state value from register: {raw_state}")
+            
+            # Use the enum's mapping method
+            self.lastEvseState = EvseState.from_modbus_register(raw_state)
+            debug(f"Mapped state: {self.lastEvseState}")
+            
             if self.lastEvseState == EvseState.PAUSED:
                 self.current = 0
             

@@ -13,21 +13,21 @@ class Power:
         self.soc = soc
 
     def __str__(self):
-        return f"Grid: {self.ch1Watts}W, pf {self.ch1Pf}; EVSE: {self.ch2Watts}W, pf {self.ch2Pf}; Voltage: {self.voltage}V; unixtime {self.unixtime}; SoC% {self.soc}"
+        return f"Ch1: {self.ch1Watts}W, pf {self.ch1Pf}; Ch2: {self.ch2Watts}W, pf {self.ch2Pf}; Voltage: {self.voltage}V; unixtime {self.unixtime}; SoC% {self.soc}"
 
     def getAccumulatedEnergy(self):
         posEnergyCh0 = round(self.posEnergyJoulesCh0 / 3600)
         posEnergyCh1 = round(self.posEnergyJoulesCh1 / 3600)
         negEnergyCh0 = round(self.negEnergyJoulesCh0 / 3600)
         negEnergyCh1 = round(self.negEnergyJoulesCh1 / 3600)
-        return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
+        return f"PosCh1: {posEnergyCh0}Wh; NegCh1: {negEnergyCh0}Wh; PosCh2: {posEnergyCh1}Wh; NegCh2: {negEnergyCh1}Wh"
 
     def getEnergyDelta(self, olderPower):
         posEnergyCh0 = round((self.posEnergyJoulesCh0 - olderPower.posEnergyJoulesCh0) / 3600)
         posEnergyCh1 = round((self.posEnergyJoulesCh1 - olderPower.posEnergyJoulesCh1) / 3600)
         negEnergyCh0 = round((self.negEnergyJoulesCh0 - olderPower.negEnergyJoulesCh0) / 3600)
         negEnergyCh1 = round((self.negEnergyJoulesCh1 - olderPower.negEnergyJoulesCh1) / 3600)
-        return f"PosGrid: {posEnergyCh0}Wh; NegGrid: {negEnergyCh0}Wh; PosEVSE: {posEnergyCh1}Wh; NegEVSE: {negEnergyCh1}Wh"
+        return f"PosCh1: {posEnergyCh0}Wh; NegCh1: {negEnergyCh0}Wh; PosCh2: {posEnergyCh1}Wh; NegCh2: {negEnergyCh1}Wh"
 
     def getHomeWatts(self):
         return self.ch1Watts - self.ch2Watts

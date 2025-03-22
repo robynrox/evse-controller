@@ -1,4 +1,7 @@
+import os
+import sys
 import signal
+import threading
 from enum import Enum
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
 from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
@@ -13,7 +16,6 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
-import sys
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)
@@ -142,20 +144,39 @@ def handle_list_schedule_command():
     for event in events:
         print(f"- {event.timestamp.isoformat()} -> {event.state}")
 
-def signal_handler(signum, frame):
-    info("Shutting down gracefully...")
-    evseController.stop()  # Add a stop method to your controller
-    inputThread.join(timeout=1)
-    sys.exit(0)
+_shutdown_event = threading.Event()
 
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    if _shutdown_event.is_set():
+        return  # Already shutting down
+        
+    _shutdown_event.set()
+    info("Shutting down gracefully...")
+    
+    try:
+        evseController.stop()  # Stop the controller first
+        
+        # Give threads time to clean up
+        if 'inputThread' in globals() and inputThread.is_alive():
+            inputThread.join(timeout=1)
+            
+    except Exception as e:
+        error(f"Error during shutdown: {e}")
+    finally:
+        info("Shutdown complete")
+        os._exit(0)  # Force exit all threads
+
+# Register handlers for both SIGINT (Ctrl+C) and SIGTERM
 signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     global execState
     nextStateCheck = 0
     previous_state = None  # Store previous state for pause-until-disconnect
 
-    while True:
+    while not _shutdown_event.is_set():
         try:
             # Check for scheduled events
             due_events = scheduler.get_due_events()

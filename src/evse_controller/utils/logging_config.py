@@ -3,12 +3,13 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 from evse_controller.utils.config import config
+from evse_controller.utils.paths import get_log_dir
 
 def setup_logging():
     """Setup logging configuration"""
     # Get configured console level
-    console_level = getattr(logging, config.CONSOLE_LOGGING.upper())
-    file_level = getattr(logging, config.FILE_LOGGING.upper())
+    console_level = getattr(logging, config.get('logging.console_level', 'WARNING').upper())
+    file_level = getattr(logging, config.get('logging.file_level', 'INFO').upper())
     
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(
@@ -21,8 +22,8 @@ def setup_logging():
     logger.setLevel(logging.DEBUG)  # Keep root logger at DEBUG to allow all potential levels
     logger.addHandler(console_handler)
 
-    # Rest of your logging setup...
-    log_dir = Path.home() / ".local" / "share" / "evse-controller" / "logs"
+    # Get log directory from paths utility
+    log_dir = get_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create formatters
