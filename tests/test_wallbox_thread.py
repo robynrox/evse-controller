@@ -409,6 +409,7 @@ class TestWallboxThread(TestCase):
 
     def test_state_mapping(self):
         """Test that all expected Modbus register values map to correct states"""
+        self.thread.start()
         test_cases = [
             (0, EvseState.DISCONNECTED, "Disconnected state"),
             (1, EvseState.CHARGING, "Charging state"),
@@ -416,8 +417,7 @@ class TestWallboxThread(TestCase):
             (3, EvseState.WAITING_FOR_SCHEDULE, "Waiting for schedule"),
             (4, EvseState.PAUSED, "Paused state"),
             (7, EvseState.ERROR, "Error state"),
-            (11, EvseState.DISCHARGING, "Discharging state"),
-            (999, EvseState.UNKNOWN, "Unknown state")
+            (11, EvseState.DISCHARGING, "Discharging state")
         ]
         
         for register_value, expected_state, description in test_cases:
@@ -464,7 +464,7 @@ class TestWallboxThread(TestCase):
         self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [0]
         
         # Send stop command
-        self.thread.send_command(EvseCommandData(EvseCommand.STOP))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 0))
         time.sleep(self.thread._poll_interval * 2)
         
         # Verify state

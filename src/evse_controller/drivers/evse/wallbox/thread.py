@@ -206,7 +206,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
 
             with self._state_lock:
-                new_state = EvseState(state_reg)
+                # Use from_modbus_register instead of direct construction
+                new_state = EvseState.from_modbus_register(state_reg)
                 # Update power model with new current
                 if new_state != self._state.evse_state or current_reg != self._state.current:
                     self._power_model.set_current(float(current_reg))
