@@ -8,6 +8,21 @@
     <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
+    <script>
+        // Icon filename constants
+        const ICONS = {
+            UNPLUG: "{{ url_for('static', filename='images/Pause_to_remove_plug_black.svg') }}",
+            SOLAR: "{{ url_for('static', filename='images/S2V_-_Solar_only_charging_black.svg') }}",
+            CHARGE: "{{ url_for('static', filename='images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg') }}",
+            DISCHARGE: "{{ url_for('static', filename='images/V2G_-_Discharge_black.svg') }}",
+            POWER_HOME: "{{ url_for('static', filename='images/V2H_-_Battery_to_House_black.svg') }}",
+            BALANCE: "{{ url_for('static', filename='images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg') }}",
+            PAUSE: "{{ url_for('static', filename='images/On-Off_black.svg') }}",
+            OCTGO: "{{ url_for('static', filename='images/Go_black.svg') }}",
+            FLUX: "{{ url_for('static', filename='images/Flux_black.svg') }}",
+            COSY: "{{ url_for('static', filename='images/Cosy_black.svg') }}"
+        };
+    </script>
     <style>
         /* Override the default body constraints for the dashboard */
         body {
@@ -58,27 +73,39 @@
     <div class="svg-button-container">
         <button class="svg-button" onclick="sendCommand('unplug')"
             title="Pause charging to allow the plug to be removed">
-            <img src="{{ url_for('static', filename='images/Remove_plug.svg') }}" alt="Pause to remove plug">
+            <img src="" id="unplug-icon" alt="Pause to remove plug">
         </button>
         <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
-            <img src="{{ url_for('static', filename='images/Solar_only_charging_black.svg') }}"
-                alt="Solar only charging">
+            <img src="" id="solar-icon" alt="Solar only charging">
         </button>
         <button class="svg-button" onclick="sendCommand('charge')"
             title="Charge battery at maximum rate using all power sources">
-            <img src="{{ url_for('static', filename='images/Solar+Grid_to_Battery_black.svg') }}"
-                alt="Charge at maximum rate">
+            <img src="" id="charge-icon" alt="Charge at maximum rate">
         </button>
-        <button onclick="sendCommand('discharge')"
-            title="Discharge battery at maximum rate to power the home and send any excess back to the grid">Discharge</button>
-        <button onclick="sendCommand('power-home')"
-            title="Discharge battery when necessary to power the home only">Power Home</button>
-        <button onclick="sendCommand('balance')"
-            title="Minimise use of the grid (charge from solar and power the home)">Balance</button>
-        <button onclick="sendCommand('pause')" title="Pause all charging/discharging">Pause</button>
-        <button onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">Octopus Go</button>
-        <button onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">Octopus Flux</button>
-        <button onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">Cosy Octopus</button>
+        <button class="svg-button" onclick="sendCommand('discharge')"
+            title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
+            <img src="" id="discharge-icon" alt="Discharge">
+        </button>
+        <button class="svg-button" onclick="sendCommand('power-home')"
+            title="Discharge battery when necessary to power the home only">
+            <img src="" id="power-home-icon" alt="Power Home">
+        </button>
+        <button class="svg-button" onclick="sendCommand('balance')"
+            title="Minimise use of the grid (charge from solar and power the home)">
+            <img src="" id="balance-icon" alt="Balance">
+        </button>
+        <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
+            <img src="" id="pause-icon" alt="Pause">
+        </button>
+        <button class="svg-button" onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">
+            <img src="" id="octgo-icon" alt="Octopus Go">
+        </button>
+        <button class="svg-button" onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">
+            <img src="" id="flux-icon" alt="Octopus Flux">
+        </button>
+        <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
+            <img src="" id="cosy-icon" alt="Cosy Octopus">
+        </button>
         <button onclick="toggleLegend()">Show/Hide Command Reference</button>
     </div>
 
@@ -87,57 +114,62 @@
             <h2>Command Reference</h2>
             <div class="legend-grid">
                 <div class="legend-item">
-                    <img src="{{ url_for('static', filename='images/Remove_plug.svg') }}" alt="Remove plug icon">
+                    <img src="" id="legend-unplug-icon" alt="Remove plug icon">
                     <div class="legend-text">
                         <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
                     </div>
                 </div>
                 <div class="legend-item">
-                    <img src="{{ url_for('static', filename='images/Solar_only_charging_black.svg') }}"
-                        alt="Solar charging icon">
+                    <img src="" id="legend-solar-icon" alt="Solar charging icon">
                     <div class="legend-text">
                         <strong>Solar Only:</strong> Charge using only solar power
                     </div>
                 </div>
                 <div class="legend-item">
-                    <img src="{{ url_for('static', filename='images/Solar+Grid_to_Battery_black.svg') }}"
-                        alt="Maximum charge icon">
+                    <img src="" id="legend-charge-icon" alt="Maximum charge icon">
                     <div class="legend-text">
                         <strong>Charge:</strong> Charge battery at maximum rate using all power sources
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-discharge-icon" alt="Discharge icon">
                     <div class="legend-text">
                         <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
                         excess back to the grid
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-power-home-icon" alt="Power Home icon">
                     <div class="legend-text">
                         <strong>Power Home:</strong> Discharge battery when necessary to power the home only
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-balance-icon" alt="Balance icon">
                     <div class="legend-text">
                         <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-pause-icon" alt="Pause icon">
                     <div class="legend-text">
                         <strong>Pause:</strong> Pause all charging/discharging
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-octgo-icon" alt="Octopus Go icon">
                     <div class="legend-text">
                         <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-flux-icon" alt="Octopus Flux icon">
                     <div class="legend-text">
                         <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
                     </div>
                 </div>
                 <div class="legend-item">
+                    <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
                     <div class="legend-text">
                         <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
                     </div>
@@ -286,6 +318,33 @@
     </style>
 
     <script>
+        // Set icon sources when page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            // Set main button icons
+            document.getElementById('unplug-icon').src = ICONS.UNPLUG;
+            document.getElementById('solar-icon').src = ICONS.SOLAR;
+            document.getElementById('charge-icon').src = ICONS.CHARGE;
+            document.getElementById('discharge-icon').src = ICONS.DISCHARGE;
+            document.getElementById('power-home-icon').src = ICONS.POWER_HOME;
+            document.getElementById('balance-icon').src = ICONS.BALANCE;
+            document.getElementById('pause-icon').src = ICONS.PAUSE;
+            document.getElementById('octgo-icon').src = ICONS.OCTGO;
+            document.getElementById('flux-icon').src = ICONS.FLUX;
+            document.getElementById('cosy-icon').src = ICONS.COSY;
+
+            // Set legend icons
+            document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
+            document.getElementById('legend-solar-icon').src = ICONS.SOLAR;
+            document.getElementById('legend-charge-icon').src = ICONS.CHARGE;
+            document.getElementById('legend-discharge-icon').src = ICONS.DISCHARGE;
+            document.getElementById('legend-power-home-icon').src = ICONS.POWER_HOME;
+            document.getElementById('legend-balance-icon').src = ICONS.BALANCE;
+            document.getElementById('legend-pause-icon').src = ICONS.PAUSE;
+            document.getElementById('legend-octgo-icon').src = ICONS.OCTGO;
+            document.getElementById('legend-flux-icon').src = ICONS.FLUX;
+            document.getElementById('legend-cosy-icon').src = ICONS.COSY;
+        });
+
         async function sendCommand(command) {
             try {
                 const response = await fetch('/api/control/command', {
