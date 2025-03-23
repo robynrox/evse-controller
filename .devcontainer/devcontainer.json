@@ -13,5 +13,11 @@
   },
   "forwardPorts": [
     5000
-  ]
+  ],
+  "mounts": [
+    "source=evse-controller-devdata,target=/workspace/data,type=volume"
+  ],
+  "remoteEnv": {
+    "EVSE_DATA_DIR": "/workspace/data"
+  }
 }

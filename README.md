@@ -15,8 +15,9 @@ monitors and I have implemented these for the following devices:
   channel 1. The EVSE channel is only used for monitoring and reporting and could be substituted with the solar power, for
   example.
 
-I have also started work on a basic scheduler example and a basic load follower (for doing V2G and S2V) which can be
-seen in files Scheduler.py and LoadFollower.py respectively.
+There's also a complete project that uses those libraries to provide V2X
+functions along with logging, scheduled events, and web or console control
+and its installation and basic use are detailed below.
 
 This code may look more Javaesque than Pythonesque - I have more expertise in Java but I've chosen Python so that I can
 learn a little bit more.
@@ -37,6 +38,46 @@ I have also added logging to InfluxDB OSS version 2. This is the open-source var
 
 I do not believe it will work with version 1. If you just try `apt install influxdb`, it is likely that you will get
 version 1, so I would suggest installing as per the official instructions on the page above.
+
+## Data Storage
+
+### Default Location
+All variable data (configuration, logs, and state) is stored in a `data` directory within the project root. This includes:
+- `data/config/` - Configuration files including `config.yaml`
+- `data/logs/` - Log files
+- `data/state/` - State files including schedule and EVSE state
+
+### Container Deployment
+When running in a container (either via Docker Compose or Dev Container), the data is stored in a persistent volume:
+
+- Docker Compose: Uses the `evse-data` volume mounted at `/workspace/data`
+- Dev Container: Uses the `evse-controller-devdata` volume mounted at `/workspace/data`
+
+This ensures data persists between container restarts and rebuilds.
+
+### Custom Data Location
+You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
+
+```bash
+# Linux/macOS
+export EVSE_DATA_DIR=/path/to/custom/data
+python -m evse_controller.app
+
+# Windows (PowerShell)
+$env:EVSE_DATA_DIR = "C:\path\to\custom\data"
+python -m evse_controller.app
+```
+
+When using Docker Compose, you can modify the volume mount point in `docker-compose.yml`:
+
+```yaml
+services:
+  evse-controller:
+    environment:
+      - EVSE_DATA_DIR=/custom/data/path
+    volumes:
+      - evse-data:/custom/data/path
+```
 
 ## Detailed Setup Instructions
 
@@ -60,28 +101,31 @@ version 1, so I would suggest installing as per the official instructions on the
 
 2. **Choose Setup Method**
 
-   A. Using Dev Container (Recommended):
+   A. Using Dev Container (Experimental):
    - Install Docker and VS Code with Dev Containers extension
    - Open project in VS Code
    - Click "Reopen in Container" when prompted
    - Container will automatically install dependencies
+   
+   Note: Container support is currently experimental and hasn't been thoroughly tested. 
+   For production use, I recommend using either the pip or Poetry installation methods.
 
    B. Using pip:
    ```bash
    # Navigate to your project directory
    cd path/to/evse-controller
    
-   # Create virtual environment in the project directory
-   python3 -m venv .
+   # Create virtual environment in a .venv subdirectory
+   python3 -m venv .venv
    
    # Activate the virtual environment
    # On Linux/macOS:
-   source bin/activate
+   source .venv/bin/activate
    # On Windows:
-   .\Scripts\activate
+   .\.venv\Activate.ps1
    
-   # Install dependencies
-   pip install -r requirements.txt
+   # Install in development mode
+   pip install -e .
    ```
 
    C. Using Poetry (Alternative):
@@ -99,8 +143,14 @@ version 1, so I would suggest installing as per the official instructions on the
    # Install dependencies using Poetry
    poetry install
 
+   # Install development dependencies (includes pytest for testing)
+   poetry install --with dev
+
    # Activate the virtual environment
    poetry shell
+
+   # Run unit tests as desired
+   pytest
    ```
 
    Note: The virtual environment will be created in your project directory, regardless of which installation method you choose. You can clone or download this repository to any location on your system.
@@ -132,8 +182,14 @@ version 1, so I would suggest installing as per the official instructions on the
        password: "yourpassword"         # Optional, for auto-restart
        serial: 12345                    # Optional, for auto-restart
      shelly:
-       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hame or Io  IPdadrress
+       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
        secondary_url: null              # Optional second Shelly
+       grid:
+         device: "primary"             # primary or secondary
+         channel: 1                    # 1 or 2
+       evse:
+         device: ""                    # primary or secondary, empty if not used
+         channel: null                 # 1 or 2, null if not used
      influxdb:
        enabled: false
        url: "http://localhost:8086"
@@ -156,44 +212,58 @@ version 1, so I would suggest installing as per the official instructions on the
 
 4. **Start the Application**
    ```bash
-   python app.py
+   python -m evse_controller.app
    ```
    Access the web interface at http://localhost:5000
 
-   It is also possible to start the application with `python smart_evse_controller.py` if the web interface is not required.
+   It is also possible to start the application with `python -m evse_controller.smart_evse_controller` if the web interface is not required.
 
 ### Configuration Options
 
 Detailed explanation of each configuration option:
 
-- `WALLBOX_URL`: IP address or hostname of your Wallbox Quasar
-- `SHELLY_URL`: IP address or hostname of your Shelly EM
-- `SHELLY_2_URL`: IP address or hostname of your second Shelly EM (optional)
-- `INFLUXDB_URL`: URL of your InfluxDB instance (if using InfluxDB)
-- `INFLUXDB_TOKEN`: Authentication token for InfluxDB (if using InfluxDB)
-- `INFLUXDB_ORG`: Organization name for InfluxDB (if using InfluxDB)
-- `INFLUXDB_BUCKET`: Bucket name for InfluxDB (if using InfluxDB)
-- `OCTOPUS_API_KEY`: API key for Octopus Energy (if using Octopus integration, not yet implemented)
-- `OCTOPUS_METER_ID`: Your Octopus Energy meter ID (if using Octopus integration, not yet implemented)
+#### Wallbox Section
+- `url`: IP address or hostname of your Wallbox Quasar
+- `username`: Your Wallbox account email (optional, for auto-restart feature)
+- `password`: Your Wallbox account password (optional, for auto-restart feature)
+- `serial`: Your Wallbox serial number (optional, for auto-restart feature)
 
-Please refer to the comments within the `configuration.py` file for more details.
+#### Shelly Section
+- `primary_url`: IP address or hostname of your primary Shelly EM
+- `secondary_url`: IP address or hostname of your second Shelly EM (optional)
+
+#### InfluxDB Section
+- `enabled`: Whether to enable InfluxDB logging (true/false)
+- `url`: URL of your InfluxDB instance (default: http://localhost:8086)
+- `token`: Authentication token for InfluxDB
+- `org`: Organization name for InfluxDB
+
+#### Charging Section
+- `max_charge_percent`: Maximum battery charge percentage (0-100)
+- `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
+- `default_tariff`: Default electricity tariff (COSY, OCTGO, or FLUX)
+
+#### Logging Section
+- `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `directory`: Directory for log files
+- `file_prefix`: Prefix for log filenames
+- `max_bytes`: Maximum size of each log file in bytes (default: 10MB)
+- `backup_count`: Number of backup log files to keep
+
+Note: The configuration file is automatically generated by running 
+`configure.py`, which provides an interactive setup process. You can also
+edit the `config.yaml` file directly if you prefer.
 
 ## Provided samples
 
 The following samples are provided:
 
-* octopus.py: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
-  It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point - at the time
-  of writing, it doesn't seem to be the case that the use of the Agile tariff is favourable.
-* app.py: At the time of writing, this runs the controller along with a web interface that allows the same basic
-  controls that you can type interactively into the terminal. You can access that web interface on port 5000. For example,
-  on the host system, point your web browser to http://127.0.0.1:5000/. On another system on your local network,
-  it might be accessed by using the name of the server, e.g. http://evserver:5000/, or alternatively I believe it
-  tells you at the time of startup what IP address you can use.
+* `src/evse_controller/smart_evse_controller.py`: Control the wallbox for Octopus Go or Cosy Octopus. This is what I expect to maintain going forward.
+  It will have control logic to drive the Flux tariff added as well, and possibly Agile at some point.
+* `src/evse_controller/app.py`: At the time of writing, this runs the controller along with a web interface that allows the same basic
+  controls that you can type interactively into the terminal.
 
-To get this running after setting up the configuration file, you would run the following command:
-
-* `python3 app.py` or `python app.py` (whichever works for you but you must use python 3)
 
 I removed the command-line argument parsing since interactive control and web control are now available.
 
@@ -201,7 +271,7 @@ I removed the command-line argument parsing since interactive control and web co
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
 
-1. Start the application using `python app.py`
+1. Start the application using `python -m evse_controller.app`
 2. Open a web browser and navigate to `http://localhost:5000/api/docs`
 3. The Swagger UI provides:
    - Interactive documentation for all API endpoints
@@ -222,7 +292,30 @@ If using VS Code (recommended):
 2. If developing outside the Dev Container, you'll need to select the correct Python interpreter:
    - Open Command Palette (View > Command Palette, or `Ctrl+Shift+P` / `Cmd+Shift+P`)
    - Type "Python: Select Interpreter"
-   - Choose the interpreter from your virtual environment (in the project's `bin` or `Scripts` directory)
+   - Choose the interpreter from your virtual environment (in the project's `.venv` directory)
+
+### Docker Compose Support (Experimental)
+
+A Docker Compose configuration is available but has not been thoroughly tested recently:
+
+```yaml
+version: '3.8'
+services:
+  evse-controller:
+    build: .
+    volumes:
+      - evse-data:/data
+    environment:
+      - EVSE_DATA_DIR=/data
+    ports:
+      - "5000:5000"
+
+volumes:
+  evse-data:
+    name: evse-controller-data
+```
+
+For production use, I recommend using either the pip or Poetry installation methods.
 
 ## Limitations
 
@@ -253,3 +346,31 @@ scheduler. Note that it is long at 66 minutes! It is somewhat outdated now, but 
 that here:
 
 * https://youtu.be/4bIpY-AyUUw
+
+## Shelly EM Housing
+
+For safety reasons, the Shelly EM devices must be properly enclosed, especially since they monitor mains voltage. The repository includes OpenSCAD files for a 3D-printable housing solution in the `shelly-housing` directory:
+
+- `shelly-housing-top.scad`: Creates a solid top piece for safety
+- `shelly-housing-bottom.scad`: Creates a bottom piece with access holes for LEDs and buttons
+- Pre-generated STL files are provided for immediate printing
+- No guarantees as to suitability are provided - use at your own risk
+
+### Assembly Notes
+- The two halves need to be secured together with screws (specific hardware requirements TBD)
+- Orient the bottom piece (with holes) facing away from potential sources of conductive materials
+- Ensure all cables are properly strain-relieved
+
+### Alternative Enclosure Options
+If you don't have access to a 3D printer, you MUST still properly enclose the Shelly EM devices. Alternatives include:
+- Using a sealed electrical junction box with appropriate cable glands
+- Using any suitable enclosure rated for electrical equipment
+- Professional installation in a proper electrical enclosure
+
+⚠️ **SAFETY WARNING**: Operating Shelly EM devices without proper enclosure is:
+- Dangerous due to exposed mains voltage connections
+- Likely illegal in most jurisdictions
+- A potential fire hazard
+- NOT supported by this project
+
+Always follow local electrical codes and safety regulations when installing power monitoring equipment.

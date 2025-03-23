@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "evse-discovery"
+version = "0.2.0"
+description = "Device discovery tool for EVSE devices (Wallbox and Shelly)"
+authors = ["Robyn <robynrox@users.noreply.github.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "~0.109.0"
+uvicorn = "~0.27.0"
+zeroconf = "~0.131.0"
+netifaces = "~0.11.0"
+requests = "~2.31.0"
+pymodbus = "~3.8.6"  # Updated to latest version
+aiohttp = "~3.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "~7.4.4"
+black = "~24.1.0"
+isort = "~5.13.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

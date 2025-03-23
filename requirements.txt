@@ -9,3 +9,4 @@ questionary~=2.0.1  # Used in configure.py
 pyyaml~=6.0.1      # Used for YAML config files
 python-dateutil~=2.8.2  # Commonly needed for date handling
 typing-extensions>=4.12.2  # Changed to match pydantic's requirement
+pytest~=7.4.4  # For running tests

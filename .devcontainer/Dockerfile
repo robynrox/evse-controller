@@ -10,9 +10,9 @@ RUN apt update \
     && echo "${USER} ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/${USER} \
     && chmod 0440 /etc/sudoers.d/${USER}
 
-# Copy requirements.txt and install dependencies
-COPY requirements.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+WORKDIR /workspace
+COPY . .
+RUN pip install --no-cache-dir -e . \
+    && mkdir -p /workspace/data
 
-# Expose the Flask port
 EXPOSE 5000
