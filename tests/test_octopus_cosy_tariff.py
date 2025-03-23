@@ -1,18 +1,21 @@
 import pytest
 from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
 from evse_controller.drivers.EvseController import ControlState
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from evse_controller.utils.config import config
+from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 
 @pytest.fixture
 def cosy_tariff():
-    return CosyOctopusTariff()
-
-@pytest.fixture
-def mock_evse():
-    evse = Mock()
-    evse.getBatteryChargeLevel = Mock(return_value=75)  # Default to 75% unless changed
-    return evse
+    # Create a new mock for WallboxThread
+    mock_thread = Mock()
+    mock_thread.getBatteryChargeLevel = Mock(return_value=75)
+    mock_thread.get_state = Mock(return_value={})
+    
+    # Patch the get_instance method to return our mock
+    with patch('evse_controller.drivers.evse.wallbox.thread.WallboxThread.get_instance', 
+               return_value=mock_thread):
+        yield CosyOctopusTariff()
 
 def test_off_peak_periods(cosy_tariff):
     """Test identification of off-peak periods (04:00-07:00, 13:00-16:00, 22:00-24:00)"""
@@ -40,28 +43,31 @@ def test_expensive_periods(cosy_tariff):
     assert cosy_tariff.is_expensive_period(1080)     # 18:00
     assert not cosy_tariff.is_expensive_period(1140) # 19:00
 
-def test_control_state_unknown_soc(cosy_tariff, mock_evse):
+def test_control_state_unknown_soc(cosy_tariff):
     """Test behavior when SoC is unknown"""
-    mock_evse.getBatteryChargeLevel.return_value = -1
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 720)
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = -1
+    state, min_current, max_current, message = cosy_tariff.get_control_state(720)
     assert state == ControlState.CHARGE
     assert min_current == 3
     assert max_current == 3
     assert "unknown" in message.lower()
 
-def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff, mock_evse):
+def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff):
     """Test behavior during expensive period with sufficient battery level"""
-    mock_evse.getBatteryChargeLevel.return_value = 80
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 1020)  # 17:00
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = 80
+    state, min_current, max_current, message = cosy_tariff.get_control_state(1020)  # 17:00
     assert state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current is None
     assert max_current is None
     assert "COSY Expensive rate: load follow discharge" in message
 
-def test_control_state_expensive_period_with_depleted_battery(cosy_tariff, mock_evse):
+def test_control_state_expensive_period_with_depleted_battery(cosy_tariff):
     """Test behavior during expensive period with depleted battery"""
-    mock_evse.getBatteryChargeLevel.return_value = 20
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 1020)  # 17:00
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = 20
+    state, min_current, max_current, message = cosy_tariff.get_control_state(1020)  # 17:00
     assert state == ControlState.DORMANT
     assert min_current is None
     assert max_current is None
@@ -79,12 +85,13 @@ def test_max_charge_percent_outside_solar_period(cosy_tariff):
     assert cosy_tariff.get_max_charge_percent(960) == config.MAX_CHARGE_PERCENT  # 16:00
     assert cosy_tariff.get_max_charge_percent(0) == config.MAX_CHARGE_PERCENT    # 00:00
 
-def test_home_demand_levels_during_expensive_period(cosy_tariff, mock_evse):
+def test_home_demand_levels_during_expensive_period(cosy_tariff):
     """Test home demand levels during expensive period"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 80
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = 80
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 1020)  # 17:00
+    cosy_tariff.set_home_demand_levels(mock_controller, 1020)  # 17:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -96,12 +103,13 @@ def test_home_demand_levels_during_expensive_period(cosy_tariff, mock_evse):
     # Check last level
     assert levels[-1] == (7440, 99999, 32)  # Maximum discharge current
 
-def test_home_demand_levels_with_medium_battery(cosy_tariff, mock_evse):
+def test_home_demand_levels_with_medium_battery(cosy_tariff):
     """Test home demand levels with battery between 50% and 100%"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 65
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = 65
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -110,12 +118,13 @@ def test_home_demand_levels_with_medium_battery(cosy_tariff, mock_evse):
     assert levels[1] == (410, 720, 3)    # Minimum discharge current
     assert levels[-1] == (7440, 99999, 32)  # Maximum discharge current
 
-def test_home_demand_levels_with_low_battery(cosy_tariff, mock_evse):
+def test_home_demand_levels_with_low_battery(cosy_tariff):
     """Test home demand levels with battery below 50%"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 45
+    mock_thread = WallboxThread.get_instance()
+    mock_thread.getBatteryChargeLevel.return_value = 45
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     

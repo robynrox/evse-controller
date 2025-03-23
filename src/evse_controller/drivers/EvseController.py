@@ -7,10 +7,11 @@ from evse_controller.drivers.EvseInterface import EvseState
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface
-from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
+from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from evse_controller.utils.config import config
+from evse_controller.drivers.Shelly import PowerMonitorShelly
 
 try:
     import influxdb_client
@@ -84,21 +85,44 @@ class EvseController(PowerMonitorObserver):
         evseCurrent (float): Current EVSE charging/discharging rate
     """
 
-    def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
-                 evseThread: EvseThreadInterface, tariffManager):
+    def __init__(self, tariffManager):
         """Initialize the EVSE controller.
-
+        
         Args:
-            pmon (PowerMonitorInterface): Primary power monitor for grid consumption
-            pmon2 (PowerMonitorInterface): Secondary power monitor for EVSE consumption
-            evse (EvseThreadInterface): The EVSE device to control
-            tariffManager: Manager for electricity tariff rules
+            tariffManager: Manager for electricity tariff rules and scheduling
         """
-        self.pmon = pmon
-        self.pmon2 = pmon2
+        # Initialize power monitors
+        primary_url = config.SHELLY_PRIMARY_URL
+        if not primary_url:
+            raise ValueError("No primary Shelly URL configured")
+        debug(f"Initializing primary Shelly with URL: {primary_url}")
+        
+        try:
+            self.pmon = PowerMonitorShelly(primary_url)
+        except Exception as e:
+            error(f"Failed to initialize primary Shelly: {e}")
+            raise
+
+        # Initialize secondary Shelly if configured
+        secondary_url = config.SHELLY_SECONDARY_URL
+        if secondary_url:
+            debug(f"Initializing secondary Shelly with URL: {secondary_url}")
+            try:
+                self.pmon2 = PowerMonitorShelly(secondary_url)
+            except Exception as e:
+                warning(f"Failed to initialize secondary Shelly: {e}")
+                self.pmon2 = None
+        else:
+            self.pmon2 = None
+
+        # Get Wallbox instance
+        try:
+            self.evse = WallboxThread.get_instance()
+        except Exception as e:
+            error(f"Failed to initialize Wallbox: {e}")
+            raise
+
         self.auxpower = Power()
-        self.evseThread = evseThread
-        self.evse = evseThread  # Add this line to maintain compatibility
         # Minimum current in either direction
         self.MIN_CURRENT = 3
         # Maximum charging current
@@ -110,10 +134,10 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.thread = PowerMonitorPollingThread(pmon)
+        self.thread = PowerMonitorPollingThread(self.pmon)
         self.thread.start()
         self.thread.attach(self)
-        self.thread2 = PowerMonitorPollingThread(pmon2)
+        self.thread2 = PowerMonitorPollingThread(self.pmon2)
         self.thread2.start()
         self.thread2.attach(self)
         self.connectionErrors = 0
@@ -493,23 +517,11 @@ class EvseController(PowerMonitorObserver):
             except Exception as e:
                 error(f"Failed to write to InfluxDB: {e}")
 
-        try:
-            new_state = self.getEvseState()
-            if new_state != self.chargerState:
-                info(f"EVSE state changed from {self.chargerState} to {new_state}")
-            self.chargerState = new_state
-            self.connectionErrors = 0
-            logMsg += f"CS:{self.chargerState} "
-        except ConnectionError as e:
-            self.connectionErrors += 1
-            error(f"Consecutive connection errors with EVSE: {self.connectionErrors} - {e}")
-            self.chargerState = EvseState.ERROR
-            if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                critical("Restarting EVSE (expect this to take 5-6 minutes)")
-                self.evse.resetViaWebApi()
-                self.evse_power_model.set_current(0)  # Zero the current in power model when resetting
-                # Allow up to an hour for the EVSE to restart without trying to restart again
-                self.connectionErrors = -3600
+        new_state = self.getEvseState()
+        if new_state != self.chargerState:
+            info(f"EVSE state changed from {self.chargerState} to {new_state}")
+        self.chargerState = new_state
+        logMsg += f"CS:{self.chargerState} "
 
         nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
         if nextWriteAllowed > 0:

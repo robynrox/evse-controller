@@ -2,6 +2,7 @@ import math
 from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
+from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 
 class OctopusFluxTariff(Tariff):
     """Implementation of Octopus Flux tariff logic.
@@ -45,22 +46,17 @@ class OctopusFluxTariff(Tariff):
         """
         return 960 <= dayMinute < 1140  # 16:00-19:00
 
-    def get_control_state(self, evse, dayMinute: int) -> tuple:
-        """Determine charging strategy based on time and battery level.
-
-        Args:
-            evse: EVSE device instance
-            dayMinute (int): Minutes since midnight (0-1439)
-
-        Returns:
-            tuple: (ControlState, min_current, max_current, reason_string)
-        """
-        if evse.getBatteryChargeLevel() == -1:
+    def get_control_state(self, dayMinute: int) -> tuple:
+        """Determine charging strategy based on time and battery level."""
+        evse = WallboxThread.get_instance()
+        battery_level = evse.getBatteryChargeLevel()
+        
+        if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "FLUX SoC unknown, charge at 3A until known"
         
         # Night rate charging period (02:00-05:00)
         if self.is_off_peak(dayMinute):
-            if evse.getBatteryChargeLevel() < config.MAX_CHARGE_PERCENT:
+            if battery_level < config.MAX_CHARGE_PERCENT:
                 return ControlState.CHARGE, None, None, "FLUX Night rate: charge at max rate"
             else:
                 return ControlState.DORMANT, None, None, "FLUX Night rate: SoC max, remain dormant"
@@ -87,8 +83,9 @@ class OctopusFluxTariff(Tariff):
         else:
             return ControlState.LOAD_FOLLOW_CHARGE, 6, 16, "FLUX Day rate: SoC<80%, solar charge 6-16A"
 
-    def set_home_demand_levels(self, evse, evseController, dayMinute):
+    def set_home_demand_levels(self, evseController, dayMinute):
         """Configure home demand power levels and corresponding charge/discharge currents."""
+        evse = WallboxThread.get_instance()
         # If SoC > 50%:
         if evse.getBatteryChargeLevel() >= 50:
             # Cover all of the home demand as far as possible.

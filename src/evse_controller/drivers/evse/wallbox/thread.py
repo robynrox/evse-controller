@@ -12,6 +12,23 @@ from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls, host: str = None, **kwargs) -> 'WallboxThread':
+        with cls._lock:
+            if cls._instance is None:
+                if host is None:
+                    from evse_controller.utils.config import config
+                    host = config.WALLBOX_URL
+                    kwargs.setdefault('wallbox_username', config.WALLBOX_USERNAME)
+                    kwargs.setdefault('wallbox_password', config.WALLBOX_PASSWORD)
+                    kwargs.setdefault('wallbox_serial', config.WALLBOX_SERIAL)
+                cls._instance = cls(host=host, **kwargs)
+                cls._instance.start()
+            return cls._instance
+
     @staticmethod
     def convert_to_16_bit_twos_complement(value: int) -> int:
         """Convert a signed integer to its 16-bit two's complement representation.
@@ -32,7 +49,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                  wallbox_username: str = None, wallbox_password: str = None, 
                  wallbox_serial: str = None, wallbox_api_client=None,
                  time_scale: float = 1.0):
-        # Initialize the Thread parent class with default arguments
+        if WallboxThread._instance is not None:
+            raise RuntimeError("WallboxThread is a singleton. Use get_instance() instead")
         threading.Thread.__init__(self)
         # Initialize our attributes
         self._host = host

@@ -84,13 +84,17 @@ class MockWallboxApi:
 
 class TestWallboxThread(TestCase):
     def setUp(self):
+        # Reset singleton state before each test
+        WallboxThread._instance = None
         self.mock_client = MockModbusClient()
         # Use a shorter poll interval for faster tests
         self.thread = WallboxThread("dummy_host", modbus_client=self.mock_client, poll_interval=0.1)
 
     def tearDown(self):
-        if self.thread.is_running():
-            self.thread.stop()
+        # Clean up after each test
+        if WallboxThread._instance is not None:
+            WallboxThread._instance.stop()
+            WallboxThread._instance = None
 
     def test_read_state(self):
         """Test basic state reading functionality"""

@@ -4,7 +4,6 @@ import signal
 import threading
 from enum import Enum
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
-from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.tariffs.manager import TariffManager
 import time
@@ -79,43 +78,7 @@ class InputParser(threading.Thread):
 inputThread = InputParser()
 inputThread.start()
 
-# Initialize Wallbox
-wallbox_url = config.WALLBOX_URL
-if not wallbox_url:
-    error("No Wallbox URL configured")
-    sys.exit(1)
-debug(f"Initializing Wallbox with URL: {wallbox_url}")
-try:
-    evse = EvseWallboxQuasar()
-except Exception as e:
-    error(f"Failed to initialize Wallbox: {e}")
-    sys.exit(1)
-
-# Initialize primary Shelly
-primary_url = config.SHELLY_PRIMARY_URL
-if not primary_url:
-    error("No primary Shelly URL configured")
-    sys.exit(1)
-debug(f"Initializing primary Shelly with URL: {primary_url}")
-try:
-    powerMonitor = PowerMonitorShelly(primary_url)
-except Exception as e:
-    error(f"Failed to initialize primary Shelly: {e}")
-    sys.exit(1)
-
-# Initialize secondary Shelly if configured
-secondary_url = config.SHELLY_SECONDARY_URL
-if secondary_url:
-    debug(f"Initializing secondary Shelly with URL: {secondary_url}")
-    try:
-        powerMonitor2 = PowerMonitorShelly(secondary_url)
-    except Exception as e:
-        warning(f"Failed to initialize secondary Shelly: {e}")
-        powerMonitor2 = None
-else:
-    powerMonitor2 = None
-
-evseController = EvseController(powerMonitor, powerMonitor2, evse, tariffManager)
+evseController = EvseController(tariffManager)  # Pass tariffManager directly
 
 
 def handle_schedule_command(command_parts):
@@ -172,6 +135,12 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
+    # Create tariff manager first
+    tariffManager = TariffManager()
+    
+    # Create EVSE controller, which will initialize the Wallbox thread
+    evseController = EvseController(tariffManager)
+    
     global execState
     nextStateCheck = 0
     previous_state = None  # Store previous state for pause-until-disconnect
@@ -315,10 +284,10 @@ def main():
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
-                control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
+                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
                 debug(log_message)
                 evseController.setControlState(control_state)
-                tariffManager.get_tariff().set_home_demand_levels(evse, evseController, dayMinute)
+                tariffManager.get_tariff().set_home_demand_levels(evseController, dayMinute)
                 if min_current is not None and max_current is not None:
                     if control_state == ControlState.CHARGE:
                         evseController.setChargeCurrentRange(min_current, max_current)
