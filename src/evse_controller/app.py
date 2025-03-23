@@ -73,7 +73,7 @@ app.secret_key = 'your-secret-key-here'
 # Create API with documentation
 api = Api(
     app,
-    version='0.1',
+    version='0.2.0',
     title='EVSE Controller API',
     description='API for controlling EV charging and scheduling',
     doc='/api/docs',

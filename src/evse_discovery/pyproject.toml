@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "evse-discovery"
-version = "0.1.0"
+version = "0.2.0"
 description = "Device discovery tool for EVSE devices (Wallbox and Shelly)"
 authors = ["Robyn <robynrox@users.noreply.github.com>"]
 
