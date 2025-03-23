@@ -103,23 +103,24 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         return self._running.is_set()
 
     def run(self):
+        loop_start_time = time.time() - self._poll_interval
         while self._running.is_set():
-            loop_start_time = time.time()
+            # Calculate remaining time until next iteration should start
+            elapsed = time.time() - loop_start_time
+            sleep_time = self._poll_interval - elapsed
+            
+            if sleep_time < 0:
+                warning(f"Wallbox thread loop overrun by {-sleep_time:.3f} seconds")
+                loop_start_time = time.time()
+            else:
+                time.sleep(sleep_time)
+                loop_start_time += self._poll_interval
+
             try:
                 self._check_and_handle_comms_failures()
-                self._ensure_connection()
-                self._process_commands()
                 self._update_state()
-                
-                # Calculate remaining time until next iteration should start
-                elapsed = time.time() - loop_start_time
-                sleep_time = self._poll_interval - elapsed
-                
-                if sleep_time < 0:
-                    warning(f"Wallbox thread loop overrun by {-sleep_time:.3f} seconds")
-                else:
-                    time.sleep(sleep_time)
-                    
+                self._process_commands()
+                                    
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
                 self._handle_error()
@@ -141,8 +142,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             return
 
         self._last_reset_attempt = current_time
-        reset_successful = self._handle_comms_failure()
-        
+        reset_successful = self._handle_comms_failure()        
         if reset_successful:
             info("Reset attempt successful - continuing to monitor")
         else:
@@ -173,10 +173,6 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             error(f"Failed to reset charger via API: {str(e)}")
             return False
 
-    def _ensure_connection(self):
-        if self._client is None or not self._client.is_open:
-            self._client = ModbusClient(host=self._host, auto_open=True, timeout=2)
-
     def _process_commands(self):
         # Process any pending commands
         try:
@@ -206,8 +202,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
 
             with self._state_lock:
-                # Use from_modbus_register instead of direct construction
-                new_state = EvseState.from_modbus_register(state_reg)
+                # Direct construction instead of using from_modbus_register
+                new_state = EvseState(state_reg)
                 # Update power model with new current
                 if new_state != self._state.evse_state or current_reg != self._state.current:
                     self._power_model.set_current(float(current_reg))
@@ -232,11 +228,6 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._state.consecutive_connection_errors += 1
             error(f"Error reading EVSE state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
-        finally:
-            try:
-                self._client.close()
-            except:
-                pass
 
     def _get_scaled_delay(self, delay: float) -> float:
         """Convert a standard delay into a scaled delay."""
