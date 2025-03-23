@@ -29,7 +29,19 @@ class OctopusGoTariff(Tariff):
         return False
 
     def get_control_state(self, evse, dayMinute: int) -> tuple:
-        """Determine charging strategy based on time and battery level."""
+        """Determine charging strategy based on time and battery level.
+
+        Args:
+            evse: EVSE device instance
+            dayMinute (int): Minutes since midnight (0-1439)
+
+        Returns:
+            tuple: (ControlState, min_current, max_current, reason_string)
+                ControlState: The operational state to set
+                min_current: Minimum charging current (None for default)
+                max_current: Maximum charging current (None for default)
+                reason_string: Human-readable explanation of the decision
+        """
         if evse.getBatteryChargeLevel() == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
@@ -39,11 +51,29 @@ class OctopusGoTariff(Tariff):
                 return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
         elif evse.getBatteryChargeLevel() <= 25:
             return ControlState.DORMANT, None, None, "OCTGO Day rate: SoC low, remain dormant"
+        elif 330 <= dayMinute < 19 * 60:
+            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, "OCTGO Day rate before 16:00: load follow discharge"
         else:
             minsBeforeNightRate = 1440 - ((dayMinute + 1410) % 1440)
+            thresholdSoCforDisharging = 55 + 7 * (minsBeforeNightRate / 60)
+            if evse.getBatteryChargeLevel() > thresholdSoCforDisharging:
+                return ControlState.DISCHARGE, None, None, f"OCTGO Day rate 19:00-00:30: SoC>{thresholdSoCforDisharging}%, discharge at max rate"
+            else:
+                return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
+
 
     def set_home_demand_levels(self, evse, evseController, dayMinute):
-        """Configure home demand power levels and corresponding charge/discharge currents."""
+        """Configure home demand power levels and corresponding charge/discharge currents.
+        
+        This method sets up the relationship between home power demand and the
+        EVSE's response in terms of charging or discharging current. The levels
+        determine at what power thresholds the system changes its behavior.
+
+        Args:
+            evse: EVSE device instance
+            evseController: Controller instance managing the EVSE
+            dayMinute (int): Minutes since midnight (0-1439)
+        """
         # If SoC > 50%:
         if evse.getBatteryChargeLevel() >= 50:
             # Start discharging at a home demand level of 416W. Cover all of the home demand as far as possible.
