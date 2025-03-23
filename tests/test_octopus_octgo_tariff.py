@@ -91,3 +91,53 @@ def test_get_rates(go_tariff):
     peak_time = datetime(2024, 1, 1, 12, 0)  # 12:00
     assert go_tariff.get_import_rate(peak_time) == 0.2627
     assert go_tariff.get_export_rate(peak_time) == 0.15
+
+def test_control_state_evening_discharge_threshold(go_tariff, mock_evse):
+    """Test evening discharge threshold behavior (19:30-00:30)"""
+    test_cases = [
+        # (minute, expected_threshold, description)
+        (1170, 90, "At 19:30 (5 hours before night rate)"),    # 19:30
+        (1230, 83, "At 20:30 (4 hours before night rate)"),    # 20:30
+        (1290, 76, "At 21:30 (3 hours before night rate)"),    # 21:30
+        (1350, 69, "At 22:30 (2 hours before night rate)"),    # 22:30
+        (1410, 62, "At 23:30 (1 hour before night rate)")      # 23:30
+    ]
+
+    for minute, expected_threshold, description in test_cases:
+        # Test battery above threshold
+        mock_evse.getBatteryChargeLevel.return_value = expected_threshold + 1
+        state, min_current, max_current, message = go_tariff.get_control_state(mock_evse, minute)
+        assert state == ControlState.DISCHARGE, description
+        assert f"SoC>{expected_threshold}" in message  # Remove the % to handle decimal places
+        assert "discharge at max rate" in message
+
+        # Test battery at threshold
+        mock_evse.getBatteryChargeLevel.return_value = expected_threshold
+        state, min_current, max_current, message = go_tariff.get_control_state(mock_evse, minute)
+        assert state == ControlState.LOAD_FOLLOW_DISCHARGE, description
+        assert f"SoC<={expected_threshold}" in message  # Remove the % to handle decimal places
+        assert "load follow discharge" in message
+
+def test_control_state_evening_discharge_edge_cases(go_tariff, mock_evse):
+    """Test edge cases for evening discharge behavior"""
+    # Just before 19:30
+    mock_evse.getBatteryChargeLevel.return_value = 90
+    state, _, _, message = go_tariff.get_control_state(mock_evse, 1169)  # 19:29
+    assert state == ControlState.LOAD_FOLLOW_DISCHARGE
+    assert "Day rate 19:00-00:30" in message
+
+    # Just after 19:30
+    state, _, _, message = go_tariff.get_control_state(mock_evse, 1171)  # 19:31
+    assert state == ControlState.DISCHARGE
+    assert "Day rate 19:00-00:30" in message
+
+    # Just before cheap rate
+    mock_evse.getBatteryChargeLevel.return_value = 56
+    state, _, _, message = go_tariff.get_control_state(mock_evse, 29)  # 00:29
+    assert state == ControlState.DISCHARGE
+    assert "Day rate 19:00-00:30" in message
+
+    # At start of cheap rate
+    state, _, _, message = go_tariff.get_control_state(mock_evse, 30)  # 00:30
+    assert state == ControlState.CHARGE
+    assert "Night rate" in message

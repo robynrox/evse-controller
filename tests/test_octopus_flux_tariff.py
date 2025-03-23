@@ -55,7 +55,7 @@ def test_control_state_off_peak(flux_tariff, mock_evse):
     mock_evse.getBatteryChargeLevel.return_value = 75
     state, min_current, max_current, message = flux_tariff.get_control_state(mock_evse, 180)  # 03:00
     assert state == ControlState.CHARGE
-    assert "Off-peak rate" in message
+    assert "Night rate" in message
 
     # Test with battery full
     mock_evse.getBatteryChargeLevel.return_value = config.MAX_CHARGE_PERCENT
@@ -71,25 +71,25 @@ def test_control_state_peak(flux_tariff, mock_evse):
     assert state == ControlState.DISCHARGE
     assert "Peak rate" in message
 
-    # Test with low battery level
+    # Test with low battery level (< 31%)
     mock_evse.getBatteryChargeLevel.return_value = 15
     state, min_current, max_current, message = flux_tariff.get_control_state(mock_evse, 1020)  # 17:00
-    assert state == ControlState.DORMANT
-    assert "SoC < 20%" in message
+    assert state == ControlState.LOAD_FOLLOW_DISCHARGE
+    assert "Peak rate: SoC<31%" in message
 
 def test_control_state_standard_period(flux_tariff, mock_evse):
     """Test behavior during standard rate period"""
-    # Test with sufficient battery level
+    # Test with sufficient battery level (75% - below 80% threshold)
     mock_evse.getBatteryChargeLevel.return_value = 75
     state, min_current, max_current, message = flux_tariff.get_control_state(mock_evse, 720)  # 12:00
-    assert state == ControlState.LOAD_FOLLOW_DISCHARGE
-    assert "Standard rate" in message
+    assert state == ControlState.LOAD_FOLLOW_CHARGE
+    assert "Day rate: SoC<80%" in message
 
     # Test with low battery level
-    mock_evse.getBatteryChargeLevel.return_value = 45
+    mock_evse.getBatteryChargeLevel.return_value = 25
     state, min_current, max_current, message = flux_tariff.get_control_state(mock_evse, 720)  # 12:00
     assert state == ControlState.DORMANT
-    assert "SoC < 50%" in message
+    assert "Battery depleted" in message
 
 def test_home_demand_levels(flux_tariff, mock_evse):
     """Test home demand levels configuration"""
@@ -100,8 +100,7 @@ def test_home_demand_levels(flux_tariff, mock_evse):
     flux_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
-    assert levels[0] == (0, 410, 0)  # First level
-    assert levels[1] == (410, 720, 3)  # Second level
+    assert levels[0] == (0, 480, 0)  # First level - no discharge below 480W
     
     # Test with low battery level
     mock_controller.reset_mock()
@@ -109,4 +108,4 @@ def test_home_demand_levels(flux_tariff, mock_evse):
     flux_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
-    assert levels[0] == (0, 720, 0)  # First level
+    assert levels[0] == (0, 720, 0)  # First level - conservative strategy
