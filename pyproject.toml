@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "evse-controller"
-version = "0.2.0"
+version = "0.3.0"
 description = "EVSE Controller with Wallbox Quasar support"
 authors = ["Robyn <robynrox@users.noreply.github.com>"]
 packages = [
