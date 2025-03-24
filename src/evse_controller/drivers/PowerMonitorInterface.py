@@ -20,31 +20,35 @@ class PowerMonitorInterface(ABC):
 
 
 class PowerMonitorPollingThread(threading.Thread):
-    def __init__(self, powerMonitor: PowerMonitorInterface):
+    def __init__(self, powerMonitor: PowerMonitorInterface, offset: float = 0.0):
         threading.Thread.__init__(self)
         self.powerMonitor = powerMonitor
         self.running = True
-        self.observers = []
+        self.observers = set()
+        self.offset = offset
 
     def run(self):
         while self.running:
+            # Get current time first
+            now = datetime.datetime.now()
+            start_of_next_second = now.replace(microsecond=0) + datetime.timedelta(seconds=1)
+            # Do the work
             result = self.powerMonitor.getPowerLevels()
             self.notify(result)
+            # Get current time after doing the work
             now = datetime.datetime.now()
-            time.sleep((1000000 - now.microsecond) / 1000000.0)
+            # Calculate sleep time based on the time we recorded before the work
+            sleep_time = (start_of_next_second - now).total_seconds() + self.offset
+            time.sleep(sleep_time)
 
     def stop(self):
         self.running = False
 
     def attach(self, observer: PowerMonitorObserver):
-        if observer not in self.observers:
-            self.observers.append(observer)
+        self.observers.add(observer)
 
     def detach(self, observer: PowerMonitorObserver):
-        try:
-            self.observers.remove(observer)
-        except ValueError:
-            pass
+        self.observers.discard(observer)
 
     def notify(self, result):
         for observer in self.observers:

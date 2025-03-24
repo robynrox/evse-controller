@@ -83,3 +83,15 @@ class EvseThreadInterface(ABC):
                  (e.g., 97% for Wallbox), False otherwise
         """
         pass
+
+    @abstractmethod
+    def is_empty(self) -> bool:
+        """Check if the battery is effectively empty.
+        
+        Returns:
+            bool: True if battery is at or below the minimum usable charge threshold
+                 (currently 5%), False otherwise
+        
+        TODO: Make the minimum threshold configurable via config file
+        """
+        pass

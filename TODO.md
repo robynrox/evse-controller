@@ -5,10 +5,11 @@
 - [ ] Allow naming of channels not being used for grid and EVSE power selection
 - [ ] Fix reporting of values to the database when only primary Shelly is used
 - [ ] Test functionality that models the EVSE power when not being monitored
-- [ ] Move to new thread-based Wallbox driver which will reduce modbus errors
+- [ ] Fix double running of EvseController's update function per second
 
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
+- [ ] Make the is_empty SoC configurable
 
 ## Low Priority
 - [ ] Improve Docker container support and testing
@@ -26,6 +27,7 @@
 - [x] Add more unit tests for edge cases
 - [x] Fix schedule not being persisted
 - [x] Fix log location, config location, and other files that need to be persisted
+- [x] Move to new thread-based Wallbox driver which will reduce modbus errors
 
 ## Notes
 - Priority levels are suggestions and may change based on user needs (please get in touch if you need something)

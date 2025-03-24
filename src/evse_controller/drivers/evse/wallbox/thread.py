@@ -273,14 +273,27 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         return max(0, remaining)
 
     def _execute_command(self, cmd: EvseCommandData):
-        # Check if we're allowed to change state yet
-        if time.time() < self._next_state_change_allowed:
-            warning(f"Command received before minimum delay period elapsed. "
-                   f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
-            return
-
         if cmd.command == EvseCommand.SET_CURRENT:
-            current_value = self._state.current
+            # First check if the requested current matches current state
+            with self._state_lock:
+                current_value = self._state.current
+                current_state = self._state.evse_state
+                
+                # If current value is the same and state is appropriate, no need to change
+                if current_value == cmd.value and (
+                    (cmd.value > 0 and current_state == EvseState.CHARGING) or
+                    (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
+                    (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
+                ):
+                    debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
+                    return
+
+            # Check if we're allowed to change state yet
+            if time.time() < self._next_state_change_allowed:
+                warning(f"Command received before minimum delay period elapsed. "
+                    f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
+                return
+
             self._next_state_change_allowed = self._calculate_next_state_change_time(
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
@@ -337,3 +350,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         """Check if battery is at Wallbox's maximum charging threshold (97%)"""
         with self._state_lock:
             return self._state.battery_level >= 97
+
+    def is_empty(self) -> bool:
+        """Check if battery is at Wallbox's minimum usable threshold (5%)"""
+        with self._state_lock:
+            return self._state.battery_level <= 5

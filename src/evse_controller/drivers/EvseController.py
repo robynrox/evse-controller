@@ -131,12 +131,19 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.thread = PowerMonitorPollingThread(self.pmon)
+        # Initialize primary thread with no offset
+        self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0)
         self.thread.start()
         self.thread.attach(self)
-        self.thread2 = PowerMonitorPollingThread(self.pmon2)
-        self.thread2.start()
-        self.thread2.attach(self)
+        
+        # Only create and start second thread if we have a secondary Shelly
+        self.thread2 = None
+        if self.pmon2 is not None:
+            # Initialize secondary thread with 0.5s offset
+            self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5)
+            self.thread2.start()
+            self.thread2.attach(self)
+
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None
         self.powerAtLastHalfHourlyLog = None
@@ -441,8 +448,13 @@ class EvseController(PowerMonitorObserver):
 
         #debug(f"Grid power: {grid_power}, EVSE power: {evse_power}")
 
-        # When power was instantiated, the SoC was not known, so update it here.
-        new_soc = self.evse.get_state().battery_level
+        # Get EVSE state once at the start
+        evse_state = self.evse.get_state()
+        self.evseCurrent = evse_state.current
+        self.chargerState = evse_state.evse_state
+        
+        # When power was instantiated, the SoC was not known, so update it here
+        new_soc = evse_state.battery_level
         
         # Only update if we get a valid reading
         if self._is_valid_soc(new_soc):
@@ -535,7 +547,7 @@ class EvseController(PowerMonitorObserver):
                 desiredEvseCurrent = 0
         if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
             resetState = True
-            if self.evse.isEmpty():
+            if self.evse.is_empty():
                 desiredEvseCurrent = 0
         if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
             resetState = True
