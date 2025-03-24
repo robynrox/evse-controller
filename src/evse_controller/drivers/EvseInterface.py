@@ -24,10 +24,6 @@ class EvseInterface(ABC):
         pass
 
     @abstractmethod
-    def getWriteNextAllowed(self) -> float:
-        pass
-
-    @abstractmethod
     def getReadNextAllowed(self) -> float:
         pass
 

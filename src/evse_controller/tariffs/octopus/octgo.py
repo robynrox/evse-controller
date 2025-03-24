@@ -29,10 +29,9 @@ class OctopusGoTariff(Tariff):
         """No specifically expensive periods in Octopus Go"""
         return False
 
-    def get_control_state(self, dayMinute: int) -> tuple:
+    def get_control_state(self, state: dict, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
-        evse = WallboxThread.get_instance()
-        battery_level = evse.getBatteryChargeLevel()
+        battery_level = state.battery_level
         
         if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
@@ -54,7 +53,7 @@ class OctopusGoTariff(Tariff):
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
 
 
-    def set_home_demand_levels(self, evseController, dayMinute):
+    def set_home_demand_levels(self, evseController, state, dayMinute):
         """Configure home demand power levels and corresponding charge/discharge currents.
         
         This method sets up the relationship between home power demand and the
@@ -67,7 +66,7 @@ class OctopusGoTariff(Tariff):
             dayMinute (int): Minutes since midnight (0-1439)
         """
         evse = WallboxThread.get_instance()
-        battery_level = evse.getBatteryChargeLevel()
+        battery_level = state.battery_level
         
         # If SoC > 50%:
         if battery_level >= 50:

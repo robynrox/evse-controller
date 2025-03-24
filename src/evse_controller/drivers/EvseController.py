@@ -68,9 +68,6 @@ class EvseController(PowerMonitorObserver):
     states including smart charging, load following, and bidirectional power flow.
 
     Args:
-        pmon (PowerMonitorInterface): Primary power monitor for grid consumption
-        pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
-        evse (EvseThreadInterface): The EVSE device being controlled
         tariffManager: Manager for electricity tariff rules and scheduling
 
     Attributes:
@@ -446,7 +443,7 @@ class EvseController(PowerMonitorObserver):
         #debug(f"Grid power: {grid_power}, EVSE power: {evse_power}")
 
         # When power was instantiated, the SoC was not known, so update it here.
-        new_soc = self.evse.getBatteryChargeLevel()
+        new_soc = self.evse.get_state().battery_level
         
         # Only update if we get a valid reading
         if self._is_valid_soc(new_soc):
@@ -509,7 +506,7 @@ class EvseController(PowerMonitorObserver):
                     .field("voltage", float(power.voltage))
                     .field("evseTargetCurrent", self.evseCurrent)
                     .field("evseDesiredCurrent", desiredEvseCurrent)
-                    .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+                    .field("batteryChargeLevel", self.evse.get_state().battery_level)
                     .field("heatpump", float(self.auxpower.ch1Watts))
                     .field("solar", float(self.auxpower.ch2Watts))
                 )
@@ -523,7 +520,7 @@ class EvseController(PowerMonitorObserver):
         self.chargerState = new_state
         logMsg += f"CS:{self.chargerState} "
 
-        nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
+        nextWriteAllowed = math.ceil(self.evse.get_time_until_current_change_allowed())
         if nextWriteAllowed > 0:
             logMsg += f"NextChgIn:{nextWriteAllowed}s "
             debug(logMsg)
@@ -626,10 +623,6 @@ class EvseController(PowerMonitorObserver):
             "soc": list(self.socHistory)
         }
 
-    def getWriteNextAllowed(self) -> float:
-        """Get timestamp when next write operation is allowed."""
-        return self.evse.getWriteNextAllowed()
-
     def getEvseState(self) -> EvseState:
         """Get current EVSE state."""
         try:
@@ -641,7 +634,7 @@ class EvseController(PowerMonitorObserver):
     def getBatteryChargeLevel(self) -> int:
         """Get current battery charge level."""
         try:
-            return self.evse.getBatteryChargeLevel()
+            return self.evse.get_state().battery_level
         except Exception as e:
             error(f"Failed to get battery charge level: {e}")
             return -1

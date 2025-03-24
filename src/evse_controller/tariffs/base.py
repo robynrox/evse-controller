@@ -59,7 +59,7 @@ class Tariff:
         """
         raise NotImplementedError
 
-    def set_home_demand_levels(self, evseController, dayMinute):
+    def set_home_demand_levels(self, evseController, state, dayMinute):
         """Configure home demand power levels and corresponding charge/discharge currents.
         
         This method defines the relationship between home power demand and the
@@ -69,6 +69,7 @@ class Tariff:
 
         Args:
             evseController: Controller instance for setting demand levels
+            state (dict): Current state containing battery_level
             dayMinute (int): Minutes since midnight (0-1439) for time-based decisions
 
         Raises:

@@ -1,21 +1,16 @@
 import pytest
 from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
 from evse_controller.drivers.EvseController import ControlState
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from evse_controller.utils.config import config
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+
+class MockState:
+    def __init__(self, battery_level):
+        self.battery_level = battery_level
 
 @pytest.fixture
 def cosy_tariff():
-    # Create a new mock for WallboxThread
-    mock_thread = Mock()
-    mock_thread.getBatteryChargeLevel = Mock(return_value=75)
-    mock_thread.get_state = Mock(return_value={})
-    
-    # Patch the get_instance method to return our mock
-    with patch('evse_controller.drivers.evse.wallbox.thread.WallboxThread.get_instance', 
-               return_value=mock_thread):
-        yield CosyOctopusTariff()
+    return CosyOctopusTariff()
 
 def test_off_peak_periods(cosy_tariff):
     """Test identification of off-peak periods (04:00-07:00, 13:00-16:00, 22:00-24:00)"""
@@ -45,30 +40,27 @@ def test_expensive_periods(cosy_tariff):
 
 def test_control_state_unknown_soc(cosy_tariff):
     """Test behavior when SoC is unknown"""
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = -1
-    state, min_current, max_current, message = cosy_tariff.get_control_state(720)
-    assert state == ControlState.CHARGE
+    state = MockState(-1)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 720)
+    assert control_state == ControlState.CHARGE
     assert min_current == 3
     assert max_current == 3
     assert "unknown" in message.lower()
 
 def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff):
     """Test behavior during expensive period with sufficient battery level"""
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = 80
-    state, min_current, max_current, message = cosy_tariff.get_control_state(1020)  # 17:00
-    assert state == ControlState.LOAD_FOLLOW_DISCHARGE
+    state = MockState(80)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
+    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current is None
     assert max_current is None
     assert "COSY Expensive rate: load follow discharge" in message
 
 def test_control_state_expensive_period_with_depleted_battery(cosy_tariff):
     """Test behavior during expensive period with depleted battery"""
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = 20
-    state, min_current, max_current, message = cosy_tariff.get_control_state(1020)  # 17:00
-    assert state == ControlState.DORMANT
+    state = MockState(20)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
+    assert control_state == ControlState.DORMANT
     assert min_current is None
     assert max_current is None
     assert "COSY Battery depleted, remain dormant" in message
@@ -88,10 +80,9 @@ def test_max_charge_percent_outside_solar_period(cosy_tariff):
 def test_home_demand_levels_during_expensive_period(cosy_tariff):
     """Test home demand levels during expensive period"""
     mock_controller = Mock()
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = 80
+    state = MockState(80)
     
-    cosy_tariff.set_home_demand_levels(mock_controller, 1020)  # 17:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 1020)  # 17:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -106,10 +97,9 @@ def test_home_demand_levels_during_expensive_period(cosy_tariff):
 def test_home_demand_levels_with_medium_battery(cosy_tariff):
     """Test home demand levels with battery between 50% and 100%"""
     mock_controller = Mock()
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = 65
+    state = MockState(65)
     
-    cosy_tariff.set_home_demand_levels(mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -121,10 +111,9 @@ def test_home_demand_levels_with_medium_battery(cosy_tariff):
 def test_home_demand_levels_with_low_battery(cosy_tariff):
     """Test home demand levels with battery below 50%"""
     mock_controller = Mock()
-    mock_thread = WallboxThread.get_instance()
-    mock_thread.getBatteryChargeLevel.return_value = 45
+    state = MockState(45)
     
-    cosy_tariff.set_home_demand_levels(mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     

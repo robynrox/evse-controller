@@ -46,10 +46,9 @@ class OctopusFluxTariff(Tariff):
         """
         return 960 <= dayMinute < 1140  # 16:00-19:00
 
-    def get_control_state(self, dayMinute: int) -> tuple:
+    def get_control_state(self, state: dict, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
-        evse = WallboxThread.get_instance()
-        battery_level = evse.getBatteryChargeLevel()
+        battery_level = state.battery_level
         
         if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "FLUX SoC unknown, charge at 3A until known"
@@ -63,31 +62,30 @@ class OctopusFluxTariff(Tariff):
         
         # Peak export period (16:00-19:00)
         if self.is_expensive_period(dayMinute):
-            if evse.getBatteryChargeLevel() < 31:
+            if battery_level < 31:
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, "FLUX Peak rate: SoC<31%, load follow discharge"
             
             # Calculate sliding threshold based on minutes since 16:00
             mins_since_1600 = dayMinute - 960  # 960 is 16:00
             threshold = 51 - math.floor(mins_since_1600 * 20 / 180)
             
-            if evse.getBatteryChargeLevel() < threshold:
+            if battery_level < threshold:
                 return ControlState.DISCHARGE, 10, 16, f"FLUX Peak rate: 31%<=SoC<{threshold}%, discharge min 10A"
             else:
                 return ControlState.DISCHARGE, None, None, f"FLUX Peak rate: SoC>={threshold}%, discharge at max rate"
         
         # Standard rate periods
-        if evse.getBatteryChargeLevel() <= 31:
+        if battery_level <= 31:
             return ControlState.DORMANT, None, None, "FLUX Battery depleted, remain dormant"
-        elif evse.getBatteryChargeLevel() >= 80:
+        elif battery_level >= 80:
             return ControlState.LOAD_FOLLOW_BIDIRECTIONAL, 6, 16, "FLUX Day rate: SoC>=80%, bidirectional 6-16A"
         else:
             return ControlState.LOAD_FOLLOW_CHARGE, 6, 16, "FLUX Day rate: SoC<80%, solar charge 6-16A"
 
-    def set_home_demand_levels(self, evseController, dayMinute):
+    def set_home_demand_levels(self, evseController, state, dayMinute):
         """Configure home demand power levels and corresponding charge/discharge currents."""
-        evse = WallboxThread.get_instance()
         # If SoC > 50%:
-        if evse.getBatteryChargeLevel() >= 50:
+        if state.battery_level >= 50:
             # Cover all of the home demand as far as possible.
             levels = []
             levels.append((0, 480, 0))
