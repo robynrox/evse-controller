@@ -399,7 +399,7 @@ class TestWallboxThread(TestCase):
         self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
         # After change, should return positive delay
-        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 15))
         time.sleep(self.thread._poll_interval)
         self.assertGreater(self.thread.get_time_until_current_change_allowed(), 0)
 
@@ -408,7 +408,7 @@ class TestWallboxThread(TestCase):
         self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
         # Test decreasing value over time
-        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
+        self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
         time.sleep(self.thread._poll_interval)
         initial_wait = self.thread.get_time_until_current_change_allowed()
         time.sleep(0.2)  # Wait a bit
