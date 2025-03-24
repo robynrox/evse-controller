@@ -20,8 +20,11 @@ class PowerMonitorInterface(ABC):
 
 
 class PowerMonitorPollingThread(threading.Thread):
-    def __init__(self, powerMonitor: PowerMonitorInterface, offset: float = 0.0):
-        threading.Thread.__init__(self)
+    def __init__(self, powerMonitor: PowerMonitorInterface, offset: float = 0.0, name: str = None):
+        # If no name provided, create a default one
+        if name is None:
+            name = f"PowerMonitor-{id(powerMonitor)}"
+        threading.Thread.__init__(self, name=name)
         self.powerMonitor = powerMonitor
         self.running = True
         self.observers = set()

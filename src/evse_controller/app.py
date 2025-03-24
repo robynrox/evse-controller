@@ -8,6 +8,7 @@ from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
+from evse_controller.utils.logging_config import info
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""

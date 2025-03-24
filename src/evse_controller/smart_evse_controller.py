@@ -45,9 +45,11 @@ class ExecState(Enum):
     PAUSE_UNTIL_DISCONNECT = 9
 
 
+# Initialize core components at module level
+tariffManager = TariffManager()
+evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
 execState = ExecState.SMART
-tariffManager = TariffManager()
 scheduler = Scheduler()
 
 def get_system_state():
@@ -74,12 +76,6 @@ class InputParser(threading.Thread):
                 break
             except Exception as e:
                 error(f"Exception raised: {e}")
-
-
-inputThread = InputParser()
-inputThread.start()
-
-evseController = EvseController(tariffManager)  # Pass tariffManager directly
 
 
 def handle_schedule_command(command_parts):
@@ -136,15 +132,14 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
-    # Create tariff manager first
-    tariffManager = TariffManager()
-    
-    # Create EVSE controller, which will initialize the Wallbox thread
-    evseController = EvseController(tariffManager)
-    
-    global execState
+    """Main loop for EVSE controller without web interface"""
+    global execState  # Add this line to allow modification of execState
     nextStateCheck = 0
-    previous_state = None  # Store previous state for pause-until-disconnect
+    previous_state = None
+
+    # Start input thread for CLI
+    inputThread = InputParser()
+    inputThread.start()
 
     while not _shutdown_event.is_set():
         try:

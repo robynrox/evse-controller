@@ -1,10 +1,8 @@
-import os
-from datetime import datetime
 from enum import Enum
 import math
 import time
 from evse_controller.drivers.evse.async_interface import EvseState
-from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
+from evse_controller.drivers.PowerMonitorInterface import PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseCommand, EvseCommandData
 from evse_controller.drivers.evse.wallbox.thread import WallboxThread
@@ -21,10 +19,7 @@ except ImportError:
 
 from collections import deque
 import json
-from pathlib import Path
-import sys
 import threading
-from typing import Optional
 
 class ControlState(Enum):
     """Defines possible operational states for the EVSE controller.
@@ -132,7 +127,7 @@ class EvseController(PowerMonitorObserver):
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
         # Initialize primary thread with no offset
-        self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0)
+        self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0, name="PrimaryMonitor")
         self.thread.start()
         self.thread.attach(self)
         
@@ -140,7 +135,7 @@ class EvseController(PowerMonitorObserver):
         self.thread2 = None
         if self.pmon2 is not None:
             # Initialize secondary thread with 0.5s offset
-            self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5)
+            self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5, name="SecondaryMonitor")
             self.thread2.start()
             self.thread2.attach(self)
 

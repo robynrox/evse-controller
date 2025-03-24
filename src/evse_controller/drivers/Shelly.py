@@ -93,20 +93,3 @@ class PowerMonitorShelly(PowerMonitorInterface):
             error(f"Error getting power from Shelly: {e}")
             # Return a Power object with zero values instead of a float
             return Power()
-
-class PowerMonitorInterface:
-    def __init__(self, powerMonitor: PowerMonitorShelly):
-        self.powerMonitor = powerMonitor
-
-    def run(self):
-        """Main loop for power monitoring."""
-        while True:
-            try:
-                result = self.powerMonitor.getPower()
-                if not isinstance(result, Power):
-                    error(f"Invalid power reading type: {type(result)}")
-                    result = Power()  # Use empty Power object if invalid
-                self.notify(result)
-            except Exception as e:
-                error(f"Error in power monitor thread: {e}")
-            time.sleep(1)
