@@ -6,7 +6,7 @@ from pyModbusTCP.client import ModbusClient
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
-from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.evse.async_interface import EvseState
 from wallbox import Wallbox
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
@@ -16,7 +16,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     _lock = threading.Lock()
 
     @classmethod
-    def get_instance(cls, host: str = None, **kwargs) -> 'WallboxThread':
+    def get_instance(cls, host: str = None, **kwargs) -> EvseThreadInterface:
         with cls._lock:
             if cls._instance is None:
                 if host is None:
@@ -332,3 +332,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def get_modelled_power(self) -> float:
         """Get the estimated power consumption in watts based on current state."""
         return self._power_model.get_power()
+
+    def is_full(self) -> bool:
+        """Check if battery is at Wallbox's maximum charging threshold (97%)"""
+        with self._state_lock:
+            return self._state.battery_level >= 97

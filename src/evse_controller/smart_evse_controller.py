@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
+from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)
@@ -284,10 +285,12 @@ def main():
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
+                evse = WallboxThread.get_instance()
+                state = evse.get_state()
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
                 debug(log_message)
                 evseController.setControlState(control_state)
-                tariffManager.get_tariff().set_home_demand_levels(evseController, dayMinute)
+                tariffManager.get_tariff().set_home_demand_levels(evseController, state, dayMinute)
                 if min_current is not None and max_current is not None:
                     if control_state == ControlState.CHARGE:
                         evseController.setChargeCurrentRange(min_current, max_current)

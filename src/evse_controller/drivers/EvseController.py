@@ -3,10 +3,10 @@ from datetime import datetime
 from enum import Enum
 import math
 import time
-from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.evse.async_interface import EvseState
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
-from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseCommand, EvseCommandData
 from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
@@ -114,7 +114,7 @@ class EvseController(PowerMonitorObserver):
 
         # Get Wallbox instance
         try:
-            self.evse = WallboxThread.get_instance()
+            self.evse: EvseThreadInterface = WallboxThread.get_instance()
         except Exception as e:
             error(f"Failed to initialize Wallbox: {e}")
             raise
@@ -137,7 +137,6 @@ class EvseController(PowerMonitorObserver):
         self.thread2 = PowerMonitorPollingThread(self.pmon2)
         self.thread2.start()
         self.thread2.attach(self)
-        self.connectionErrors = 0
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None
         self.powerAtLastHalfHourlyLog = None
@@ -532,7 +531,7 @@ class EvseController(PowerMonitorObserver):
             resetState = True
         if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
             resetState = True
-            if self.evse.isFull():
+            if self.evse.is_full():
                 desiredEvseCurrent = 0
         if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
             resetState = True
@@ -545,8 +544,7 @@ class EvseController(PowerMonitorObserver):
         if resetState:
             if (self.evseCurrent != desiredEvseCurrent):
                 info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-            self.evse.setChargingCurrent(desiredEvseCurrent)
-            self.evseCurrent = desiredEvseCurrent
+            self._setCurrent(desiredEvseCurrent)
 
         # After processing updates, save persistent state
         self._save_persistent_state()
@@ -626,7 +624,7 @@ class EvseController(PowerMonitorObserver):
     def getEvseState(self) -> EvseState:
         """Get current EVSE state."""
         try:
-            return self.evse.getEvseState()
+            return self.evse.get_state().evse_state
         except Exception as e:
             error(f"Failed to get EVSE state: {e}")
             return EvseState.ERROR
@@ -640,14 +638,18 @@ class EvseController(PowerMonitorObserver):
             return -1
 
     def _setCurrent(self, current: float):
-        """Set the EVSE current."""
+        """Set the EVSE current.
+        
+        Args:
+            current: Current in amperes. Positive for charging, negative for discharging.
+        """
         try:
-            self.evse.setChargingCurrent(int(abs(current)))
-            self.evse_power_model.set_current(current)
+            cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=int(abs(current)))
+            if not self.evse.send_command(cmd):
+                raise RuntimeError("Failed to send command to EVSE thread")
             self.evseCurrent = current
         except Exception as e:
             error(f"Failed to set current: {e}")
-            self.connectionErrors += 1
 
     def stop(self):
         """Stop the controller and cleanup resources."""
@@ -659,10 +661,7 @@ class EvseController(PowerMonitorObserver):
         
         try:
             # Stop charging before cleanup
-            if hasattr(self.evse, 'stopCharging'):
-                self.evse.stopCharging()
-            elif hasattr(self.evse, 'setChargingCurrent'):
-                self.evse.setChargingCurrent(0)
+            self._setCurrent(0)
             
             # Stop threads first
             if hasattr(self.thread, 'stop'):

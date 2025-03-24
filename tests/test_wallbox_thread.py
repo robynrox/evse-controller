@@ -5,7 +5,7 @@ from typing import Optional, List
 from evse_controller.drivers.evse.wallbox.thread import WallboxThread
 from evse_controller.drivers.evse.wallbox.modbus_interface import ModbusClientInterface
 from evse_controller.drivers.evse.async_interface import EvseAsyncState, EvseCommand, EvseCommandData
-from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.evse.async_interface import EvseState
 
 class MockModbusClient(ModbusClientInterface):
     def __init__(self):

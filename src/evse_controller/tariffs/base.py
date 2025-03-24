@@ -48,7 +48,7 @@ class Tariff:
         """
         raise NotImplementedError
 
-    def get_control_state(self, dayMinute: int) -> tuple:
+    def get_control_state(self, state, dayMinute: int) -> tuple:
         """Determine the appropriate control state based on current conditions.
 
         Args:
