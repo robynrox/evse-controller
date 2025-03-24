@@ -108,6 +108,8 @@ _shutdown_event = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
+    global inputThread  # Add this line to acknowledge the global
+    
     if _shutdown_event.is_set():
         return  # Already shutting down
         

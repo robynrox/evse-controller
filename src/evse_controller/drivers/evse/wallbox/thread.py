@@ -217,7 +217,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             battery_reg = reg_contents[1][0]
             current_reg = reg_contents[2][0]
 
-            debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
+            #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
 
             with self._state_lock:
                 # Direct construction instead of using from_modbus_register
