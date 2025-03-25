@@ -436,7 +436,7 @@ def get_status():
         (event for event in future_events if event.enabled), 
         None
     )
-    battery_soc = evseController.evse.getBatteryChargeLevel()
+    battery_soc = evseController.getBatteryChargeLevel()  # Fixed to use the controller's method
     
     return jsonify({
         'current_state': current_state,
