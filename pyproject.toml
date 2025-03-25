@@ -9,6 +9,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
+psutil = "^5.9.0"
 python = "^3.11"
 requests = "~2.31.0"
 pyModbusTCP = "~0.2.0"

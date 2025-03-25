@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.utils.memory_monitor import MemoryMonitor
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)
@@ -108,7 +109,7 @@ _shutdown_event = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
-    global inputThread  # Add this line to acknowledge the global
+    global inputThread, memory_monitor  # Add memory_monitor to globals
     
     if _shutdown_event.is_set():
         return  # Already shutting down
@@ -122,6 +123,11 @@ def signal_handler(signum, frame):
         # Give threads time to clean up
         if 'inputThread' in globals() and inputThread.is_alive():
             inputThread.join(timeout=1)
+            
+        # Stop and cleanup memory monitor
+        if 'memory_monitor' in globals() and memory_monitor.is_alive():
+            memory_monitor.stop()
+            memory_monitor.join(timeout=1)
             
     except Exception as e:
         error(f"Error during shutdown: {e}")
@@ -142,6 +148,10 @@ def main():
     # Start input thread for CLI
     inputThread = InputParser()
     inputThread.start()
+
+    # Start memory monitoring
+    memory_monitor = MemoryMonitor(interval=3600)  # Log every hour
+    memory_monitor.start()
 
     while not _shutdown_event.is_set():
         try:
