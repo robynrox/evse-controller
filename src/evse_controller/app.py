@@ -300,6 +300,10 @@ def index():
                          scheduled_events=scheduled_events,
                          current_state=current_state)
 
+@app.route('/tariff-designer')
+def tariff_designer():
+    return render_template('tariff_designer.html')
+
 @schedule_ns.route('/')
 class ScheduleResource(Resource):
     @schedule_ns.marshal_list_with(scheduled_event_model)
