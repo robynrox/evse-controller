@@ -3,7 +3,7 @@ from evse_controller.tariffs.octopus.flux import OctopusFluxTariff
 from evse_controller.drivers.EvseController import ControlState
 from unittest.mock import Mock, patch
 from evse_controller.utils.config import config
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 
 class MockState:
     def __init__(self, battery_level):

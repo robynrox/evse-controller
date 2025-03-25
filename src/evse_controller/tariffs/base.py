@@ -52,6 +52,7 @@ class Tariff:
         """Determine the appropriate control state based on current conditions.
 
         Args:
+            state: State object containing battery_level and other EVSE state information
             dayMinute (int): Minutes since midnight (0-1439)
 
         Returns:
@@ -69,7 +70,7 @@ class Tariff:
 
         Args:
             evseController: Controller instance for setting demand levels
-            state (dict): Current state containing battery_level
+            state: State object containing battery_level and other EVSE state information
             dayMinute (int): Minutes since midnight (0-1439) for time-based decisions
 
         Raises:

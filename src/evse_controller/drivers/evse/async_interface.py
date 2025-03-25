@@ -33,7 +33,7 @@ class EvseAsyncState:
     """Thread-safe data container for Wallbox state"""
     evse_state: EvseState = EvseState.UNKNOWN
     current: int = 0
-    battery_level: int = 0
+    battery_level: int = -1  # Changed from 0 to -1 to indicate unknown/invalid state
     last_update: float = 0
     consecutive_connection_errors: int = 0
     power_watts: float = 0.0

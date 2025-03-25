@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, patch, PropertyMock
 from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
 from evse_controller.drivers.EvseController import ControlState
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.utils.config import config
 
 @pytest.fixture

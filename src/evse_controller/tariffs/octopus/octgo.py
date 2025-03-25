@@ -1,7 +1,7 @@
 from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 
 class OctopusGoTariff(Tariff):
     """Implementation of Octopus Go tariff logic.

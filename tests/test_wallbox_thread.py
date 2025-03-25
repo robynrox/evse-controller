@@ -2,7 +2,7 @@ import unittest
 from unittest import TestCase
 import time
 from typing import Optional, List
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.wallbox.modbus_interface import ModbusClientInterface
 from evse_controller.drivers.evse.async_interface import EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.drivers.evse.async_interface import EvseState

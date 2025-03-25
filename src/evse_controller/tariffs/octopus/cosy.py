@@ -1,7 +1,9 @@
 from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.utils.logging_config import debug, info, warning, error
 
 class CosyOctopusTariff(Tariff):
     """Implementation of Cosy Octopus tariff logic."""
@@ -38,10 +40,12 @@ class CosyOctopusTariff(Tariff):
         """Check if current time is during peak period (16:00-19:00)"""
         return 960 <= dayMinute < 1140
 
-    def get_control_state(self, state: dict, dayMinute: int) -> tuple:
+    def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
+        # Access battery_level directly as a property
         battery_level = state.battery_level
         
+        debug(f"COSY Tariff: Current battery level is {battery_level}")
         if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "COSY SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):

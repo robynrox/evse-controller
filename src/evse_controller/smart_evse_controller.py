@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)

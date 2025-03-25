@@ -5,7 +5,7 @@ from evse_controller.drivers.evse.async_interface import EvseState
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseCommand, EvseCommandData
-from evse_controller.drivers.evse.wallbox.thread import WallboxThread
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from evse_controller.utils.config import config
@@ -651,7 +651,7 @@ class EvseController(PowerMonitorObserver):
             current: Current in amperes. Positive for charging, negative for discharging.
         """
         try:
-            cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=int(abs(current)))
+            cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=int(current))  # Remove abs()
             if not self.evse.send_command(cmd):
                 raise RuntimeError("Failed to send command to EVSE thread")
             self.evseCurrent = current
