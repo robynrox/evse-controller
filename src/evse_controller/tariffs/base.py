@@ -1,5 +1,6 @@
 from datetime import datetime
 from evse_controller.drivers.EvseController import ControlState
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
 class Tariff:
     """Base class for implementing electricity tariff logic.
@@ -48,7 +49,7 @@ class Tariff:
         """
         raise NotImplementedError
 
-    def get_control_state(self, state, dayMinute: int) -> tuple:
+    def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
         """Determine the appropriate control state based on current conditions.
 
         Args:
@@ -60,7 +61,7 @@ class Tariff:
         """
         raise NotImplementedError
 
-    def set_home_demand_levels(self, evseController, state, dayMinute):
+    def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels and corresponding charge/discharge currents.
         
         This method defines the relationship between home power demand and the

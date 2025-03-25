@@ -1,12 +1,15 @@
 import pytest
 from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
 from evse_controller.drivers.EvseController import ControlState
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from unittest.mock import Mock
 from evse_controller.utils.config import config
 
-class MockState:
-    def __init__(self, battery_level):
-        self.battery_level = battery_level
+def create_test_state(battery_level: int) -> EvseAsyncState:
+    """Helper function to create a test state with specified battery level"""
+    state = EvseAsyncState()
+    state.battery_level = battery_level
+    return state
 
 @pytest.fixture
 def cosy_tariff():
@@ -40,7 +43,7 @@ def test_expensive_periods(cosy_tariff):
 
 def test_control_state_unknown_soc(cosy_tariff):
     """Test behavior when SoC is unknown"""
-    state = MockState(-1)
+    state = create_test_state(-1)
     control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 720)
     assert control_state == ControlState.CHARGE
     assert min_current == 3
@@ -49,7 +52,7 @@ def test_control_state_unknown_soc(cosy_tariff):
 
 def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff):
     """Test behavior during expensive period with sufficient battery level"""
-    state = MockState(80)
+    state = create_test_state(80)
     control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current is None
@@ -58,7 +61,7 @@ def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff):
 
 def test_control_state_expensive_period_with_depleted_battery(cosy_tariff):
     """Test behavior during expensive period with depleted battery"""
-    state = MockState(20)
+    state = create_test_state(20)
     control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
     assert control_state == ControlState.DORMANT
     assert min_current is None
@@ -80,7 +83,7 @@ def test_max_charge_percent_outside_solar_period(cosy_tariff):
 def test_home_demand_levels_during_expensive_period(cosy_tariff):
     """Test home demand levels during expensive period"""
     mock_controller = Mock()
-    state = MockState(80)
+    state = create_test_state(80)
     
     cosy_tariff.set_home_demand_levels(mock_controller, state, 1020)  # 17:00
     assert mock_controller.setHomeDemandLevels.called
@@ -97,7 +100,7 @@ def test_home_demand_levels_during_expensive_period(cosy_tariff):
 def test_home_demand_levels_with_medium_battery(cosy_tariff):
     """Test home demand levels with battery between 50% and 100%"""
     mock_controller = Mock()
-    state = MockState(65)
+    state = create_test_state(65)
     
     cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
@@ -111,7 +114,7 @@ def test_home_demand_levels_with_medium_battery(cosy_tariff):
 def test_home_demand_levels_with_low_battery(cosy_tariff):
     """Test home demand levels with battery below 50%"""
     mock_controller = Mock()
-    state = MockState(45)
+    state = create_test_state(45)
     
     cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called

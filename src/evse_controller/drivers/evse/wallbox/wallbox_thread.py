@@ -156,11 +156,11 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     time.sleep(sleep_time)
                     loop_start_time += self._poll_interval
 
-                debug("Starting Wallbox state update cycle")  # New log
+                #debug("Starting Wallbox state update cycle")  # New log
                 self._check_and_handle_comms_failures()
                 self._update_state()
                 self._process_commands()
-                debug("Completed Wallbox state update cycle")  # New log
+                #debug("Completed Wallbox state update cycle")  # New log
                                     
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")

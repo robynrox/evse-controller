@@ -4,10 +4,13 @@ from evse_controller.drivers.EvseController import ControlState
 from unittest.mock import Mock, patch
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
-class MockState:
-    def __init__(self, battery_level):
-        self.battery_level = battery_level
+def create_test_state(battery_level: int) -> EvseAsyncState:
+    """Helper function to create a test state with specified battery level"""
+    state = EvseAsyncState()
+    state.battery_level = battery_level
+    return state
 
 @pytest.fixture
 def flux_tariff():
@@ -16,8 +19,8 @@ def flux_tariff():
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
     mock_thread.get_state = Mock(return_value={})
     
-    # Patch the get_instance method to return our mock
-    with patch('evse_controller.drivers.evse.wallbox.thread.WallboxThread.get_instance', 
+    # Updated patch path to use wallbox_thread instead of thread
+    with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance', 
                return_value=mock_thread):
         yield OctopusFluxTariff()
 
@@ -49,7 +52,7 @@ def test_expensive_periods(flux_tariff):
 
 def test_control_state_unknown_soc(flux_tariff):
     """Test behavior when SoC is unknown"""
-    state = MockState(-1)
+    state = create_test_state(-1)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 720)
     assert state == ControlState.CHARGE
     assert min_current == 3
@@ -59,13 +62,13 @@ def test_control_state_unknown_soc(flux_tariff):
 def test_control_state_off_peak(flux_tariff):
     """Test behavior during off-peak period"""
     # Test with battery not full
-    state = MockState(75)
+    state = create_test_state(75)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 180)  # 03:00
     assert state == ControlState.CHARGE
     assert "Night rate" in message
 
     # Test with battery full
-    state = MockState(config.MAX_CHARGE_PERCENT)
+    state = create_test_state(config.MAX_CHARGE_PERCENT)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 180)  # 03:00
     assert state == ControlState.DORMANT
     assert "SoC max" in message
@@ -73,27 +76,27 @@ def test_control_state_off_peak(flux_tariff):
 def test_control_state_peak(flux_tariff):
     """Test behavior during peak period"""
     # Test with sufficient battery level
-    state = MockState(75)
+    state = create_test_state(75)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 1020)  # 17:00
     assert state == ControlState.DISCHARGE
     assert "Peak rate" in message
 
     # Test with low battery level (< 31%)
-    state = MockState(15)
+    state = create_test_state(15)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 1020)  # 17:00
     assert state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert "Peak rate: SoC<31%" in message
 
 def test_control_state_standard_period(flux_tariff):
     """Test behavior during standard rate period"""
-    state = MockState(75)
+    state = create_test_state(75)
     # Test with sufficient battery level (75% - below 80% threshold)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 720)  # 12:00
     assert state == ControlState.LOAD_FOLLOW_CHARGE
     assert "Day rate: SoC<80%" in message
 
     # Test with low battery level
-    state = MockState(25)
+    state = create_test_state(25)
     state, min_current, max_current, message = flux_tariff.get_control_state(state, 720)  # 12:00
     assert state == ControlState.DORMANT
     assert "Battery depleted" in message
@@ -101,7 +104,7 @@ def test_control_state_standard_period(flux_tariff):
 def test_home_demand_levels(flux_tariff):
     """Test home demand levels configuration"""
     mock_controller = Mock()
-    state = MockState(75)
+    state = create_test_state(75)
     
     # Test with high battery level
     flux_tariff.set_home_demand_levels(mock_controller, state, 720)

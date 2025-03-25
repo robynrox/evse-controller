@@ -3,6 +3,7 @@ from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
 class OctopusFluxTariff(Tariff):
     """Implementation of Octopus Flux tariff logic.
@@ -46,7 +47,7 @@ class OctopusFluxTariff(Tariff):
         """
         return 960 <= dayMinute < 1140  # 16:00-19:00
 
-    def get_control_state(self, state: dict, dayMinute: int) -> tuple:
+    def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
         battery_level = state.battery_level
         
@@ -82,7 +83,7 @@ class OctopusFluxTariff(Tariff):
         else:
             return ControlState.LOAD_FOLLOW_CHARGE, 6, 16, "FLUX Day rate: SoC<80%, solar charge 6-16A"
 
-    def set_home_demand_levels(self, evseController, state, dayMinute):
+    def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels and corresponding charge/discharge currents."""
         # If SoC > 50%:
         if state.battery_level >= 50:

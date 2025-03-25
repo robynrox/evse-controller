@@ -1,17 +1,16 @@
 import pytest
-from unittest.mock import Mock, patch, PropertyMock
+from unittest.mock import Mock, patch
 from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.config import config
 
-@pytest.fixture
-def mock_evse():
-    evse = Mock()
-    # Ensure all required methods exist on the mock
-    evse.getBatteryChargeLevel = Mock(return_value=75)
-    evse.get_state = Mock(return_value={})
-    return evse
+def create_test_state(battery_level: int) -> EvseAsyncState:
+    """Helper function to create a test state with specified battery level"""
+    state = EvseAsyncState()
+    state.battery_level = battery_level
+    return state
 
 @pytest.fixture
 def go_tariff():
@@ -20,8 +19,8 @@ def go_tariff():
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
     mock_thread.get_state = Mock(return_value={})
     
-    # Patch the get_instance method to return our mock
-    with patch('evse_controller.drivers.evse.wallbox.thread.WallboxThread.get_instance', 
+    # Updated patch path to use wallbox_thread instead of thread
+    with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance', 
                return_value=mock_thread):
         yield OctopusGoTariff()
 
@@ -42,13 +41,9 @@ def test_expensive_periods(go_tariff):
     assert not go_tariff.is_expensive_period(720)  # Should always return False
     assert not go_tariff.is_expensive_period(1020) # Even during typical peak times
 
-class MockState:
-    def __init__(self, battery_level):
-        self.battery_level = battery_level
-
 def test_control_state_unknown_soc(go_tariff):
     """Test behavior when SoC is unknown"""
-    state = MockState(-1)
+    state = create_test_state(-1)
     state, min_current, max_current, message = go_tariff.get_control_state(state, 720)
     assert state == ControlState.CHARGE
     assert min_current == 3
@@ -58,7 +53,7 @@ def test_control_state_unknown_soc(go_tariff):
 def test_control_state_off_peak(go_tariff):
     """Test behavior during off-peak period"""
     # Test with battery not full
-    state = MockState(75)
+    state = create_test_state(75)
     state, min_current, max_current, message = go_tariff.get_control_state(state, 120)  # 02:00
     assert state == ControlState.CHARGE
     assert min_current is None
@@ -66,14 +61,14 @@ def test_control_state_off_peak(go_tariff):
     assert "OCTGO Night rate: charge at max rate" in message
 
     # Test with battery full
-    state = MockState(config.MAX_CHARGE_PERCENT)
+    state = create_test_state(config.MAX_CHARGE_PERCENT)
     state, min_current, max_current, message = go_tariff.get_control_state(state, 120)  # 02:00
     assert state == ControlState.DORMANT
     assert "OCTGO Night rate: SoC max" in message
 
 def test_control_state_low_battery(go_tariff):
     """Test behavior with low battery level during peak period"""
-    state = MockState(25)
+    state = create_test_state(25)
     state, min_current, max_current, message = go_tariff.get_control_state(state, 720)  # 12:00
     assert state == ControlState.DORMANT
     assert "OCTGO Battery depleted" in message
@@ -81,7 +76,7 @@ def test_control_state_low_battery(go_tariff):
 def test_home_demand_levels(go_tariff):
     """Test home demand levels configuration"""
     mock_controller = Mock()
-    mock_state = MockState(75)
+    mock_state = create_test_state(75)
     
     # Test with high battery level
     go_tariff.set_home_demand_levels(mock_controller, mock_state, 720)
@@ -120,14 +115,14 @@ def test_control_state_evening_discharge_threshold(go_tariff):
 
     for minute, expected_threshold, description in test_cases:
         # Test battery above threshold
-        state = MockState(expected_threshold + 1)
+        state = create_test_state(expected_threshold + 1)
         state, min_current, max_current, message = go_tariff.get_control_state(state, minute)
         assert state == ControlState.DISCHARGE, description
         assert f"SoC>{expected_threshold}" in message
         assert "discharge at max rate" in message
 
         # Test battery at threshold
-        state = MockState(expected_threshold)
+        state = create_test_state(expected_threshold)
         state, min_current, max_current, message = go_tariff.get_control_state(state, minute)
         assert state == ControlState.LOAD_FOLLOW_DISCHARGE, description
         assert f"SoC<={expected_threshold}" in message
@@ -136,7 +131,7 @@ def test_control_state_evening_discharge_threshold(go_tariff):
 def test_control_state_evening_discharge_edge_cases(go_tariff):
     """Test edge cases for evening discharge behavior"""
     # Just before 19:30
-    state = MockState(90)
+    state = create_test_state(90)
     control_state, _, _, message = go_tariff.get_control_state(state, 1169)  # 19:29
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert "Day rate 19:00-00:30" in message
@@ -147,7 +142,7 @@ def test_control_state_evening_discharge_edge_cases(go_tariff):
     assert "Day rate 19:00-00:30" in message
 
     # Just before cheap rate
-    state = MockState(56)
+    state = create_test_state(56)
     control_state, _, _, message = go_tariff.get_control_state(state, 29)  # 00:29
     assert control_state == ControlState.DISCHARGE
     assert "Day rate 19:00-00:30" in message

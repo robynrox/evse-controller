@@ -23,7 +23,7 @@ class CosyOctopusTariff(Tariff):
             "low 3": {"start": "22:00", "end": "24:00", "import_rate":  low, "export_rate": 0.15},
         }
 
-    def get_max_charge_percent(self, dayMinute):
+    def get_max_charge_percent(self, dayMinute: int) -> int:
         # Afternoon period (13:00-16:00)
         if 13 * 60 <= dayMinute < 16 * 60:
             return config.SOLAR_PERIOD_MAX_CHARGE
@@ -61,7 +61,7 @@ class CosyOctopusTariff(Tariff):
         else:
             return ControlState.LOAD_FOLLOW_DISCHARGE, None, None, "COSY Standard rate: load follow discharge"
 
-    def set_home_demand_levels(self, evseController, state, dayMinute):
+    def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels based on time and battery level."""
         battery_level = state.battery_level
         

@@ -2,6 +2,7 @@ from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
 class OctopusGoTariff(Tariff):
     """Implementation of Octopus Go tariff logic.
@@ -29,7 +30,7 @@ class OctopusGoTariff(Tariff):
         """No specifically expensive periods in Octopus Go"""
         return False
 
-    def get_control_state(self, state: dict, dayMinute: int) -> tuple:
+    def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
         battery_level = state.battery_level
         
@@ -53,7 +54,7 @@ class OctopusGoTariff(Tariff):
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
 
 
-    def set_home_demand_levels(self, evseController, state, dayMinute):
+    def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels and corresponding charge/discharge currents.
         
         This method sets up the relationship between home power demand and the
