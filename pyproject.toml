@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "evse-controller"
-version = "0.2.0"
+version = "0.3.0"
 description = "EVSE Controller with Wallbox Quasar support"
 authors = ["Robyn <robynrox@users.noreply.github.com>"]
 packages = [
@@ -9,6 +9,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
+psutil = "^5.9.0"
 python = "^3.11"
 requests = "~2.31.0"
 pyModbusTCP = "~0.2.0"

@@ -41,21 +41,11 @@ version 1, so I would suggest installing as per the official instructions on the
 
 ## Data Storage
 
-### Default Location
-All variable data (configuration, logs, and state) is stored in a `data` directory within the project root. This includes:
+All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
 - `data/state/` - State files including schedule and EVSE state
 
-### Container Deployment
-When running in a container (either via Docker Compose or Dev Container), the data is stored in a persistent volume:
-
-- Docker Compose: Uses the `evse-data` volume mounted at `/workspace/data`
-- Dev Container: Uses the `evse-controller-devdata` volume mounted at `/workspace/data`
-
-This ensures data persists between container restarts and rebuilds.
-
-### Custom Data Location
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
 
 ```bash
@@ -68,16 +58,7 @@ $env:EVSE_DATA_DIR = "C:\path\to\custom\data"
 python -m evse_controller.app
 ```
 
-When using Docker Compose, you can modify the volume mount point in `docker-compose.yml`:
-
-```yaml
-services:
-  evse-controller:
-    environment:
-      - EVSE_DATA_DIR=/custom/data/path
-    volumes:
-      - evse-data:/custom/data/path
-```
+For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
 
 ## Detailed Setup Instructions
 
@@ -157,58 +138,58 @@ services:
 
 3. **Configuration**
 
-   Before configuring, you may want to use the discovery tool to find your devices.
-   See `evse-discovery/README.md` for detailed information about the discovery process.
+  Before configuring, you may want to use the discovery tool to find your devices.
+  See `evse-discovery/README.md` for detailed information about the discovery process.
 
-   There are two ways to configure the application:
+  There are two ways to configure the application:
 
-   A. Interactive Configuration:
-   ```bash
-   python configure.py
-   ```
-   This will guide you through setting up:
-   - Wallbox connection details
-   - Shelly EM configuration
-   - InfluxDB settings (optional)
-   - Charging preferences
-   
-   B. Manual Configuration:
-   - Edit `config.yaml` directly (created by configure.py)
-   - Configuration structure:
-     ```yaml
-     wallbox:
-       url: "WB012345.ultrahub"  # Hostname or IP address
-       username: "myemail@address.com"  # Optional, for auto-restart
-       password: "yourpassword"         # Optional, for auto-restart
-       serial: 12345                    # Optional, for auto-restart
-     shelly:
-       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
-       secondary_url: null              # Optional second Shelly
-       grid:
-         device: "primary"             # primary or secondary
-         channel: 1                    # 1 or 2
-       evse:
-         device: ""                    # primary or secondary, empty if not used
-         channel: null                 # 1 or 2, null if not used
-     influxdb:
-       enabled: false
-       url: "http://localhost:8086"
-       token: ""
-       org: ""
-     logging:
-       file_level: "DEBUG"
-       console_level: "WARNING"
-       directory: "log"
-       file_prefix: "evse"
-       max_bytes: 10485760             # 10MB
-       backup_count: 30
-     charging:
-       max_charge_percent: 90          # Maximum battery charge percentage
-       solar_period_max_charge: 80     # Maximum charge during solar generation periods
-       default_tariff: "COSY"          # COSY, OCTGO or FLUX
-     ```
+  A. Interactive Configuration:
+  ```bash
+  python configure.py
+  ```
+  This will guide you through setting up:
+  - Wallbox connection details
+  - Shelly EM configuration
+  - InfluxDB settings (optional)
+  - Charging preferences
 
-   Note: The old `configuration.py`/`secret.py` method is deprecated and will be removed in a future version.
+  B. Manual Configuration:
+  - Edit `config.yaml` directly (created by configure.py)
+  - Configuration structure:
+    ```yaml
+    wallbox:
+      url: "WB012345.ultrahub"  # Hostname or IP address
+      username: "myemail@address.com"  # Optional, for auto-restart
+      password: "yourpassword"         # Optional, for auto-restart
+      serial: 12345                    # Optional, for auto-restart
+    shelly:
+      primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
+      secondary_url: null              # Optional second Shelly
+      grid:
+        device: "primary"             # primary or secondary
+        channel: 1                    # 1 or 2
+      evse:
+        device: ""                    # primary or secondary, empty if not used
+        channel: null                 # 1 or 2, null if not used
+    influxdb:
+      enabled: false
+      url: "http://localhost:8086"
+      token: ""
+      org: ""
+    logging:
+      file_level: "DEBUG"
+      console_level: "WARNING"
+      directory: "log"
+      file_prefix: "evse"
+      max_bytes: 10485760             # 10MB
+      backup_count: 30
+    charging:
+      max_charge_percent: 90          # Maximum battery charge percentage
+      solar_period_max_charge: 80     # Maximum charge during solar generation periods
+      default_tariff: "COSY"          # COSY, OCTGO or FLUX
+    ```
+
+  Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
 
 4. **Start the Application**
    ```bash
@@ -294,29 +275,6 @@ If using VS Code (recommended):
    - Type "Python: Select Interpreter"
    - Choose the interpreter from your virtual environment (in the project's `.venv` directory)
 
-### Docker Compose Support (Experimental)
-
-A Docker Compose configuration is available but has not been thoroughly tested recently:
-
-```yaml
-version: '3.8'
-services:
-  evse-controller:
-    build: .
-    volumes:
-      - evse-data:/data
-    environment:
-      - EVSE_DATA_DIR=/data
-    ports:
-      - "5000:5000"
-
-volumes:
-  evse-data:
-    name: evse-controller-data
-```
-
-For production use, I recommend using either the pip or Poetry installation methods.
-
 ## Limitations
 
 - Currently only supports Wallbox Quasar for EVSE and Shelly EM for power monitoring. Other devices would require new interface implementations.
@@ -374,3 +332,12 @@ If you don't have access to a 3D printer, you MUST still properly enclose the Sh
 - NOT supported by this project
 
 Always follow local electrical codes and safety regulations when installing power monitoring equipment.
+
+## Running as a Service
+
+For instructions on running EVSE Controller as a persistent service that starts automatically with your system, see
+[CONTAINER_GUIDE.md](CONTAINER_GUIDE.md). This includes:
+- Container-based deployment (recommended)
+- Alternative deployment methods
+- Monitoring and maintenance
+- Troubleshooting guide

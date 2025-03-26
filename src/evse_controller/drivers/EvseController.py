@@ -1,16 +1,15 @@
-import os
-from datetime import datetime
 from enum import Enum
 import math
 import time
-from evse_controller.drivers.EvseInterface import EvseState
-from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface, PowerMonitorObserver, PowerMonitorPollingThread
+from evse_controller.drivers.evse.async_interface import EvseState
+from evse_controller.drivers.PowerMonitorInterface import PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
-from evse_controller.drivers.evse.async_interface import EvseThreadInterface
-from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseCommand, EvseCommandData
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from evse_controller.utils.config import config
+from evse_controller.drivers.Shelly import PowerMonitorShelly
 
 try:
     import influxdb_client
@@ -20,10 +19,7 @@ except ImportError:
 
 from collections import deque
 import json
-from pathlib import Path
-import sys
 import threading
-from typing import Optional
 
 class ControlState(Enum):
     """Defines possible operational states for the EVSE controller.
@@ -67,9 +63,6 @@ class EvseController(PowerMonitorObserver):
     states including smart charging, load following, and bidirectional power flow.
 
     Args:
-        pmon (PowerMonitorInterface): Primary power monitor for grid consumption
-        pmon2 (PowerMonitorInterface): Secondary power monitor for additional consumption monitoring
-        evse (EvseThreadInterface): The EVSE device being controlled
         tariffManager: Manager for electricity tariff rules and scheduling
 
     Attributes:
@@ -84,21 +77,44 @@ class EvseController(PowerMonitorObserver):
         evseCurrent (float): Current EVSE charging/discharging rate
     """
 
-    def __init__(self, pmon: PowerMonitorInterface, pmon2: PowerMonitorInterface, 
-                 evseThread: EvseThreadInterface, tariffManager):
+    def __init__(self, tariffManager):
         """Initialize the EVSE controller.
-
+        
         Args:
-            pmon (PowerMonitorInterface): Primary power monitor for grid consumption
-            pmon2 (PowerMonitorInterface): Secondary power monitor for EVSE consumption
-            evse (EvseThreadInterface): The EVSE device to control
-            tariffManager: Manager for electricity tariff rules
+            tariffManager: Manager for electricity tariff rules and scheduling
         """
-        self.pmon = pmon
-        self.pmon2 = pmon2
+        # Initialize power monitors
+        primary_url = config.SHELLY_PRIMARY_URL
+        if not primary_url:
+            raise ValueError("No primary Shelly URL configured")
+        debug(f"Initializing primary Shelly with URL: {primary_url}")
+        
+        try:
+            self.pmon = PowerMonitorShelly(primary_url)
+        except Exception as e:
+            error(f"Failed to initialize primary Shelly: {e}")
+            raise
+
+        # Initialize secondary Shelly if configured
+        secondary_url = config.SHELLY_SECONDARY_URL
+        if secondary_url:
+            debug(f"Initializing secondary Shelly with URL: {secondary_url}")
+            try:
+                self.pmon2 = PowerMonitorShelly(secondary_url)
+            except Exception as e:
+                warning(f"Failed to initialize secondary Shelly: {e}")
+                self.pmon2 = None
+        else:
+            self.pmon2 = None
+
+        # Get Wallbox instance
+        try:
+            self.evse: EvseThreadInterface = WallboxThread.get_instance()
+        except Exception as e:
+            error(f"Failed to initialize Wallbox: {e}")
+            raise
+
         self.auxpower = Power()
-        self.evseThread = evseThread
-        self.evse = evseThread  # Add this line to maintain compatibility
         # Minimum current in either direction
         self.MIN_CURRENT = 3
         # Maximum charging current
@@ -110,13 +126,19 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
-        self.thread = PowerMonitorPollingThread(pmon)
+        # Initialize primary thread with no offset
+        self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0, name="PrimaryMonitor")
         self.thread.start()
         self.thread.attach(self)
-        self.thread2 = PowerMonitorPollingThread(pmon2)
-        self.thread2.start()
-        self.thread2.attach(self)
-        self.connectionErrors = 0
+        
+        # Only create and start second thread if we have a secondary Shelly
+        self.thread2 = None
+        if self.pmon2 is not None:
+            # Initialize secondary thread with 0.5s offset
+            self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5, name="SecondaryMonitor")
+            self.thread2.start()
+            self.thread2.attach(self)
+
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None
         self.powerAtLastHalfHourlyLog = None
@@ -421,8 +443,13 @@ class EvseController(PowerMonitorObserver):
 
         #debug(f"Grid power: {grid_power}, EVSE power: {evse_power}")
 
-        # When power was instantiated, the SoC was not known, so update it here.
-        new_soc = self.evse.getBatteryChargeLevel()
+        # Get EVSE state once at the start
+        evse_state = self.evse.get_state()
+        self.evseCurrent = evse_state.current
+        self.chargerState = evse_state.evse_state
+        
+        # When power was instantiated, the SoC was not known, so update it here
+        new_soc = evse_state.battery_level
         
         # Only update if we get a valid reading
         if self._is_valid_soc(new_soc):
@@ -485,7 +512,7 @@ class EvseController(PowerMonitorObserver):
                     .field("voltage", float(power.voltage))
                     .field("evseTargetCurrent", self.evseCurrent)
                     .field("evseDesiredCurrent", desiredEvseCurrent)
-                    .field("batteryChargeLevel", self.evse.getBatteryChargeLevel())
+                    .field("batteryChargeLevel", self.evse.get_state().battery_level)
                     .field("heatpump", float(self.auxpower.ch1Watts))
                     .field("solar", float(self.auxpower.ch2Watts))
                 )
@@ -493,25 +520,13 @@ class EvseController(PowerMonitorObserver):
             except Exception as e:
                 error(f"Failed to write to InfluxDB: {e}")
 
-        try:
-            new_state = self.getEvseState()
-            if new_state != self.chargerState:
-                info(f"EVSE state changed from {self.chargerState} to {new_state}")
-            self.chargerState = new_state
-            self.connectionErrors = 0
-            logMsg += f"CS:{self.chargerState} "
-        except ConnectionError as e:
-            self.connectionErrors += 1
-            error(f"Consecutive connection errors with EVSE: {self.connectionErrors} - {e}")
-            self.chargerState = EvseState.ERROR
-            if self.connectionErrors > 10 and isinstance(self.evse, EvseWallboxQuasar):
-                critical("Restarting EVSE (expect this to take 5-6 minutes)")
-                self.evse.resetViaWebApi()
-                self.evse_power_model.set_current(0)  # Zero the current in power model when resetting
-                # Allow up to an hour for the EVSE to restart without trying to restart again
-                self.connectionErrors = -3600
+        new_state = self.getEvseState()
+        if new_state != self.chargerState:
+            info(f"EVSE state changed from {self.chargerState} to {new_state}")
+        self.chargerState = new_state
+        logMsg += f"CS:{self.chargerState} "
 
-        nextWriteAllowed = math.ceil(self.evse.getWriteNextAllowed() - time.time())
+        nextWriteAllowed = math.ceil(self.evse.get_time_until_current_change_allowed())
         if nextWriteAllowed > 0:
             logMsg += f"NextChgIn:{nextWriteAllowed}s "
             debug(logMsg)
@@ -523,11 +538,11 @@ class EvseController(PowerMonitorObserver):
             resetState = True
         if self.chargerState == EvseState.PAUSED and desiredEvseCurrent > 0:
             resetState = True
-            if self.evse.isFull():
+            if self.evse.is_full():
                 desiredEvseCurrent = 0
         if self.chargerState == EvseState.PAUSED and desiredEvseCurrent < 0:
             resetState = True
-            if self.evse.isEmpty():
+            if self.evse.is_empty():
                 desiredEvseCurrent = 0
         if self.chargerState == EvseState.CHARGING and desiredEvseCurrent == 0:
             resetState = True
@@ -536,8 +551,7 @@ class EvseController(PowerMonitorObserver):
         if resetState:
             if (self.evseCurrent != desiredEvseCurrent):
                 info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-            self.evse.setChargingCurrent(desiredEvseCurrent)
-            self.evseCurrent = desiredEvseCurrent
+            self._setCurrent(desiredEvseCurrent)
 
         # After processing updates, save persistent state
         self._save_persistent_state()
@@ -614,14 +628,10 @@ class EvseController(PowerMonitorObserver):
             "soc": list(self.socHistory)
         }
 
-    def getWriteNextAllowed(self) -> float:
-        """Get timestamp when next write operation is allowed."""
-        return self.evse.getWriteNextAllowed()
-
     def getEvseState(self) -> EvseState:
         """Get current EVSE state."""
         try:
-            return self.evse.getEvseState()
+            return self.evse.get_state().evse_state
         except Exception as e:
             error(f"Failed to get EVSE state: {e}")
             return EvseState.ERROR
@@ -629,20 +639,24 @@ class EvseController(PowerMonitorObserver):
     def getBatteryChargeLevel(self) -> int:
         """Get current battery charge level."""
         try:
-            return self.evse.getBatteryChargeLevel()
+            return self.evse.get_state().battery_level
         except Exception as e:
             error(f"Failed to get battery charge level: {e}")
             return -1
 
     def _setCurrent(self, current: float):
-        """Set the EVSE current."""
+        """Set the EVSE current.
+        
+        Args:
+            current: Current in amperes. Positive for charging, negative for discharging.
+        """
         try:
-            self.evse.setChargingCurrent(int(abs(current)))
-            self.evse_power_model.set_current(current)
+            cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=int(current))  # Remove abs()
+            if not self.evse.send_command(cmd):
+                raise RuntimeError("Failed to send command to EVSE thread")
             self.evseCurrent = current
         except Exception as e:
             error(f"Failed to set current: {e}")
-            self.connectionErrors += 1
 
     def stop(self):
         """Stop the controller and cleanup resources."""
@@ -654,10 +668,7 @@ class EvseController(PowerMonitorObserver):
         
         try:
             # Stop charging before cleanup
-            if hasattr(self.evse, 'stopCharging'):
-                self.evse.stopCharging()
-            elif hasattr(self.evse, 'setChargingCurrent'):
-                self.evse.setChargingCurrent(0)
+            self._setCurrent(0)
             
             # Stop threads first
             if hasattr(self.thread, 'stop'):

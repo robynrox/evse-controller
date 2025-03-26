@@ -4,7 +4,6 @@ import signal
 import threading
 from enum import Enum
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
-from evse_controller.drivers.WallboxQuasar import EvseWallboxQuasar
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.tariffs.manager import TariffManager
 import time
@@ -16,6 +15,8 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
+from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.utils.memory_monitor import MemoryMonitor
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)
@@ -45,9 +46,11 @@ class ExecState(Enum):
     PAUSE_UNTIL_DISCONNECT = 9
 
 
+# Initialize core components at module level
+tariffManager = TariffManager()
+evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
 execState = ExecState.SMART
-tariffManager = TariffManager()
 scheduler = Scheduler()
 
 def get_system_state():
@@ -74,48 +77,6 @@ class InputParser(threading.Thread):
                 break
             except Exception as e:
                 error(f"Exception raised: {e}")
-
-
-inputThread = InputParser()
-inputThread.start()
-
-# Initialize Wallbox
-wallbox_url = config.WALLBOX_URL
-if not wallbox_url:
-    error("No Wallbox URL configured")
-    sys.exit(1)
-debug(f"Initializing Wallbox with URL: {wallbox_url}")
-try:
-    evse = EvseWallboxQuasar()
-except Exception as e:
-    error(f"Failed to initialize Wallbox: {e}")
-    sys.exit(1)
-
-# Initialize primary Shelly
-primary_url = config.SHELLY_PRIMARY_URL
-if not primary_url:
-    error("No primary Shelly URL configured")
-    sys.exit(1)
-debug(f"Initializing primary Shelly with URL: {primary_url}")
-try:
-    powerMonitor = PowerMonitorShelly(primary_url)
-except Exception as e:
-    error(f"Failed to initialize primary Shelly: {e}")
-    sys.exit(1)
-
-# Initialize secondary Shelly if configured
-secondary_url = config.SHELLY_SECONDARY_URL
-if secondary_url:
-    debug(f"Initializing secondary Shelly with URL: {secondary_url}")
-    try:
-        powerMonitor2 = PowerMonitorShelly(secondary_url)
-    except Exception as e:
-        warning(f"Failed to initialize secondary Shelly: {e}")
-        powerMonitor2 = None
-else:
-    powerMonitor2 = None
-
-evseController = EvseController(powerMonitor, powerMonitor2, evse, tariffManager)
 
 
 def handle_schedule_command(command_parts):
@@ -148,6 +109,8 @@ _shutdown_event = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
+    global inputThread, memory_monitor  # Add memory_monitor to globals
+    
     if _shutdown_event.is_set():
         return  # Already shutting down
         
@@ -161,6 +124,11 @@ def signal_handler(signum, frame):
         if 'inputThread' in globals() and inputThread.is_alive():
             inputThread.join(timeout=1)
             
+        # Stop and cleanup memory monitor
+        if 'memory_monitor' in globals() and memory_monitor.is_alive():
+            memory_monitor.stop()
+            memory_monitor.join(timeout=1)
+            
     except Exception as e:
         error(f"Error during shutdown: {e}")
     finally:
@@ -172,9 +140,18 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
-    global execState
+    """Main loop for EVSE controller without web interface"""
+    global execState  # Add this line to allow modification of execState
     nextStateCheck = 0
-    previous_state = None  # Store previous state for pause-until-disconnect
+    previous_state = None
+
+    # Start input thread for CLI
+    inputThread = InputParser()
+    inputThread.start()
+
+    # Start memory monitoring
+    memory_monitor = MemoryMonitor(interval=3600)  # Log every hour
+    memory_monitor.start()
 
     while not _shutdown_event.is_set():
         try:
@@ -315,10 +292,12 @@ def main():
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
-                control_state, min_current, max_current, log_message = tariffManager.get_control_state(evse, dayMinute)
+                evse = WallboxThread.get_instance()
+                state = evse.get_state()
+                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
                 debug(log_message)
                 evseController.setControlState(control_state)
-                tariffManager.get_tariff().set_home_demand_levels(evse, evseController, dayMinute)
+                tariffManager.get_tariff().set_home_demand_levels(evseController, state, dayMinute)
                 if min_current is not None and max_current is not None:
                     if control_state == ControlState.CHARGE:
                         evseController.setChargeCurrentRange(min_current, max_current)

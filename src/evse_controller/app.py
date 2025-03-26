@@ -8,6 +8,7 @@ from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
+from evse_controller.utils.logging_config import info
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
@@ -299,6 +300,10 @@ def index():
                          scheduled_events=scheduled_events,
                          current_state=current_state)
 
+@app.route('/tariff-designer')
+def tariff_designer():
+    return render_template('tariff_designer.html')
+
 @schedule_ns.route('/')
 class ScheduleResource(Resource):
     @schedule_ns.marshal_list_with(scheduled_event_model)
@@ -435,7 +440,7 @@ def get_status():
         (event for event in future_events if event.enabled), 
         None
     )
-    battery_soc = evseController.evse.getBatteryChargeLevel()
+    battery_soc = evseController.getBatteryChargeLevel()  # Fixed to use the controller's method
     
     return jsonify({
         'current_state': current_state,

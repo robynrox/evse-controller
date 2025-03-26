@@ -28,13 +28,19 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.negEnergyJoulesCh0 = 0
         self.posEnergyJoulesCh1 = 0
         self.negEnergyJoulesCh1 = 0
+        self._consecutive_failures = 0
+        self.MAX_RETRIES = 5
+        self.BASE_TIMEOUT = 0.1  # Base timeout for first attempt
+        self.MAX_TIMEOUT = 1.0   # Maximum timeout
         self.getPowerLevels()
 
     def fetch_data(self):
-        max_attempts = 5
+        max_attempts = self.MAX_RETRIES
         for attempt in range(max_attempts):
             try:
-                r = requests.get(self.ENDPOINT, timeout=0.1)
+                # Increase timeout with each retry, but cap at MAX_TIMEOUT
+                timeout = min(self.BASE_TIMEOUT * (2 ** attempt), self.MAX_TIMEOUT)
+                r = requests.get(self.ENDPOINT, timeout=timeout)
                 r.raise_for_status()
                 reqJson = r.json()
                 self.powerCh0 = reqJson["emeters"][0]["power"]
@@ -44,10 +50,15 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.voltage = reqJson["emeters"][0]["voltage"]
                 self.unixtime = reqJson["unixtime"]
                 self.lastUpdate = time.time()
+                self._consecutive_failures = 0  # Reset on success
                 break  # Exit the loop if the request is successful
             except requests.exceptions.RequestException as e:
+                self._consecutive_failures += 1
                 if attempt == max_attempts - 1:
                     error(f"Max attempts reached. Failed to fetch data from Shelly. Reason {e}")
+                    error(f"Consecutive failures: {self._consecutive_failures}")
+                else:
+                    warning(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
 
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
@@ -93,20 +104,3 @@ class PowerMonitorShelly(PowerMonitorInterface):
             error(f"Error getting power from Shelly: {e}")
             # Return a Power object with zero values instead of a float
             return Power()
-
-class PowerMonitorInterface:
-    def __init__(self, powerMonitor: PowerMonitorShelly):
-        self.powerMonitor = powerMonitor
-
-    def run(self):
-        """Main loop for power monitoring."""
-        while True:
-            try:
-                result = self.powerMonitor.getPower()
-                if not isinstance(result, Power):
-                    error(f"Invalid power reading type: {type(result)}")
-                    result = Power()  # Use empty Power object if invalid
-                self.notify(result)
-            except Exception as e:
-                error(f"Error in power monitor thread: {e}")
-            time.sleep(1)

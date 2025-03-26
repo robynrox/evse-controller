@@ -1,18 +1,19 @@
 import pytest
 from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
 from evse_controller.drivers.EvseController import ControlState
+from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from unittest.mock import Mock
 from evse_controller.utils.config import config
+
+def create_test_state(battery_level: int) -> EvseAsyncState:
+    """Helper function to create a test state with specified battery level"""
+    state = EvseAsyncState()
+    state.battery_level = battery_level
+    return state
 
 @pytest.fixture
 def cosy_tariff():
     return CosyOctopusTariff()
-
-@pytest.fixture
-def mock_evse():
-    evse = Mock()
-    evse.getBatteryChargeLevel = Mock(return_value=75)  # Default to 75% unless changed
-    return evse
 
 def test_off_peak_periods(cosy_tariff):
     """Test identification of off-peak periods (04:00-07:00, 13:00-16:00, 22:00-24:00)"""
@@ -40,29 +41,29 @@ def test_expensive_periods(cosy_tariff):
     assert cosy_tariff.is_expensive_period(1080)     # 18:00
     assert not cosy_tariff.is_expensive_period(1140) # 19:00
 
-def test_control_state_unknown_soc(cosy_tariff, mock_evse):
+def test_control_state_unknown_soc(cosy_tariff):
     """Test behavior when SoC is unknown"""
-    mock_evse.getBatteryChargeLevel.return_value = -1
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 720)
-    assert state == ControlState.CHARGE
+    state = create_test_state(-1)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 720)
+    assert control_state == ControlState.CHARGE
     assert min_current == 3
     assert max_current == 3
     assert "unknown" in message.lower()
 
-def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff, mock_evse):
+def test_control_state_expensive_period_with_sufficient_battery(cosy_tariff):
     """Test behavior during expensive period with sufficient battery level"""
-    mock_evse.getBatteryChargeLevel.return_value = 80
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 1020)  # 17:00
-    assert state == ControlState.LOAD_FOLLOW_DISCHARGE
+    state = create_test_state(80)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
+    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current is None
     assert max_current is None
     assert "COSY Expensive rate: load follow discharge" in message
 
-def test_control_state_expensive_period_with_depleted_battery(cosy_tariff, mock_evse):
+def test_control_state_expensive_period_with_depleted_battery(cosy_tariff):
     """Test behavior during expensive period with depleted battery"""
-    mock_evse.getBatteryChargeLevel.return_value = 20
-    state, min_current, max_current, message = cosy_tariff.get_control_state(mock_evse, 1020)  # 17:00
-    assert state == ControlState.DORMANT
+    state = create_test_state(20)
+    control_state, min_current, max_current, message = cosy_tariff.get_control_state(state, 1020)  # 17:00
+    assert control_state == ControlState.DORMANT
     assert min_current is None
     assert max_current is None
     assert "COSY Battery depleted, remain dormant" in message
@@ -79,12 +80,12 @@ def test_max_charge_percent_outside_solar_period(cosy_tariff):
     assert cosy_tariff.get_max_charge_percent(960) == config.MAX_CHARGE_PERCENT  # 16:00
     assert cosy_tariff.get_max_charge_percent(0) == config.MAX_CHARGE_PERCENT    # 00:00
 
-def test_home_demand_levels_during_expensive_period(cosy_tariff, mock_evse):
+def test_home_demand_levels_during_expensive_period(cosy_tariff):
     """Test home demand levels during expensive period"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 80
+    state = create_test_state(80)
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 1020)  # 17:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 1020)  # 17:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -96,12 +97,12 @@ def test_home_demand_levels_during_expensive_period(cosy_tariff, mock_evse):
     # Check last level
     assert levels[-1] == (7440, 99999, 32)  # Maximum discharge current
 
-def test_home_demand_levels_with_medium_battery(cosy_tariff, mock_evse):
+def test_home_demand_levels_with_medium_battery(cosy_tariff):
     """Test home demand levels with battery between 50% and 100%"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 65
+    state = create_test_state(65)
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     
@@ -110,12 +111,12 @@ def test_home_demand_levels_with_medium_battery(cosy_tariff, mock_evse):
     assert levels[1] == (410, 720, 3)    # Minimum discharge current
     assert levels[-1] == (7440, 99999, 32)  # Maximum discharge current
 
-def test_home_demand_levels_with_low_battery(cosy_tariff, mock_evse):
+def test_home_demand_levels_with_low_battery(cosy_tariff):
     """Test home demand levels with battery below 50%"""
     mock_controller = Mock()
-    mock_evse.getBatteryChargeLevel.return_value = 45
+    state = create_test_state(45)
     
-    cosy_tariff.set_home_demand_levels(mock_evse, mock_controller, 720)  # 12:00
+    cosy_tariff.set_home_demand_levels(mock_controller, state, 720)  # 12:00
     assert mock_controller.setHomeDemandLevels.called
     levels = mock_controller.setHomeDemandLevels.call_args[0][0]
     

@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tariff Designer</title>
+    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
+    <style>
+        .tariff-rules {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+
+        .rule-container {
+            background: white;
+            padding: 15px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .rule-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            align-items: start;
+        }
+
+        .rule-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .weekday-selector {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 5px;
+        }
+
+        .weekday-btn {
+            padding: 5px;
+            border: 1px solid #ddd;
+            background: #f8f9fa;
+            cursor: pointer;
+            text-align: center;
+            border-radius: 4px;
+        }
+
+        .weekday-btn.selected {
+            background: #007bff;
+            color: white;
+            border-color: #0056b3;
+        }
+
+        .soc-range {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .soc-range input[type="number"] {
+            width: 70px;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .action-buttons button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .add-rule {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .delete-rule {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .mode-select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+
+        .visualization-container {
+            margin-top: 20px;
+            padding: 20px;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+
+        .canvas-container {
+            position: relative;
+            margin: 40px 40px 60px 60px;
+            /* top right bottom left */
+        }
+
+        #ruleCanvas {
+            border: 1px solid #ddd;
+            background: white;
+        }
+
+        .mode-legend {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .color-box {
+            width: 20px;
+            height: 20px;
+            border: 1px solid #ddd;
+        }
+
+        .rules-list {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .rules-list-items {
+            list-style: none;
+            padding: 0;
+        }
+
+        .rules-list-items li {
+            padding: 10px;
+            margin: 5px 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .rule-text {
+            flex-grow: 1;
+        }
+
+        .axis-label {
+            position: absolute;
+            font-size: 14px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .x-axis-label {
+            bottom: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .y-axis-label {
+            left: -50px;
+            top: 50%;
+            transform: rotate(-90deg) translateX(-50%);
+            transform-origin: 0 50%;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="nav-links">
+        <a href="{{ url_for('config_page') }}">← Back to Configuration</a>
+    </div>
+
+    <h1>Tariff Designer</h1>
+
+    <div class="tariff-rules">
+        <h2>Tariff Rules</h2>
+
+        <div class="rule-container">
+            <div class="rule-grid">
+                <div class="rule-item">
+                    <label>Days of Week:</label>
+                    <div class="weekday-selector">
+                        <div class="weekday-btn" data-day="1">M</div>
+                        <div class="weekday-btn" data-day="2">T</div>
+                        <div class="weekday-btn" data-day="3">W</div>
+                        <div class="weekday-btn" data-day="4">T</div>
+                        <div class="weekday-btn" data-day="5">F</div>
+                        <div class="weekday-btn" data-day="6">S</div>
+                        <div class="weekday-btn" data-day="0">S</div>
+                    </div>
+                </div>
+
+                <div class="rule-item">
+                    <label>Time Range:</label>
+                    <div class="time-range">
+                        <input type="time" value="00:00"> to
+                        <input type="time" value="23:59">
+                    </div>
+                </div>
+
+                <div class="rule-item">
+                    <label>State of Charge Range (%):</label>
+                    <div class="soc-range">
+                        <input type="number" min="0" max="100" value="0"> to
+                        <input type="number" min="0" max="100" value="100">
+                    </div>
+                </div>
+
+                <div class="rule-item">
+                    <label>Mode:</label>
+                    <select class="mode-select">
+                        <option value="discharge">Full-speed discharge</option>
+                        <option value="solar">Charge from solar</option>
+                        <option value="power-home">Power the home</option>
+                        <option value="balance">Solar charge + Power home</option>
+                        <option value="charge">Full-speed charge</option>
+                        <option value="dormant">Dormant</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="delete-rule">Delete Rule</button>
+            </div>
+        </div>
+
+        <div class="rules-list">
+            <h3>Configured Rules</h3>
+            <ul id="rulesList" class="rules-list-items">
+                <!-- Rules will be populated here -->
+            </ul>
+        </div>
+
+        <button class="add-rule">Add New Rule</button>
+    </div>
+
+    <div class="visualization-container">
+        <h2>Day View</h2>
+        <p>Selected day: <span id="selectedDay">Monday</span></p>
+        <div class="canvas-container">
+            <div class="axis-label y-axis-label">State of Charge (%)</div>
+            <canvas id="ruleCanvas" width="800" height="400"></canvas>
+            <div class="axis-label x-axis-label">Time of Day</div>
+        </div>
+
+        <div class="mode-legend">
+            <div class="legend-item">
+                <div class="color-box" style="background: #FF4444"></div>
+                <span>Full-speed discharge</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background: #44FF44"></div>
+                <span>Charge from solar</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background: #4444FF"></div>
+                <span>Power the home</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background: #44FFFF"></div>
+                <span>Solar charge + Power home</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background: #FFFF44"></div>
+                <span>Full-speed charge</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background: #CCCCCC"></div>
+                <span>Dormant</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            // Toggle weekday selection
+            document.querySelectorAll('.weekday-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    this.classList.toggle('selected');
+                });
+            });
+        });
+
+        const MODE_COLORS = {
+            'discharge': '#FF4444',
+            'solar': '#44FF44',
+            'power-home': '#4444FF',
+            'balance': '#44FFFF',
+            'charge': '#FFFF44',
+            'dormant': '#CCCCCC'
+        };
+
+        class RuleVisualizer {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.rules = [];
+                this.draw();
+            }
+
+            clear() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            drawGrid() {
+                const ctx = this.ctx;
+                const width = this.canvas.width;
+                const height = this.canvas.height;
+                const padding = 40;  // Padding for labels
+
+                // Draw default dormant state
+                ctx.fillStyle = MODE_COLORS['dormant'];
+                ctx.fillRect(0, 0, width, height);
+
+                // Grid lines and labels as before
+                ctx.strokeStyle = '#EEEEEE';
+                ctx.lineWidth = 1;
+
+                // Hour lines and labels
+                for (let i = 0; i <= 24; i++) {
+                    const x = (i / 24) * width;
+
+                    // Grid lines
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                    ctx.stroke();
+
+                    // Labels every 4 hours
+                    if (i % 4 === 0) {
+                        ctx.fillStyle = '#000000';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(`${i.toString().padStart(2, '0')}:00`, x - 20, height + 20);
+                    }
+                }
+
+                // SoC lines and labels
+                for (let i = 0; i <= 100; i += 10) {
+                    const y = height - (i / 100) * height;
+
+                    // Grid lines
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                    ctx.stroke();
+
+                    // Labels every 20%
+                    if (i % 20 === 0) {
+                        ctx.fillStyle = '#000000';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(`${i}%`, -30, y + 4);
+                    }
+                }
+            }
+
+            updateRulesList() {
+                const rulesList = document.getElementById('rulesList');
+                rulesList.innerHTML = '';
+
+                this.rules.forEach((rule, index) => {
+                    const li = document.createElement('li');
+
+                    const timeStart = Math.floor(rule.timeStart).toString().padStart(2, '0') +
+                        ':' + ((rule.timeStart % 1) * 60).toString().padStart(2, '0');
+                    const timeEnd = Math.floor(rule.timeEnd).toString().padStart(2, '0') +
+                        ':' + ((rule.timeEnd % 1) * 60).toString().padStart(2, '0');
+
+                    li.innerHTML = `
+                        <span class="rule-text">
+                            ${timeStart} - ${timeEnd}, 
+                            SoC: ${rule.socMin}% - ${rule.socMax}%, 
+                            Mode: ${rule.mode}
+                        </span>
+                        <button class="delete-rule" data-index="${index}">Delete</button>
+                    `;
+                    rulesList.appendChild(li);
+                });
+
+                // Add delete handlers
+                document.querySelectorAll('.delete-rule').forEach(button => {
+                    button.addEventListener('click', (e) => {
+                        const index = parseInt(e.target.dataset.index);
+                        this.rules.splice(index, 1);
+                        this.draw();
+                        this.updateRulesList();
+                    });
+                });
+            }
+
+            addRule(timeStart, timeEnd, socMin, socMax, mode) {
+                this.rules.push({
+                    timeStart,
+                    timeEnd,
+                    socMin,
+                    socMax,
+                    mode
+                });
+                this.draw();
+                this.updateRulesList();
+            }
+
+            draw() {
+                this.clear();
+                this.drawGrid();
+
+                const width = this.canvas.width;
+                const height = this.canvas.height;
+
+                this.rules.forEach(rule => {
+                    const startX = (rule.timeStart / 24) * width;
+                    const endX = (rule.timeEnd / 24) * width;
+                    const topY = height - (rule.socMax / 100) * height;
+                    const bottomY = height - (rule.socMin / 100) * height;
+
+                    this.ctx.fillStyle = MODE_COLORS[rule.mode];
+                    this.ctx.fillRect(startX, topY, endX - startX, bottomY - topY);
+                });
+            }
+        }
+
+        // Initialize visualizer
+        const visualizer = new RuleVisualizer('ruleCanvas');
+
+        // Example rule addition (you'll want to tie this to your form inputs)
+        document.querySelector('.add-rule').addEventListener('click', () => {
+            // Get values from form
+            const timeStart = document.querySelector('input[type="time"]').value;
+            const timeEnd = document.querySelector('input[type="time"]:last-of-type').value;
+            const socMin = parseInt(document.querySelector('.soc-range input').value);
+            const socMax = parseInt(document.querySelector('.soc-range input:last-of-type').value);
+            const mode = document.querySelector('.mode-select').value;
+
+            // Convert time strings to hours
+            const [startHours, startMinutes] = timeStart.split(':').map(Number);
+            const [endHours, endMinutes] = timeEnd.split(':').map(Number);
+            const startTimeInHours = startHours + startMinutes / 60;
+            const endTimeInHours = endHours + endMinutes / 60;
+
+            visualizer.addRule(startTimeInHours, endTimeInHours, socMin, socMax, mode);
+        });
+    </script>
+</body>
+
+</html>

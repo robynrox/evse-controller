@@ -1,17 +1,35 @@
 import threading
 import queue
 import time
+import traceback
 from typing import Optional
 from pyModbusTCP.client import ModbusClient
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
-from evse_controller.drivers.EvseInterface import EvseState
+from evse_controller.drivers.evse.async_interface import EvseState
 from wallbox import Wallbox
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls, host: str = None, **kwargs) -> EvseThreadInterface:
+        with cls._lock:
+            if cls._instance is None:
+                if host is None:
+                    from evse_controller.utils.config import config
+                    host = config.WALLBOX_URL
+                    kwargs.setdefault('wallbox_username', config.WALLBOX_USERNAME)
+                    kwargs.setdefault('wallbox_password', config.WALLBOX_PASSWORD)
+                    kwargs.setdefault('wallbox_serial', config.WALLBOX_SERIAL)
+                cls._instance = cls(host=host, **kwargs)
+                cls._instance.start()
+            return cls._instance
+
     @staticmethod
     def convert_to_16_bit_twos_complement(value: int) -> int:
         """Convert a signed integer to its 16-bit two's complement representation.
@@ -28,11 +46,18 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         """
         return ((1 << 16) + value) & 0xFFFF
 
+    def _convert_to_signed(self, value: int) -> int:
+        """Convert a 16-bit unsigned integer to signed."""
+        if value > 32767:  # If high bit is set
+            return value - 65536
+        return value
+
     def __init__(self, host: str, modbus_client=None, poll_interval: float = 1.0,
                  wallbox_username: str = None, wallbox_password: str = None, 
                  wallbox_serial: str = None, wallbox_api_client=None,
                  time_scale: float = 1.0):
-        # Initialize the Thread parent class with default arguments
+        if WallboxThread._instance is not None:
+            raise RuntimeError("WallboxThread is a singleton. Use get_instance() instead")
         threading.Thread.__init__(self)
         # Initialize our attributes
         self._host = host
@@ -83,6 +108,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             return self._state
 
     def send_command(self, command: EvseCommandData) -> bool:
+        """Queue a command to be executed by the thread"""
+        debug(f"WALLBOX Received command: {command}")
         if not self.is_running():
             return False
         self._command_queue.put(command)
@@ -104,25 +131,40 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
     def run(self):
         loop_start_time = time.time() - self._poll_interval
+        last_heartbeat = time.time()
         while self._running.is_set():
-            # Calculate remaining time until next iteration should start
-            elapsed = time.time() - loop_start_time
-            sleep_time = self._poll_interval - elapsed
-            
-            if sleep_time < 0:
-                warning(f"Wallbox thread loop overrun by {-sleep_time:.3f} seconds")
-                loop_start_time = time.time()
-            else:
-                time.sleep(sleep_time)
-                loop_start_time += self._poll_interval
-
             try:
+                current_time = time.time()
+                # Heartbeat every 30 seconds
+                if current_time - last_heartbeat >= 30:
+                    debug(f"Wallbox thread heartbeat - Thread state: {self.is_alive()}, "
+                          f"Running flag: {self._running.is_set()}")
+                    last_heartbeat = current_time
+
+                # Calculate remaining time until next iteration should start
+                elapsed = time.time() - loop_start_time
+                sleep_time = self._poll_interval - elapsed
+                
+                if sleep_time < 0:
+                    warning(f"Wallbox thread loop overrun by {-sleep_time:.3f} seconds")
+                    loop_start_time = time.time()
+                else:
+                    # Guard against excessive sleep times
+                    if sleep_time > self._poll_interval * 2:
+                        warning(f"Excessive sleep time calculated: {sleep_time:.3f}s. Limiting to {self._poll_interval}s")
+                        sleep_time = self._poll_interval
+                    time.sleep(sleep_time)
+                    loop_start_time += self._poll_interval
+
+                #debug("Starting Wallbox state update cycle")  # New log
                 self._check_and_handle_comms_failures()
                 self._update_state()
                 self._process_commands()
+                #debug("Completed Wallbox state update cycle")  # New log
                                     
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
+                error(f"Stack trace: {traceback.format_exc()}")  # Add stack trace
                 self._handle_error()
 
     def _check_and_handle_comms_failures(self):
@@ -199,14 +241,17 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             battery_reg = reg_contents[1][0]
             current_reg = reg_contents[2][0]
 
-            debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current_reg}")
+            # Convert the current from unsigned to signed when reading from Wallbox
+            current = self._convert_to_signed(current_reg)
+
+            #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
                 # Direct construction instead of using from_modbus_register
                 new_state = EvseState(state_reg)
                 # Update power model with new current
-                if new_state != self._state.evse_state or current_reg != self._state.current:
-                    self._power_model.set_current(float(current_reg))
+                if new_state != self._state.evse_state or current != self._state.current:
+                    self._power_model.set_current(float(current))
                 
                 self._state.evse_state = new_state
                 if self._battery_percentage_valid(battery_reg):
@@ -215,7 +260,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     self._state.current = 0
                     self._power_model.set_current(0.0)
                 else:
-                    self._state.current = current_reg
+                    self._state.current = current
                 self._state.last_update = time.time()
                 self._state.consecutive_connection_errors = 0
 
@@ -255,14 +300,27 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         return max(0, remaining)
 
     def _execute_command(self, cmd: EvseCommandData):
-        # Check if we're allowed to change state yet
-        if time.time() < self._next_state_change_allowed:
-            warning(f"Command received before minimum delay period elapsed. "
-                   f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
-            return
-
         if cmd.command == EvseCommand.SET_CURRENT:
-            current_value = self._state.current
+            # First check if the requested current matches current state
+            with self._state_lock:
+                current_value = self._state.current
+                current_state = self._state.evse_state
+                
+                # If current value is the same and state is appropriate, no need to change
+                if current_value == cmd.value and (
+                    (cmd.value > 0 and current_state == EvseState.CHARGING) or
+                    (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
+                    (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
+                ):
+                    debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
+                    return
+
+            # Check if we're allowed to change state yet
+            if time.time() < self._next_state_change_allowed:
+                warning(f"Command received before minimum delay period elapsed. "
+                    f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
+                return
+
             self._next_state_change_allowed = self._calculate_next_state_change_time(
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
@@ -314,3 +372,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def get_modelled_power(self) -> float:
         """Get the estimated power consumption in watts based on current state."""
         return self._power_model.get_power()
+
+    def is_full(self) -> bool:
+        """Check if battery is at Wallbox's maximum charging threshold (97%)"""
+        with self._state_lock:
+            return self._state.battery_level >= 97
+
+    def is_empty(self) -> bool:
+        """Check if battery is at Wallbox's minimum usable threshold (5%)"""
+        with self._state_lock:
+            return self._state.battery_level <= 5
