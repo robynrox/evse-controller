@@ -3,7 +3,7 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any
 import sys
-from evse_controller.utils.paths import get_data_dir, ensure_data_dirs
+from evse_controller.utils.paths import get_data_dir, ensure_data_dirs, get_config_file
 
 DEFAULT_CONFIG = {
     "wallbox": {
@@ -80,7 +80,7 @@ def load_existing_config() -> Dict[str, Any]:
 
 def save_config(config: Dict[str, Any]):
     """Save configuration to YAML file."""
-    config_path = get_data_dir() / "config" / "config.yaml"
+    config_path = get_config_file(require_exists=False)
     try:
         with config_path.open('w') as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)

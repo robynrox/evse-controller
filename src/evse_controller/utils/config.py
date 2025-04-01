@@ -2,7 +2,7 @@ import yaml
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
-from evse_controller.utils.paths import get_data_dir
+from evse_controller.utils.paths import get_data_dir, get_config_file
 
 class Config:
     _instance = None
@@ -15,17 +15,11 @@ class Config:
 
     def __init__(self):
         if not self._initialized:
-            data_dir = get_data_dir()
-            self.CONFIG_FILE = data_dir / "config" / "config.yaml"
-            
-            # Also check in the current directory for development
-            current_dir_config = Path("config.yaml")
-            if current_dir_config.exists():
-                self.CONFIG_FILE = current_dir_config
-            
+            self.CONFIG_FILE = get_config_file()
             self._config_data = self._load_config()
             
             # Standard paths
+            data_dir = get_data_dir()
             self.SCHEDULE_FILE = data_dir / "state" / "schedule.json"
             self.HISTORY_FILE = data_dir / "state" / "history.json"
             self.EVSE_STATE_FILE = data_dir / "state" / "evse_state.json"
@@ -304,12 +298,15 @@ class Config:
 
     def save(self):
         """Save configuration to YAML file with backup."""
-        config_path = Path('config.yaml')
-        backup_path = Path('config.yaml.bak')
+        config_path = get_config_file()
+        backup_path = config_path.with_suffix('.yaml.bak')
         
         # Create backup of existing config if it exists
         if config_path.exists():
             backup_path.write_text(config_path.read_text())
+        
+        # Ensure parent directory exists
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Save new configuration
         try:
