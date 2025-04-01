@@ -8,6 +8,7 @@ class Config:
     _instance = None
     _initialized = False
     _testing = False
+    _config_data = None
 
     @classmethod
     def set_testing(cls, testing: bool = True):
@@ -15,14 +16,16 @@ class Config:
         cls._testing = testing
         cls._instance = None  # Reset singleton to force reinitialization
         cls._initialized = False
+        cls._config_data = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
-        if not self._initialized:
+    def _ensure_initialized(self):
+        """Ensure configuration is loaded when needed"""
+        if self._config_data is None:
             if self._testing:
                 test_config = Path(__file__).parent.parent.parent.parent / "tests" / "test_config.yaml"
                 if test_config.exists():
@@ -59,15 +62,13 @@ class Config:
             else:
                 self.CONFIG_FILE = get_config_file()
                 self._config_data = self._load_config()
-            
+
             # Standard paths
             data_dir = get_data_dir()
             self.SCHEDULE_FILE = data_dir / "state" / "schedule.json"
             self.HISTORY_FILE = data_dir / "state" / "history.json"
             self.EVSE_STATE_FILE = data_dir / "state" / "evse_state.json"
             self.LOG_DIR = data_dir / "logs"
-            
-            self._initialized = True
 
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -85,6 +86,7 @@ class Config:
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from config with dot notation support."""
+        self._ensure_initialized()
         keys = key.split('.')
         value = self._config_data
         for k in keys:
@@ -96,10 +98,12 @@ class Config:
 
     def _get_config_value(self, section: str, key: str, default: Any) -> Any:
         """Generic getter for config values"""
+        self._ensure_initialized()
         return self.get(f"{section}.{key}", default)
 
     def _set_config_value(self, section: str, key: str, value: Any):
         """Generic setter for config values"""
+        self._ensure_initialized()
         if section not in self._config_data:
             self._config_data[section] = {}
         self._config_data[section][key] = value
