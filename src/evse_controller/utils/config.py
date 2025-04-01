@@ -7,6 +7,14 @@ from evse_controller.utils.paths import get_data_dir, get_config_file
 class Config:
     _instance = None
     _initialized = False
+    _testing = False
+
+    @classmethod
+    def set_testing(cls, testing: bool = True):
+        """Enable testing mode - uses default config instead of loading from file"""
+        cls._testing = testing
+        cls._instance = None  # Reset singleton to force reinitialization
+        cls._initialized = False
 
     def __new__(cls):
         if cls._instance is None:
@@ -15,8 +23,37 @@ class Config:
 
     def __init__(self):
         if not self._initialized:
-            self.CONFIG_FILE = get_config_file()
-            self._config_data = self._load_config()
+            if self._testing:
+                self._config_data = {
+                    'wallbox': {
+                        'url': 'test.local',
+                        'username': 'test',
+                        'password': 'test',
+                        'serial': 'test'
+                    },
+                    'shelly': {
+                        'primary_url': '',
+                        'secondary_url': '',
+                        'grid': {'device': 'primary', 'channel': 1},
+                        'evse': {'device': '', 'channel': None}
+                    },
+                    'charging': {
+                        'max_charge_percent': 90,
+                        'solar_period_max_charge': 80,
+                        'default_tariff': 'COSY'
+                    },
+                    'logging': {
+                        'file_level': 'INFO',
+                        'console_level': 'WARNING',
+                        'directory': 'log',
+                        'file_prefix': 'evse',
+                        'max_bytes': 10485760,
+                        'backup_count': 30
+                    }
+                }
+            else:
+                self.CONFIG_FILE = get_config_file()
+                self._config_data = self._load_config()
             
             # Standard paths
             data_dir = get_data_dir()
