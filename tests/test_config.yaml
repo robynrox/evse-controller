@@ -1,0 +1,7 @@
+test_mode: true
+wallbox:
+  enabled: false
+shelly:
+  enabled: false
+modbus:
+  enabled: false

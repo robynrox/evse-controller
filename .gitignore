@@ -55,6 +55,7 @@ log/
 history.json
 schedules.json
 evse_state.json
+data/
 
 # System-specific
 .DS_Store
