@@ -165,6 +165,25 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     shelly:
       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
       secondary_url: null              # Optional second Shelly
+      channels:
+        primary:
+          channel1:
+            name: "Primary Channel 1"  # Custom name for the channel
+            abbreviation: "Pri1"       # Short name for display
+            in_use: true              # Whether this channel is active
+          channel2:
+            name: "Primary Channel 2"
+            abbreviation: "Pri2"
+            in_use: true
+        secondary:                     # Only used if secondary_url is configured
+          channel1:
+            name: "Secondary Channel 1"
+            abbreviation: "Sec1"
+            in_use: true
+          channel2:
+            name: "Secondary Channel 2"
+            abbreviation: "Sec2"
+            in_use: true
       grid:
         device: "primary"             # primary or secondary
         channel: 1                    # 1 or 2
@@ -172,10 +191,11 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
         device: ""                    # primary or secondary, empty if not used
         channel: null                 # 1 or 2, null if not used
     influxdb:
-      enabled: false
-      url: "http://localhost:8086"
-      token: ""
-      org: ""
+      enabled: false                  # Whether to enable InfluxDB logging
+      url: "http://localhost:8086"    # InfluxDB server URL
+      token: ""                       # Authentication token
+      org: ""                        # Organization name
+      bucket: "powerlog"             # Bucket name for storing data
     logging:
       file_level: "DEBUG"
       console_level: "WARNING"

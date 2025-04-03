@@ -43,7 +43,8 @@ class PowerMonitorPollingThread(threading.Thread):
                     debug(f"PowerMonitor thread heartbeat - {self.name} - Thread alive and running")
                     last_heartbeat = current_time
                 
-                start_of_next_second = now.replace(microsecond=0) + datetime.timedelta(seconds=1)
+                # Calculate next second boundary by rounding up to next second
+                start_of_next_second = (now + datetime.timedelta(seconds=1)).replace(microsecond=0)
                 # Do the work
                 result = self.powerMonitor.getPowerLevels()
                 self.notify(result)

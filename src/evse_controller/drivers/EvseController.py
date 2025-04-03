@@ -1,13 +1,11 @@
 from enum import Enum
 import math
 import time
-from evse_controller.drivers.evse.async_interface import EvseState
+from evse_controller.drivers.evse.async_interface import EvseState, EvseThreadInterface, EvseCommand, EvseCommandData
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorObserver, PowerMonitorPollingThread
 from evse_controller.drivers.Power import Power
-from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseCommand, EvseCommandData
-from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
-from evse_controller.utils.logging_config import debug, info, warning, error, critical
+from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.utils.config import config
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 
@@ -34,7 +32,7 @@ class ControlState(Enum):
     LOAD_FOLLOW_BIDIRECTIONAL: Bidirectional power flow following grid load
     PAUSE_UNTIL_DISCONNECT: Temporary pause state for safe cable removal
     """
-    
+
     DORMANT = 0
     # The EVSE will charge the vehicle and follow the grid load between the ranges specified.
     # If the load moves out of range, target current will be set to the minimum or maximum as appropriate.
@@ -57,7 +55,7 @@ class ControlState(Enum):
 
 class EvseController(PowerMonitorObserver):
     """Controls an EVSE (Electric Vehicle Supply Equipment) based on power monitoring data.
-    
+
     This class manages the charging and discharging behavior of an EVSE by monitoring
     power consumption and following configured demand levels. It supports various control
     states including smart charging, load following, and bidirectional power flow.
@@ -79,7 +77,7 @@ class EvseController(PowerMonitorObserver):
 
     def __init__(self, tariffManager):
         """Initialize the EVSE controller.
-        
+
         Args:
             tariffManager: Manager for electricity tariff rules and scheduling
         """
@@ -88,7 +86,7 @@ class EvseController(PowerMonitorObserver):
         if not primary_url:
             raise ValueError("No primary Shelly URL configured")
         debug(f"Initializing primary Shelly with URL: {primary_url}")
-        
+
         try:
             self.pmon = PowerMonitorShelly(primary_url)
         except Exception as e:
@@ -107,9 +105,9 @@ class EvseController(PowerMonitorObserver):
         else:
             self.pmon2 = None
 
-        # Get Wallbox instance
+        # Get Wallbox instance using the factory method
         try:
-            self.evse: EvseThreadInterface = WallboxThread.get_instance()
+            self.evse: EvseThreadInterface = EvseThreadInterface.get_instance()
         except Exception as e:
             error(f"Failed to initialize Wallbox: {e}")
             raise
@@ -130,7 +128,7 @@ class EvseController(PowerMonitorObserver):
         self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0, name="PrimaryMonitor")
         self.thread.start()
         self.thread.attach(self)
-        
+
         # Only create and start second thread if we have a secondary Shelly
         self.thread2 = None
         if self.pmon2 is not None:
@@ -178,13 +176,12 @@ class EvseController(PowerMonitorObserver):
             'last_update_time': 0
         }
 
-        # Data for the last 300 readings
-        self.gridPowerHistory = deque(maxlen=300)
-        self.evsePowerHistory = deque(maxlen=300)
-        self.solarPowerHistory = deque(maxlen=300)
-        self.heatPumpPowerHistory = deque(maxlen=300)
-        self.socHistory = deque(maxlen=300)
-        self.timestamps = deque(maxlen=300)
+        # Single history deque for all data
+        self.history = {
+            "entries": deque(maxlen=300),
+            "channel_metadata": {}
+        }
+        self._update_channel_metadata()
         self.tariffManager = tariffManager
         self.history_file = config.HISTORY_FILE
         self._load_history()
@@ -195,40 +192,97 @@ class EvseController(PowerMonitorObserver):
         self.evse_power_model = SimpleEvseModel()  # Add this line
         self._shutdown_event = threading.Event()
 
-    def _load_history(self):
-        """Load historical data from file if it exists."""
-        if self.history_file.exists():
-            try:
-                data = json.loads(self.history_file.read_text())
-                self.timestamps = deque(data["timestamps"], maxlen=300)
-                self.gridPowerHistory = deque(data["grid_power"], maxlen=300)
-                self.evsePowerHistory = deque(data["evse_power"], maxlen=300)
-                self.heatPumpPowerHistory = deque(data["heat_pump_power"], maxlen=300)
-                self.solarPowerHistory = deque(data["solar_power"], maxlen=300)
-                self.socHistory = deque(data["soc"], maxlen=300)
-                info("Historical data loaded successfully")
-            except Exception as e:
-                warning(f"Failed to load historical data: {e}")
+    def _update_channel_metadata(self):
+        """Update the channel metadata in the history dictionary.
+        This method can be called whenever config changes in the future.
+        """
+        self.history["channel_metadata"] = {
+            "devices": {
+                "primary": {
+                    "channel1": {
+                        "name": config.get_channel_name("primary", 1),
+                        "abbreviation": config.get_channel_abbreviation("primary", 1),
+                    "in_use": config.is_channel_in_use("primary", 1)
+                    },
+                    "channel2": {
+                        "name": config.get_channel_name("primary", 2),
+                        "abbreviation": config.get_channel_abbreviation("primary", 2),
+                        "in_use": config.is_channel_in_use("primary", 2)
+                    }
+                },
+                "secondary": {
+                    "channel1": {
+                        "name": config.get_channel_name("secondary", 1),
+                        "abbreviation": config.get_channel_abbreviation("secondary", 1),
+                        "in_use": config.is_channel_in_use("secondary", 1)
+                    },
+                    "channel2": {
+                        "name": config.get_channel_name("secondary", 2),
+                        "abbreviation": config.get_channel_abbreviation("secondary", 2),
+                        "in_use": config.is_channel_in_use("secondary", 2)
+                    }
+                }
+            },
+            "roles": {
+                "grid": {
+                    "device": config.SHELLY_GRID_DEVICE,
+                    "channel": config.SHELLY_GRID_CHANNEL
+                }
+            }
+        }
+
+        # Add EVSE role if configured
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            self.history["channel_metadata"]["roles"]["evse"] = {
+                "device": config.SHELLY_EVSE_DEVICE,
+                "channel": config.SHELLY_EVSE_CHANNEL
+            }
 
     def _save_history(self):
         """Save historical data to file if 10 seconds have passed since last save."""
         current_time = time.time()
         if current_time - self.last_save_time < self.save_interval:
             return
-            
+
         try:
+            # Only save the entries, not the metadata (which can be regenerated)
             data = {
-                "timestamps": list(self.timestamps),
-                "grid_power": list(self.gridPowerHistory),
-                "evse_power": list(self.evsePowerHistory),
-                "heat_pump_power": list(self.heatPumpPowerHistory),
-                "solar_power": list(self.solarPowerHistory),
-                "soc": list(self.socHistory)
+                "entries": list(self.history["entries"])
             }
+
             self.history_file.write_text(json.dumps(data))
             self.last_save_time = current_time
+            debug("Historical data saved successfully")
         except Exception as e:
             error(f"Failed to save historical data: {e}")
+
+    def _load_history(self):
+        """Load historical data from file if it exists."""
+        if self.history_file.exists():
+            try:
+                data = json.loads(self.history_file.read_text())
+
+                if "entries" not in data:
+                    raise ValueError("Invalid history file format")
+
+                # Initialize the history dictionary structure
+                self.history = {
+                    "entries": deque(data["entries"], maxlen=300),
+                    "channel_metadata": {}
+                }
+
+                # Update the metadata (will be overwritten anyway)
+                self._update_channel_metadata()
+
+                info("Historical data loaded successfully")
+            except Exception as e:
+                warning(f"Failed to load historical data: {e}")
+                # Initialize with empty structure if loading fails
+                self.history = {
+                    "entries": deque(maxlen=300),
+                    "channel_metadata": {}
+                }
+                self._update_channel_metadata()
 
     def setHysteresisWindow(self, window):
         """
@@ -340,18 +394,18 @@ class EvseController(PowerMonitorObserver):
                 "unixtime": 0
             }
         }
-        
+
         if self.state_file.exists():
             try:
                 data = json.loads(self.state_file.read_text())
                 self.persistent_state = default_state | data
                 info("Persistent state loaded successfully")
-                
+
                 # Restore relevant state with validation
                 loaded_soc = self.persistent_state["last_known_soc"]
                 self.batteryChargeLevel = loaded_soc if self._is_valid_soc(loaded_soc) else -1
                 info(f"Restored battery charge level: {self.batteryChargeLevel}%")
-                
+
                 # Restore last power state
                 last_power = self.persistent_state["last_power_state"]
                 self.powerAtLastHalfHourlyLog = Power(
@@ -386,24 +440,137 @@ class EvseController(PowerMonitorObserver):
                 }
             else:
                 power_state = self.persistent_state["last_power_state"]
-            
+
             # Only update SoC if we have a valid reading
             if self._is_valid_soc(self.batteryChargeLevel):
                 self.persistent_state.update({
                     "last_known_soc": self.batteryChargeLevel,
                     "last_soc_timestamp": time.time(),
                 })
-            
+
             self.persistent_state["last_power_state"] = power_state
-            
+
             self.state_file.write_text(json.dumps(self.persistent_state))
             #debug(f"Saved persistent state with SoC: {self.batteryChargeLevel}%")
         except Exception as e:
             error(f"Failed to save persistent state: {e}")
 
+    def _build_power_log_message(self, power, evse_power=0, desired_evse_current=0, primary_power=None, secondary_power=None):
+        """
+        Build a log message with power values from all channels.
+
+        Args:
+            power: The Power object from the monitor
+            evse_power: The calculated EVSE power (used if no EVSE channel is configured)
+            desired_evse_current: The desired EVSE current
+            primary_power: The Power object from the primary monitor (optional)
+            secondary_power: The Power object from the secondary monitor (optional)
+
+        Returns:
+            A formatted log message string
+        """
+        # Get the grid power from the configured channel
+        grid_device = config.SHELLY_GRID_DEVICE
+        grid_channel = config.SHELLY_GRID_CHANNEL
+
+        # Use instantaneous values if available
+        if grid_device == "primary" and primary_power is not None:
+            grid_power = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
+        elif grid_device == "secondary" and secondary_power is not None:
+            grid_power = round(secondary_power.ch1Watts if grid_channel == 1 else secondary_power.ch2Watts)
+        else:
+            # Fallback
+            grid_power = 0
+            debug(f"No grid power data available for {grid_device}.{grid_channel}")
+
+        # Get EVSE power
+        evse_power_value = 0
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            evse_device = config.SHELLY_EVSE_DEVICE
+            evse_channel = config.SHELLY_EVSE_CHANNEL
+
+            # Use instantaneous values if available
+            if evse_device == "primary" and primary_power is not None:
+                evse_power_value = round(primary_power.ch1Watts if evse_channel == 1 else primary_power.ch2Watts)
+            elif evse_device == "secondary" and secondary_power is not None:
+                evse_power_value = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
+            else:
+                # Fallback
+                evse_power_value = round(evse_power)
+                debug(f"No EVSE power data available for {evse_device}.{evse_channel}, using calculated value: {evse_power_value}")
+        else:
+            evse_power_value = round(evse_power)
+
+        # Collect all channel powers and abbreviations for logging
+        channel_powers = {}
+        total_non_grid_power = 0
+
+        # Process all channels
+        for device in ["primary", "secondary"]:
+            device_power = primary_power if device == "primary" else secondary_power
+
+            for ch_num in [1, 2]:
+
+                # Skip the grid channel
+                if device == grid_device and ch_num == grid_channel:
+                    continue
+
+                # Skip channels that are not in use
+                if not config.is_channel_in_use(device, ch_num):
+                    continue
+
+                # Get the channel power
+                channel_power = None
+
+                # Use instantaneous values if available
+                if device_power is not None:
+                    channel_power = round(device_power.ch1Watts if ch_num == 1 else device_power.ch2Watts)
+
+                if channel_power is not None:
+                    # Get the channel abbreviation
+                    abbr = config.get_channel_abbreviation(device, ch_num)
+
+                    # Store for logging
+                    channel_powers[abbr] = channel_power
+
+                    # Add to total non-grid power
+                    total_non_grid_power += channel_power
+
+        # Calculate home power
+        home_power = round(grid_power - total_non_grid_power)
+
+        # Add grid power to channel_powers
+        grid_abbr = config.get_channel_abbreviation(grid_device, grid_channel)
+        channel_powers[grid_abbr] = grid_power
+
+        # Build the log message
+        log_msg = f"STATE Home:{home_power}"
+
+        # Add EVSE power if configured
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
+            log_msg += f" {evse_abbr}:{evse_power_value}"
+
+        # Add all other channels
+        for abbr, power_value in channel_powers.items():
+            # Skip EVSE as it's already added
+            if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
+                if abbr == evse_abbr:
+                    continue
+
+            log_msg += f" {abbr}:{power_value}"
+
+        # Add the rest of the log message
+        # Round the SoC to the nearest integer
+        rounded_soc = round(power.soc)
+        log_msg += f" V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desired_evse_current} C%:{rounded_soc} "
+
+        return log_msg
+
     def update(self, monitor, power):
         """Update controller state based on power monitor readings.
-        
+
         Args:
             monitor: The Shelly power monitor that's reporting
             power: Power readings from the monitor
@@ -415,19 +582,15 @@ class EvseController(PowerMonitorObserver):
         )
 
         if not is_grid_monitor:
-            # Update auxiliary power readings
+            # Update auxiliary power readings and return
             self.auxpower = power
-            #debug(f"Auxiliary power: {self.auxpower}")
             return
-        
+
         # From here on, we're handling the grid monitor update
         # Use configured channels instead of fixed assignments
         grid_channel = config.SHELLY_GRID_CHANNEL
         evse_channel = config.SHELLY_EVSE_CHANNEL if config.SHELLY_EVSE_DEVICE else None
-        
-        # Get grid power from configured channel
-        grid_power = power.ch1Watts if grid_channel == 1 else power.ch2Watts
-        
+
         # Get EVSE power - either from monitoring or model
         if evse_channel is not None:
             if config.SHELLY_EVSE_DEVICE == config.SHELLY_GRID_DEVICE:
@@ -435,42 +598,69 @@ class EvseController(PowerMonitorObserver):
                 evse_power = power.ch1Watts if evse_channel == 1 else power.ch2Watts
             else:
                 # EVSE is on the other device
-                evse_power = self.auxpower.ch1Watts if evse_channel == 1 else self.auxpower.ch2Watts
+                evse_power = self.auxpower.ch1Watts if evse_channel == 1 and hasattr(self, 'auxpower') and self.auxpower else 0.0
+                if evse_channel == 2 and hasattr(self, 'auxpower') and self.auxpower:
+                    evse_power = self.auxpower.ch2Watts
         else:
             # No EVSE monitoring configured, use power model
             self.evse_power_model.set_voltage(power.voltage)
             evse_power = self.evse_power_model.get_power()
 
-        #debug(f"Grid power: {grid_power}, EVSE power: {evse_power}")
-
         # Get EVSE state once at the start
         evse_state = self.evse.get_state()
         self.evseCurrent = evse_state.current
         self.chargerState = evse_state.evse_state
-        
-        # When power was instantiated, the SoC was not known, so update it here
-        new_soc = evse_state.battery_level
-        
-        # Only update if we get a valid reading
-        if self._is_valid_soc(new_soc):
-            power.soc = new_soc
-        elif self._is_valid_soc(self.batteryChargeLevel):
-            power.soc = self.batteryChargeLevel
-        else:
-            power.soc = -1
-        
-        # Log the attempted update for debugging
-        #debug(f"SoC update attempt - Current: {power.soc}, New reading: {new_soc}, Persisted: {self.batteryChargeLevel}")
-        
-        # Append new data to the history buffers
-        self.gridPowerHistory.append(grid_power)
-        self.evsePowerHistory.append(evse_power)
-        self.heatPumpPowerHistory.append(self.auxpower.ch1Watts)
-        self.solarPowerHistory.append(self.auxpower.ch2Watts)
-        self.socHistory.append(power.soc)
-        self.timestamps.append(power.unixtime)
 
-        # After updating the deques, save the history
+        # Get the current battery SoC from the Wallbox/EVSE
+        try:
+            current_soc = evse_state.battery_level
+            # Only update if we get a valid reading
+            if not self._is_valid_soc(current_soc):
+                if self._is_valid_soc(self.batteryChargeLevel):
+                    current_soc = self.batteryChargeLevel
+                else:
+                    current_soc = -1
+        except Exception as e:
+            error(f"Failed to get battery charge level: {e}")
+            current_soc = -1
+
+        # Update the power object's SoC for backward compatibility
+        power.soc = current_soc
+
+        # Get the current power values from both monitors
+        if monitor == self.pmon:  # Primary Shelly update
+            primary_power = power
+            secondary_power = self.auxpower if hasattr(self, 'auxpower') else None
+        else:  # Secondary Shelly update
+            primary_power = None
+            secondary_power = power
+            if hasattr(self, 'pmon') and self.pmon:
+                try:
+                    primary_power = self.pmon.getPowerLevels()
+                except Exception as e:
+                    debug(f"Failed to get instantaneous primary power values: {e}")
+
+        # Create a new history entry with all available data
+        history_entry = {
+            'timestamp': time.time(),
+            'soc': current_soc,
+            'voltage': power.voltage,
+            'channels': {
+                'primary': {
+                    'channel1': primary_power.ch1Watts if primary_power else None,
+                    'channel2': primary_power.ch2Watts if primary_power else None
+                },
+                'secondary': {
+                    'channel1': secondary_power.ch1Watts if secondary_power else None,
+                    'channel2': secondary_power.ch2Watts if secondary_power else None
+                }
+            }
+        }
+
+        # Add the entry to the history
+        self.history["entries"].append(history_entry)
+
+        # After updating the history, save it
         self._save_history()
 
         if (time.time() >= self.nextHalfHourlyLog):
@@ -481,20 +671,34 @@ class EvseController(PowerMonitorObserver):
             self.powerAtLastHalfHourlyLog = power
             self._save_persistent_state()  # Save state after updating half-hourly log
 
-        # Use the latest power reading directly
-
         # Calculate desired current based on latest reading
         desiredEvseCurrent = self.calculateTargetCurrent(power)
         self.current_grid_power = power
 
-        gridPower = round(power.ch1Watts)
-        evsePower = round(power.ch2Watts)
-        hpPower = round(self.auxpower.ch1Watts)
-        solarPower = round(self.auxpower.ch2Watts)
+        # Get the current power values from the monitors
+        # We already have these from earlier in the method
+        if monitor == self.pmon:  # Primary Shelly update
+            primary_power = power
+            secondary_power = self.auxpower if hasattr(self, 'auxpower') else None
+        else:  # Secondary Shelly update
+            secondary_power = power
+            primary_power = self.auxpower if hasattr(self, 'auxpower') else None
 
-        homePower = round(gridPower - evsePower - hpPower - solarPower)
+        # Build the log message with power values
+        logMsg = self._build_power_log_message(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
 
-        logMsg = f"STATE Hm:{homePower} G:{gridPower} E:{evsePower} HP:{hpPower} S:{solarPower} V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desiredEvseCurrent} C%:{power.soc} "
+        # Get grid power for InfluxDB (needed later)
+        grid_device = config.SHELLY_GRID_DEVICE
+        grid_channel = config.SHELLY_GRID_CHANNEL
+        gridPower = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
+
+        # Get EVSE power for InfluxDB (needed later)
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            evse_device = config.SHELLY_EVSE_DEVICE
+            evse_channel = config.SHELLY_EVSE_CHANNEL
+            evsePower = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
+        else:
+            evsePower = round(evse_power)
 
         if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
             if self.powerAtBatteryChargeLevel is not None:
@@ -503,20 +707,175 @@ class EvseController(PowerMonitorObserver):
             self.powerAtBatteryChargeLevel = power
         if self.write_api:
             try:
+                # Start building the point with common fields
                 point = (
                     influxdb_client.Point("measurement")
-                    .field("grid", float(power.ch1Watts))
-                    .field("grid_pf", float(power.ch1Pf))
-                    .field("evse", float(power.ch2Watts))
-                    .field("evse_pf", float(power.ch2Pf))
+                    .field("grid", float(gridPower))
+                    .field("evse", float(evsePower))
                     .field("voltage", float(power.voltage))
                     .field("evseTargetCurrent", self.evseCurrent)
                     .field("evseDesiredCurrent", desiredEvseCurrent)
-                    .field("batteryChargeLevel", self.evse.get_state().battery_level)
-                    .field("heatpump", float(self.auxpower.ch1Watts))
-                    .field("solar", float(self.auxpower.ch2Watts))
+                    .field("batteryChargeLevel", int(self.evse.get_state().battery_level))
                 )
-                self.write_api.write(bucket="powerlog", record=point)
+
+                # Add voltage fields for all channels in use
+                # We'll use the voltage from the current monitor for all channels
+                current_monitor = "primary" if monitor == self.pmon else "secondary"
+
+                # Add power factors for all channels
+                # For the current monitor, we can use the power factors from the power object
+                # For the other monitor, we'll need to use the stored power factors
+
+                # Add power factors for all channels that are in use
+                for device in ["primary", "secondary"]:
+                    for ch_num in [1, 2]:
+                        # Skip channels that are not in use
+                        if not config.is_channel_in_use(device, ch_num):
+                            continue
+
+                        # Get the channel name and abbreviation
+                        name = config.get_channel_name(device, ch_num)
+                        abbr = config.get_channel_abbreviation(device, ch_num)
+
+                        # Get the power factor
+                        if device == current_monitor:
+                            # Use the power factor from the current monitor
+                            channel_pf = power.ch1Pf if ch_num == 1 else power.ch2Pf
+                        else:
+                            # Use the stored power factor from the other monitor
+                            other_power = self.auxpower
+                            channel_pf = other_power.ch1Pf if ch_num == 1 else other_power.ch2Pf
+
+                        # Add to InfluxDB point
+                        # Use lowercase name without spaces as the field name
+                        field_name = name.lower().replace(" ", "_") + "_pf"
+                        point = point.field(field_name, float(channel_pf))
+
+                        # For backward compatibility, also add grid_pf and evse_pf
+                        grid_device = config.SHELLY_GRID_DEVICE
+                        grid_channel = config.SHELLY_GRID_CHANNEL
+                        if device == grid_device and ch_num == grid_channel:
+                            point = point.field("grid_pf", float(channel_pf))
+
+                        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                            evse_device = config.SHELLY_EVSE_DEVICE
+                            evse_channel = config.SHELLY_EVSE_CHANNEL
+                            if device == evse_device and ch_num == evse_channel:
+                                point = point.field("evse_pf", float(channel_pf))
+
+                # Add power fields for all channels that are in use
+                # We'll use the channel names for the field names and instantaneous values from the power monitors
+                # debug(f"Grid device: {config.SHELLY_GRID_DEVICE}, Grid channel: {config.SHELLY_GRID_CHANNEL}")
+                # if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                #     debug(f"EVSE device: {config.SHELLY_EVSE_DEVICE}, EVSE channel: {config.SHELLY_EVSE_CHANNEL}")
+
+                # Get the current power values from the monitors
+                primary_power = power if monitor == self.pmon else None
+                secondary_power = power if monitor == self.pmon2 else None
+
+                # If we don't have the current power values, use the stored ones
+                if primary_power is None and hasattr(self, 'pmon') and self.pmon is not None:
+                    try:
+                        primary_power = self.pmon.getPowerLevels()
+                        #debug(f"Using instantaneous primary power values: ch1={primary_power.ch1Watts}, ch2={primary_power.ch2Watts}")
+                    except Exception as e:
+                        #debug(f"Failed to get instantaneous primary power values: {e}")
+                        primary_power = None
+
+                if secondary_power is None and hasattr(self, 'pmon2') and self.pmon2 is not None:
+                    try:
+                        secondary_power = self.pmon2.getPowerLevels()
+                        #debug(f"Using instantaneous secondary power values: ch1={secondary_power.ch1Watts}, ch2={secondary_power.ch2Watts}")
+                    except Exception as e:
+                        #debug(f"Failed to get instantaneous secondary power values: {e}")
+                        secondary_power = None
+
+                # Add power fields for all channels
+                for device in ["primary", "secondary"]:
+                    # Get the power object for this device
+                    device_power = primary_power if device == "primary" else secondary_power
+
+                    for ch_num in [1, 2]:
+                        # Log channel configuration
+                        in_use = config.is_channel_in_use(device, ch_num)
+                        name = config.get_channel_name(device, ch_num) if in_use else "Not in use"
+                        #debug(f"Channel {device}.{ch_num}: in_use={in_use}, name={name}")
+
+                        # Skip channels that are not in use
+                        if not in_use:
+                            continue
+
+                        # Get the channel name and abbreviation
+                        name = config.get_channel_name(device, ch_num)
+                        abbr = config.get_channel_abbreviation(device, ch_num)
+                        field_name = name.lower().replace(" ", "_")
+
+                        # Add to InfluxDB point using instantaneous values if available
+                        if device_power is not None:
+                            # Get the power value for this channel
+                            channel_power = device_power.ch1Watts if ch_num == 1 else device_power.ch2Watts
+                            #debug(f"Adding power field to InfluxDB: {field_name} = {channel_power}")
+                            point = point.field(field_name, float(channel_power))
+                        else:
+                            # If we don't have instantaneous values, log a message
+                            channel_key = f"channel{ch_num}"
+                            #debug(f"No power data available for {device}.{channel_key}")
+
+                            # For backward compatibility, also add grid and evse fields
+                            grid_device = config.SHELLY_GRID_DEVICE
+                            grid_channel = config.SHELLY_GRID_CHANNEL
+                            if device == grid_device and ch_num == grid_channel:
+                                # Already added as "grid" at the beginning
+                                pass
+
+                            if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                                evse_device = config.SHELLY_EVSE_DEVICE
+                                evse_channel = config.SHELLY_EVSE_CHANNEL
+                                if device == evse_device and ch_num == evse_channel:
+                                    # Already added as "evse" at the beginning
+                                    pass
+
+                # Add channel names as tags
+                # Add grid channel tag
+                if config.is_channel_in_use(grid_device, grid_channel):
+                    point = point.tag("grid_name", config.get_channel_name(grid_device, grid_channel))
+                    point = point.tag("grid_device", grid_device)
+                    point = point.tag("grid_channel", str(grid_channel))
+
+                # Add EVSE channel tag if configured
+                if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                    if config.is_channel_in_use(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL):
+                        point = point.tag("evse_name", config.get_channel_name(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL))
+                        point = point.tag("evse_device", config.SHELLY_EVSE_DEVICE)
+                        point = point.tag("evse_channel", str(config.SHELLY_EVSE_CHANNEL))
+
+                # Add tags for all other channels that are in use
+                for device in ["primary", "secondary"]:
+                    for ch_num in [1, 2]:
+                        # Skip the grid and EVSE channels as they're already tagged
+                        if device == grid_device and ch_num == grid_channel:
+                            continue
+                        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+                            if device == config.SHELLY_EVSE_DEVICE and ch_num == config.SHELLY_EVSE_CHANNEL:
+                                continue
+
+                        # Skip channels that are not in use
+                        if not config.is_channel_in_use(device, ch_num):
+                            continue
+
+                        # Get the channel name and abbreviation
+                        name = config.get_channel_name(device, ch_num)
+                        abbr = config.get_channel_abbreviation(device, ch_num)
+
+                        # Create a tag name based on the device and channel
+                        tag_prefix = f"{device}_ch{ch_num}"
+                        point = point.tag(f"{tag_prefix}_name", name)
+                        point = point.tag(f"{tag_prefix}_abbr", abbr)
+
+                # Write the point to InfluxDB using the configured bucket name
+                # The Config class will return the default "powerlog" if bucket is not defined
+                bucket_name = config.INFLUXDB_BUCKET
+                self.write_api.write(bucket=bucket_name, record=point)
             except Exception as e:
                 error(f"Failed to write to InfluxDB: {e}")
 
@@ -611,22 +970,18 @@ class EvseController(PowerMonitorObserver):
     def getHistory(self) -> dict:
         """
         Returns the last 300 points (nominally 5 minutes) of historical data.
-        :return: A dictionary containing:
-            - timestamps: List of timestamps (in seconds since epoch).
-            - grid_power: List of grid power measurements (in watts).
-            - evse_power: List of EVSE power measurements (in watts).
-            - heat_pump_power: List of heat pump power measurements (in watts).
-            - solar_power: List of solar power measurements (in watts).
-            - soc: List of state of charge values (in percent).
+        :return: A dictionary containing history entries and channel metadata.
         """
-        return {
-            "timestamps": list(self.timestamps),
-            "grid_power": list(self.gridPowerHistory),
-            "evse_power": list(self.evsePowerHistory),
-            "heat_pump_power": list(self.heatPumpPowerHistory),
-            "solar_power": list(self.solarPowerHistory),
-            "soc": list(self.socHistory)
+        # Update metadata (in the future, this could be called only when config changes)
+        self._update_channel_metadata()
+
+        # Create a new dictionary with the entries converted to a list for JSON serialization
+        result = {
+            "entries": list(self.history["entries"]),
+            "channel_metadata": self.history["channel_metadata"]
         }
+
+        return result
 
     def getEvseState(self) -> EvseState:
         """Get current EVSE state."""
@@ -646,7 +1001,7 @@ class EvseController(PowerMonitorObserver):
 
     def _setCurrent(self, current: float):
         """Set the EVSE current.
-        
+
         Args:
             current: Current in amperes. Positive for charging, negative for discharging.
         """
@@ -662,25 +1017,25 @@ class EvseController(PowerMonitorObserver):
         """Stop the controller and cleanup resources."""
         if self._shutdown_event.is_set():
             return  # Already shutting down
-            
+
         self._shutdown_event.set()
         info("Stopping charging")
-        
+
         try:
             # Stop charging before cleanup
             self._setCurrent(0)
-            
+
             # Stop threads first
             if hasattr(self.thread, 'stop'):
                 self.thread.stop()
             if hasattr(self.thread2, 'stop'):
                 self.thread2.stop()
-            
+
             # Stop power monitors
             if hasattr(self.pmon, 'stop'):
                 self.pmon.stop()
             if hasattr(self.pmon2, 'stop'):
                 self.pmon2.stop()
-            
+
         except Exception as e:
             error(f"Error during controller shutdown: {e}")

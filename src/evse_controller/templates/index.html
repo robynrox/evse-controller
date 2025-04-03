@@ -1,521 +1,583 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EVSE Control</title>
-    <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
-    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
-    <script>
-        // Icon filename constants
-        const ICONS = {
-            UNPLUG: "{{ url_for('static', filename='images/Pause_to_remove_plug_black.svg') }}",
-            SOLAR: "{{ url_for('static', filename='images/S2V_-_Solar_only_charging_black.svg') }}",
-            CHARGE: "{{ url_for('static', filename='images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg') }}",
-            DISCHARGE: "{{ url_for('static', filename='images/V2G_-_Discharge_black.svg') }}",
-            POWER_HOME: "{{ url_for('static', filename='images/V2H_-_Battery_to_House_black.svg') }}",
-            BALANCE: "{{ url_for('static', filename='images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg') }}",
-            PAUSE: "{{ url_for('static', filename='images/On-Off_black.svg') }}",
-            OCTGO: "{{ url_for('static', filename='images/Go_black.svg') }}",
-            FLUX: "{{ url_for('static', filename='images/Flux_black.svg') }}",
-            COSY: "{{ url_for('static', filename='images/Cosy_black.svg') }}"
-        };
-    </script>
-    <style>
-        /* Override the default body constraints for the dashboard */
-        body {
-            max-width: none;
-            margin: 20px;
-            /* Keep some margin from the window edges */
-        }
+{% block head %}
+<title>EVSE Control</title>
+<script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+<script>
+    // Icon filename constants
+    const ICONS = {
+        UNPLUG: "/static/images/Pause_to_remove_plug_black.svg",
+        SOLAR: "/static/images/S2V_-_Solar_only_charging_black.svg",
+        CHARGE: "/static/images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg",
+        DISCHARGE: "/static/images/V2G_-_Discharge_black.svg",
+        POWER_HOME: "/static/images/V2H_-_Battery_to_House_black.svg",
+        BALANCE: "/static/images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg",
+        PAUSE: "/static/images/On-Off_black.svg",
+        OCTGO: "/static/images/Go_black.svg",
+        FLUX: "/static/images/Flux_black.svg",
+        COSY: "/static/images/Cosy_black.svg"
+    };
+</script>
+<style>
+    /* Override the default body constraints for the dashboard */
+    body {
+        max-width: none;
+        margin: 20px;
+        /* Keep some margin from the window edges */
+    }
 
-        /* Page-specific styles only */
-        #chart {
-            width: 100%;
-            height: 80vh;
-            max-height: 600px;
-        }
+    /* Page-specific styles only */
+    #chart {
+        width: 100%;
+        height: 80vh;
+        max-height: 600px;
+    }
 
-        .svg-button-container {
-            margin-top: 15px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-    </style>
-</head>
+    .svg-button-container {
+        margin-top: 15px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+</style>
+{% endblock %}
 
-<body>
-    <h1>EVSE Control Interface</h1>
-    <div class="nav-links">
-        <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
-        <a href="{{ url_for('config_page') }}">Configuration →</a>
+{% block content %}
+<h1>EVSE Control Interface</h1>
+<div class="nav-links">
+    <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
+    <a href="{{ url_for('config_page') }}">Configuration →</a>
+</div>
+
+<div class="status-panel">
+    <div class="status-item">
+        <span class="status-info">
+            <strong>Current State:</strong> <span id="current-state">Loading...</span>
+        </span>
+        <span class="separator">|</span>
+        <span class="status-info">
+            <strong>Battery:</strong> <span id="battery-soc">Loading...</span>
+        </span>
+        <span class="separator">|</span>
     </div>
-
-    <div class="status-panel">
-        <div class="status-item">
-            <span class="status-info">
-                <strong>Current State:</strong> <span id="current-state">Loading...</span>
-            </span>
-            <span class="separator">|</span>
-            <span class="status-info">
-                <strong>Battery:</strong> <span id="battery-soc">Loading...</span>
-            </span>
-            <span class="separator">|</span>
-        </div>
-        <div class="status-item">
-            <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
-        </div>
+    <div class="status-item">
+        <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
     </div>
+</div>
 
-    <div class="svg-button-container">
-        <button class="svg-button" onclick="sendCommand('unplug')"
-            title="Pause charging to allow the plug to be removed">
-            <img src="" id="unplug-icon" alt="Pause to remove plug">
-        </button>
-        <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
-            <img src="" id="solar-icon" alt="Solar only charging">
-        </button>
-        <button class="svg-button" onclick="sendCommand('charge')"
-            title="Charge battery at maximum rate using all power sources">
-            <img src="" id="charge-icon" alt="Charge at maximum rate">
-        </button>
-        <button class="svg-button" onclick="sendCommand('discharge')"
-            title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
-            <img src="" id="discharge-icon" alt="Discharge">
-        </button>
-        <button class="svg-button" onclick="sendCommand('power-home')"
-            title="Discharge battery when necessary to power the home only">
-            <img src="" id="power-home-icon" alt="Power Home">
-        </button>
-        <button class="svg-button" onclick="sendCommand('balance')"
-            title="Minimise use of the grid (charge from solar and power the home)">
-            <img src="" id="balance-icon" alt="Balance">
-        </button>
-        <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
-            <img src="" id="pause-icon" alt="Pause">
-        </button>
-        <button class="svg-button" onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">
-            <img src="" id="octgo-icon" alt="Octopus Go">
-        </button>
-        <button class="svg-button" onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">
-            <img src="" id="flux-icon" alt="Octopus Flux">
-        </button>
-        <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
-            <img src="" id="cosy-icon" alt="Cosy Octopus">
-        </button>
-        <button onclick="toggleLegend()">Show/Hide Command Reference</button>
-    </div>
+<div class="svg-button-container">
+    <button class="svg-button" onclick="sendCommand('unplug')" title="Pause charging to allow the plug to be removed">
+        <img src="" id="unplug-icon" alt="Pause to remove plug">
+    </button>
+    <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
+        <img src="" id="solar-icon" alt="Solar only charging">
+    </button>
+    <button class="svg-button" onclick="sendCommand('charge')"
+        title="Charge battery at maximum rate using all power sources">
+        <img src="" id="charge-icon" alt="Charge at maximum rate">
+    </button>
+    <button class="svg-button" onclick="sendCommand('discharge')"
+        title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
+        <img src="" id="discharge-icon" alt="Discharge">
+    </button>
+    <button class="svg-button" onclick="sendCommand('power-home')"
+        title="Discharge battery when necessary to power the home only">
+        <img src="" id="power-home-icon" alt="Power Home">
+    </button>
+    <button class="svg-button" onclick="sendCommand('balance')"
+        title="Minimise use of the grid (charge from solar and power the home)">
+        <img src="" id="balance-icon" alt="Balance">
+    </button>
+    <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
+        <img src="" id="pause-icon" alt="Pause">
+    </button>
+    <button class="svg-button" onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">
+        <img src="" id="octgo-icon" alt="Octopus Go">
+    </button>
+    <button class="svg-button" onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">
+        <img src="" id="flux-icon" alt="Octopus Flux">
+    </button>
+    <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
+        <img src="" id="cosy-icon" alt="Cosy Octopus">
+    </button>
+    <button onclick="toggleLegend()">Show/Hide Command Reference</button>
+</div>
 
-    <div class="legend-container">
-        <div id="command-legend" class="command-legend collapsed">
-            <h2>Command Reference</h2>
-            <div class="legend-grid">
-                <div class="legend-item">
-                    <img src="" id="legend-unplug-icon" alt="Remove plug icon">
-                    <div class="legend-text">
-                        <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
-                    </div>
+<div class="legend-container">
+    <div id="command-legend" class="command-legend collapsed">
+        <h2>Command Reference</h2>
+        <div class="legend-grid">
+            <div class="legend-item">
+                <img src="" id="legend-unplug-icon" alt="Remove plug icon">
+                <div class="legend-text">
+                    <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-solar-icon" alt="Solar charging icon">
-                    <div class="legend-text">
-                        <strong>Solar Only:</strong> Charge using only solar power
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-solar-icon" alt="Solar charging icon">
+                <div class="legend-text">
+                    <strong>Solar Only:</strong> Charge using only solar power
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-charge-icon" alt="Maximum charge icon">
-                    <div class="legend-text">
-                        <strong>Charge:</strong> Charge battery at maximum rate using all power sources
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-charge-icon" alt="Maximum charge icon">
+                <div class="legend-text">
+                    <strong>Charge:</strong> Charge battery at maximum rate using all power sources
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-discharge-icon" alt="Discharge icon">
-                    <div class="legend-text">
-                        <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
-                        excess back to the grid
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-discharge-icon" alt="Discharge icon">
+                <div class="legend-text">
+                    <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
+                    excess back to the grid
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-power-home-icon" alt="Power Home icon">
-                    <div class="legend-text">
-                        <strong>Power Home:</strong> Discharge battery when necessary to power the home only
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-power-home-icon" alt="Power Home icon">
+                <div class="legend-text">
+                    <strong>Power Home:</strong> Discharge battery when necessary to power the home only
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-balance-icon" alt="Balance icon">
-                    <div class="legend-text">
-                        <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-balance-icon" alt="Balance icon">
+                <div class="legend-text">
+                    <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-pause-icon" alt="Pause icon">
-                    <div class="legend-text">
-                        <strong>Pause:</strong> Pause all charging/discharging
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-pause-icon" alt="Pause icon">
+                <div class="legend-text">
+                    <strong>Pause:</strong> Pause all charging/discharging
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-octgo-icon" alt="Octopus Go icon">
-                    <div class="legend-text">
-                        <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-octgo-icon" alt="Octopus Go icon">
+                <div class="legend-text">
+                    <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-flux-icon" alt="Octopus Flux icon">
-                    <div class="legend-text">
-                        <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-flux-icon" alt="Octopus Flux icon">
+                <div class="legend-text">
+                    <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
                 </div>
-                <div class="legend-item">
-                    <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
-                    <div class="legend-text">
-                        <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
-                    </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
+                <div class="legend-text">
+                    <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <h1>Power History</h1>
-    <div id="chart" style="width:100%;height:600px;"></div>
+<h1>Power History</h1>
+<div id="chart" style="width:100%;height:600px;"></div>
 
-    <style>
-        .status-panel {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            padding: 15px;
-            margin: 20px 0;
-        }
+<style>
+    .status-panel {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        margin: 20px 0;
+    }
 
-        .status-item {
-            margin: 10px 0;
-        }
+    .status-item {
+        margin: 10px 0;
+    }
 
-        .status-item strong {
-            color: #495057;
-        }
+    .status-item strong {
+        color: #495057;
+    }
 
-        .svg-button-container {
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
+    .svg-button-container {
+        margin-top: 15px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
 
-        .svg-button-container button {
-            height: 48px;
-        }
+    .svg-button-container button {
+        height: 48px;
+    }
 
-        .svg-button {
-            padding: 4px !important;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            cursor: pointer;
-        }
+    .svg-button {
+        padding: 4px !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        cursor: pointer;
+    }
 
-        .svg-button:hover {
-            background-color: #e9ecef;
-            transform: scale(1.05);
-        }
+    .svg-button:hover {
+        background-color: #e9ecef;
+        transform: scale(1.05);
+    }
 
-        .svg-button:active {
-            transform: scale(0.95);
-        }
+    .svg-button:active {
+        transform: scale(0.95);
+    }
 
-        .svg-button img {
-            height: 40px;
-            width: auto;
-        }
+    .svg-button img {
+        height: 40px;
+        width: auto;
+    }
 
-        .legend-container {
-            margin-top: 10px;
+    .legend-container {
+        margin-top: 10px;
+    }
+
+    .legend-toggle {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 10px 20px;
+        cursor: pointer;
+        font-size: 1rem;
+        transition: background-color 0.2s;
+        margin-left: auto;
+    }
+
+    .legend-toggle:hover {
+        background-color: #e9ecef;
+    }
+
+    .command-legend {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 20px;
+        margin-top: 10px;
+        max-height: 2000px;
+        transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
+        overflow: hidden;
+        opacity: 1;
+    }
+
+    .command-legend.collapsed {
+        max-height: 0;
+        opacity: 0;
+        margin-top: 0;
+        padding: 0;
+        border: none;
+    }
+
+    .legend-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .legend-item img {
+        height: 30px;
+        width: auto;
+    }
+
+    .legend-text {
+        flex: 1;
+    }
+
+    .legend-text strong {
+        display: block;
+        margin-bottom: 4px;
+    }
+
+    @media (max-width: 768px) {
+        .legend-grid {
+            grid-template-columns: 1fr;
         }
 
         .legend-toggle {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            padding: 10px 20px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: background-color 0.2s;
-            margin-left: auto;
+            margin-left: 0;
+            width: 100%;
         }
 
-        .legend-toggle:hover {
-            background-color: #e9ecef;
+        .svg-button-container button:last-child {
+            width: 100%;
         }
+    }
+</style>
 
-        .command-legend {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            padding: 20px;
-            margin-top: 10px;
-            max-height: 2000px;
-            transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
-            overflow: hidden;
-            opacity: 1;
-        }
+<script>
+    // Set icon sources when page loads
+    document.addEventListener('DOMContentLoaded', function () {
+        // Set main button icons
+        document.getElementById('unplug-icon').src = ICONS.UNPLUG;
+        document.getElementById('solar-icon').src = ICONS.SOLAR;
+        document.getElementById('charge-icon').src = ICONS.CHARGE;
+        document.getElementById('discharge-icon').src = ICONS.DISCHARGE;
+        document.getElementById('power-home-icon').src = ICONS.POWER_HOME;
+        document.getElementById('balance-icon').src = ICONS.BALANCE;
+        document.getElementById('pause-icon').src = ICONS.PAUSE;
+        document.getElementById('octgo-icon').src = ICONS.OCTGO;
+        document.getElementById('flux-icon').src = ICONS.FLUX;
+        document.getElementById('cosy-icon').src = ICONS.COSY;
 
-        .command-legend.collapsed {
-            max-height: 0;
-            opacity: 0;
-            margin-top: 0;
-            padding: 0;
-            border: none;
-        }
+        // Set legend icons
+        document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
+        document.getElementById('legend-solar-icon').src = ICONS.SOLAR;
+        document.getElementById('legend-charge-icon').src = ICONS.CHARGE;
+        document.getElementById('legend-discharge-icon').src = ICONS.DISCHARGE;
+        document.getElementById('legend-power-home-icon').src = ICONS.POWER_HOME;
+        document.getElementById('legend-balance-icon').src = ICONS.BALANCE;
+        document.getElementById('legend-pause-icon').src = ICONS.PAUSE;
+        document.getElementById('legend-octgo-icon').src = ICONS.OCTGO;
+        document.getElementById('legend-flux-icon').src = ICONS.FLUX;
+        document.getElementById('legend-cosy-icon').src = ICONS.COSY;
+    });
 
-        .legend-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-top: 15px;
-        }
+    async function sendCommand(command) {
+        try {
+            const response = await fetch('/api/control/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ command: command })
+            });
 
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+            const data = await response.json();
 
-        .legend-item img {
-            height: 30px;
-            width: auto;
-        }
-
-        .legend-text {
-            flex: 1;
-        }
-
-        .legend-text strong {
-            display: block;
-            margin-bottom: 4px;
-        }
-
-        @media (max-width: 768px) {
-            .legend-grid {
-                grid-template-columns: 1fr;
+            if (!response.ok) {
+                throw new Error(data.message || 'Failed to send command');
             }
-
-            .legend-toggle {
-                margin-left: 0;
-                width: 100%;
-            }
-
-            .svg-button-container button:last-child {
-                width: 100%;
-            }
+        } catch (error) {
+            console.error('Error sending command:', error);
+            alert('Failed to send command: ' + error.message);
         }
-    </style>
+    }
 
-    <script>
-        // Set icon sources when page loads
-        document.addEventListener('DOMContentLoaded', function () {
-            // Set main button icons
-            document.getElementById('unplug-icon').src = ICONS.UNPLUG;
-            document.getElementById('solar-icon').src = ICONS.SOLAR;
-            document.getElementById('charge-icon').src = ICONS.CHARGE;
-            document.getElementById('discharge-icon').src = ICONS.DISCHARGE;
-            document.getElementById('power-home-icon').src = ICONS.POWER_HOME;
-            document.getElementById('balance-icon').src = ICONS.BALANCE;
-            document.getElementById('pause-icon').src = ICONS.PAUSE;
-            document.getElementById('octgo-icon').src = ICONS.OCTGO;
-            document.getElementById('flux-icon').src = ICONS.FLUX;
-            document.getElementById('cosy-icon').src = ICONS.COSY;
+    async function fetchHistory() {
+        const response = await fetch('/api/status/history');
+        const data = await response.json();
 
-            // Set legend icons
-            document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
-            document.getElementById('legend-solar-icon').src = ICONS.SOLAR;
-            document.getElementById('legend-charge-icon').src = ICONS.CHARGE;
-            document.getElementById('legend-discharge-icon').src = ICONS.DISCHARGE;
-            document.getElementById('legend-power-home-icon').src = ICONS.POWER_HOME;
-            document.getElementById('legend-balance-icon').src = ICONS.BALANCE;
-            document.getElementById('legend-pause-icon').src = ICONS.PAUSE;
-            document.getElementById('legend-octgo-icon').src = ICONS.OCTGO;
-            document.getElementById('legend-flux-icon').src = ICONS.FLUX;
-            document.getElementById('legend-cosy-icon').src = ICONS.COSY;
+        // Convert the new history format to the old format for compatibility with existing code
+        const entries = data.entries || [];
+        const metadata = data.channel_metadata || {};
+        const roles = metadata.roles || {};
+
+        // Get device and channel for grid and evse
+        const gridRole = roles.grid || {};
+        const gridDevice = gridRole.device;
+        const gridChannel = gridRole.channel;
+
+        const evseRole = roles.evse || {};
+        const evseDevice = evseRole.device;
+        const evseChannel = evseRole.channel;
+
+        // Extract timestamps and convert to ISO format
+        const timestamps = entries.map(entry => {
+            const date = new Date(entry.timestamp * 1000);
+            return date.toISOString();
         });
 
-        async function sendCommand(command) {
-            try {
-                const response = await fetch('/api/control/command', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ command: command })
-                });
+        // Extract power values for each channel
+        const gridPower = [];
+        const evsePower = [];
+        const solarPower = [];
+        const heatPumpPower = [];
 
-                const data = await response.json();
+        entries.forEach(entry => {
+            const channels = entry.channels || {};
 
-                if (!response.ok) {
-                    throw new Error(data.message || 'Failed to send command');
-                }
-            } catch (error) {
-                console.error('Error sending command:', error);
-                alert('Failed to send command: ' + error.message);
+            // Grid power
+            if (gridDevice && gridChannel) {
+                const deviceData = channels[gridDevice] || {};
+                const channelKey = `channel${gridChannel}`;
+                gridPower.push(deviceData[channelKey] || 0);
+            } else {
+                gridPower.push(0);
             }
-        }
 
-        async function fetchHistory() {
-            const response = await fetch('/api/status/history');
-            return await response.json();
-        }
+            // EVSE power
+            if (evseDevice && evseChannel) {
+                const deviceData = channels[evseDevice] || {};
+                const channelKey = `channel${evseChannel}`;
+                evsePower.push(deviceData[channelKey] || 0);
+            } else {
+                evsePower.push(0);
+            }
 
-        function isMobile() {
-            return window.innerWidth <= 768; // Adjust the threshold as needed
-        }
+            // For backward compatibility, assume heat pump is secondary channel 1
+            const secondaryData = channels.secondary || {};
+            heatPumpPower.push(secondaryData.channel1 || 0);
 
-        function getLayout() {
-            const isMobileDevice = isMobile();
-            return {
-                title: 'Power History',
-                xaxis: {
-                    title: 'Time',
-                    tickmode: 'auto',
-                    nticks: 10,
-                    titlefont: { size: isMobileDevice ? 12 : 14 },
-                    tickfont: { size: isMobileDevice ? 10 : 12 }
-                },
-                yaxis: {
-                    title: 'Power (W)',
-                    titlefont: { size: isMobileDevice ? 12 : 14 },
-                    tickfont: { size: isMobileDevice ? 10 : 12 }
-                },
-                responsive: true,
-                autosize: true,
-                margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
-            };
-        }
+            // For backward compatibility, assume solar is secondary channel 2
+            solarPower.push(secondaryData.channel2 || 0);
+        });
 
-        // Wrap all our initialization code in a DOMContentLoaded event handler
-        document.addEventListener('DOMContentLoaded', function () {
-            // Initialize the empty chart with all traces
-            Plotly.newPlot('chart', [
-                {
-                    x: [],
-                    y: [],
+        return {
+            timestamps: timestamps,
+            grid_power: gridPower,
+            evse_power: evsePower,
+            solar_power: solarPower,
+            heat_pump_power: heatPumpPower
+        };
+    }
+
+    function isMobile() {
+        return window.innerWidth <= 768; // Adjust the threshold as needed
+    }
+
+    function getLayout() {
+        const isMobileDevice = isMobile();
+        return {
+            title: 'Power History',
+            xaxis: {
+                title: 'Time',
+                tickmode: 'auto',
+                nticks: 10,
+                titlefont: { size: isMobileDevice ? 12 : 14 },
+                tickfont: { size: isMobileDevice ? 10 : 12 }
+            },
+            yaxis: {
+                title: 'Power (W)',
+                titlefont: { size: isMobileDevice ? 12 : 14 },
+                tickfont: { size: isMobileDevice ? 10 : 12 }
+            },
+            responsive: true,
+            autosize: true,
+            margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
+        };
+    }
+
+    // Wrap all our initialization code in a DOMContentLoaded event handler
+    document.addEventListener('DOMContentLoaded', function () {
+        // Initialize the empty chart - traces will be added dynamically
+        Plotly.newPlot('chart', [], getLayout());
+
+        let firstLoad = true;
+
+        async function updateChart() {
+            try {
+                const history = await fetchHistory();
+                const timestamps = history.timestamps.map(t => new Date(t));
+
+                // Prepare traces for the chart
+                const traces = [];
+
+                // Add traces for grid, evse, solar, and heat pump
+                traces.push({
+                    x: timestamps,
+                    y: history.grid_power,
                     name: 'Grid',
                     type: 'scatter'
-                },
-                {
-                    x: [],
-                    y: [],
-                    name: 'EVSE',
+                });
+
+                traces.push({
+                    x: timestamps,
+                    y: history.evse_power,
+                    name: 'Wallbox',
                     type: 'scatter'
-                },
-                {
-                    x: [],
-                    y: [],
+                });
+
+                traces.push({
+                    x: timestamps,
+                    y: history.solar_power,
                     name: 'Solar',
                     type: 'scatter'
-                },
-                {
-                    x: [],
-                    y: [],
+                });
+
+                traces.push({
+                    x: timestamps,
+                    y: history.heat_pump_power,
                     name: 'Heat Pump',
                     type: 'scatter'
-                },
-                {
-                    x: [],
-                    y: [],
+                });
+
+                // Calculate home power (grid - evse - solar - heat_pump)
+                const homePower = history.grid_power.map((grid, i) => {
+                    return grid - history.evse_power[i] - history.solar_power[i] - history.heat_pump_power[i];
+                });
+
+                // Add home power trace
+                traces.push({
+                    x: timestamps,
+                    y: homePower,
                     name: 'Home',
                     type: 'scatter'
+                });
+
+                if (firstLoad) {
+                    // First load - create the plot with all traces
+                    Plotly.newPlot('chart', traces, getLayout());
+                    firstLoad = false;
+                } else {
+                    // Update existing plot
+                    Plotly.react('chart', traces, getLayout());
                 }
-            ], getLayout());
-
-            async function updateChart() {
-                try {
-                    const history = await fetchHistory();
-
-                    const timestamps = history.timestamps.map(t => new Date(t));
-
-                    // Calculate home power
-                    const homePower = history.grid_power.map((grid, i) =>
-                        grid - history.evse_power[i] - history.solar_power[i] - history.heat_pump_power[i]
-                    );
-
-                    // Update existing plot with all traces
-                    Plotly.update('chart', {
-                        x: [timestamps, timestamps, timestamps, timestamps, timestamps],
-                        y: [
-                            history.grid_power,
-                            history.evse_power,
-                            history.solar_power,
-                            history.heat_pump_power,
-                            homePower
-                        ]
-                    });
-                } catch (error) {
-                    console.error('Error updating chart:', error);
-                }
+            } catch (error) {
+                console.error('Error updating chart:', error);
             }
-
-            async function updateStatus() {
-                try {
-                    const response = await fetch('/api/status');
-                    const data = await response.json();
-
-                    // Update current state
-                    const stateElement = document.getElementById('current-state');
-                    stateElement.textContent = data.current_state.replace(/_/g, ' ');
-
-                    // Update battery SOC if available
-                    const socElement = document.getElementById('battery-soc');
-                    if (data.battery_soc !== undefined) {
-                        socElement.textContent = `${data.battery_soc}%`;
-                    } else {
-                        socElement.textContent = 'Unknown';
-                    }
-
-                    // Update next event
-                    const nextEventElement = document.getElementById('next-event');
-                    if (data.next_event) {
-                        const eventTime = new Date(data.next_event.timestamp);
-                        const formattedTime = eventTime.toLocaleString(undefined, {
-                            dateStyle: 'short',
-                            timeStyle: 'short'
-                        });
-                        nextEventElement.textContent = `${data.next_event.state} at ${formattedTime}`;
-                    } else {
-                        nextEventElement.textContent = 'No events scheduled';
-                    }
-                } catch (error) {
-                    console.error('Error fetching status:', error);
-                    document.getElementById('current-state').textContent = 'Error';
-                    document.getElementById('battery-soc').textContent = 'Error';
-                    document.getElementById('next-event').textContent = 'Unable to fetch status';
-                }
-            }
-
-            // Set up update intervals
-            setInterval(updateChart, 2000);  // Every 2 seconds
-            setInterval(updateStatus, 5000); // Every 5 seconds
-
-            // Initial calls
-            updateChart();
-            updateStatus();
-
-            // Add resize handler
-            window.addEventListener('resize', () => {
-                Plotly.relayout('chart', getLayout());
-            });
-        });
-
-        function toggleLegend() {
-            const legend = document.getElementById('command-legend');
-            legend.classList.toggle('collapsed');
         }
-    </script>
-</body>
 
-</html>
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // Update current state
+                const stateElement = document.getElementById('current-state');
+                stateElement.textContent = data.current_state.replace(/_/g, ' ');
+
+                // Update battery SOC if available
+                const socElement = document.getElementById('battery-soc');
+                if (data.battery_soc !== undefined) {
+                    socElement.textContent = `${data.battery_soc}%`;
+                } else {
+                    socElement.textContent = 'Unknown';
+                }
+
+                // Update next event
+                const nextEventElement = document.getElementById('next-event');
+                if (data.next_event) {
+                    const eventTime = new Date(data.next_event.timestamp);
+                    const formattedTime = eventTime.toLocaleString(undefined, {
+                        dateStyle: 'short',
+                        timeStyle: 'short'
+                    });
+                    nextEventElement.textContent = `${data.next_event.state} at ${formattedTime}`;
+                } else {
+                    nextEventElement.textContent = 'No events scheduled';
+                }
+            } catch (error) {
+                console.error('Error fetching status:', error);
+                document.getElementById('current-state').textContent = 'Error';
+                document.getElementById('battery-soc').textContent = 'Error';
+                document.getElementById('next-event').textContent = 'Unable to fetch status';
+            }
+        }
+
+        // Set up update intervals
+        setInterval(updateChart, 2000);  // Every 2 seconds
+        setInterval(updateStatus, 5000); // Every 5 seconds
+
+        // Initial calls
+        updateChart();
+        updateStatus();
+
+        // Add resize handler
+        window.addEventListener('resize', () => {
+            Plotly.relayout('chart', getLayout());
+        });
+    });
+
+    function toggleLegend() {
+        const legend = document.getElementById('command-legend');
+        legend.classList.toggle('collapsed');
+    }
+</script>
+{% endblock %}

@@ -8,6 +8,7 @@ services:
       - EVSE_DATA_DIR=/workspace/data
     ports:
       - "5000:5000"
+      - "5001:5001"
 
 volumes:
   evse-data:

@@ -1,353 +1,346 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Schedule EVSE Events</title>
-    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
-    <style>
-        /* Schedule-specific styles */
-        .scheduled-events {
-            margin-top: 20px;
-            padding: 20px;
-            background: #f5f5f5;
-            border-radius: 4px;
-        }
+{% block head %}
+<title>Schedule EVSE Events</title>
+<style>
+    /* Schedule-specific styles */
+    .scheduled-events {
+        margin-top: 20px;
+        padding: 20px;
+        background: #f5f5f5;
+        border-radius: 4px;
+    }
 
-        .event-list {
-            list-style: none;
-            padding: 0;
-        }
+    .event-list {
+        list-style: none;
+        padding: 0;
+    }
 
-        .event-item {
-            background: #fff;
-            padding: 10px;
-            margin-bottom: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+    .event-item {
+        background: #fff;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
 
-        .event-info {
-            flex-grow: 1;
-        }
+    .event-info {
+        flex-grow: 1;
+    }
 
-        .event-actions {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
+    .event-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
 
-        /* Common button styles for all buttons on the schedule page */
-        .schedule-form button[type="submit"],
-        .toggle-btn,
-        .edit-btn,
-        .delete-btn {
-            padding: 8px 16px;
-            /* Increased padding */
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            min-width: 70px;
-            height: 38px;
-            /* Explicit height to match form submit button */
-            font-size: 14px;
-            /* Consistent font size */
-            line-height: 20px;
-            /* Consistent line height */
-        }
+    /* Common button styles for all buttons on the schedule page */
+    .schedule-form button[type="submit"],
+    .toggle-btn,
+    .edit-btn,
+    .delete-btn {
+        padding: 8px 16px;
+        /* Increased padding */
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        min-width: 70px;
+        height: 38px;
+        /* Explicit height to match form submit button */
+        font-size: 14px;
+        /* Consistent font size */
+        line-height: 20px;
+        /* Consistent line height */
+    }
 
-        /* Specific background colors for different button types */
-        .toggle-btn.enabled {
-            background-color: #28a745;
-            color: white;
-        }
+    /* Specific background colors for different button types */
+    .toggle-btn.enabled {
+        background-color: #28a745;
+        color: white;
+    }
 
-        .toggle-btn.disabled {
-            background-color: #6c757d;
-            color: white;
-        }
+    .toggle-btn.disabled {
+        background-color: #6c757d;
+        color: white;
+    }
 
-        .edit-btn {
-            background-color: #ffc107;
-            color: black;
-        }
+    .edit-btn {
+        background-color: #ffc107;
+        color: black;
+    }
 
-        .delete-btn {
-            background-color: #dc3545;
-            color: white;
-        }
+    .delete-btn {
+        background-color: #dc3545;
+        color: white;
+    }
 
-        /* Hover states */
-        .edit-btn:hover {
-            background-color: #e0a800;
-        }
+    /* Hover states */
+    .edit-btn:hover {
+        background-color: #e0a800;
+    }
 
-        .delete-btn:hover {
-            background-color: #c82333;
-        }
+    .delete-btn:hover {
+        background-color: #c82333;
+    }
 
-        /* Modal styles */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-        }
+    /* Modal styles */
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+    }
 
-        .modal-content {
-            background-color: white;
-            margin: 15% auto;
-            padding: 20px;
-            border-radius: 5px;
-            width: 80%;
-            max-width: 500px;
-        }
+    .modal-content {
+        background-color: white;
+        margin: 15% auto;
+        padding: 20px;
+        border-radius: 5px;
+        width: 80%;
+        max-width: 500px;
+    }
 
-        .modal-buttons {
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-        }
-    </style>
-</head>
+    .modal-buttons {
+        margin-top: 20px;
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+    }
+</style>
+{% endblock %}
 
-<body>
-    <div class="nav-links">
-        <a href="/">← Back to Dashboard</a>
+{% block content %}
+<div class="nav-links">
+    <a href="/">← Back to Dashboard</a>
+</div>
+
+<h1>Schedule EVSE Events</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+<div class="flash-messages">
+    {% for category, message in messages %}
+    <div class="flash-message flash-{{ category }}">
+        {{ message }}
     </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endwith %}
 
-    <h1>Schedule EVSE Events</h1>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-    <div class="flash-messages">
-        {% for category, message in messages %}
-        <div class="flash-message flash-{{ category }}">
-            {{ message }}
+<div class="schedule-form">
+    <h2>Add New Schedule</h2>
+    <form action="{{ url_for('schedule_page') }}" method="post">
+        <div class="form-group">
+            <label for="datetime">Date and Time:</label>
+            <input type="datetime-local" id="datetime" name="datetime" required>
         </div>
-        {% endfor %}
-    </div>
-    {% endif %}
-    {% endwith %}
+        <div class="form-group">
+            <label for="state">State:</label>
+            <select id="state" name="state" required>
+                <!-- Will be populated by JavaScript -->
+            </select>
+        </div>
+        <button type="submit">Schedule Event</button>
+    </form>
+</div>
 
-    <div class="schedule-form">
-        <h2>Add New Schedule</h2>
-        <form action="{{ url_for('schedule_page') }}" method="post">
+<div class="scheduled-events">
+    <h2>Scheduled Events</h2>
+    {% if scheduled_events %}
+    <ul class="event-list">
+        {% for event in scheduled_events %}
+        <li class="event-item">
+            <span class="event-info">
+                {{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') }} → {{ event.state }}
+            </span>
+            <div class="event-actions">
+                <button onclick="toggleEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                    class="toggle-btn {% if event.enabled %}enabled{% else %}disabled{% endif %}">
+                    {% if event.enabled %}Enabled{% else %}Disabled{% endif %}
+                </button>
+                <button onclick="editEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                    class="edit-btn">Edit</button>
+                <button onclick="deleteEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
+                    class="delete-btn">Delete</button>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No scheduled events</p>
+    {% endif %}
+</div>
+
+<div id="editModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <h3>Edit Scheduled Event</h3>
+        <form id="editForm">
             <div class="form-group">
-                <label for="datetime">Date and Time:</label>
-                <input type="datetime-local" id="datetime" name="datetime" required>
+                <label for="editDatetime">Date and Time:</label>
+                <input type="datetime-local" id="editDatetime" name="datetime" required>
             </div>
             <div class="form-group">
-                <label for="state">State:</label>
-                <select id="state" name="state" required>
+                <label for="editState">State:</label>
+                <select id="editState" name="state" required>
                     <!-- Will be populated by JavaScript -->
                 </select>
             </div>
-            <button type="submit">Schedule Event</button>
+            <input type="hidden" id="originalTimestamp">
+            <input type="hidden" id="originalState">
+            <div class="modal-buttons">
+                <button type="submit">Save Changes</button>
+                <button type="button" onclick="closeEditModal()">Cancel</button>
+            </div>
         </form>
     </div>
+</div>
 
-    <div class="scheduled-events">
-        <h2>Scheduled Events</h2>
-        {% if scheduled_events %}
-        <ul class="event-list">
-            {% for event in scheduled_events %}
-            <li class="event-item">
-                <span class="event-info">
-                    {{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') }} → {{ event.state }}
-                </span>
-                <div class="event-actions">
-                    <button onclick="toggleEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
-                        class="toggle-btn {% if event.enabled %}enabled{% else %}disabled{% endif %}">
-                        {% if event.enabled %}Enabled{% else %}Disabled{% endif %}
-                    </button>
-                    <button onclick="editEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
-                        class="edit-btn">Edit</button>
-                    <button onclick="deleteEvent('{{ event.timestamp.isoformat() }}', '{{ event.state }}')"
-                        class="delete-btn">Delete</button>
-                </div>
-            </li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p>No scheduled events</p>
-        {% endif %}
-    </div>
-
-    <div id="editModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <h3>Edit Scheduled Event</h3>
-            <form id="editForm">
-                <div class="form-group">
-                    <label for="editDatetime">Date and Time:</label>
-                    <input type="datetime-local" id="editDatetime" name="datetime" required>
-                </div>
-                <div class="form-group">
-                    <label for="editState">State:</label>
-                    <select id="editState" name="state" required>
-                        <!-- Will be populated by JavaScript -->
-                    </select>
-                </div>
-                <input type="hidden" id="originalTimestamp">
-                <input type="hidden" id="originalState">
-                <div class="modal-buttons">
-                    <button type="submit">Save Changes</button>
-                    <button type="button" onclick="closeEditModal()">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <script>
-        // Global functions for event handling
-        async function deleteEvent(timestamp, state) {
-            if (!confirm('Are you sure you want to delete this event?')) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/schedule/${timestamp}/${state}`, {
-                    method: 'DELETE',
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    window.location.reload();
-                } else {
-                    alert(`Error: ${result.message}`);
-                }
-            } catch (error) {
-                alert('Error deleting event');
-                console.error('Error:', error);
-            }
+<script>
+    // Global functions for event handling
+    async function deleteEvent(timestamp, state) {
+        if (!confirm('Are you sure you want to delete this event?')) {
+            return;
         }
 
-        async function toggleEvent(timestamp, state) {
-            try {
-                const response = await fetch(`/api/schedule/toggle/${timestamp}/${state}`, {
-                    method: 'POST',
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    window.location.reload();
-                } else {
-                    alert(`Error: ${result.message}`);
-                }
-            } catch (error) {
-                alert('Error toggling event');
-                console.error('Error:', error);
-            }
-        }
-
-        function editEvent(timestamp, state) {
-            const modal = document.getElementById('editModal');
-            const datetimeInput = document.getElementById('editDatetime');
-            const stateSelect = document.getElementById('editState');
-            const originalTimestamp = document.getElementById('originalTimestamp');
-            const originalState = document.getElementById('originalState');
-
-            // Convert ISO timestamp to local datetime-local format
-            const date = new Date(timestamp);
-            const localDateTime = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-                .toISOString()
-                .slice(0, 16);
-
-            datetimeInput.value = localDateTime;
-            stateSelect.value = state;
-            originalTimestamp.value = timestamp;
-            originalState.value = state;
-
-            modal.style.display = 'block';
-        }
-
-        function closeEditModal() {
-            document.getElementById('editModal').style.display = 'none';
-        }
-
-        // DOM ready event handler
-        document.addEventListener('DOMContentLoaded', function () {
-            // Populate both select elements
-            populateStateSelect(document.getElementById('state'));
-            populateStateSelect(document.getElementById('editState'));
-
-            // Set default datetime
-            function setDefaultDateTime() {
-                const now = new Date();
-                now.setHours(now.getHours() + 1);
-                now.setMinutes(0);
-                now.setSeconds(0);
-                now.setMilliseconds(0);
-
-                const year = now.getFullYear();
-                const month = String(now.getMonth() + 1).padStart(2, '0');
-                const day = String(now.getDate()).padStart(2, '0');
-                const hours = String(now.getHours()).padStart(2, '0');
-                const minutes = String(now.getMinutes()).padStart(2, '0');
-
-                const defaultDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
-                const datetimeInput = document.getElementById('datetime');
-                if (datetimeInput) {
-                    datetimeInput.value = defaultDateTime;
-                }
-            }
-
-            setDefaultDateTime();
-
-            // Edit form submit handler
-            document.getElementById('editForm').addEventListener('submit', async function (e) {
-                e.preventDefault();
-
-                const formData = {
-                    newDatetime: document.getElementById('editDatetime').value,
-                    newState: document.getElementById('editState').value,
-                    originalTimestamp: document.getElementById('originalTimestamp').value,
-                    originalState: document.getElementById('originalState').value
-                };
-
-                try {
-                    const response = await fetch('/api/schedule/edit', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(formData)
-                    });
-
-                    const result = await response.json();
-
-                    if (response.ok) {
-                        window.location.reload();
-                    } else {
-                        alert(`Error: ${result.message}`);
-                    }
-                } catch (error) {
-                    alert('Error updating event');
-                    console.error('Error:', error);
-                }
+        try {
+            const response = await fetch(`/api/schedule/${timestamp}/${state}`, {
+                method: 'DELETE',
             });
 
-            // Close modal when clicking outside
-            window.onclick = function (event) {
-                const modal = document.getElementById('editModal');
-                if (event.target === modal) {
-                    modal.style.display = 'none';
-                }
-            };
-        });
-    </script>
-</body>
+            const result = await response.json();
 
-</html>
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert(`Error: ${result.message}`);
+            }
+        } catch (error) {
+            alert('Error deleting event');
+            console.error('Error:', error);
+        }
+    }
+
+    async function toggleEvent(timestamp, state) {
+        try {
+            const response = await fetch(`/api/schedule/toggle/${timestamp}/${state}`, {
+                method: 'POST',
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert(`Error: ${result.message}`);
+            }
+        } catch (error) {
+            alert('Error toggling event');
+            console.error('Error:', error);
+        }
+    }
+
+    function editEvent(timestamp, state) {
+        const modal = document.getElementById('editModal');
+        const datetimeInput = document.getElementById('editDatetime');
+        const stateSelect = document.getElementById('editState');
+        const originalTimestamp = document.getElementById('originalTimestamp');
+        const originalState = document.getElementById('originalState');
+
+        // Convert ISO timestamp to local datetime-local format
+        const date = new Date(timestamp);
+        const localDateTime = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+            .toISOString()
+            .slice(0, 16);
+
+        datetimeInput.value = localDateTime;
+        stateSelect.value = state;
+        originalTimestamp.value = timestamp;
+        originalState.value = state;
+
+        modal.style.display = 'block';
+    }
+
+    function closeEditModal() {
+        document.getElementById('editModal').style.display = 'none';
+    }
+
+    // DOM ready event handler
+    document.addEventListener('DOMContentLoaded', function () {
+        // Populate both select elements
+        populateStateSelect(document.getElementById('state'));
+        populateStateSelect(document.getElementById('editState'));
+
+        // Set default datetime
+        function setDefaultDateTime() {
+            const now = new Date();
+            now.setHours(now.getHours() + 1);
+            now.setMinutes(0);
+            now.setSeconds(0);
+            now.setMilliseconds(0);
+
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+
+            const defaultDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
+            const datetimeInput = document.getElementById('datetime');
+            if (datetimeInput) {
+                datetimeInput.value = defaultDateTime;
+            }
+        }
+
+        setDefaultDateTime();
+
+        // Edit form submit handler
+        document.getElementById('editForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            const formData = {
+                newDatetime: document.getElementById('editDatetime').value,
+                newState: document.getElementById('editState').value,
+                originalTimestamp: document.getElementById('originalTimestamp').value,
+                originalState: document.getElementById('originalState').value
+            };
+
+            try {
+                const response = await fetch('/api/schedule/edit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+            } catch (error) {
+                alert('Error updating event');
+                console.error('Error:', error);
+            }
+        });
+
+        // Close modal when clicking outside
+        window.onclick = function (event) {
+            const modal = document.getElementById('editModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        };
+    });
+</script>
+{% endblock %}

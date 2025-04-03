@@ -1,12 +1,11 @@
 from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
-from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
 class OctopusGoTariff(Tariff):
     """Implementation of Octopus Go tariff logic.
-    
+
     Octopus Go provides a cheap rate between 00:30 and 05:30,
     with a standard rate at other times.
 
@@ -33,7 +32,7 @@ class OctopusGoTariff(Tariff):
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
         """Determine charging strategy based on time and battery level."""
         battery_level = state.battery_level
-        
+
         if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
@@ -56,7 +55,7 @@ class OctopusGoTariff(Tariff):
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels and corresponding charge/discharge currents.
-        
+
         This method sets up the relationship between home power demand and the
         EVSE's response in terms of charging or discharging current. The levels
         determine at what power thresholds the system changes its behavior.
@@ -66,9 +65,10 @@ class OctopusGoTariff(Tariff):
             evseController: Controller instance managing the EVSE
             dayMinute (int): Minutes since midnight (0-1439)
         """
-        evse = WallboxThread.get_instance()
+        # We don't actually need to get the EVSE instance here since we already have the state
+        # The battery_level is already available in the state parameter
         battery_level = state.battery_level
-        
+
         # If SoC > 50%:
         if battery_level >= 50:
             # Cover all of the home demand as far as possible. Try to avoid energy coming from the grid.

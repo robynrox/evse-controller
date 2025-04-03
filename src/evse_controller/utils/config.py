@@ -37,7 +37,13 @@ class Config:
                             'url': 'test.local',
                             'username': 'test',
                             'password': 'test',
-                            'serial': 'test'
+                            'serial': 'test',
+                            'use_simulator': True,
+                            'simulator': {
+                                'initial_battery_level': 50,
+                                'battery_capacity_kwh': 50,
+                                'simulation_speed': 60
+                            }
                         },
                         'shelly': {
                             'primary_url': '',
@@ -77,6 +83,13 @@ class Config:
                 with self.CONFIG_FILE.open('r') as f:
                     config = yaml.safe_load(f)
                     print(f"Debug: Loaded config from {self.CONFIG_FILE}", file=sys.stderr)
+
+                    # Handle backward compatibility for use_simulator flag
+                    # If Wallbox URL is defined but use_simulator flag is missing, default to False
+                    if "wallbox" in config and config["wallbox"].get("url") and "use_simulator" not in config["wallbox"]:
+                        config["wallbox"]["use_simulator"] = False
+                        print(f"Debug: Wallbox URL found but no use_simulator flag, defaulting to False", file=sys.stderr)
+
                     return config
             print(f"Error: Config file not found: {self.CONFIG_FILE}", file=sys.stderr)
             return {}
@@ -156,6 +169,27 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "serial", value)
     )
 
+    # Wallbox simulator properties
+    USE_WALLBOX_SIMULATOR = property(
+        lambda self: self._get_config_value("wallbox", "use_simulator", False),
+        lambda self, value: self._set_config_value("wallbox", "use_simulator", value)
+    )
+
+    SIMULATOR_INITIAL_BATTERY_LEVEL = property(
+        lambda self: self._get_config_value("wallbox.simulator", "initial_battery_level", 50),
+        lambda self, value: self._set_config_value("wallbox.simulator", "initial_battery_level", value)
+    )
+
+    SIMULATOR_BATTERY_CAPACITY_KWH = property(
+        lambda self: self._get_config_value("wallbox.simulator", "battery_capacity_kwh", 50),
+        lambda self, value: self._set_config_value("wallbox.simulator", "battery_capacity_kwh", value)
+    )
+
+    SIMULATOR_SPEED = property(
+        lambda self: self._get_config_value("wallbox.simulator", "simulation_speed", 60),
+        lambda self, value: self._set_config_value("wallbox.simulator", "simulation_speed", value)
+    )
+
     # Shelly section properties
     SHELLY_PRIMARY_URL = property(
         lambda self: self._get_config_value("shelly", "primary_url", ""),
@@ -208,18 +242,23 @@ class Config:
         lambda self, value: self._set_config_value("influxdb", "org", value)
     )
 
+    INFLUXDB_BUCKET = property(
+        lambda self: self._get_config_value("influxdb", "bucket", "powerlog"),
+        lambda self, value: self._set_config_value("influxdb", "bucket", value)
+    )
+
     def save(self):
         """Save configuration to YAML file with backup."""
         config_path = get_config_file()
         backup_path = config_path.with_suffix('.yaml.bak')
-        
+
         # Create backup of existing config if it exists
         if config_path.exists():
             backup_path.write_text(config_path.read_text())
-        
+
         # Ensure parent directory exists
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Save new configuration
         try:
             with config_path.open('w') as f:
@@ -249,13 +288,15 @@ class Config:
                 'evse': {
                     'device': self.SHELLY_EVSE_DEVICE,
                     'channel': self.SHELLY_EVSE_CHANNEL
-                }
+                },
+                'channels': self._get_channels_dict()
             },
             'influxdb': {
                 'enabled': self.INFLUXDB_ENABLED,
                 'url': self.INFLUXDB_URL,
                 'token': self.INFLUXDB_TOKEN,
-                'org': self.INFLUXDB_ORG
+                'org': self.INFLUXDB_ORG,
+                'bucket': self.INFLUXDB_BUCKET
             },
             'charging': {
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
@@ -267,6 +308,156 @@ class Config:
                 'console_level': self.CONSOLE_LOGGING
             }
         }
+
+    # Channel-related methods
+    def _get_channels_dict(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Get the channels configuration as a dictionary.
+
+        Returns:
+            A dictionary containing the channel configuration
+        """
+        self._ensure_initialized()
+        if "channels" not in self._config_data.get("shelly", {}):
+            # Create default channel structure for backward compatibility
+            return {
+                "primary": {
+                    "channel1": {
+                        "name": "Channel 1",
+                        "abbreviation": "Ch1",
+                        "in_use": True
+                    },
+                    "channel2": {
+                        "name": "Channel 2",
+                        "abbreviation": "Ch2",
+                        "in_use": True
+                    }
+                },
+                "secondary": {
+                    "channel1": {
+                        "name": "Channel 1",
+                        "abbreviation": "Ch1",
+                        "in_use": True
+                    },
+                    "channel2": {
+                        "name": "Channel 2",
+                        "abbreviation": "Ch2",
+                        "in_use": True
+                    }
+                }
+            }
+        return self._config_data["shelly"]["channels"]
+
+    def get_channel_name(self, device: str, channel: int) -> str:
+        """Get the name for a specific channel.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+
+        Returns:
+            The channel name or a default if not configured
+        """
+        self._ensure_initialized()
+        channel_key = f"channel{channel}"
+        try:
+            return self._config_data["shelly"]["channels"][device][channel_key]["name"]
+        except (KeyError, TypeError):
+            return f"Channel {channel}"
+
+    def get_channel_abbreviation(self, device: str, channel: int) -> str:
+        """Get the abbreviation for a specific channel.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+
+        Returns:
+            The channel abbreviation or a default if not configured
+        """
+        self._ensure_initialized()
+        channel_key = f"channel{channel}"
+        try:
+            return self._config_data["shelly"]["channels"][device][channel_key]["abbreviation"]
+        except (KeyError, TypeError):
+            return f"Ch{channel}"
+
+    def is_channel_in_use(self, device: str, channel: int) -> bool:
+        """Check if a specific channel is in use.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+
+        Returns:
+            True if the channel is in use, False otherwise
+        """
+        self._ensure_initialized()
+        channel_key = f"channel{channel}"
+        try:
+            return self._config_data["shelly"]["channels"][device][channel_key]["in_use"]
+        except (KeyError, TypeError):
+            # For backward compatibility, assume all channels are in use
+            return True
+
+    def set_channel_name(self, device: str, channel: int, name: str):
+        """Set the name for a specific channel.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+            name: The name to set
+        """
+        self._ensure_initialized()
+        self._ensure_channel_structure(device, channel)
+        channel_key = f"channel{channel}"
+        self._config_data["shelly"]["channels"][device][channel_key]["name"] = name
+
+    def set_channel_abbreviation(self, device: str, channel: int, abbreviation: str):
+        """Set the abbreviation for a specific channel.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+            abbreviation: The abbreviation to set
+        """
+        self._ensure_initialized()
+        self._ensure_channel_structure(device, channel)
+        channel_key = f"channel{channel}"
+        self._config_data["shelly"]["channels"][device][channel_key]["abbreviation"] = abbreviation
+
+    def set_channel_in_use(self, device: str, channel: int, in_use: bool):
+        """Set whether a specific channel is in use.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+            in_use: True if the channel is in use, False otherwise
+        """
+        self._ensure_initialized()
+        self._ensure_channel_structure(device, channel)
+        channel_key = f"channel{channel}"
+        self._config_data["shelly"]["channels"][device][channel_key]["in_use"] = in_use
+
+    def _ensure_channel_structure(self, device: str, channel: int):
+        """Ensure the channel structure exists in the configuration.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+        """
+        if "channels" not in self._config_data["shelly"]:
+            self._config_data["shelly"]["channels"] = {}
+
+        if device not in self._config_data["shelly"]["channels"]:
+            self._config_data["shelly"]["channels"][device] = {}
+
+        channel_key = f"channel{channel}"
+        if channel_key not in self._config_data["shelly"]["channels"][device]:
+            self._config_data["shelly"]["channels"][device][channel_key] = {
+                "name": f"Channel {channel}",
+                "abbreviation": f"Ch{channel}",
+                "in_use": True
+            }
 
     def __getattr__(self, name):
         """Handle attributes not explicitly defined."""
