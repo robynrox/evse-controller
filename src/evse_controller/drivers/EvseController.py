@@ -117,10 +117,10 @@ class EvseController(PowerMonitorObserver):
         self.auxpower = Power()
         # Minimum current in either direction
         self.MIN_CURRENT = 3
-        # Maximum charging current
-        self.MAX_CHARGE_CURRENT = 16
-        # Maximum discharging current
-        self.MAX_DISCHARGE_CURRENT = 16
+        # Maximum charging current from config
+        self.MAX_CHARGE_CURRENT = config.WALLBOX_MAX_CHARGE_CURRENT
+        # Maximum discharging current from config
+        self.MAX_DISCHARGE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT
         self.evseCurrent = 0
         self.minDischargeCurrent = 0
         self.maxDischargeCurrent = 0
