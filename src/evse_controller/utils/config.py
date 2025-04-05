@@ -156,6 +156,16 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "serial", value)
     )
 
+    WALLBOX_MAX_CHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "max_charge_current", 32),
+        lambda self, value: self._set_config_value("wallbox", "max_charge_current", value)
+    )
+
+    WALLBOX_MAX_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "max_discharge_current", 32),
+        lambda self, value: self._set_config_value("wallbox", "max_discharge_current", value)
+    )
+
     # Shelly section properties
     SHELLY_PRIMARY_URL = property(
         lambda self: self._get_config_value("shelly", "primary_url", ""),
@@ -237,7 +247,9 @@ class Config:
                 'url': self.WALLBOX_URL,
                 'username': self.WALLBOX_USERNAME,
                 'password': self.WALLBOX_PASSWORD,
-                'serial': self.WALLBOX_SERIAL
+                'serial': self.WALLBOX_SERIAL,
+                'max_charge_current': self.WALLBOX_MAX_CHARGE_CURRENT,
+                'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,

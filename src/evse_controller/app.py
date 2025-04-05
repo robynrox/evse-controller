@@ -241,6 +241,23 @@ def config_page():
                 config.WALLBOX_PASSWORD = request.form.get('wallbox[password]')
             if request.form.get('wallbox[serial]'):
                 config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
+            
+            # Update Wallbox current limits
+            max_charge_current = request.form.get('wallbox[max_charge_current]')
+            if max_charge_current:
+                charge_current = int(max_charge_current)
+                if 3 <= charge_current <= 32:
+                    config.WALLBOX_MAX_CHARGE_CURRENT = charge_current
+                else:
+                    raise ValueError("Maximum charging current must be between 3 and 32A")
+
+            max_discharge_current = request.form.get('wallbox[max_discharge_current]')
+            if max_discharge_current:
+                discharge_current = int(max_discharge_current)
+                if 3 <= discharge_current <= 32:
+                    config.WALLBOX_MAX_DISCHARGE_CURRENT = discharge_current
+                else:
+                    raise ValueError("Maximum discharging current must be between 3 and 32A")
 
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
