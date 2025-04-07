@@ -16,7 +16,9 @@ DEFAULT_CONFIG = {
             "initial_battery_level": 50,
             "battery_capacity_kwh": 50,
             "simulation_speed": 60  # 60x speed (1 minute = 1 second)
-        }
+        },
+        "max_charge_current": 32,    # Maximum charging current (positive)
+        "max_discharge_current": 32,  # Maximum discharging current (positive)
     },
     "shelly": {
         "primary_url": "",
@@ -216,6 +218,27 @@ def interactive_config():
             "Enter your Wallbox URL (IP or hostname):",
             default=config["wallbox"]["url"],
             validate=lambda text: len(text) > 0
+        ).ask()
+    
+    config["wallbox"]["max_charge_current"] = int(questionary.text(
+        "Maximum charging current (A):",
+        default=str(config["wallbox"]["max_charge_current"]),
+        validate=lambda text: text.isdigit() and 3 <= int(text) <= 32
+    ).ask())
+    
+    config["wallbox"]["max_discharge_current"] = int(questionary.text(
+        "Maximum discharging current (A):",
+        default=str(config["wallbox"]["max_discharge_current"]),
+        validate=lambda text: text.isdigit() and 3 <= int(text) <= 32
+    ).ask())
+    
+    if questionary.confirm(
+        "Configure Wallbox authentication (required for auto-restart)?",
+        default=bool(config["wallbox"]["username"])
+    ).ask():
+        config["wallbox"]["username"] = questionary.text(
+            "Wallbox username:",
+            default=config["wallbox"]["username"]
         ).ask()
 
         if questionary.confirm(
