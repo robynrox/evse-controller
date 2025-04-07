@@ -211,6 +211,8 @@ Detailed explanation of each configuration option:
 - `username`: Your Wallbox account email (optional, for auto-restart feature)
 - `password`: Your Wallbox account password (optional, for auto-restart feature)
 - `serial`: Your Wallbox serial number (optional, for auto-restart feature)
+- `max_charge_current`: Maximum charging current, integer between 3-32 (amperes)
+- `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes)
 
 #### Shelly Section
 - `primary_url`: IP address or hostname of your primary Shelly EM

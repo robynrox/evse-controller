@@ -51,6 +51,16 @@
                 <label for="wallbox_serial">Serial Number:</label>
                 <input type="number" id="wallbox_serial" name="wallbox[serial]" value="{{ config.wallbox.serial }}">
             </div>
+            <div class="form-group">
+                <label for="max_charge_current">Maximum Charging Current (A):</label>
+                <input type="number" id="max_charge_current" name="wallbox[max_charge_current]"
+                    value="{{ config.wallbox.max_charge_current }}" min="3" max="32" required>
+            </div>
+            <div class="form-group">
+                <label for="max_discharge_current">Maximum Discharging Current (A):</label>
+                <input type="number" id="max_discharge_current" name="wallbox[max_discharge_current]"
+                    value="{{ config.wallbox.max_discharge_current }}" min="3" max="32" required>
+            </div>
         </div>
 
         <div class="config-section">
@@ -202,6 +212,25 @@
     </form>
 
     <script>
+        // Add validation for current inputs
+        document.getElementById('max_charge_current').addEventListener('input', function () {
+            const value = parseInt(this.value);
+            if (value < 3 || value > 32) {
+                this.setCustomValidity('Current must be between 3 and 32A');
+            } else {
+                this.setCustomValidity('');
+            }
+        });
+
+        document.getElementById('max_discharge_current').addEventListener('input', function () {
+            const value = parseInt(this.value);
+            if (value < 3 || value > 32) {
+                this.setCustomValidity('Current must be between 3 and 32A');
+            } else {
+                this.setCustomValidity('');
+            }
+        });
+
         document.getElementById('influxdb_enabled').addEventListener('change', function () {
             document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
         });

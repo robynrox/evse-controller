@@ -117,10 +117,6 @@ class EvseController(PowerMonitorObserver):
         self.auxpower = Power()
         # Minimum current in either direction
         self.MIN_CURRENT = 3
-        # Maximum charging current
-        self.MAX_CHARGE_CURRENT = 16
-        # Maximum discharging current
-        self.MAX_DISCHARGE_CURRENT = 16
         self.evseCurrent = 0
         self.minDischargeCurrent = 0
         self.maxDischargeCurrent = 0
@@ -568,22 +564,22 @@ class EvseController(PowerMonitorObserver):
                     self.minChargeCurrent = 0
                     self.maxChargeCurrent = 0
                 case ControlState.CHARGE:
-                    self.minChargeCurrent = self.MAX_CHARGE_CURRENT
-                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                    self.minChargeCurrent = config.WALLBOX_MAX_CHARGE_CURRENT
+                    self.maxChargeCurrent = config.WALLBOX_MAX_CHARGE_CURRENT
                 case ControlState.DISCHARGE:
-                    self.minDischargeCurrent = self.MAX_DISCHARGE_CURRENT
-                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                    self.minDischargeCurrent = config.WALLBOX_MAX_DISCHARGE_CURRENT
+                    self.maxDischargeCurrent = config.WALLBOX_MAX_DISCHARGE_CURRENT
                 case ControlState.LOAD_FOLLOW_CHARGE:
                     self.minChargeCurrent = 0
-                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                    self.maxChargeCurrent = config.WALLBOX_MAX_CHARGE_CURRENT
                 case ControlState.LOAD_FOLLOW_DISCHARGE:
                     self.minDischargeCurrent = 0
-                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                    self.maxDischargeCurrent = config.WALLBOX_MAX_DISCHARGE_CURRENT
                 case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
                     self.minChargeCurrent = 0
-                    self.maxChargeCurrent = self.MAX_CHARGE_CURRENT
+                    self.maxChargeCurrent = config.WALLBOX_MAX_CHARGE_CURRENT
                     self.minDischargeCurrent = 0
-                    self.maxDischargeCurrent = self.MAX_DISCHARGE_CURRENT
+                    self.maxDischargeCurrent = config.WALLBOX_MAX_DISCHARGE_CURRENT
             info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
 
     def setDischargeCurrentRange(self, minCurrent, maxCurrent):
