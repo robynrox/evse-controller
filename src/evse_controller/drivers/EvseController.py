@@ -81,6 +81,9 @@ class EvseController(PowerMonitorObserver):
         Args:
             tariffManager: Manager for electricity tariff rules and scheduling
         """
+        # Add MAX_HISTORY_POINTS constant
+        self.MAX_HISTORY_POINTS = 300
+
         # Initialize power monitors
         primary_url = config.SHELLY_PRIMARY_URL
         if not primary_url:
@@ -105,6 +108,10 @@ class EvseController(PowerMonitorObserver):
         else:
             self.pmon2 = None
 
+        # Initialize power tracking attributes
+        self.gridpower = Power()
+        self.auxpower = Power()
+
         # Get Wallbox instance using the factory method
         try:
             self.evse: EvseThreadInterface = EvseThreadInterface.get_instance()
@@ -112,8 +119,6 @@ class EvseController(PowerMonitorObserver):
             error(f"Failed to initialize Wallbox: {e}")
             raise
 
-        self.auxpower = Power()
-        # Minimum current in either direction
         self.MIN_CURRENT = 3
         self.evseCurrent = 0
         self.minDischargeCurrent = 0
@@ -177,7 +182,7 @@ class EvseController(PowerMonitorObserver):
 
         # Single history deque for all data
         self.history = {
-            "entries": deque(maxlen=300),
+            "entries": deque(maxlen=self.MAX_HISTORY_POINTS),
             "channel_metadata": {}
         }
         self._update_channel_metadata()
@@ -196,7 +201,7 @@ class EvseController(PowerMonitorObserver):
         This method can be called whenever config changes in the future.
         """
         self.history["channel_metadata"] = {
-            "devices": {
+            "channels": {
                 "primary": {
                     "channel1": {
                         "name": config.get_channel_name("primary", 1),
@@ -266,7 +271,7 @@ class EvseController(PowerMonitorObserver):
 
                 # Initialize the history dictionary structure
                 self.history = {
-                    "entries": deque(data["entries"], maxlen=300),
+                    "entries": deque(data["entries"], maxlen=self.MAX_HISTORY_POINTS),
                     "channel_metadata": {}
                 }
 
@@ -278,7 +283,7 @@ class EvseController(PowerMonitorObserver):
                 warning(f"Failed to load historical data: {e}")
                 # Initialize with empty structure if loading fails
                 self.history = {
-                    "entries": deque(maxlen=300),
+                    "entries": deque(maxlen=self.MAX_HISTORY_POINTS),
                     "channel_metadata": {}
                 }
                 self._update_channel_metadata()
@@ -594,6 +599,41 @@ class EvseController(PowerMonitorObserver):
             (monitor == self.pmon2 and config.SHELLY_GRID_DEVICE == "secondary")
         )
 
+        # Update the appropriate power readings
+        if monitor == self.pmon:
+            primary_power = power
+            secondary_power = self.auxpower
+            if is_grid_monitor:
+                self.gridpower = power
+        else:  # monitor == self.pmon2
+            primary_power = self.gridpower
+            secondary_power = power
+            if is_grid_monitor:
+                self.gridpower = power
+
+        # Only add history entry when we receive data from the grid monitor
+        # This ensures we maintain exactly 5 minutes of history (300 seconds)
+        if is_grid_monitor:
+            channels_data = {
+                "primary": {
+                    "channel1": primary_power.ch1Watts if primary_power else None,
+                    "channel2": primary_power.ch2Watts if primary_power else None
+                },
+                "secondary": {
+                    "channel1": secondary_power.ch1Watts if secondary_power else None,
+                    "channel2": secondary_power.ch2Watts if secondary_power else None
+                }
+            }
+            
+            self.history["entries"].append({
+                "timestamp": time.time(),
+                "channels": channels_data
+            })
+
+            # Keep history size limited
+            while len(self.history["entries"]) > self.MAX_HISTORY_POINTS:
+                self.history["entries"].popleft()
+
         if not is_grid_monitor:
             # Update auxiliary power readings and return
             self.auxpower = power
@@ -670,19 +710,12 @@ class EvseController(PowerMonitorObserver):
             }
         }
 
-        # Add the entry to the history
-        self.history["entries"].append(history_entry)
-
-        # After updating the history, save it
-        self._save_history()
-
         if (time.time() >= self.nextHalfHourlyLog):
             self.nextHalfHourlyLog = math.ceil((time.time() + 1) / 1800) * 1800
             info(f"ENERGY {power.getAccumulatedEnergy()}")
             if (self.powerAtLastHalfHourlyLog is not None):
                 info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
             self.powerAtLastHalfHourlyLog = power
-            self._save_persistent_state()  # Save state after updating half-hourly log
 
         # Calculate desired current based on latest reading
         desiredEvseCurrent = self.calculateTargetCurrent(power)
@@ -788,9 +821,6 @@ class EvseController(PowerMonitorObserver):
             if (self.evseCurrent != desiredEvseCurrent):
                 info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
             self._setCurrent(desiredEvseCurrent)
-
-        # After processing updates, save persistent state
-        self._save_persistent_state()
 
     def setControlState(self, state: ControlState):
         """Set the control state and log the transition."""
@@ -899,6 +929,10 @@ class EvseController(PowerMonitorObserver):
         info("Stopping charging")
 
         try:
+            # Save both history and persistent state before stopping
+            self._save_history()
+            self._save_persistent_state()
+            
             # Stop charging before cleanup
             self._setCurrent(0)
 

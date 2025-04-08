@@ -102,67 +102,53 @@ status_model = api.model('Status', {
     }))
 })
 
-# Define models for the new history structure
+# Define models for the history structure
 channel_metadata_device_model = api.model('ChannelMetadataDevice', {
     'name': fields.String(description='Channel name'),
     'abbreviation': fields.String(description='Channel abbreviation'),
     'in_use': fields.Boolean(description='Whether the channel is in use')
 })
 
-channel_metadata_devices_model = api.model('ChannelMetadataDevices', {
-    'primary_channel1': fields.Nested(channel_metadata_device_model),
-    'primary_channel2': fields.Nested(channel_metadata_device_model),
-    'secondary_channel1': fields.Nested(channel_metadata_device_model),
-    'secondary_channel2': fields.Nested(channel_metadata_device_model)
-})
-
-channel_role_model = api.model('ChannelRole', {
-    'device': fields.String(description='Device (primary or secondary)'),
-    'channel': fields.Integer(description='Channel number (1 or 2)')
-})
-
-channel_roles_model = api.model('ChannelRoles', {
-    'grid': fields.Nested(channel_role_model),
-    'evse': fields.Nested(channel_role_model, required=False)
-})
-
 channel_metadata_model = api.model('ChannelMetadata', {
-    'devices': fields.Nested(channel_metadata_devices_model),
-    'roles': fields.Nested(channel_roles_model)
-})
-
-channel_data_device_model = api.model('ChannelDataDevice', {
-    'channel1': fields.List(fields.Float),
-    'channel2': fields.List(fields.Float)
-})
-
-channel_data_model = api.model('ChannelData', {
-    'primary': fields.Nested(channel_data_device_model),
-    'secondary': fields.Nested(channel_data_device_model)
-})
-
-# Define channel data for history entries
-history_entry_channels_model = api.model('HistoryEntryChannels', {
-    'primary': api.model('HistoryEntryChannelsPrimary', {
-        'channel1': fields.Float(description='Primary channel 1 power'),
-        'channel2': fields.Float(description='Primary channel 2 power')
-    }),
-    'secondary': api.model('HistoryEntryChannelsSecondary', {
-        'channel1': fields.Float(description='Secondary channel 1 power'),
-        'channel2': fields.Float(description='Secondary channel 2 power')
-    })
+    'channels': fields.Nested(api.model('Channels', {
+        'primary': fields.Nested(api.model('PrimaryChannels', {
+            'channel1': fields.Nested(channel_metadata_device_model),
+            'channel2': fields.Nested(channel_metadata_device_model)
+        })),
+        'secondary': fields.Nested(api.model('SecondaryChannels', {
+            'channel1': fields.Nested(channel_metadata_device_model),
+            'channel2': fields.Nested(channel_metadata_device_model)
+        }))
+    })),
+    'roles': fields.Nested(api.model('Roles', {
+        'grid': fields.Nested(api.model('GridRole', {
+            'device': fields.String(description='Device (primary/secondary)'),
+            'channel': fields.Integer(description='Channel number (1/2)')
+        })),
+        'evse': fields.Nested(api.model('EvseRole', {
+            'device': fields.String(description='Device (primary/secondary)'),
+            'channel': fields.Integer(description='Channel number (1/2)')
+        }))
+    }))
 })
 
 history_entry_model = api.model('HistoryEntry', {
     'timestamp': fields.Float(description='Unix timestamp'),
-    'soc': fields.Float(description='State of charge'),
-    'voltage': fields.Float(description='Voltage'),
-    'channels': fields.Nested(history_entry_channels_model)
+    'channels': fields.Nested(api.model('EntryChannels', {
+        'primary': fields.Nested(api.model('PrimaryPower', {
+            'channel1': fields.Float(description='Primary channel 1 power'),
+            'channel2': fields.Float(description='Primary channel 2 power')
+        })),
+        'secondary': fields.Nested(api.model('SecondaryPower', {
+            'channel1': fields.Float(description='Secondary channel 1 power'),
+            'channel2': fields.Float(description='Secondary channel 2 power')
+        }))
+    }))
 })
 
 history_model = api.model('History', {
-    'entries': fields.Raw(description='History entries'),
-    'channel_metadata': fields.Raw(description='Channel metadata')
+    'entries': fields.List(fields.Nested(history_entry_model)),
+    'channel_metadata': fields.Nested(channel_metadata_model)
 })
 
 # No legacy model needed

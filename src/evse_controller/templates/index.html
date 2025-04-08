@@ -363,68 +363,69 @@
     async function fetchHistory() {
         const response = await fetch('/api/status/history');
         const data = await response.json();
+        return processHistoryData(data.entries, data.channel_metadata);
+    }
 
-        // Convert the new history format to the old format for compatibility with existing code
-        const entries = data.entries || [];
-        const metadata = data.channel_metadata || {};
-        const roles = metadata.roles || {};
+    function processHistoryData(entries, metadata) {
+        const timestamps = entries.map(entry => new Date(entry.timestamp * 1000));
+        const channels = {};
+        const channelConfigs = metadata.channels || {};
 
-        // Get device and channel for grid and evse
-        const gridRole = roles.grid || {};
+        // Initialize arrays for each active channel
+        for (const device in channelConfigs) {
+            for (const channelKey in channelConfigs[device]) {
+                const channelConfig = channelConfigs[device][channelKey];
+                if (channelConfig.in_use) {
+                    channels[channelConfig.name] = new Array(entries.length).fill(0);
+                }
+            }
+        }
+
+        // Get grid channel info
+        const gridRole = metadata.roles?.grid || {};
         const gridDevice = gridRole.device;
         const gridChannel = gridRole.channel;
+        const gridName = gridDevice && gridChannel ?
+            metadata.channels[gridDevice][`channel${gridChannel}`]?.name : null;
 
-        const evseRole = roles.evse || {};
-        const evseDevice = evseRole.device;
-        const evseChannel = evseRole.channel;
+        // Process each entry
+        entries.forEach((entry, index) => {
+            const entryChannels = entry.channels || {};
 
-        // Extract timestamps and convert to ISO format
-        const timestamps = entries.map(entry => {
-            const date = new Date(entry.timestamp * 1000);
-            return date.toISOString();
+            // Process each configured channel
+            for (const device in channelConfigs) {
+                const deviceData = entryChannels[device] || {};
+
+                for (const channelKey in channelConfigs[device]) {
+                    const channelConfig = channelConfigs[device][channelKey];
+                    if (channelConfig.in_use) {
+                        const channelNum = parseInt(channelKey.replace('channel', ''));
+                        const power = deviceData[`channel${channelNum}`] || 0;
+                        channels[channelConfig.name][index] = power;
+                    }
+                }
+            }
         });
 
-        // Extract power values for each channel
-        const gridPower = [];
-        const evsePower = [];
-        const solarPower = [];
-        const heatPumpPower = [];
-
-        entries.forEach(entry => {
-            const channels = entry.channels || {};
-
-            // Grid power
-            if (gridDevice && gridChannel) {
-                const deviceData = channels[gridDevice] || {};
-                const channelKey = `channel${gridChannel}`;
-                gridPower.push(deviceData[channelKey] || 0);
-            } else {
-                gridPower.push(0);
+        // Calculate home power only if we have grid and at least one other channel
+        let homePower = null;
+        if (gridName && Object.keys(channels).length > 1) {
+            homePower = new Array(entries.length).fill(0);
+            for (let i = 0; i < entries.length; i++) {
+                let total = channels[gridName][i];
+                for (const [channelName, values] of Object.entries(channels)) {
+                    if (channelName !== gridName) {
+                        total -= values[i];
+                    }
+                }
+                homePower[i] = total;
             }
-
-            // EVSE power
-            if (evseDevice && evseChannel) {
-                const deviceData = channels[evseDevice] || {};
-                const channelKey = `channel${evseChannel}`;
-                evsePower.push(deviceData[channelKey] || 0);
-            } else {
-                evsePower.push(0);
-            }
-
-            // For backward compatibility, assume heat pump is secondary channel 1
-            const secondaryData = channels.secondary || {};
-            heatPumpPower.push(secondaryData.channel1 || 0);
-
-            // For backward compatibility, assume solar is secondary channel 2
-            solarPower.push(secondaryData.channel2 || 0);
-        });
+        }
 
         return {
             timestamps: timestamps,
-            grid_power: gridPower,
-            evse_power: evsePower,
-            solar_power: solarPower,
-            heat_pump_power: heatPumpPower
+            channels: channels,
+            homePower: homePower
         };
     }
 
@@ -464,60 +465,35 @@
         async function updateChart() {
             try {
                 const history = await fetchHistory();
-                const timestamps = history.timestamps.map(t => new Date(t));
-
-                // Prepare traces for the chart
                 const traces = [];
 
-                // Add traces for grid, evse, solar, and heat pump
-                traces.push({
-                    x: timestamps,
-                    y: history.grid_power,
-                    name: 'Grid',
-                    type: 'scatter'
-                });
+                // Add a trace for each active channel
+                for (const [channelName, values] of Object.entries(history.channels)) {
+                    traces.push({
+                        x: history.timestamps,
+                        y: values,
+                        name: channelName,
+                        type: 'scatter'
+                    });
+                }
 
-                traces.push({
-                    x: timestamps,
-                    y: history.evse_power,
-                    name: 'Wallbox',
-                    type: 'scatter'
-                });
+                // Add home power trace if available
+                if (history.homePower) {
+                    traces.push({
+                        x: history.timestamps,
+                        y: history.homePower,
+                        name: 'Home',
+                        type: 'scatter'
+                    });
+                }
 
-                traces.push({
-                    x: timestamps,
-                    y: history.solar_power,
-                    name: 'Solar',
-                    type: 'scatter'
-                });
-
-                traces.push({
-                    x: timestamps,
-                    y: history.heat_pump_power,
-                    name: 'Heat Pump',
-                    type: 'scatter'
-                });
-
-                // Calculate home power (grid - evse - solar - heat_pump)
-                const homePower = history.grid_power.map((grid, i) => {
-                    return grid - history.evse_power[i] - history.solar_power[i] - history.heat_pump_power[i];
-                });
-
-                // Add home power trace
-                traces.push({
-                    x: timestamps,
-                    y: homePower,
-                    name: 'Home',
-                    type: 'scatter'
-                });
+                const layout = getLayout();
 
                 if (firstLoad) {
-                    // First load - create the plot with all traces
-                    Plotly.newPlot('chart', traces, getLayout());
+                    Plotly.newPlot('chart', traces, layout);
                     firstLoad = false;
                 } else {
-                    // Update existing plot
-                    Plotly.react('chart', traces, getLayout());
+                    Plotly.react('chart', traces, layout);
                 }
             } catch (error) {
                 console.error('Error updating chart:', error);
