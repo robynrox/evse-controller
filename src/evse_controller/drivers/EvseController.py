@@ -719,6 +719,9 @@ class EvseController(PowerMonitorObserver):
             try:
                 point = influxdb_client.Point("measurement")
 
+                # Add logging to verify bucket
+                info(f"Writing to InfluxDB bucket: {config.INFLUXDB_BUCKET}")
+
                 # Add common measurements
                 point = point.field("voltage", float(power.voltage))
                 point = point.field("evseTargetCurrent", self.evseCurrent)
