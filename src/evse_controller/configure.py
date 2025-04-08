@@ -410,11 +410,11 @@ def interactive_config():
             default=config["shelly"]["grid"]["device"]
         ).ask()
 
-        config["shelly"]["grid"]["channel"] = questionary.select(
+        config["shelly"]["grid"]["channel"] = int(questionary.select(
             "Select channel for grid monitoring:",
             choices=["1", "2"],
             default=str(config["shelly"]["grid"]["channel"])
-        ).ask()
+        ).ask())
 
         # Configure EVSE monitoring (optional)
         if questionary.confirm(

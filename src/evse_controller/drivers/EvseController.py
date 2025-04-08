@@ -198,7 +198,7 @@ class EvseController(PowerMonitorObserver):
                     "channel1": {
                         "name": config.get_channel_name("primary", 1),
                         "abbreviation": config.get_channel_abbreviation("primary", 1),
-                    "in_use": config.is_channel_in_use("primary", 1)
+                        "in_use": config.is_channel_in_use("primary", 1)
                     },
                     "channel2": {
                         "name": config.get_channel_name("primary", 2),
@@ -564,6 +564,20 @@ class EvseController(PowerMonitorObserver):
 
         return log_msg
 
+    def _format_influxdb_field_name(self, channel_name: str) -> str:
+        """Format a channel name for use as an InfluxDB field name.
+        
+        Converts to lowercase and replaces spaces with underscores to ensure
+        compatibility with InfluxDB.
+        
+        Args:
+            channel_name: The raw channel name from config
+            
+        Returns:
+            A formatted string safe for use as an InfluxDB field name
+        """
+        return channel_name.lower().replace(' ', '_')
+
     def update(self, monitor, power):
         """Update controller state based on power monitor readings.
 
@@ -703,175 +717,39 @@ class EvseController(PowerMonitorObserver):
             self.powerAtBatteryChargeLevel = power
         if self.write_api:
             try:
-                # Start building the point with common fields
-                point = (
-                    influxdb_client.Point("measurement")
-                    .field("grid", float(gridPower))
-                    .field("evse", float(evsePower))
-                    .field("voltage", float(power.voltage))
-                    .field("evseTargetCurrent", self.evseCurrent)
-                    .field("evseDesiredCurrent", desiredEvseCurrent)
-                    .field("batteryChargeLevel", int(self.evse.get_state().battery_level))
-                )
+                point = influxdb_client.Point("measurement")
 
-                # Add voltage fields for all channels in use
-                # We'll use the voltage from the current monitor for all channels
-                current_monitor = "primary" if monitor == self.pmon else "secondary"
+                # Add common measurements
+                point = point.field("voltage", float(power.voltage))
+                point = point.field("evseTargetCurrent", self.evseCurrent)
+                point = point.field("evseDesiredCurrent", desiredEvseCurrent)
+                point = point.field("batteryChargeLevel", self.evse.get_state().battery_level)
 
-                # Add power factors for all channels
-                # For the current monitor, we can use the power factors from the power object
-                # For the other monitor, we'll need to use the stored power factors
+                # Add primary device channels if they exist and are enabled
+                if primary_power:
+                    if config.is_channel_in_use("primary", 1):
+                        name = self._format_influxdb_field_name(config.get_channel_name("primary", 1))
+                        point = point.field(name, float(primary_power.ch1Watts))
+                        point = point.field(f"{name}_pf", float(primary_power.ch1Pf))
+                    
+                    if config.is_channel_in_use("primary", 2):
+                        name = self._format_influxdb_field_name(config.get_channel_name("primary", 2))
+                        point = point.field(name, float(primary_power.ch2Watts))
+                        point = point.field(f"{name}_pf", float(primary_power.ch2Pf))
 
-                # Add power factors for all channels that are in use
-                for device in ["primary", "secondary"]:
-                    for ch_num in [1, 2]:
-                        # Skip channels that are not in use
-                        if not config.is_channel_in_use(device, ch_num):
-                            continue
+                # Add secondary device channels if they exist and are enabled
+                if secondary_power:
+                    if config.is_channel_in_use("secondary", 1):
+                        name = self._format_influxdb_field_name(config.get_channel_name("secondary", 1))
+                        point = point.field(name, float(secondary_power.ch1Watts))
+                        point = point.field(f"{name}_pf", float(secondary_power.ch1Pf))
+                    
+                    if config.is_channel_in_use("secondary", 2):
+                        name = self._format_influxdb_field_name(config.get_channel_name("secondary", 2))
+                        point = point.field(name, float(secondary_power.ch2Watts))
+                        point = point.field(f"{name}_pf", float(secondary_power.ch2Pf))
 
-                        # Get the channel name and abbreviation
-                        name = config.get_channel_name(device, ch_num)
-                        abbr = config.get_channel_abbreviation(device, ch_num)
-
-                        # Get the power factor
-                        if device == current_monitor:
-                            # Use the power factor from the current monitor
-                            channel_pf = power.ch1Pf if ch_num == 1 else power.ch2Pf
-                        else:
-                            # Use the stored power factor from the other monitor
-                            other_power = self.auxpower
-                            channel_pf = other_power.ch1Pf if ch_num == 1 else other_power.ch2Pf
-
-                        # Add to InfluxDB point
-                        # Use lowercase name without spaces as the field name
-                        field_name = name.lower().replace(" ", "_") + "_pf"
-                        point = point.field(field_name, float(channel_pf))
-
-                        # For backward compatibility, also add grid_pf and evse_pf
-                        grid_device = config.SHELLY_GRID_DEVICE
-                        grid_channel = config.SHELLY_GRID_CHANNEL
-                        if device == grid_device and ch_num == grid_channel:
-                            point = point.field("grid_pf", float(channel_pf))
-
-                        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-                            evse_device = config.SHELLY_EVSE_DEVICE
-                            evse_channel = config.SHELLY_EVSE_CHANNEL
-                            if device == evse_device and ch_num == evse_channel:
-                                point = point.field("evse_pf", float(channel_pf))
-
-                # Add power fields for all channels that are in use
-                # We'll use the channel names for the field names and instantaneous values from the power monitors
-                # debug(f"Grid device: {config.SHELLY_GRID_DEVICE}, Grid channel: {config.SHELLY_GRID_CHANNEL}")
-                # if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-                #     debug(f"EVSE device: {config.SHELLY_EVSE_DEVICE}, EVSE channel: {config.SHELLY_EVSE_CHANNEL}")
-
-                # Get the current power values from the monitors
-                primary_power = power if monitor == self.pmon else None
-                secondary_power = power if monitor == self.pmon2 else None
-
-                # If we don't have the current power values, use the stored ones
-                if primary_power is None and hasattr(self, 'pmon') and self.pmon is not None:
-                    try:
-                        primary_power = self.pmon.getPowerLevels()
-                        #debug(f"Using instantaneous primary power values: ch1={primary_power.ch1Watts}, ch2={primary_power.ch2Watts}")
-                    except Exception as e:
-                        #debug(f"Failed to get instantaneous primary power values: {e}")
-                        primary_power = None
-
-                if secondary_power is None and hasattr(self, 'pmon2') and self.pmon2 is not None:
-                    try:
-                        secondary_power = self.pmon2.getPowerLevels()
-                        #debug(f"Using instantaneous secondary power values: ch1={secondary_power.ch1Watts}, ch2={secondary_power.ch2Watts}")
-                    except Exception as e:
-                        #debug(f"Failed to get instantaneous secondary power values: {e}")
-                        secondary_power = None
-
-                # Add power fields for all channels
-                for device in ["primary", "secondary"]:
-                    # Get the power object for this device
-                    device_power = primary_power if device == "primary" else secondary_power
-
-                    for ch_num in [1, 2]:
-                        # Log channel configuration
-                        in_use = config.is_channel_in_use(device, ch_num)
-                        name = config.get_channel_name(device, ch_num) if in_use else "Not in use"
-                        #debug(f"Channel {device}.{ch_num}: in_use={in_use}, name={name}")
-
-                        # Skip channels that are not in use
-                        if not in_use:
-                            continue
-
-                        # Get the channel name and abbreviation
-                        name = config.get_channel_name(device, ch_num)
-                        abbr = config.get_channel_abbreviation(device, ch_num)
-                        field_name = name.lower().replace(" ", "_")
-
-                        # Add to InfluxDB point using instantaneous values if available
-                        if device_power is not None:
-                            # Get the power value for this channel
-                            channel_power = device_power.ch1Watts if ch_num == 1 else device_power.ch2Watts
-                            #debug(f"Adding power field to InfluxDB: {field_name} = {channel_power}")
-                            point = point.field(field_name, float(channel_power))
-                        else:
-                            # If we don't have instantaneous values, log a message
-                            channel_key = f"channel{ch_num}"
-                            #debug(f"No power data available for {device}.{channel_key}")
-
-                            # For backward compatibility, also add grid and evse fields
-                            grid_device = config.SHELLY_GRID_DEVICE
-                            grid_channel = config.SHELLY_GRID_CHANNEL
-                            if device == grid_device and ch_num == grid_channel:
-                                # Already added as "grid" at the beginning
-                                pass
-
-                            if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-                                evse_device = config.SHELLY_EVSE_DEVICE
-                                evse_channel = config.SHELLY_EVSE_CHANNEL
-                                if device == evse_device and ch_num == evse_channel:
-                                    # Already added as "evse" at the beginning
-                                    pass
-
-                # Add channel names as tags
-                # Add grid channel tag
-                if config.is_channel_in_use(grid_device, grid_channel):
-                    point = point.tag("grid_name", config.get_channel_name(grid_device, grid_channel))
-                    point = point.tag("grid_device", grid_device)
-                    point = point.tag("grid_channel", str(grid_channel))
-
-                # Add EVSE channel tag if configured
-                if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-                    if config.is_channel_in_use(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL):
-                        point = point.tag("evse_name", config.get_channel_name(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL))
-                        point = point.tag("evse_device", config.SHELLY_EVSE_DEVICE)
-                        point = point.tag("evse_channel", str(config.SHELLY_EVSE_CHANNEL))
-
-                # Add tags for all other channels that are in use
-                for device in ["primary", "secondary"]:
-                    for ch_num in [1, 2]:
-                        # Skip the grid and EVSE channels as they're already tagged
-                        if device == grid_device and ch_num == grid_channel:
-                            continue
-                        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-                            if device == config.SHELLY_EVSE_DEVICE and ch_num == config.SHELLY_EVSE_CHANNEL:
-                                continue
-
-                        # Skip channels that are not in use
-                        if not config.is_channel_in_use(device, ch_num):
-                            continue
-
-                        # Get the channel name and abbreviation
-                        name = config.get_channel_name(device, ch_num)
-                        abbr = config.get_channel_abbreviation(device, ch_num)
-
-                        # Create a tag name based on the device and channel
-                        tag_prefix = f"{device}_ch{ch_num}"
-                        point = point.tag(f"{tag_prefix}_name", name)
-                        point = point.tag(f"{tag_prefix}_abbr", abbr)
-
-                # Write the point to InfluxDB using the configured bucket name
-                # The Config class will return the default "powerlog" if bucket is not defined
-                bucket_name = config.INFLUXDB_BUCKET
-                self.write_api.write(bucket=bucket_name, record=point)
+                self.write_api.write(bucket=config.INFLUXDB_BUCKET, record=point)
             except Exception as e:
                 error(f"Failed to write to InfluxDB: {e}")
 
