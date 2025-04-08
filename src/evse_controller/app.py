@@ -1,14 +1,15 @@
 import os
 import signal
-from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_from_directory
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
+from werkzeug.middleware.proxy_fix import ProxyFix
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.utils.config import config  # Import the config object
 import logging
 import threading
 from datetime import datetime
-from evse_controller.utils.logging_config import info
+from evse_controller.utils.logging_config import info, error, debug
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
@@ -23,10 +24,10 @@ signal.signal(signal.SIGTERM, signal_handler)
 ensure_data_dirs()
 
 from evse_controller.smart_evse_controller import (
-    execQueue, 
-    main, 
-    evseController, 
-    scheduler, 
+    execQueue,
+    main,
+    evseController,
+    scheduler,
     ScheduledEvent,
     get_system_state
 )
@@ -45,23 +46,6 @@ VALID_COMMANDS = {
     'balance': 'Balance between solar charging and home power'
 }
 
-# Completely disable Werkzeug logging
-log = logging.getLogger('werkzeug')
-log.disabled = True
-
-class CustomWSGIRequestHandler(WSGIRequestHandler):
-    def log(self, type, message, *args):
-        """Override the logging method"""
-        return
-
-    def log_request(self, *args, **kwargs):
-        """Override the request logging method"""
-        return
-
-    def log_error(self, format, *args):
-        """Keep error logging"""
-        logging.getLogger('werkzeug').error(format % args)
-
 # Get the directory containing this file
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
@@ -70,6 +54,20 @@ app = Flask(__name__,
            template_folder=template_dir,
            static_folder=static_dir)
 app.secret_key = 'your-secret-key-here'
+
+class CustomWSGIRequestHandler(WSGIRequestHandler):
+    def log_request(self, code='-', size='-'):
+        """Log all requests during development"""
+        msg = f"Flask request: {self.command} {self.path} - {code} {size}"
+        debug(msg)
+
+    def log_error(self, format, *args):
+        """Keep error logging"""
+        error(f"Flask error: {format % args}", exc_info=True)
+        
+    def log_message(self, format, *args):
+        """Catch any other logging"""
+        debug(f"Flask message: {format % args}")
 
 # Create API with documentation
 api = Api(
@@ -89,7 +87,7 @@ schedule_ns = api.namespace('schedule', description='Schedule operations')
 # Define models
 command_model = api.model('Command', {
     'command': fields.String(
-        required=True, 
+        required=True,
         enum=list(VALID_COMMANDS.keys()),
         description='Control command to execute'
     )
@@ -104,18 +102,61 @@ status_model = api.model('Status', {
     }))
 })
 
-history_model = api.model('HistoryPoint', {
-    'timestamps': fields.List(fields.String, required=True),
-    'grid_power': fields.List(fields.Float, required=True),
-    'evse_power': fields.List(fields.Float, required=True),
-    'solar_power': fields.List(fields.Float, required=True),
-    'heat_pump_power': fields.List(fields.Float, required=True)
+# Define models for the history structure
+channel_metadata_device_model = api.model('ChannelMetadataDevice', {
+    'name': fields.String(description='Channel name'),
+    'abbreviation': fields.String(description='Channel abbreviation'),
+    'in_use': fields.Boolean(description='Whether the channel is in use')
 })
+
+channel_metadata_model = api.model('ChannelMetadata', {
+    'channels': fields.Nested(api.model('Channels', {
+        'primary': fields.Nested(api.model('PrimaryChannels', {
+            'channel1': fields.Nested(channel_metadata_device_model),
+            'channel2': fields.Nested(channel_metadata_device_model)
+        })),
+        'secondary': fields.Nested(api.model('SecondaryChannels', {
+            'channel1': fields.Nested(channel_metadata_device_model),
+            'channel2': fields.Nested(channel_metadata_device_model)
+        }))
+    })),
+    'roles': fields.Nested(api.model('Roles', {
+        'grid': fields.Nested(api.model('GridRole', {
+            'device': fields.String(description='Device (primary/secondary)'),
+            'channel': fields.Integer(description='Channel number (1/2)')
+        })),
+        'evse': fields.Nested(api.model('EvseRole', {
+            'device': fields.String(description='Device (primary/secondary)'),
+            'channel': fields.Integer(description='Channel number (1/2)')
+        }))
+    }))
+})
+
+history_entry_model = api.model('HistoryEntry', {
+    'timestamp': fields.Float(description='Unix timestamp'),
+    'channels': fields.Nested(api.model('EntryChannels', {
+        'primary': fields.Nested(api.model('PrimaryPower', {
+            'channel1': fields.Float(description='Primary channel 1 power'),
+            'channel2': fields.Float(description='Primary channel 2 power')
+        })),
+        'secondary': fields.Nested(api.model('SecondaryPower', {
+            'channel1': fields.Float(description='Secondary channel 1 power'),
+            'channel2': fields.Float(description='Secondary channel 2 power')
+        }))
+    }))
+})
+
+history_model = api.model('History', {
+    'entries': fields.List(fields.Nested(history_entry_model)),
+    'channel_metadata': fields.Nested(channel_metadata_model)
+})
+
+# No legacy model needed
 
 scheduled_event_model = api.model('ScheduledEvent', {
     'timestamp': fields.DateTime(required=True, description='When the event should occur'),
     'state': fields.String(
-        required=True, 
+        required=True,
         enum=list(VALID_COMMANDS.keys()),
         description='State to transition to'
     ),
@@ -125,7 +166,7 @@ scheduled_event_model = api.model('ScheduledEvent', {
 schedule_create_model = api.model('ScheduleCreate', {
     'datetime': fields.String(required=True, description='ISO format datetime (YYYY-MM-DDTHH:MM:SS)'),
     'state': fields.String(
-        required=True, 
+        required=True,
         enum=list(VALID_COMMANDS.keys())
     )
 })
@@ -135,7 +176,7 @@ schedule_edit_model = api.model('ScheduleEdit', {
     'originalState': fields.String(required=True, description='Current state of the event'),
     'newDatetime': fields.String(required=True, description='New ISO format datetime for the event'),
     'newState': fields.String(
-        required=True, 
+        required=True,
         enum=list(VALID_COMMANDS.keys())
     )
 })
@@ -154,7 +195,7 @@ class ControlResource(Resource):
         """Execute a control command on the EVSE."""
         data = request.json
         command = data.get('command')
-        
+
         if command in VALID_COMMANDS:
             execQueue.put(command)
             return {"status": "success", "message": f"Command '{command}' received"}
@@ -173,7 +214,7 @@ class StatusResource(Resource):
         current_state = get_system_state()
         next_event = scheduler.get_next_event()
         battery_soc = evseController.getBatteryChargeLevel()  # Changed from evseController.evse.getBatteryChargeLevel()
-        
+
         return {
             "current_state": current_state,
             "battery_soc": battery_soc,
@@ -185,21 +226,9 @@ class HistoryResource(Resource):
     @status_ns.marshal_with(history_model)
     def get(self):
         """Retrieve historical data from the EVSE controller"""
-        history = evseController.getHistory()
-        
-        # Convert Unix timestamps to ISO format strings
-        timestamps = [
-            datetime.fromtimestamp(ts).isoformat() 
-            for ts in history.get('timestamps', [])
-        ]
-        
-        return {
-            'timestamps': timestamps,
-            'grid_power': history.get('grid_power', []),
-            'evse_power': history.get('evse_power', []),
-            'solar_power': history.get('solar_power', []),
-            'heat_pump_power': history.get('heat_pump_power', [])
-        }
+        return evseController.getHistory()
+
+
 
 # Add these route names for the web interface
 @app.route('/schedule', methods=['GET', 'POST'])
@@ -209,11 +238,11 @@ def schedule_page():
         try:
             timestamp = datetime.fromisoformat(request.form['datetime'].replace('T', ' '))
             state = request.form['state']
-            
+
             if timestamp < datetime.now():
                 flash('Cannot schedule events in the past', 'error')
                 return redirect(url_for('schedule_page'))
-                
+
             event = ScheduledEvent(timestamp, state)
             scheduler.add_event(event)
             scheduler.save_events()
@@ -222,9 +251,9 @@ def schedule_page():
             flash(f'Invalid datetime format: {str(e)}', 'error')
         except Exception as e:
             flash(f'Error scheduling event: {str(e)}', 'error')
-        
+
         return redirect(url_for('schedule_page'))
-    
+
     scheduled_events = scheduler.get_future_events()
     return render_template('schedule.html', scheduled_events=scheduled_events)
 
@@ -262,11 +291,11 @@ def config_page():
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
             config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')
-            
+
             # Update Grid monitoring settings
             config.SHELLY_GRID_DEVICE = request.form.get('shelly[grid][device]')
             config.SHELLY_GRID_CHANNEL = int(request.form.get('shelly[grid][channel]'))
-            
+
             # Update EVSE monitoring settings
             config.SHELLY_EVSE_DEVICE = request.form.get('shelly[evse][device]') or ""
             evse_channel = request.form.get('shelly[evse][channel]')
@@ -278,6 +307,7 @@ def config_page():
             if request.form.get('influxdb[token]'):  # Only update if provided
                 config.INFLUXDB_TOKEN = request.form.get('influxdb[token]')
             config.INFLUXDB_ORG = request.form.get('influxdb[org]')
+            config.INFLUXDB_BUCKET = request.form.get('influxdb[bucket]', 'powerlog')  # Default to 'powerlog' if not provided
 
             # Update charging settings
             config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))
@@ -290,7 +320,7 @@ def config_page():
 
             # Save the updated configuration
             config.save()
-            
+
             flash('Configuration saved.', 'success')
             return redirect(url_for('config_page'))
 
@@ -307,13 +337,13 @@ def config_page():
         logging.error(f"Error loading configuration page: {str(e)}")
         flash(f'Error loading configuration: {str(e)}', 'error')
         return redirect(url_for('index'))
-    
+
 @app.route('/')
 def index():
     """Render the main dashboard page"""
     scheduled_events = scheduler.get_future_events()
     current_state = get_system_state()
-    return render_template('index.html', 
+    return render_template('index.html',
                          scheduled_events=scheduled_events,
                          current_state=current_state)
 
@@ -340,14 +370,14 @@ class ScheduleResource(Resource):
         try:
             data = request.json
             timestamp = datetime.fromisoformat(data['datetime'].replace('T', ' '))
-            
+
             if timestamp < datetime.now():
                 api.abort(400, 'Cannot schedule events in the past')
-                
+
             event = ScheduledEvent(timestamp, data['state'])
             scheduler.add_event(event)
             scheduler.save_events()
-            
+
             return {'message': 'Event scheduled successfully'}, 201
         except ValueError as e:
             api.abort(400, f'Invalid datetime format: {str(e)}')
@@ -364,7 +394,7 @@ class ScheduleItemResource(Resource):
             event_timestamp = datetime.fromisoformat(timestamp)
             events = scheduler.get_future_events()
             for event in events:
-                if (event.timestamp == event_timestamp and 
+                if (event.timestamp == event_timestamp and
                     event.state == state):
                     scheduler.events.remove(event)
                     scheduler.save_events()
@@ -383,7 +413,7 @@ class ScheduleToggleResource(Resource):
             event_timestamp = datetime.fromisoformat(timestamp)
             events = scheduler.get_future_events()
             for event in events:
-                if (event.timestamp == event_timestamp and 
+                if (event.timestamp == event_timestamp and
                     event.state == state):
                     event.enabled = not event.enabled
                     scheduler.save_events()
@@ -415,7 +445,7 @@ class ScheduleEditResource(Resource):
 
             events = scheduler.get_future_events()
             for event in events:
-                if (event.timestamp == original_timestamp and 
+                if (event.timestamp == original_timestamp and
                     event.state == original_state):
                     was_enabled = event.enabled
                     scheduler.events.remove(event)
@@ -432,7 +462,7 @@ class ScheduleEditResource(Resource):
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get current system status and next scheduled event.
-    
+
     Returns:
         JSON object containing:
         - current_state: String representing the current system state
@@ -440,7 +470,7 @@ def get_status():
         - next_event: Object containing next scheduled event details, or null if none exists
             - timestamp: ISO format timestamp
             - state: String representing the scheduled state
-    
+
     Example response:
         {
             "current_state": "CHARGING",
@@ -454,11 +484,11 @@ def get_status():
     current_state = get_system_state()
     future_events = scheduler.get_future_events()
     next_event = next(
-        (event for event in future_events if event.enabled), 
+        (event for event in future_events if event.enabled),
         None
     )
     battery_soc = evseController.getBatteryChargeLevel()  # Fixed to use the controller's method
-    
+
     return jsonify({
         'current_state': current_state,
         'battery_soc': battery_soc,
@@ -470,10 +500,37 @@ def get_status():
 
 # Run the Flask app in a separate thread
 def run_flask():
-    app.run(host='0.0.0.0', port=5000, threaded=True, request_handler=CustomWSGIRequestHandler)
+    """Run the Flask app, trying port 5000 first, falling back to 5001 if occupied."""
+    import socket
+
+    def is_port_in_use(port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('0.0.0.0', port))
+                return False
+            except socket.error:
+                return True
+
+    port = 5000 if not is_port_in_use(5000) else 5001
+    info(f"Starting Flask server on port {port}")
+    
+    # Add ProxyFix middleware to handle reverse proxies correctly
+    app.wsgi_app = ProxyFix(app.wsgi_app)
+    
+    # Verify custom handler is being used
+    debug("Starting Flask with CustomWSGIRequestHandler")
+    
+    try:
+        app.run(host='0.0.0.0', 
+                port=port, 
+                threaded=True, 
+                request_handler=CustomWSGIRequestHandler)
+    except Exception as e:
+        error(f"Flask server crashed: {str(e)}", exc_info=True)
+        # Optionally restart the server here
 
 # Start the Flask server in a separate thread
-flask_thread = threading.Thread(target=run_flask, daemon=True)  # Make it a daemon thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # Start the main program

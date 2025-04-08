@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import List, Dict
 from evse_controller.utils.paths import ensure_data_dirs
-from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface
 from evse_controller.utils.memory_monitor import MemoryMonitor
 
 # Ensure data directories exist before anything else
@@ -84,7 +84,7 @@ def handle_schedule_command(command_parts):
     if len(command_parts) != 3:
         print("Usage: schedule YYYY-MM-DDTHH:MM:SS state")
         return
-    
+
     try:
         timestamp = datetime.fromisoformat(command_parts[1])
         state = command_parts[2]
@@ -100,7 +100,7 @@ def handle_list_schedule_command():
     if not events:
         print("No scheduled events")
         return
-    
+
     print("Scheduled events:")
     for event in events:
         print(f"- {event.timestamp.isoformat()} -> {event.state}")
@@ -110,25 +110,25 @@ _shutdown_event = threading.Event()
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
     global inputThread, memory_monitor  # Add memory_monitor to globals
-    
+
     if _shutdown_event.is_set():
         return  # Already shutting down
-        
+
     _shutdown_event.set()
     info("Shutting down gracefully...")
-    
+
     try:
         evseController.stop()  # Stop the controller first
-        
+
         # Give threads time to clean up
         if 'inputThread' in globals() and inputThread.is_alive():
             inputThread.join(timeout=1)
-            
+
         # Stop and cleanup memory monitor
         if 'memory_monitor' in globals() and memory_monitor.is_alive():
             memory_monitor.stop()
             memory_monitor.join(timeout=1)
-            
+
     except Exception as e:
         error(f"Error during shutdown: {e}")
     finally:
@@ -271,7 +271,7 @@ def main():
             if execState == ExecState.PAUSE_UNTIL_DISCONNECT:
                 info("CONTROL PAUSE_UNTIL_DISCONNECT")
                 evseController.setControlState(ControlState.DORMANT)
-                
+
                 # Check if vehicle is disconnected
                 evse_state = evseController.getEvseState()  # Use controller instead of direct access
                 if evse_state == EvseState.DISCONNECTED:
@@ -292,7 +292,8 @@ def main():
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
-                evse = WallboxThread.get_instance()
+                # Get the appropriate EVSE instance using the factory method
+                evse = EvseThreadInterface.get_instance()
                 state = evse.get_state()
                 control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
                 debug(log_message)

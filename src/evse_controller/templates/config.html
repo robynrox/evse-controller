@@ -1,11 +1,7 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{% block head %}
     <title>EVSE Controller Configuration</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
     <style>
         /* Override the default body styles for config page */
         body {
@@ -13,10 +9,28 @@
             padding: 0 20px;
             /* Different padding for config page */
         }
-    </style>
-</head>
 
-<body>
+        /* Channel configuration styles */
+        .channel-config {
+            margin-left: 20px;
+            margin-bottom: 20px;
+        }
+
+        .channel-config h4 {
+            margin-bottom: 5px;
+            color: #555;
+        }
+
+        .channel-details {
+            margin-left: 20px;
+            padding-left: 10px;
+            border-left: 2px solid #eee;
+            margin-bottom: 15px;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
     <div class="nav-links">
         <a href="/">← Back to Dashboard</a>
     </div>
@@ -76,7 +90,114 @@
                     value="{{ config.shelly.secondary_url }}">
             </div>
 
+            <!-- Primary Shelly Channel Configuration -->
+            <h3>Primary Shelly Channels</h3>
+            <div class="channel-config">
+                <h4>Channel 1</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="primary_ch1_in_use"
+                            name="shelly[channels][primary][channel1][in_use]" {% if
+                            config.shelly.channels.primary.channel1.in_use %}checked{% endif %}>
+                        Channel in use
+                    </label>
+                </div>
+                <div class="channel-details" id="primary_ch1_details" {% if not
+                    config.shelly.channels.primary.channel1.in_use %}style="display: none" {% endif %}>
+                    <div class="form-group">
+                        <label for="primary_ch1_name">Name:</label>
+                        <input type="text" id="primary_ch1_name" name="shelly[channels][primary][channel1][name]"
+                            value="{{ config.shelly.channels.primary.channel1.name }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="primary_ch1_abbr">Abbreviation:</label>
+                        <input type="text" id="primary_ch1_abbr"
+                            name="shelly[channels][primary][channel1][abbreviation]"
+                            value="{{ config.shelly.channels.primary.channel1.abbreviation }}">
+                    </div>
+                </div>
+
+                <h4>Channel 2</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="primary_ch2_in_use"
+                            name="shelly[channels][primary][channel2][in_use]" {% if
+                            config.shelly.channels.primary.channel2.in_use %}checked{% endif %}>
+                        Channel in use
+                    </label>
+                </div>
+                <div class="channel-details" id="primary_ch2_details" {% if not
+                    config.shelly.channels.primary.channel2.in_use %}style="display: none" {% endif %}>
+                    <div class="form-group">
+                        <label for="primary_ch2_name">Name:</label>
+                        <input type="text" id="primary_ch2_name" name="shelly[channels][primary][channel2][name]"
+                            value="{{ config.shelly.channels.primary.channel2.name }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="primary_ch2_abbr">Abbreviation:</label>
+                        <input type="text" id="primary_ch2_abbr"
+                            name="shelly[channels][primary][channel2][abbreviation]"
+                            value="{{ config.shelly.channels.primary.channel2.abbreviation }}">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Secondary Shelly Channel Configuration (if configured) -->
+            {% if config.shelly.secondary_url %}
+            <h3>Secondary Shelly Channels</h3>
+            <div class="channel-config">
+                <h4>Channel 1</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="secondary_ch1_in_use"
+                            name="shelly[channels][secondary][channel1][in_use]" {% if
+                            config.shelly.channels.secondary.channel1.in_use %}checked{% endif %}>
+                        Channel in use
+                    </label>
+                </div>
+                <div class="channel-details" id="secondary_ch1_details" {% if not
+                    config.shelly.channels.secondary.channel1.in_use %}style="display: none" {% endif %}>
+                    <div class="form-group">
+                        <label for="secondary_ch1_name">Name:</label>
+                        <input type="text" id="secondary_ch1_name" name="shelly[channels][secondary][channel1][name]"
+                            value="{{ config.shelly.channels.secondary.channel1.name }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="secondary_ch1_abbr">Abbreviation:</label>
+                        <input type="text" id="secondary_ch1_abbr"
+                            name="shelly[channels][secondary][channel1][abbreviation]"
+                            value="{{ config.shelly.channels.secondary.channel1.abbreviation }}">
+                    </div>
+                </div>
+
+                <h4>Channel 2</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="secondary_ch2_in_use"
+                            name="shelly[channels][secondary][channel2][in_use]" {% if
+                            config.shelly.channels.secondary.channel2.in_use %}checked{% endif %}>
+                        Channel in use
+                    </label>
+                </div>
+                <div class="channel-details" id="secondary_ch2_details" {% if not
+                    config.shelly.channels.secondary.channel2.in_use %}style="display: none" {% endif %}>
+                    <div class="form-group">
+                        <label for="secondary_ch2_name">Name:</label>
+                        <input type="text" id="secondary_ch2_name" name="shelly[channels][secondary][channel2][name]"
+                            value="{{ config.shelly.channels.secondary.channel2.name }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="secondary_ch2_abbr">Abbreviation:</label>
+                        <input type="text" id="secondary_ch2_abbr"
+                            name="shelly[channels][secondary][channel2][abbreviation]"
+                            value="{{ config.shelly.channels.secondary.channel2.abbreviation }}">
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Grid Monitoring Configuration -->
+            <h3>Device Assignment</h3>
             <div class="form-group">
                 <label for="grid_device">Grid Monitoring Device:</label>
                 <select id="grid_device" name="shelly[grid][device]" required>
@@ -149,6 +270,11 @@
                 <div class="form-group">
                     <label for="influxdb_org">Organization:</label>
                     <input type="text" id="influxdb_org" name="influxdb[org]" value="{{ config.influxdb.org }}">
+                </div>
+                <div class="form-group">
+                    <label for="influxdb_bucket">Bucket:</label>
+                    <input type="text" id="influxdb_bucket" name="influxdb[bucket]"
+                        value="{{ config.influxdb.bucket }}">
                 </div>
             </div>
         </div>
@@ -231,9 +357,30 @@
             }
         });
 
+        // Function to toggle visibility of channel details based on checkbox state
+        function setupChannelToggle(checkboxId, detailsId) {
+            const checkbox = document.getElementById(checkboxId);
+            const details = document.getElementById(detailsId);
+
+            if (checkbox && details) {
+                checkbox.addEventListener('change', function () {
+                    details.style.display = this.checked ? 'block' : 'none';
+                });
+            }
+        }
+
+        // Set up channel toggles
+        setupChannelToggle('primary_ch1_in_use', 'primary_ch1_details');
+        setupChannelToggle('primary_ch2_in_use', 'primary_ch2_details');
+        setupChannelToggle('secondary_ch1_in_use', 'secondary_ch1_details');
+        setupChannelToggle('secondary_ch2_in_use', 'secondary_ch2_details');
+
+        // InfluxDB toggle
         document.getElementById('influxdb_enabled').addEventListener('change', function () {
             document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
         });
+
+        // EVSE monitoring toggle
         document.getElementById('evse_enabled').addEventListener('change', function () {
             const evseSettings = document.getElementById('evse_settings');
             const evseDevice = document.getElementById('evse_device');
@@ -247,6 +394,4 @@
             }
         });
     </script>
-</body>
-
-</html>
+{% endblock %}

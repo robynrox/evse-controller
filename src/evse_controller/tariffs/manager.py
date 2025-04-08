@@ -3,8 +3,8 @@ from .octopus.octgo import OctopusGoTariff
 from .octopus.flux import OctopusFluxTariff
 from .octopus.cosy import CosyOctopusTariff
 from .base import Tariff
-from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
-from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+from evse_controller.utils.logging_config import debug
 
 class TariffManager:
     def __init__(self):
@@ -26,14 +26,15 @@ class TariffManager:
 
     def get_control_state(self, dayMinute):
         """Get control state from current tariff.
-        
+
         Args:
             dayMinute (int): Minutes since midnight
-            
+
         Returns:
             tuple: (ControlState, min_current, max_current, reason_string)
         """
-        evse = WallboxThread.get_instance()
+        # Get the appropriate EVSE instance using the factory method
+        evse = EvseThreadInterface.get_instance()
         evse_state = evse.get_state()
         debug(f"TariffManager: Getting control state with state={evse_state}")
         return self.current_tariff.get_control_state(evse_state, dayMinute)
