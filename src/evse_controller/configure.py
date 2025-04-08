@@ -212,13 +212,20 @@ def interactive_config():
         # Set dummy values for real Wallbox config to avoid validation errors
         if not config["wallbox"]["url"]:
             config["wallbox"]["url"] = "simulator"
+
     else:
         # Configure real Wallbox
         config["wallbox"]["url"] = questionary.text(
             "Enter your Wallbox URL (IP or hostname):",
-            default=config["wallbox"]["url"],
+            default=config["wallbox"].get("url", ""),
             validate=lambda text: len(text) > 0
         ).ask()
+
+    # Ensure max current settings exist with defaults from DEFAULT_CONFIG
+    if "max_charge_current" not in config["wallbox"]:
+        config["wallbox"]["max_charge_current"] = DEFAULT_CONFIG["wallbox"]["max_charge_current"]
+    if "max_discharge_current" not in config["wallbox"]:
+        config["wallbox"]["max_discharge_current"] = DEFAULT_CONFIG["wallbox"]["max_discharge_current"]
     
     config["wallbox"]["max_charge_current"] = int(questionary.text(
         "Maximum charging current (A):",
@@ -232,6 +239,7 @@ def interactive_config():
         validate=lambda text: text.isdigit() and 3 <= int(text) <= 32
     ).ask())
     
+    # Authentication configuration
     if questionary.confirm(
         "Configure Wallbox authentication (required for auto-restart)?",
         default=bool(config["wallbox"]["username"])
@@ -240,28 +248,19 @@ def interactive_config():
             "Wallbox username:",
             default=config["wallbox"]["username"]
         ).ask()
-
-        if questionary.confirm(
-            "Configure Wallbox authentication (required for auto-restart)?",
-            default=bool(config["wallbox"]["username"])
-        ).ask():
-            config["wallbox"]["username"] = questionary.text(
-                "Wallbox username:",
-                default=config["wallbox"]["username"]
-            ).ask()
-            # Fix: Only pass default if password exists and is not None
-            password_default = config["wallbox"]["password"] if config["wallbox"]["password"] else ""
-            config["wallbox"]["password"] = questionary.password(
-                "Wallbox password:",
-                default=password_default
-            ).ask()
-            config["wallbox"]["serial"] = questionary.text(
-                "Wallbox serial number:",
-                default=str(config["wallbox"]["serial"]) if config["wallbox"]["serial"] else "",
-                validate=lambda text: text.isdigit() or text == ""
-            ).ask()
-            if config["wallbox"]["serial"]:
-                config["wallbox"]["serial"] = int(config["wallbox"]["serial"])
+        # Fix: Only pass default if password exists and is not None
+        password_default = config["wallbox"]["password"] if config["wallbox"]["password"] else ""
+        config["wallbox"]["password"] = questionary.password(
+            "Wallbox password:",
+            default=password_default
+        ).ask()
+        config["wallbox"]["serial"] = questionary.text(
+            "Wallbox serial number:",
+            default=str(config["wallbox"]["serial"]) if config["wallbox"]["serial"] else "",
+            validate=lambda text: text.isdigit() or text == ""
+        ).ask()
+        if config["wallbox"]["serial"]:
+            config["wallbox"]["serial"] = int(config["wallbox"]["serial"])
 
     # Shelly configuration
     print("\nShelly Configuration")
@@ -462,7 +461,7 @@ def interactive_config():
             config["influxdb"]["bucket"] = "powerlog"
 
         config["influxdb"]["bucket"] = questionary.text(
-            "InfluxDB bucket name (for testing, use a different bucket than production):",
+            "InfluxDB bucket name:",
             default=config["influxdb"]["bucket"]
         ).ask()
 
