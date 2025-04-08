@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New Wallbox simulator for testing and development:
+  - Configurable initial battery level, capacity, and simulation speed
+  - Simulates charging and discharging behavior
+  - Automatically enabled when no Wallbox URL is configured
+  - Can be explicitly enabled via configuration
+  - Includes realistic power factor and efficiency modeling
 - New Shelly device configuration structure with named channels and metadata:
   - Channel names and descriptions can now be configured
   - Each channel can be marked as active/inactive
