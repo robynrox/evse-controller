@@ -163,6 +163,9 @@ class EvseController(PowerMonitorObserver):
                     org=config.INFLUXDB_ORG
                 )
                 self.write_api = client.write_api(write_options=SYNCHRONOUS)
+                # Add logging to verify bucket
+                info(f"Writing to InfluxDB bucket: {config.INFLUXDB_BUCKET}")
+
             except Exception as e:
                 error(f"Failed to initialize InfluxDB: {e}")
 
@@ -718,9 +721,6 @@ class EvseController(PowerMonitorObserver):
         if self.write_api:
             try:
                 point = influxdb_client.Point("measurement")
-
-                # Add logging to verify bucket
-                info(f"Writing to InfluxDB bucket: {config.INFLUXDB_BUCKET}")
 
                 # Add common measurements
                 point = point.field("voltage", float(power.voltage))
