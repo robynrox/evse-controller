@@ -85,28 +85,13 @@ class EvseController(PowerMonitorObserver):
         self.MAX_HISTORY_POINTS = 300
 
         # Initialize power monitors
-        primary_url = config.SHELLY_PRIMARY_URL
-        if not primary_url:
-            raise ValueError("No primary Shelly URL configured")
-        debug(f"Initializing primary Shelly with URL: {primary_url}")
+        # Initialize primary Shelly
+        self.pmon = PowerMonitorShelly(lambda: config.SHELLY_PRIMARY_URL)
+        debug(f"Initializing primary Shelly with URL: {config.SHELLY_PRIMARY_URL}")
 
-        try:
-            self.pmon = PowerMonitorShelly(primary_url)
-        except Exception as e:
-            error(f"Failed to initialize primary Shelly: {e}")
-            raise
-
-        # Initialize secondary Shelly if configured
-        secondary_url = config.SHELLY_SECONDARY_URL
-        if secondary_url:
-            debug(f"Initializing secondary Shelly with URL: {secondary_url}")
-            try:
-                self.pmon2 = PowerMonitorShelly(secondary_url)
-            except Exception as e:
-                warning(f"Failed to initialize secondary Shelly: {e}")
-                self.pmon2 = None
-        else:
-            self.pmon2 = None
+        # Initialize secondary Shelly
+        self.pmon2 = PowerMonitorShelly(lambda: config.SHELLY_SECONDARY_URL)
+        debug(f"Initializing secondary Shelly with URL: {config.SHELLY_SECONDARY_URL}")
 
         # Initialize power tracking attributes
         self.gridpower = Power()
@@ -130,13 +115,10 @@ class EvseController(PowerMonitorObserver):
         self.thread.start()
         self.thread.attach(self)
 
-        # Only create and start second thread if we have a secondary Shelly
-        self.thread2 = None
-        if self.pmon2 is not None:
-            # Initialize secondary thread with 0.5s offset
-            self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5, name="SecondaryMonitor")
-            self.thread2.start()
-            self.thread2.attach(self)
+        # Initialize secondary thread with 0.5s offset
+        self.thread2 = PowerMonitorPollingThread(self.pmon2, offset=0.5, name="SecondaryMonitor")
+        self.thread2.start()
+        self.thread2.attach(self)
 
         self.batteryChargeLevel = -1
         self.powerAtBatteryChargeLevel = None

@@ -318,6 +318,27 @@ def config_page():
             config.FILE_LOGGING = request.form.get('logging[file_level]', 'INFO')
             config.CONSOLE_LOGGING = request.form.get('logging[console_level]', 'WARNING')
 
+            # Update simulator settings
+            config.SIMULATOR_BATTERY_CAPACITY_KWH = float(request.form.get('simulator[battery_capacity]', 50))
+            config.SIMULATOR_SPEED = int(request.form.get('simulator[speed]', 60))
+
+            # Handle channel configuration for both devices
+            devices = ['primary']
+            if config.SHELLY_SECONDARY_URL:
+                devices.append('secondary')
+
+            for channel in [1, 2]:
+                channel_key = f"channel{channel}"
+                for device in devices:
+                    in_use = request.form.get(f'shelly[channels][{device}][{channel_key}][in_use]') == 'on'
+                    config.set_channel_in_use(device, channel, in_use)
+                    
+                    if in_use:
+                        name = request.form.get(f'shelly[channels][{device}][{channel_key}][name]')
+                        abbr = request.form.get(f'shelly[channels][{device}][{channel_key}][abbreviation]')
+                        config.set_channel_name(device, channel, name)
+                        config.set_channel_abbreviation(device, channel, abbr)
+
             # Save the updated configuration
             config.save()
 
