@@ -1,397 +1,393 @@
 {% extends "base.html" %}
 
 {% block head %}
-    <title>EVSE Controller Configuration</title>
-    <style>
-        /* Override the default body styles for config page */
-        body {
-            margin: 20px auto;
-            padding: 0 20px;
-            /* Different padding for config page */
-        }
+<title>EVSE Controller Configuration</title>
+<style>
+    /* Override the default body styles for config page */
+    body {
+        margin: 20px auto;
+        padding: 0 20px;
+        /* Different padding for config page */
+    }
 
-        /* Channel configuration styles */
-        .channel-config {
-            margin-left: 20px;
-            margin-bottom: 20px;
-        }
+    /* Channel configuration styles */
+    .channel-config {
+        margin-left: 20px;
+        margin-bottom: 20px;
+    }
 
-        .channel-config h4 {
-            margin-bottom: 5px;
-            color: #555;
-        }
+    .channel-config h4 {
+        margin-bottom: 5px;
+        color: #555;
+    }
 
-        .channel-details {
-            margin-left: 20px;
-            padding-left: 10px;
-            border-left: 2px solid #eee;
-            margin-bottom: 15px;
-        }
-    </style>
+    .channel-details {
+        margin-left: 20px;
+        padding-left: 10px;
+        border-left: 2px solid #eee;
+        margin-bottom: 15px;
+    }
+</style>
 {% endblock %}
 
 {% block content %}
-    <div class="nav-links">
-        <a href="/">← Back to Dashboard</a>
+<div class="nav-links">
+    <a href="/">← Back to Dashboard</a>
+</div>
+
+<h1>EVSE Controller Configuration</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for category, message in messages %}
+<div class="flash-message flash-{{ category }}">{{ message }}</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<form id="configForm" method="POST">
+    <div class="config-section">
+        <h2>Wallbox Configuration</h2>
+        <div class="form-group">
+            <label for="wallbox_url">Wallbox URL:</label>
+            <input type="text" id="wallbox_url" name="wallbox[url]" value="{{ config.wallbox.url }}" required>
+        </div>
+        <div class="form-group">
+            <label for="wallbox_username">Username (for auto-restart):</label>
+            <input type="text" id="wallbox_username" name="wallbox[username]" value="{{ config.wallbox.username }}">
+        </div>
+        <div class="form-group">
+            <label for="wallbox_password">Password (for auto-restart):</label>
+            <input type="password" id="wallbox_password" name="wallbox[password]" value="{{ config.wallbox.password }}"
+                autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label for="wallbox_serial">Serial Number:</label>
+            <input type="number" id="wallbox_serial" name="wallbox[serial]" value="{{ config.wallbox.serial }}"
+                class="no-spinner">
+        </div>
+        <div class="form-group">
+            <label for="max_charge_current">Maximum Charging Current (A):</label>
+            <input type="number" id="max_charge_current" name="wallbox[max_charge_current]"
+                value="{{ config.wallbox.max_charge_current }}" min="3" max="32" required>
+        </div>
+        <div class="form-group">
+            <label for="max_discharge_current">Maximum Discharging Current (A):</label>
+            <input type="number" id="max_discharge_current" name="wallbox[max_discharge_current]"
+                value="{{ config.wallbox.max_discharge_current }}" min="3" max="32" required>
+        </div>
     </div>
 
-    <h1>EVSE Controller Configuration</h1>
+    <div class="config-section">
+        <h2>Shelly Configuration</h2>
+        <div class="form-group">
+            <label for="shelly_url">Primary Shelly EM URL:</label>
+            <input type="text" id="shelly_url" name="shelly[primary_url]" value="{{ config.shelly.primary_url }}"
+                required>
+        </div>
+        <div class="form-group">
+            <label for="shelly_secondary_url">Secondary Shelly EM URL (optional):</label>
+            <input type="text" id="shelly_secondary_url" name="shelly[secondary_url]"
+                value="{{ config.shelly.secondary_url }}">
+        </div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-    {% for category, message in messages %}
-    <div class="flash-message flash-{{ category }}">{{ message }}</div>
-    {% endfor %}
-    {% endif %}
-    {% endwith %}
+        <!-- Primary Shelly Channel Configuration -->
+        <h3>Primary Shelly Channels</h3>
+        <div class="channel-config">
+            <h4>Channel 1</h4>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="primary_ch1_in_use" name="shelly[channels][primary][channel1][in_use]" {%
+                        if config.shelly.channels.primary.channel1.in_use %}checked{% endif %}>
+                    Channel in use
+                </label>
+            </div>
+            <div class="channel-details" id="primary_ch1_details" {% if not
+                config.shelly.channels.primary.channel1.in_use %}style="display: none" {% endif %}>
+                <div class="form-group">
+                    <label for="primary_ch1_name">Name:</label>
+                    <input type="text" id="primary_ch1_name" name="shelly[channels][primary][channel1][name]"
+                        value="{{ config.shelly.channels.primary.channel1.name }}">
+                </div>
+                <div class="form-group">
+                    <label for="primary_ch1_abbr">Abbreviation:</label>
+                    <input type="text" id="primary_ch1_abbr" name="shelly[channels][primary][channel1][abbreviation]"
+                        value="{{ config.shelly.channels.primary.channel1.abbreviation }}">
+                </div>
+            </div>
 
-    <form id="configForm" method="POST">
-        <div class="config-section">
-            <h2>Wallbox Configuration</h2>
+            <h4>Channel 2</h4>
             <div class="form-group">
-                <label for="wallbox_url">Wallbox URL:</label>
-                <input type="text" id="wallbox_url" name="wallbox[url]" value="{{ config.wallbox.url }}" required>
+                <label>
+                    <input type="checkbox" id="primary_ch2_in_use" name="shelly[channels][primary][channel2][in_use]" {%
+                        if config.shelly.channels.primary.channel2.in_use %}checked{% endif %}>
+                    Channel in use
+                </label>
             </div>
-            <div class="form-group">
-                <label for="wallbox_username">Username (for auto-restart):</label>
-                <input type="text" id="wallbox_username" name="wallbox[username]" value="{{ config.wallbox.username }}">
-            </div>
-            <div class="form-group">
-                <label for="wallbox_password">Password (for auto-restart):</label>
-                <input type="password" id="wallbox_password" name="wallbox[password]"
-                    value="{{ config.wallbox.password }}" autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label for="wallbox_serial">Serial Number:</label>
-                <input type="number" id="wallbox_serial" name="wallbox[serial]" value="{{ config.wallbox.serial }}">
-            </div>
-            <div class="form-group">
-                <label for="max_charge_current">Maximum Charging Current (A):</label>
-                <input type="number" id="max_charge_current" name="wallbox[max_charge_current]"
-                    value="{{ config.wallbox.max_charge_current }}" min="3" max="32" required>
-            </div>
-            <div class="form-group">
-                <label for="max_discharge_current">Maximum Discharging Current (A):</label>
-                <input type="number" id="max_discharge_current" name="wallbox[max_discharge_current]"
-                    value="{{ config.wallbox.max_discharge_current }}" min="3" max="32" required>
+            <div class="channel-details" id="primary_ch2_details" {% if not
+                config.shelly.channels.primary.channel2.in_use %}style="display: none" {% endif %}>
+                <div class="form-group">
+                    <label for="primary_ch2_name">Name:</label>
+                    <input type="text" id="primary_ch2_name" name="shelly[channels][primary][channel2][name]"
+                        value="{{ config.shelly.channels.primary.channel2.name }}">
+                </div>
+                <div class="form-group">
+                    <label for="primary_ch2_abbr">Abbreviation:</label>
+                    <input type="text" id="primary_ch2_abbr" name="shelly[channels][primary][channel2][abbreviation]"
+                        value="{{ config.shelly.channels.primary.channel2.abbreviation }}">
+                </div>
             </div>
         </div>
 
-        <div class="config-section">
-            <h2>Shelly Configuration</h2>
+        <!-- Secondary Shelly Channel Configuration (if configured) -->
+        {% if config.shelly.secondary_url %}
+        <h3>Secondary Shelly Channels</h3>
+        <div class="channel-config">
+            <h4>Channel 1</h4>
             <div class="form-group">
-                <label for="shelly_url">Primary Shelly EM URL:</label>
-                <input type="text" id="shelly_url" name="shelly[primary_url]" value="{{ config.shelly.primary_url }}"
-                    required>
+                <label>
+                    <input type="checkbox" id="secondary_ch1_in_use"
+                        name="shelly[channels][secondary][channel1][in_use]" {% if
+                        config.shelly.channels.secondary.channel1.in_use %}checked{% endif %}>
+                    Channel in use
+                </label>
             </div>
+            <div class="channel-details" id="secondary_ch1_details" {% if not
+                config.shelly.channels.secondary.channel1.in_use %}style="display: none" {% endif %}>
+                <div class="form-group">
+                    <label for="secondary_ch1_name">Name:</label>
+                    <input type="text" id="secondary_ch1_name" name="shelly[channels][secondary][channel1][name]"
+                        value="{{ config.shelly.channels.secondary.channel1.name }}">
+                </div>
+                <div class="form-group">
+                    <label for="secondary_ch1_abbr">Abbreviation:</label>
+                    <input type="text" id="secondary_ch1_abbr"
+                        name="shelly[channels][secondary][channel1][abbreviation]"
+                        value="{{ config.shelly.channels.secondary.channel1.abbreviation }}">
+                </div>
+            </div>
+
+            <h4>Channel 2</h4>
             <div class="form-group">
-                <label for="shelly_secondary_url">Secondary Shelly EM URL (optional):</label>
-                <input type="text" id="shelly_secondary_url" name="shelly[secondary_url]"
-                    value="{{ config.shelly.secondary_url }}">
+                <label>
+                    <input type="checkbox" id="secondary_ch2_in_use"
+                        name="shelly[channels][secondary][channel2][in_use]" {% if
+                        config.shelly.channels.secondary.channel2.in_use %}checked{% endif %}>
+                    Channel in use
+                </label>
             </div>
-
-            <!-- Primary Shelly Channel Configuration -->
-            <h3>Primary Shelly Channels</h3>
-            <div class="channel-config">
-                <h4>Channel 1</h4>
+            <div class="channel-details" id="secondary_ch2_details" {% if not
+                config.shelly.channels.secondary.channel2.in_use %}style="display: none" {% endif %}>
                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="primary_ch1_in_use"
-                            name="shelly[channels][primary][channel1][in_use]" {% if
-                            config.shelly.channels.primary.channel1.in_use %}checked{% endif %}>
-                        Channel in use
-                    </label>
+                    <label for="secondary_ch2_name">Name:</label>
+                    <input type="text" id="secondary_ch2_name" name="shelly[channels][secondary][channel2][name]"
+                        value="{{ config.shelly.channels.secondary.channel2.name }}">
                 </div>
-                <div class="channel-details" id="primary_ch1_details" {% if not
-                    config.shelly.channels.primary.channel1.in_use %}style="display: none" {% endif %}>
-                    <div class="form-group">
-                        <label for="primary_ch1_name">Name:</label>
-                        <input type="text" id="primary_ch1_name" name="shelly[channels][primary][channel1][name]"
-                            value="{{ config.shelly.channels.primary.channel1.name }}">
-                    </div>
-                    <div class="form-group">
-                        <label for="primary_ch1_abbr">Abbreviation:</label>
-                        <input type="text" id="primary_ch1_abbr"
-                            name="shelly[channels][primary][channel1][abbreviation]"
-                            value="{{ config.shelly.channels.primary.channel1.abbreviation }}">
-                    </div>
-                </div>
-
-                <h4>Channel 2</h4>
                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="primary_ch2_in_use"
-                            name="shelly[channels][primary][channel2][in_use]" {% if
-                            config.shelly.channels.primary.channel2.in_use %}checked{% endif %}>
-                        Channel in use
-                    </label>
-                </div>
-                <div class="channel-details" id="primary_ch2_details" {% if not
-                    config.shelly.channels.primary.channel2.in_use %}style="display: none" {% endif %}>
-                    <div class="form-group">
-                        <label for="primary_ch2_name">Name:</label>
-                        <input type="text" id="primary_ch2_name" name="shelly[channels][primary][channel2][name]"
-                            value="{{ config.shelly.channels.primary.channel2.name }}">
-                    </div>
-                    <div class="form-group">
-                        <label for="primary_ch2_abbr">Abbreviation:</label>
-                        <input type="text" id="primary_ch2_abbr"
-                            name="shelly[channels][primary][channel2][abbreviation]"
-                            value="{{ config.shelly.channels.primary.channel2.abbreviation }}">
-                    </div>
+                    <label for="secondary_ch2_abbr">Abbreviation:</label>
+                    <input type="text" id="secondary_ch2_abbr"
+                        name="shelly[channels][secondary][channel2][abbreviation]"
+                        value="{{ config.shelly.channels.secondary.channel2.abbreviation }}">
                 </div>
             </div>
+        </div>
+        {% endif %}
 
-            <!-- Secondary Shelly Channel Configuration (if configured) -->
-            {% if config.shelly.secondary_url %}
-            <h3>Secondary Shelly Channels</h3>
-            <div class="channel-config">
-                <h4>Channel 1</h4>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="secondary_ch1_in_use"
-                            name="shelly[channels][secondary][channel1][in_use]" {% if
-                            config.shelly.channels.secondary.channel1.in_use %}checked{% endif %}>
-                        Channel in use
-                    </label>
-                </div>
-                <div class="channel-details" id="secondary_ch1_details" {% if not
-                    config.shelly.channels.secondary.channel1.in_use %}style="display: none" {% endif %}>
-                    <div class="form-group">
-                        <label for="secondary_ch1_name">Name:</label>
-                        <input type="text" id="secondary_ch1_name" name="shelly[channels][secondary][channel1][name]"
-                            value="{{ config.shelly.channels.secondary.channel1.name }}">
-                    </div>
-                    <div class="form-group">
-                        <label for="secondary_ch1_abbr">Abbreviation:</label>
-                        <input type="text" id="secondary_ch1_abbr"
-                            name="shelly[channels][secondary][channel1][abbreviation]"
-                            value="{{ config.shelly.channels.secondary.channel1.abbreviation }}">
-                    </div>
-                </div>
+        <!-- Grid Monitoring Configuration -->
+        <h3>Device Assignment</h3>
+        <div class="form-group">
+            <label for="grid_device">Grid Monitoring Device:</label>
+            <select id="grid_device" name="shelly[grid][device]" required>
+                <option value="primary" {% if config.shelly.grid.device=="primary" %}selected{% endif %}>Primary
+                    Shelly</option>
+                {% if config.shelly.secondary_url %}
+                <option value="secondary" {% if config.shelly.grid.device=="secondary" %}selected{% endif %}>
+                    Secondary Shelly</option>
+                {% endif %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="grid_channel">Grid Monitoring Channel:</label>
+            <select id="grid_channel" name="shelly[grid][channel]" required>
+                <option value="1" {% if config.shelly.grid.channel==1 %}selected{% endif %}>Channel 1</option>
+                <option value="2" {%- if config.shelly.grid.channel==2 -%}selected{%- endif -%}>Channel 2</option>
+            </select>
+        </div>
 
-                <h4>Channel 2</h4>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="secondary_ch2_in_use"
-                            name="shelly[channels][secondary][channel2][in_use]" {% if
-                            config.shelly.channels.secondary.channel2.in_use %}checked{% endif %}>
-                        Channel in use
-                    </label>
-                </div>
-                <div class="channel-details" id="secondary_ch2_details" {% if not
-                    config.shelly.channels.secondary.channel2.in_use %}style="display: none" {% endif %}>
-                    <div class="form-group">
-                        <label for="secondary_ch2_name">Name:</label>
-                        <input type="text" id="secondary_ch2_name" name="shelly[channels][secondary][channel2][name]"
-                            value="{{ config.shelly.channels.secondary.channel2.name }}">
-                    </div>
-                    <div class="form-group">
-                        <label for="secondary_ch2_abbr">Abbreviation:</label>
-                        <input type="text" id="secondary_ch2_abbr"
-                            name="shelly[channels][secondary][channel2][abbreviation]"
-                            value="{{ config.shelly.channels.secondary.channel2.abbreviation }}">
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Grid Monitoring Configuration -->
-            <h3>Device Assignment</h3>
+        <!-- EVSE Monitoring Configuration -->
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="evse_enabled" {% if config.shelly.evse.device %}checked{% endif %}>
+                Enable EVSE Monitoring
+            </label>
+        </div>
+        <div id="evse_settings" style="display: {% if config.shelly.evse.device %}block{% else %}none{% endif %}">
             <div class="form-group">
-                <label for="grid_device">Grid Monitoring Device:</label>
-                <select id="grid_device" name="shelly[grid][device]" required>
-                    <option value="primary" {% if config.shelly.grid.device=="primary" %}selected{% endif %}>Primary
+                <label for="evse_device">EVSE Monitoring Device:</label>
+                <select id="evse_device" name="shelly[evse][device]">
+                    <option value="" {% if not config.shelly.evse.device %}selected{% endif %}>None</option>
+                    <option value="primary" {% if config.shelly.evse.device=="primary" %}selected{% endif %}>Primary
                         Shelly</option>
                     {% if config.shelly.secondary_url %}
-                    <option value="secondary" {% if config.shelly.grid.device=="secondary" %}selected{% endif %}>
+                    <option value="secondary" {% if config.shelly.evse.device=="secondary" %}selected{% endif %}>
                         Secondary Shelly</option>
                     {% endif %}
                 </select>
             </div>
             <div class="form-group">
-                <label for="grid_channel">Grid Monitoring Channel:</label>
-                <select id="grid_channel" name="shelly[grid][channel]" required>
-                    <option value="1" {% if config.shelly.grid.channel==1 %}selected{% endif %}>Channel 1</option>
-                    <option value="2" {%- if config.shelly.grid.channel==2 -%}selected{%- endif -%}>Channel 2</option>
-                </select>
-            </div>
-
-            <!-- EVSE Monitoring Configuration -->
-            <div class="form-group">
-                <label>
-                    <input type="checkbox" id="evse_enabled" {% if config.shelly.evse.device %}checked{% endif %}>
-                    Enable EVSE Monitoring
-                </label>
-            </div>
-            <div id="evse_settings" style="display: {% if config.shelly.evse.device %}block{% else %}none{% endif %}">
-                <div class="form-group">
-                    <label for="evse_device">EVSE Monitoring Device:</label>
-                    <select id="evse_device" name="shelly[evse][device]">
-                        <option value="" {% if not config.shelly.evse.device %}selected{% endif %}>None</option>
-                        <option value="primary" {% if config.shelly.evse.device=="primary" %}selected{% endif %}>Primary
-                            Shelly</option>
-                        {% if config.shelly.secondary_url %}
-                        <option value="secondary" {% if config.shelly.evse.device=="secondary" %}selected{% endif %}>
-                            Secondary Shelly</option>
-                        {% endif %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="evse_channel">EVSE Monitoring Channel:</label>
-                    <select id="evse_channel" name="shelly[evse][channel]">
-                        <option value="" {% if not config.shelly.evse.channel %}selected{% endif %}>None</option>
-                        <option value="1" {% if config.shelly.evse.channel==1 %}selected{% endif %}>Channel 1</option>
-                        <option value="2" {% if config.shelly.evse.channel==2 %}selected{% endif %}>Channel 2</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <div class="config-section">
-            <h2>InfluxDB Configuration</h2>
-            <div class="form-group">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="influxdb_enabled" name="influxdb[enabled]" {% if config.influxdb.enabled
-                        %}checked{% endif %}>
-                    Enable InfluxDB logging
-                </label>
-            </div>
-            <div id="influxdb_settings" {% if not config.influxdb.enabled %}style="display: none" {% endif %}>
-                <div class="form-group">
-                    <label for="influxdb_url">InfluxDB URL:</label>
-                    <input type="text" id="influxdb_url" name="influxdb[url]" value="{{ config.influxdb.url }}">
-                </div>
-                <div class="form-group">
-                    <label for="influxdb_token">Token:</label>
-                    <input type="password" id="influxdb_token" name="influxdb[token]"
-                        value="{{ config.influxdb.token }}" autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <label for="influxdb_org">Organization:</label>
-                    <input type="text" id="influxdb_org" name="influxdb[org]" value="{{ config.influxdb.org }}">
-                </div>
-                <div class="form-group">
-                    <label for="influxdb_bucket">Bucket:</label>
-                    <input type="text" id="influxdb_bucket" name="influxdb[bucket]"
-                        value="{{ config.influxdb.bucket }}">
-                </div>
-            </div>
-        </div>
-
-        <div class="config-section">
-            <h2>Charging Configuration</h2>
-            <div class="form-group">
-                <label for="max_charge_percent">Maximum Charge Percentage:</label>
-                <input type="number" id="max_charge_percent" name="charging[max_charge_percent]"
-                    value="{{ config.charging.max_charge_percent }}" min="0" max="100" required>
-            </div>
-            <div class="form-group">
-                <label for="solar_period_max_charge">Solar Period Maximum Charge:</label>
-                <input type="number" id="solar_period_max_charge" name="charging[solar_period_max_charge]"
-                    value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
-            </div>
-            <div class="form-group">
-                <label for="default_tariff">Default Tariff:</label>
-                <select id="default_tariff" name="charging[default_tariff]" required>
-                    <option value="COSY" {% if config.charging.default_tariff=='COSY' %}selected{% endif %}>COSY
-                    </option>
-                    <option value="OCTGO" {% if config.charging.default_tariff=='OCTGO' %}selected{% endif %}>OCTGO
-                    </option>
-                    <option value="FLUX" {% if config.charging.default_tariff=='FLUX' %}selected{% endif %}>FLUX
-                    </option>
+                <label for="evse_channel">EVSE Monitoring Channel:</label>
+                <select id="evse_channel" name="shelly[evse][channel]">
+                    <option value="" {% if not config.shelly.evse.channel %}selected{% endif %}>None</option>
+                    <option value="1" {% if config.shelly.evse.channel==1 %}selected{% endif %}>Channel 1</option>
+                    <option value="2" {% if config.shelly.evse.channel==2 %}selected{% endif %}>Channel 2</option>
                 </select>
             </div>
         </div>
+    </div>
 
-        <div class="config-section">
-            <h2>Logging Configuration</h2>
+    <div class="config-section">
+        <h2>InfluxDB Configuration</h2>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="influxdb_enabled" name="influxdb[enabled]" {% if config.influxdb.enabled
+                    %}checked{% endif %}>
+                Enable InfluxDB logging
+            </label>
+        </div>
+        <div id="influxdb_settings" {% if not config.influxdb.enabled %}style="display: none" {% endif %}>
             <div class="form-group">
-                <label for="file_logging">File Logging Level:</label>
-                <select id="file_logging" name="logging[file_level]" required>
-                    <option value="DEBUG" {% if config.logging.file_level=='DEBUG' %}selected{% endif %}>DEBUG</option>
-                    <option value="INFO" {% if config.logging.file_level=='INFO' %}selected{% endif %}>INFO</option>
-                    <option value="WARNING" {% if config.logging.file_level=='WARNING' %}selected{% endif %}>WARNING
-                    </option>
-                    <option value="ERROR" {% if config.logging.file_level=='ERROR' %}selected{% endif %}>ERROR</option>
-                    <option value="CRITICAL" {% if config.logging.file_level=='CRITICAL' %}selected{% endif %}>CRITICAL
-                    </option>
-                </select>
+                <label for="influxdb_url">InfluxDB URL:</label>
+                <input type="text" id="influxdb_url" name="influxdb[url]" value="{{ config.influxdb.url }}">
             </div>
             <div class="form-group">
-                <label for="console_logging">Console Logging Level:</label>
-                <select id="console_logging" name="logging[console_level]" required>
-                    <option value="DEBUG" {% if config.logging.console_level=='DEBUG' %}selected{% endif %}>DEBUG
-                    </option>
-                    <option value="INFO" {% if config.logging.console_level=='INFO' %}selected{% endif %}>INFO</option>
-                    <option value="WARNING" {% if config.logging.console_level=='WARNING' %}selected{% endif %}>WARNING
-                    </option>
-                    <option value="ERROR" {% if config.logging.console_level=='ERROR' %}selected{% endif %}>ERROR
-                    </option>
-                    <option value="CRITICAL" {% if config.logging.console_level=='CRITICAL' %}selected{% endif %}>
-                        CRITICAL</option>
-                </select>
+                <label for="influxdb_token">Token:</label>
+                <input type="password" id="influxdb_token" name="influxdb[token]" value="{{ config.influxdb.token }}"
+                    autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="influxdb_org">Organization:</label>
+                <input type="text" id="influxdb_org" name="influxdb[org]" value="{{ config.influxdb.org }}">
+            </div>
+            <div class="form-group">
+                <label for="influxdb_bucket">Bucket:</label>
+                <input type="text" id="influxdb_bucket" name="influxdb[bucket]" value="{{ config.influxdb.bucket }}">
             </div>
         </div>
+    </div>
 
-        <button type="submit">Save Configuration</button>
-    </form>
+    <div class="config-section">
+        <h2>Charging Configuration</h2>
+        <div class="form-group">
+            <label for="max_charge_percent">Maximum Charge Percentage:</label>
+            <input type="number" id="max_charge_percent" name="charging[max_charge_percent]"
+                value="{{ config.charging.max_charge_percent }}" min="0" max="100" required>
+        </div>
+        <div class="form-group">
+            <label for="solar_period_max_charge">Solar Period Maximum Charge:</label>
+            <input type="number" id="solar_period_max_charge" name="charging[solar_period_max_charge]"
+                value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
+        </div>
+        <div class="form-group">
+            <label for="default_tariff">Default Tariff:</label>
+            <select id="default_tariff" name="charging[default_tariff]" required>
+                <option value="COSY" {% if config.charging.default_tariff=='COSY' %}selected{% endif %}>COSY
+                </option>
+                <option value="OCTGO" {% if config.charging.default_tariff=='OCTGO' %}selected{% endif %}>OCTGO
+                </option>
+                <option value="FLUX" {% if config.charging.default_tariff=='FLUX' %}selected{% endif %}>FLUX
+                </option>
+            </select>
+        </div>
+    </div>
 
-    <script>
-        // Add validation for current inputs
-        document.getElementById('max_charge_current').addEventListener('input', function () {
-            const value = parseInt(this.value);
-            if (value < 3 || value > 32) {
-                this.setCustomValidity('Current must be between 3 and 32A');
-            } else {
-                this.setCustomValidity('');
-            }
-        });
+    <div class="config-section">
+        <h2>Logging Configuration</h2>
+        <div class="form-group">
+            <label for="file_logging">File Logging Level:</label>
+            <select id="file_logging" name="logging[file_level]" required>
+                <option value="DEBUG" {% if config.logging.file_level=='DEBUG' %}selected{% endif %}>DEBUG</option>
+                <option value="INFO" {% if config.logging.file_level=='INFO' %}selected{% endif %}>INFO</option>
+                <option value="WARNING" {% if config.logging.file_level=='WARNING' %}selected{% endif %}>WARNING
+                </option>
+                <option value="ERROR" {% if config.logging.file_level=='ERROR' %}selected{% endif %}>ERROR</option>
+                <option value="CRITICAL" {% if config.logging.file_level=='CRITICAL' %}selected{% endif %}>CRITICAL
+                </option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="console_logging">Console Logging Level:</label>
+            <select id="console_logging" name="logging[console_level]" required>
+                <option value="DEBUG" {% if config.logging.console_level=='DEBUG' %}selected{% endif %}>DEBUG
+                </option>
+                <option value="INFO" {% if config.logging.console_level=='INFO' %}selected{% endif %}>INFO</option>
+                <option value="WARNING" {% if config.logging.console_level=='WARNING' %}selected{% endif %}>WARNING
+                </option>
+                <option value="ERROR" {% if config.logging.console_level=='ERROR' %}selected{% endif %}>ERROR
+                </option>
+                <option value="CRITICAL" {% if config.logging.console_level=='CRITICAL' %}selected{% endif %}>
+                    CRITICAL</option>
+            </select>
+        </div>
+    </div>
 
-        document.getElementById('max_discharge_current').addEventListener('input', function () {
-            const value = parseInt(this.value);
-            if (value < 3 || value > 32) {
-                this.setCustomValidity('Current must be between 3 and 32A');
-            } else {
-                this.setCustomValidity('');
-            }
-        });
+    <button type="submit">Save Configuration</button>
+</form>
 
-        // Function to toggle visibility of channel details based on checkbox state
-        function setupChannelToggle(checkboxId, detailsId) {
-            const checkbox = document.getElementById(checkboxId);
-            const details = document.getElementById(detailsId);
-
-            if (checkbox && details) {
-                checkbox.addEventListener('change', function () {
-                    details.style.display = this.checked ? 'block' : 'none';
-                });
-            }
+<script>
+    // Add validation for current inputs
+    document.getElementById('max_charge_current').addEventListener('input', function () {
+        const value = parseInt(this.value);
+        if (value < 3 || value > 32) {
+            this.setCustomValidity('Current must be between 3 and 32A');
+        } else {
+            this.setCustomValidity('');
         }
+    });
 
-        // Set up channel toggles
-        setupChannelToggle('primary_ch1_in_use', 'primary_ch1_details');
-        setupChannelToggle('primary_ch2_in_use', 'primary_ch2_details');
-        setupChannelToggle('secondary_ch1_in_use', 'secondary_ch1_details');
-        setupChannelToggle('secondary_ch2_in_use', 'secondary_ch2_details');
+    document.getElementById('max_discharge_current').addEventListener('input', function () {
+        const value = parseInt(this.value);
+        if (value < 3 || value > 32) {
+            this.setCustomValidity('Current must be between 3 and 32A');
+        } else {
+            this.setCustomValidity('');
+        }
+    });
 
-        // InfluxDB toggle
-        document.getElementById('influxdb_enabled').addEventListener('change', function () {
-            document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
-        });
+    // Function to toggle visibility of channel details based on checkbox state
+    function setupChannelToggle(checkboxId, detailsId) {
+        const checkbox = document.getElementById(checkboxId);
+        const details = document.getElementById(detailsId);
 
-        // EVSE monitoring toggle
-        document.getElementById('evse_enabled').addEventListener('change', function () {
-            const evseSettings = document.getElementById('evse_settings');
-            const evseDevice = document.getElementById('evse_device');
-            const evseChannel = document.getElementById('evse_channel');
+        if (checkbox && details) {
+            checkbox.addEventListener('change', function () {
+                details.style.display = this.checked ? 'block' : 'none';
+            });
+        }
+    }
 
-            evseSettings.style.display = this.checked ? 'block' : 'none';
+    // Set up channel toggles
+    setupChannelToggle('primary_ch1_in_use', 'primary_ch1_details');
+    setupChannelToggle('primary_ch2_in_use', 'primary_ch2_details');
+    setupChannelToggle('secondary_ch1_in_use', 'secondary_ch1_details');
+    setupChannelToggle('secondary_ch2_in_use', 'secondary_ch2_details');
 
-            if (!this.checked) {
-                evseDevice.value = '';
-                evseChannel.value = '';
-            }
-        });
-    </script>
+    // InfluxDB toggle
+    document.getElementById('influxdb_enabled').addEventListener('change', function () {
+        document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
+    });
+
+    // EVSE monitoring toggle
+    document.getElementById('evse_enabled').addEventListener('change', function () {
+        const evseSettings = document.getElementById('evse_settings');
+        const evseDevice = document.getElementById('evse_device');
+        const evseChannel = document.getElementById('evse_channel');
+
+        evseSettings.style.display = this.checked ? 'block' : 'none';
+
+        if (!this.checked) {
+            evseDevice.value = '';
+            evseChannel.value = '';
+        }
+    });
+</script>
 {% endblock %}

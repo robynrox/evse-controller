@@ -193,3 +193,14 @@ button {
     padding: 4px 12px;
     /* Slightly more padding for text buttons */
 }
+
+/* Remove spinner buttons from number inputs */
+.no-spinner::-webkit-inner-spin-button,
+.no-spinner::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.no-spinner {
+    -moz-appearance: textfield;
+}

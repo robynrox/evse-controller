@@ -1,5 +1,6 @@
 import requests
 import time
+from typing import Callable
 
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface
@@ -7,16 +8,17 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 
 
 class PowerMonitorShelly(PowerMonitorInterface):
-    def __init__(self, url: str):
-        if not url:
-            raise ValueError("Shelly URL cannot be empty")
-            
-        # Remove any http:// prefix if present
-        url = url.replace("http://", "")
+    def __init__(self, url_getter: Callable[[], str]):
+        """
+        Initialize Shelly power monitor
         
-        self.url = url
-        self.ENDPOINT = f"http://{self.url}/status"
-        debug(f"Initializing Shelly with endpoint: {self.ENDPOINT}")
+        Args:
+            url_getter: Callable that returns the current URL
+        """
+        self._url_getter = url_getter
+        self._had_config_error = False
+        
+        # Initialize all the attributes
         self.powerCh0 = 0
         self.pfCh0 = 0
         self.powerCh1 = 0
@@ -30,9 +32,21 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.negEnergyJoulesCh1 = 0
         self._consecutive_failures = 0
         self.MAX_RETRIES = 5
-        self.BASE_TIMEOUT = 0.1  # Base timeout for first attempt
-        self.MAX_TIMEOUT = 1.0   # Maximum timeout
-        self.getPowerLevels()
+        self.BASE_TIMEOUT = 0.1
+        self.MAX_TIMEOUT = 1.0
+
+    @property
+    def ENDPOINT(self) -> str:
+        """
+        Dynamically construct endpoint URL using the current URL
+        
+        Raises:
+            ValueError: If the current URL is empty
+        """
+        url = self._url_getter()
+        if not url:
+            raise ValueError("Cannot construct endpoint: Shelly URL is empty")
+        return f"http://{url.replace('http://', '')}/status"
 
     def fetch_data(self):
         max_attempts = self.MAX_RETRIES
@@ -41,6 +55,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 # Increase timeout with each retry, but cap at MAX_TIMEOUT
                 timeout = min(self.BASE_TIMEOUT * (2 ** attempt), self.MAX_TIMEOUT)
                 r = requests.get(self.ENDPOINT, timeout=timeout)
+                self._had_config_error = False  # Reset config error state on success
                 r.raise_for_status()
                 reqJson = r.json()
                 self.powerCh0 = reqJson["emeters"][0]["power"]
@@ -52,13 +67,18 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.lastUpdate = time.time()
                 self._consecutive_failures = 0  # Reset on success
                 break  # Exit the loop if the request is successful
+            except ValueError as e:
+                if not self._had_config_error:
+                    warning(f"Configuration issue - failed to fetch data from Shelly: {e}")
+                    self._had_config_error = True
+                return
             except requests.exceptions.RequestException as e:
                 self._consecutive_failures += 1
                 if attempt == max_attempts - 1:
-                    error(f"Max attempts reached. Failed to fetch data from Shelly. Reason {e}")
-                    error(f"Consecutive failures: {self._consecutive_failures}")
+                    warning(f"Failed to fetch data from Shelly after {max_attempts} attempts. Reason: {e}")
+                    debug(f"Consecutive failures: {self._consecutive_failures}")
                 else:
-                    warning(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
+                    debug(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
 
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
