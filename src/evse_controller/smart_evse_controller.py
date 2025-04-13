@@ -200,10 +200,13 @@ def main():
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
-                    info("Entering pause-until-disconnect state")
-                    previous_state = execState
-                    execState = ExecState.PAUSE_UNTIL_DISCONNECT
-                    nextStateCheck = time.time()
+                    if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
+                        info("Entering pause-until-disconnect state")
+                        previous_state = execState
+                        execState = ExecState.PAUSE_UNTIL_DISCONNECT
+                        nextStateCheck = time.time()
+                    else:
+                        debug("Already in pause-until-disconnect state, ignoring command")
                 case "solar":
                     info("Entering solar charging state")
                     execState = ExecState.SOLAR
@@ -275,10 +278,12 @@ def main():
                 # Check if vehicle is disconnected
                 evse_state = evseController.getEvseState()  # Use controller instead of direct access
                 if evse_state == EvseState.DISCONNECTED:
-                    info(f"Vehicle disconnected, will revert to {previous_state} when reconnected")
-                elif previous_state is not None:  # Vehicle was previously disconnected
-                    info(f"Vehicle reconnected, reverting to {previous_state}")
-                    execState = previous_state
+                    if previous_state is not None:
+                        info(f"Vehicle disconnected, reverting to {previous_state}")
+                        execState = previous_state
+                    else:
+                        warning("Internal error: No previous state found, falling back to PAUSE mode")
+                        execState = ExecState.PAUSE
                     previous_state = None
 
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
