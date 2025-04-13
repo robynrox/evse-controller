@@ -200,10 +200,13 @@ def main():
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
-                    info("Entering pause-until-disconnect state")
-                    previous_state = execState
-                    execState = ExecState.PAUSE_UNTIL_DISCONNECT
-                    nextStateCheck = time.time()
+                    if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
+                        info("Entering pause-until-disconnect state")
+                        previous_state = execState
+                        execState = ExecState.PAUSE_UNTIL_DISCONNECT
+                        nextStateCheck = time.time()
+                    else:
+                        debug("Already in pause-until-disconnect state, ignoring command")
                 case "solar":
                     info("Entering solar charging state")
                     execState = ExecState.SOLAR
