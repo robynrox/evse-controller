@@ -313,18 +313,18 @@ def main():
             if execState == ExecState.SOLAR:
                 info("CONTROL SOLAR")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-                evseController.setChargeCurrentRange(3, 16)
+                evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
 
             if execState == ExecState.POWER_HOME:
                 info("CONTROL POWER_HOME")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-                evseController.setDischargeCurrentRange(3, 16)
+                evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
 
             if execState == ExecState.BALANCE:
                 info("CONTROL BALANCE")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-                evseController.setChargeCurrentRange(3, 16)
-                evseController.setDischargeCurrentRange(3, 16)
+                evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
+                evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
 
 if __name__ == '__main__':
     main()
