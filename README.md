@@ -63,6 +63,14 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
 ## Detailed Setup Instructions
 
 ### Prerequisites
+- A computer! Possibly a Raspberry Pi. An old laptop also works well.
+- Ideally Linux. Instructions are given for Windows and macOS but the platforms are not recommended.
+  In particular, it is known that there are issues with the Windows installation instructions as they
+  were recently tried out and we were unsuccessful in getting it to work. It is developed on a machine 
+  that runs Ubuntu 24.04. Other Linux distributions are likely to work well; "immutable" ones such as 
+  Fedora Silverblue might be more difficult to get to work. If you insist on running on Windows or 
+  macOS, expect installation to be difficult, and consider running within a container (Docker etc) 
+  using an Ubuntu image.
 - Python 3.11.7 or 3.12.3
 - An EVSE device (currently supports Wallbox Quasar)
 - A power monitor (currently supports Shelly EM)
