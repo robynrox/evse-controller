@@ -308,6 +308,7 @@ class EvseController(PowerMonitorObserver):
             int: Target current in Amps for the EVSE
         """
         homeWatts = power.getHomeWatts()
+        debug(f"calculateTargetCurrent: HomeWatts: {homeWatts}, Hysteresis: {self.hysteresisWindow}, lastTargetCurrent: {self.lastTargetCurrent}")
         desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
 
         # Determine desired current based on home power draw with hysteresis
@@ -316,14 +317,17 @@ class EvseController(PowerMonitorObserver):
                 if (homeWatts < min_power or homeWatts > max_power) and target_current != self.lastTargetCurrent:
                     continue  # Stay within hysteresis window
                 desiredEvseCurrent = -target_current
+                debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: -{target_current}")
                 break
             if min_power - self.hysteresisWindow <= -homeWatts < max_power + self.hysteresisWindow:
                 if (-homeWatts < min_power or -homeWatts > max_power) and target_current != self.lastTargetCurrent:
                     continue  # Stay within hysteresis window
                 desiredEvseCurrent = target_current
+                debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: {target_current}")
                 break
 
         # Apply control state logic
+        debug(f"calculateTargetCurrent: ControlState: {self.state}, minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
         match self.state:
             case ControlState.LOAD_FOLLOW_CHARGE:
                 if (desiredEvseCurrent < self.minChargeCurrent):
@@ -356,6 +360,7 @@ class EvseController(PowerMonitorObserver):
                 desiredEvseCurrent = 0
 
         self.lastTargetCurrent = desiredEvseCurrent  # Update last current level with final value
+        debug(f"calculateTargetCurrent: Final Desired EVSE current: {desiredEvseCurrent}")
         return desiredEvseCurrent
 
     def _is_valid_soc(self, soc):
