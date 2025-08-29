@@ -181,19 +181,23 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
             name: "Primary Channel 1"  # Custom name for the channel
             abbreviation: "Pri1"       # Short name for display
             in_use: true               # Whether this channel is active
+            scaling: 1.0               # Scaling factor for power readings (for use if using a CT clamp that reports the wrong values)
           channel2:
             name: "Primary Channel 2"
             abbreviation: "Pri2"
             in_use: true
+            scaling: 1.0
         secondary:                     # Only used if secondary_url is configured
           channel1:
             name: "Secondary Channel 1"
             abbreviation: "Sec1"
             in_use: true
+            scaling: 1.0
           channel2:
             name: "Secondary Channel 2"
             abbreviation: "Sec2"
             in_use: true
+            scaling: 1.0
       grid:
         device: "primary"              # primary or secondary
         channel: 1                     # 1 or 2
