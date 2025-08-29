@@ -8,7 +8,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 
 
 class PowerMonitorShelly(PowerMonitorInterface):
-    def __init__(self, url_getter: Callable[[], str]):
+    def __init__(self, url_getter: Callable[[], str], channel1_scaling: Callable[[], float], channel2_scaling: Callable[[], float]):
         """
         Initialize Shelly power monitor
         
@@ -16,6 +16,8 @@ class PowerMonitorShelly(PowerMonitorInterface):
             url_getter: Callable that returns the current URL
         """
         self._url_getter = url_getter
+        self._channel1_scaling = channel1_scaling
+        self._channel2_scaling = channel2_scaling
         self._had_config_error = False
         
         # Initialize all the attributes
@@ -58,9 +60,9 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self._had_config_error = False  # Reset config error state on success
                 r.raise_for_status()
                 reqJson = r.json()
-                self.powerCh0 = reqJson["emeters"][0]["power"]
+                self.powerCh0 = float(reqJson["emeters"][0]["power"]) * self._channel1_scaling()
                 self.pfCh0 = reqJson["emeters"][0]["pf"]
-                self.powerCh1 = reqJson["emeters"][1]["power"]
+                self.powerCh1 = float(reqJson["emeters"][1]["power"]) * self._channel2_scaling()
                 self.pfCh1 = reqJson["emeters"][1]["pf"]
                 self.voltage = reqJson["emeters"][0]["voltage"]
                 self.unixtime = reqJson["unixtime"]

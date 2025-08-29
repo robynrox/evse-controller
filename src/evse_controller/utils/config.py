@@ -336,24 +336,28 @@ class Config:
                     "channel1": {
                         "name": "Channel 1",
                         "abbreviation": "Ch1",
-                        "in_use": True
+                        "in_use": True,
+                        "scaling": 1.0
                     },
                     "channel2": {
                         "name": "Channel 2",
                         "abbreviation": "Ch2",
-                        "in_use": True
+                        "in_use": True,
+                        "scaling": 1.0
                     }
                 },
                 "secondary": {
                     "channel1": {
                         "name": "Channel 1",
                         "abbreviation": "Ch1",
-                        "in_use": True
+                        "in_use": True,
+                        "scaling": 1.0
                     },
                     "channel2": {
                         "name": "Channel 2",
                         "abbreviation": "Ch2",
-                        "in_use": True
+                        "in_use": True,
+                        "scaling": 1.0
                     }
                 }
             }
@@ -410,6 +414,23 @@ class Config:
         except (KeyError, TypeError):
             # For backward compatibility, assume all channels are in use
             return True
+
+    def get_channel_scaling(self, device: str, channel: int) -> float:
+        """Get the scaling factor for a specific channel.
+
+        Args:
+            device: 'primary' or 'secondary'
+            channel: 1 or 2
+
+        Returns:
+            The scaling factor for the channel
+        """
+        self._ensure_initialized()
+        channel_key = f"channel{channel}"
+        try:
+            return self._config_data["shelly"]["channels"][device][channel_key]["scaling"]
+        except (KeyError, TypeError):
+            return 1.0
 
     def set_channel_name(self, device: str, channel: int, name: str):
         """Set the name for a specific channel.

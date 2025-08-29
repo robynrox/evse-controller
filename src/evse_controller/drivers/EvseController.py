@@ -86,11 +86,11 @@ class EvseController(PowerMonitorObserver):
 
         # Initialize power monitors
         # Initialize primary Shelly
-        self.pmon = PowerMonitorShelly(lambda: config.SHELLY_PRIMARY_URL)
+        self.pmon = PowerMonitorShelly(lambda: config.SHELLY_PRIMARY_URL, lambda: config.get_channel_scaling("primary", 1), lambda: config.get_channel_scaling("primary", 2))
         debug(f"Initializing primary Shelly with URL: {config.SHELLY_PRIMARY_URL}")
 
         # Initialize secondary Shelly
-        self.pmon2 = PowerMonitorShelly(lambda: config.SHELLY_SECONDARY_URL)
+        self.pmon2 = PowerMonitorShelly(lambda: config.SHELLY_SECONDARY_URL, lambda: config.get_channel_scaling("secondary", 1), lambda: config.get_channel_scaling("secondary", 2))
         debug(f"Initializing secondary Shelly with URL: {config.SHELLY_SECONDARY_URL}")
 
         # Initialize power tracking attributes

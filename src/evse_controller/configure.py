@@ -28,24 +28,28 @@ DEFAULT_CONFIG = {
                 "channel1": {
                     "name": "Primary Channel 1",
                     "abbreviation": "Pri1",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 },
                 "channel2": {
                     "name": "Primary Channel 2",
                     "abbreviation": "Pri2",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 }
             },
             "secondary": {
                 "channel1": {
                     "name": "Secondary Channel 1",
                     "abbreviation": "Sec1",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 },
                 "channel2": {
                     "name": "Secondary Channel 2",
                     "abbreviation": "Sec2",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 }
             }
         },
@@ -115,12 +119,14 @@ def load_existing_config() -> Dict[str, Any]:
                                 "channel1": {
                                     "name": "Primary Channel 1",
                                     "abbreviation": "Pri1",
-                                    "in_use": True
+                                    "in_use": True,
+                                    "scaling": 1.0
                                 },
                                 "channel2": {
                                     "name": "Primary Channel 2",
                                     "abbreviation": "Pri2",
-                                    "in_use": True
+                                    "in_use": True,
+                                    "scaling": 1.0
                                 }
                             }
                         }
@@ -131,12 +137,14 @@ def load_existing_config() -> Dict[str, Any]:
                                 "channel1": {
                                     "name": "Secondary Channel 1",
                                     "abbreviation": "Sec1",
-                                    "in_use": True
+                                    "in_use": True,
+                                    "scaling": 1.0
                                 },
                                 "channel2": {
                                     "name": "Secondary Channel 2",
                                     "abbreviation": "Sec2",
-                                    "in_use": True
+                                    "in_use": True,
+                                    "scaling": 1.0
                                 }
                             }
 
@@ -297,13 +305,15 @@ def interactive_config():
             config["shelly"]["channels"]["primary"]["channel1"] = {
                 "name": "Channel 1",
                 "abbreviation": "Ch1",
-                "in_use": True
+                "in_use": True,
+                "scaling": 1.0
             }
         if "channel2" not in config["shelly"]["channels"]["primary"]:
             config["shelly"]["channels"]["primary"]["channel2"] = {
                 "name": "Channel 2",
                 "abbreviation": "Ch2",
-                "in_use": True
+                "in_use": True,
+                "scaling": 1.0
             }
 
         # Configure primary channel 1
@@ -324,6 +334,11 @@ def interactive_config():
                 default=config["shelly"]["channels"]["primary"]["channel1"].get("abbreviation", "Ch1")
             ).ask()
 
+            config["shelly"]["channels"]["primary"]["channel1"]["scaling"] = float(questionary.text(
+                "Enter scaling factor for primary Shelly channel 1 (1.0 = no scaling):",
+                default=str(config["shelly"]["channels"]["primary"]["channel1"].get("scaling", 1.0))
+            ).ask())
+
         # Configure primary channel 2
         print("\nPrimary Shelly Channel 2:")
         config["shelly"]["channels"]["primary"]["channel2"]["in_use"] = questionary.confirm(
@@ -342,6 +357,11 @@ def interactive_config():
                 default=config["shelly"]["channels"]["primary"]["channel2"].get("abbreviation", "Ch2")
             ).ask()
 
+            config["shelly"]["channels"]["primary"]["channel2"]["scaling"] = float(questionary.text(
+                "Enter scaling factor for primary Shelly channel 2 (1.0 = no scaling):",
+                default=str(config["shelly"]["channels"]["primary"]["channel2"].get("scaling", 1.0))
+            ).ask())
+
         # Configure secondary Shelly channels if a secondary URL is configured
         if config["shelly"]["secondary_url"]:
             print("\nSecondary Shelly Channel Configuration")
@@ -353,13 +373,15 @@ def interactive_config():
                 config["shelly"]["channels"]["secondary"]["channel1"] = {
                     "name": "Channel 1",
                     "abbreviation": "Ch1",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 }
             if "channel2" not in config["shelly"]["channels"]["secondary"]:
                 config["shelly"]["channels"]["secondary"]["channel2"] = {
                     "name": "Channel 2",
                     "abbreviation": "Ch2",
-                    "in_use": True
+                    "in_use": True,
+                    "scaling": 1.0
                 }
 
             # Configure secondary channel 1
@@ -380,6 +402,11 @@ def interactive_config():
                     default=config["shelly"]["channels"]["secondary"]["channel1"].get("abbreviation", "Ch1")
                 ).ask()
 
+                config["shelly"]["channels"]["secondary"]["channel1"]["scaling"] = float(questionary.text(
+                    "Enter scaling factor for secondary Shelly channel 1 (1.0 = no scaling):",
+                    default=str(config["shelly"]["channels"]["secondary"]["channel1"].get("scaling", 1.0))
+                ).ask())
+
             # Configure secondary channel 2
             print("\nSecondary Shelly Channel 2:")
             config["shelly"]["channels"]["secondary"]["channel2"]["in_use"] = questionary.confirm(
@@ -397,6 +424,11 @@ def interactive_config():
                     "Enter abbreviation for secondary Shelly channel 2:",
                     default=config["shelly"]["channels"]["secondary"]["channel2"].get("abbreviation", "Ch2")
                 ).ask()
+
+                config["shelly"]["channels"]["secondary"]["channel2"]["scaling"] = float(questionary.text(
+                    "Enter scaling factor for secondary Shelly channel 2 (1.0 = no scaling):",
+                    default=str(config["shelly"]["channels"]["secondary"]["channel2"].get("scaling", 1.0))
+                ).ask())
 
         print("\nShelly Device Assignment")
         # Configure grid monitoring (mandatory)
