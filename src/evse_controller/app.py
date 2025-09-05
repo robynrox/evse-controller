@@ -545,9 +545,8 @@ def run_flask():
                 request_handler=CustomWSGIRequestHandler)
     except Exception as e:
         error(f"Flask server crashed: {str(e)}", exc_info=True)
-
-flask_thread = threading.Thread(target=run_flask, daemon=True)
-flask_thread.start()
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask, daemon=True)
