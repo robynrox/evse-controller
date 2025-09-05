@@ -125,7 +125,7 @@ class EvseController(PowerMonitorObserver):
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        self.hysteresisWindow = 50 # Default hysteresis in Watts
+        self.hysteresisWindow = 100# Default hysteresis in Watts
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
         self.current_grid_power = Power()
         self.last_save_time = 0
@@ -133,7 +133,7 @@ class EvseController(PowerMonitorObserver):
         self.chargerState = EvseState.UNKNOWN
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
-        levels = [(0, 720, 0)]
+        levels = [(0, 400, 0)]
         for current in range(3, 32):
             start = current * 240
             end = start + 240
@@ -332,7 +332,7 @@ class EvseController(PowerMonitorObserver):
                     desiredEvseCurrent = self.maxChargeCurrent
             case ControlState.LOAD_FOLLOW_DISCHARGE:
                 if (-desiredEvseCurrent < self.minDischargeCurrent):
-                    desiredEvseCurrent = 0
+                    desiredEvseCurrent = -1
                 elif (-desiredEvseCurrent > self.maxDischargeCurrent):
                     desiredEvseCurrent = -self.maxDischargeCurrent
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
@@ -883,10 +883,14 @@ class EvseController(PowerMonitorObserver):
     def getBatteryChargeLevel(self) -> int:
         """Get current battery charge level."""
         try:
-            return self.evse.get_state().battery_level
+            soc = self.evse.get_state().battery_level
+            if soc is None or soc == -1:
+                # If SOC is unknown, return 50 as fallback
+                return 50
+            return soc
         except Exception as e:
             error(f"Failed to get battery charge level: {e}")
-            return -1
+            return 50
 
     def _setCurrent(self, current: float):
         """Set the EVSE current.

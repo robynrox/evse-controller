@@ -23,7 +23,10 @@ class OctopusGoTariff(Tariff):
 
     def is_off_peak(self, dayMinute: int) -> bool:
         """Check if current time is during off-peak period (00:30-05:30)"""
-        return 30 <= dayMinute < 330
+        """Check if current time is during off-peak periods"""
+        return (0 <= dayMinute < 320 or  # 04:00-07:00
+                380 <= dayMinute < 330 or   # 13:00-16:00
+                1410 <= dayMinute < 1440)   # 22:00-24:00
 
     def is_expensive_period(self, dayMinute: int) -> bool:
         """No specifically expensive periods in Octopus Go"""
@@ -42,15 +45,15 @@ class OctopusGoTariff(Tariff):
                 return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
         elif battery_level <= 25:
             return ControlState.DORMANT, None, None, "OCTGO Battery depleted, remain dormant"
-        elif 330 <= dayMinute < 19 * 60:
-            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, "OCTGO Day rate before 16:00: load follow discharge"
+        elif 390 <= dayMinute < 16.75 * 60:
+            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 32, "OCTGO Day rate before 16:00: load follow discharge"
         else:
-            minsBeforeNightRate = 1440 - ((dayMinute + 1410) % 1440)
-            thresholdSoCforDisharging = 55 + 7 * (minsBeforeNightRate / 60)
+            minsBeforeNightRate = 1440 - ((dayMinute + 30) % 1440)
+            thresholdSoCforDisharging = 26+ 7 * (minsBeforeNightRate / 60)
             if battery_level > thresholdSoCforDisharging:
                 return ControlState.DISCHARGE, None, None, f"OCTGO Day rate 19:00-00:30: SoC>{thresholdSoCforDisharging}%, discharge at max rate"
             else:
-                return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 16, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
+                return ControlState.LOAD_FOLLOW_DISCHARGE, 2, 32, f"OCTGO Day rate 19:00-00:30: SoC<={thresholdSoCforDisharging}%, load follow discharge"
 
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
@@ -69,12 +72,12 @@ class OctopusGoTariff(Tariff):
         # The battery_level is already available in the state parameter
         battery_level = state.battery_level
 
-        # If SoC > 50%:
-        if battery_level >= 50:
+        # If SoC > 50%... Changed to always:
+        if battery_level >= 25:
             # Cover all of the home demand as far as possible. Try to avoid energy coming from the grid.
             levels = []
-            levels.append((0, 410, 0))
-            levels.append((410, 720, 3))
+            levels.append((0, 250, 0))
+            levels.append((250, 720, 3))
             for current in range(4, 32):
                 end = current * 240
                 start = end - 240
