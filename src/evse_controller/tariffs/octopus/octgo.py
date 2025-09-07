@@ -76,8 +76,8 @@ class OctopusGoTariff(Tariff):
         if battery_level >= 25:
             # Cover all of the home demand as far as possible. Try to avoid energy coming from the grid.
             levels = []
-            levels.append((0, 250, 0))
-            levels.append((250, 720, 3))
+            levels.append((0, 300, 0))
+            levels.append((300, 720, 3))
             for current in range(4, 32):
                 end = current * 240
                 start = end - 240

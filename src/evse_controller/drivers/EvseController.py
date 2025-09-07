@@ -133,8 +133,9 @@ class EvseController(PowerMonitorObserver):
         self.chargerState = EvseState.UNKNOWN
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
-        levels = [(0, 400, 0)]
-        for current in range(3, 32):
+        levels = [(0, 300, 0)]
+        levels = [(300, 720, 3)]
+        for current in range(4, 32):
             start = current * 240
             end = start + 240
             levels.append((start, end, current))
@@ -336,7 +337,7 @@ class EvseController(PowerMonitorObserver):
                     desiredEvseCurrent = self.maxChargeCurrent
             case ControlState.LOAD_FOLLOW_DISCHARGE:
                 if (-desiredEvseCurrent < self.minDischargeCurrent):
-                    desiredEvseCurrent = -1
+                    desiredEvseCurrent = 0
                 elif (-desiredEvseCurrent > self.maxDischargeCurrent):
                     desiredEvseCurrent = -self.maxDischargeCurrent
             case ControlState.LOAD_FOLLOW_BIDIRECTIONAL:
