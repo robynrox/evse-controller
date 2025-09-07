@@ -134,7 +134,7 @@ class EvseController(PowerMonitorObserver):
         # Home demand levels for targeting range 0W to 240W with startup at 720W demand
         # (to conserve power)
         levels = [(0, 300, 0)]
-        levels = [(300, 720, 3)]
+        levels.append((300, 720, 3))
         for current in range(4, 32):
             start = current * 240
             end = start + 240
