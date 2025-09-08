@@ -260,6 +260,7 @@ def schedule_page():
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
     """Handle configuration page display and updates."""
+
     if request.method == 'POST':
         try:
             # Update Wallbox settings
@@ -270,7 +271,7 @@ def config_page():
                 config.WALLBOX_PASSWORD = request.form.get('wallbox[password]')
             if request.form.get('wallbox[serial]'):
                 config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
-            
+
             # Update Wallbox current limits
             max_charge_current = request.form.get('wallbox[max_charge_current]')
             if max_charge_current:
@@ -332,12 +333,15 @@ def config_page():
                 for device in devices:
                     in_use = request.form.get(f'shelly[channels][{device}][{channel_key}][in_use]') == 'on'
                     config.set_channel_in_use(device, channel, in_use)
-                    
                     if in_use:
                         name = request.form.get(f'shelly[channels][{device}][{channel_key}][name]')
                         abbr = request.form.get(f'shelly[channels][{device}][{channel_key}][abbreviation]')
                         config.set_channel_name(device, channel, name)
                         config.set_channel_abbreviation(device, channel, abbr)
+
+            # Save enabled dashboard buttons
+            enabled_buttons = request.form.getlist('enabled_buttons')
+            config.ENABLED_BUTTONS = enabled_buttons
 
             # Save the updated configuration
             config.save()
@@ -364,9 +368,12 @@ def index():
     """Render the main dashboard page"""
     scheduled_events = scheduler.get_future_events()
     current_state = get_system_state()
+    enabled_buttons = config.ENABLED_BUTTONS if hasattr(config, 'ENABLED_BUTTONS') else [
+        'unplug', 'solar', 'charge', 'discharge', 'power-home', 'balance', 'pause', 'octgo', 'flux', 'cosy']
     return render_template('index.html',
                          scheduled_events=scheduled_events,
-                         current_state=current_state)
+                         current_state=current_state,
+                         enabled_buttons=enabled_buttons)
 
 @app.route('/tariff-designer')
 def tariff_designer():

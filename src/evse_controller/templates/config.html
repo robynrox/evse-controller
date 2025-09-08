@@ -47,6 +47,35 @@
 
 <form id="configForm" method="POST">
     <div class="config-section">
+        <h2>EVSE Control Interface Buttons</h2>
+        <div class="form-group">
+            <label>Select which control buttons appear on the dashboard:</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px;">
+                {% set all_buttons = [
+                    ('unplug', 'Pause to remove plug', 'Pause charging to allow the plug to be removed'),
+                    ('solar', 'Solar only charging', 'Charge using only solar power'),
+                    ('charge', 'Charge at max rate', 'Charge battery at maximum rate using all power sources'),
+                    ('discharge', 'Discharge to grid', 'Discharge battery at maximum rate to power the home and send any excess back to the grid'),
+                    ('power-home', 'Discharge to home', 'Discharge battery when necessary to power the home only'),
+                    ('balance', 'Balance solar/home', 'Minimise use of the grid (charge from solar and power the home)'),
+                    ('pause', 'Pause charging/discharging', 'Pause all charging/discharging'),
+                    ('octgo', 'Octopus Go', 'Select the Octopus Go tariff controller'),
+                    ('flux', 'Octopus Flux', 'Select the Octopus Flux tariff controller'),
+                    ('cosy', 'Cosy Octopus', 'Select the Cosy Octopus tariff controller'),
+                ] %}
+                {% for key, label, description in all_buttons %}
+                    <label style="min-width: 320px; display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px;">
+                        <input type="checkbox" name="enabled_buttons" value="{{ key }}" {% if config.enabled_buttons and key in config.enabled_buttons %}checked{% endif %}>
+                        <div>
+                            <strong>{{ label }}</strong><br>
+                            <span style="font-size: 0.95em; color: #555;">{{ description }}</span>
+                        </div>
+                    </label>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="config-section">
         <h2>Wallbox Configuration</h2>
         <div class="form-group">
             <label for="wallbox_url">Wallbox URL:</label>

@@ -1,3 +1,6 @@
+# Dashboard button selection property
+
+        # Dashboard button selection property
 import yaml
 import sys
 from pathlib import Path
@@ -122,6 +125,13 @@ class Config:
         self._config_data[section][key] = value
 
     # Charging section properties
+
+    # Dashboard button selection property
+    ENABLED_BUTTONS = property(
+        lambda self: self._get_config_value("dashboard", "enabled_buttons", [
+            'unplug', 'solar', 'charge', 'discharge', 'power-home', 'balance', 'pause', 'octgo', 'flux', 'cosy']) or [],
+        lambda self, value: self._set_config_value("dashboard", "enabled_buttons", value)
+    )
     DEFAULT_TARIFF = property(
         lambda self: self._get_config_value("charging", "default_tariff", "COSY"),
         lambda self, value: self._set_config_value("charging", "default_tariff", value)
@@ -318,7 +328,8 @@ class Config:
             'logging': {
                 'file_level': self.FILE_LOGGING,
                 'console_level': self.CONSOLE_LOGGING
-            }
+            },
+            'enabled_buttons': self.ENABLED_BUTTONS
         }
 
     # Channel-related methods

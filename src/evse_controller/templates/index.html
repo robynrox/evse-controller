@@ -2,7 +2,7 @@
 
 {% block head %}
 <title>EVSE Control</title>
-<script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+<script src="{{ url_for('static', filename='js/plotly-2.29.1.min.js') }}"></script>
 <script>
     // Icon filename constants
     const ICONS = {
@@ -67,19 +67,19 @@
     <div>
         <h1>EVSE Control Interface</h1>
         <div class="status-panel" style="margin-bottom: 8px;">
-            <div class="status-item">
-                <span class="status-info">
-                    <strong>Battery:</strong> <span id="battery-soc" style="color: red;">Loading...</span>
-                </span>
-                <span class="separator">|</span>
-                <span class="status-info">
-                    <strong>Current State:</strong> <span id="current-state">Loading...</span>
-                </span>
-                <span class="separator">|</span>
-            </div>
-            <div class="status-item">
-                <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
-            </div>
+                <div class="status-item">
+                    <span class="status-info">
+                        <strong>Battery:</strong> <span id="battery-soc" style="color: red;">Loading...</span>
+                    </span>
+                </div>
+                <div class="status-item">
+                    <span class="status-info">
+                        <strong>Current State:</strong> <span id="current-state">Loading...</span>
+                    </span>
+                </div>
+                <div class="status-item">
+                    <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
+                </div>
         </div>
         <div class="nav-links">
             <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
@@ -89,113 +89,43 @@
 </div>
 
 <div class="svg-button-container">
-    <button class="svg-button" onclick="sendCommand('unplug')" title="Pause charging to allow the plug to be removed">
-        <img src="" id="unplug-icon" alt="Pause to remove plug">
-    </button>
-    <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
-        <img src="" id="solar-icon" alt="Solar only charging">
-    </button>
-    <button class="svg-button" onclick="sendCommand('charge')"
-        title="Charge battery at maximum rate using all power sources">
-        <img src="" id="charge-icon" alt="Charge at maximum rate">
-    </button>
-    <button class="svg-button" onclick="sendCommand('discharge')"
-        title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
-        <img src="" id="discharge-icon" alt="Discharge">
-    </button>
-    <button class="svg-button" onclick="sendCommand('power-home')"
-        title="Discharge battery when necessary to power the home only">
-        <img src="" id="power-home-icon" alt="Power Home">
-    </button>
-    <button class="svg-button" onclick="sendCommand('balance')"
-        title="Minimise use of the grid (charge from solar and power the home)">
-        <img src="" id="balance-icon" alt="Balance">
-    </button>
-    <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
-        <img src="" id="pause-icon" alt="Pause">
-    </button>
-    <button class="svg-button" onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">
-        <img src="" id="octgo-icon" alt="Octopus Go">
-    </button>
-    <button class="svg-button" onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">
-        <img src="" id="flux-icon" alt="Octopus Flux">
-    </button>
-    <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
-        <img src="" id="cosy-icon" alt="Cosy Octopus">
-    </button>
-    <button onclick="toggleLegend()">Command References</button>
-</div>
+    {% set button_defs = [
+        ('unplug', 'Pause to remove plug', 'unplug-icon', 'Pause to remove plug'),
+        ('solar', 'Charge using only solar power', 'solar-icon', 'Solar only charging'),
+        ('charge', 'Charge battery at maximum rate using all power sources', 'charge-icon', 'Charge at maximum rate'),
+        ('discharge', 'Discharge battery at maximum rate to power the home and send any excess back to the grid', 'discharge-icon', 'Discharge'),
+        ('power-home', 'Discharge battery when necessary to power the home only', 'power-home-icon', 'Power Home'),
+        ('balance', 'Minimise use of the grid (charge from solar and power the home)', 'balance-icon', 'Balance'),
+        ('pause', 'Pause all charging/discharging', 'pause-icon', 'Pause'),
+        ('octgo', 'Select the Octopus Go tariff controller', 'octgo-icon', 'Octopus Go'),
+        ('flux', 'Select the Octopus Flux tariff controller', 'flux-icon', 'Octopus Flux'),
+        ('cosy', 'Select the Cosy Octopus tariff controller', 'cosy-icon', 'Cosy Octopus'),
+    ] %}
+    {% set icon_urls = {
+        'unplug': '/static/images/Pause_to_remove_plug_black.svg',
+        'solar': '/static/images/S2V_-_Solar_only_charging_black.svg',
+        'charge': '/static/images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg',
+        'discharge': '/static/images/V2G_-_Discharge_black.svg',
+        'power-home': '/static/images/V2H_-_Battery_to_House_black.svg',
+        'balance': '/static/images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg',
+        'pause': '/static/images/On-Off_black.svg',
+        'octgo': '/static/images/Go_black.svg',
+        'flux': '/static/images/Flux_black.svg',
+        'cosy': '/static/images/Cosy_black.svg',
+    } %}
+    {% for key, title, icon_id, alt in button_defs %}
+        {% if enabled_buttons and key in enabled_buttons %}
+            <button class="svg-button" onclick="sendCommand('{{ key }}')" title="{{ title }}">
+                <img src="{{ icon_urls[key] }}" id="{{ icon_id }}" alt="{{ alt }}">
+            </button>
 
-<div class="legend-container">
-    <div id="command-legend" class="command-legend collapsed">
-        <h2>Command Reference</h2>
-        <div class="legend-grid">
-            <div class="legend-item">
-                <img src="" id="legend-unplug-icon" alt="Remove plug icon">
-                <div class="legend-text">
-                    <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-solar-icon" alt="Solar charging icon">
-                <div class="legend-text">
-                    <strong>Solar Only:</strong> Charge using only solar power
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-charge-icon" alt="Maximum charge icon">
-                <div class="legend-text">
-                    <strong>Charge:</strong> Charge battery at maximum rate using all power sources
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-discharge-icon" alt="Discharge icon">
-                <div class="legend-text">
-                    <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
-                    excess back to the grid
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-power-home-icon" alt="Power Home icon">
-                <div class="legend-text">
-                    <strong>Power Home:</strong> Discharge battery when necessary to power the home only
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-balance-icon" alt="Balance icon">
-                <div class="legend-text">
-                    <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-pause-icon" alt="Pause icon">
-                <div class="legend-text">
-                    <strong>Pause:</strong> Pause all charging/discharging
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-octgo-icon" alt="Octopus Go icon">
-                <div class="legend-text">
-                    <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-flux-icon" alt="Octopus Flux icon">
-                <div class="legend-text">
-                    <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
-                <div class="legend-text">
-                    <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+        {% endif %}
+    {% endfor %}
 
-<h1>Power History</h1>
+
+</div> <!-- close svg-button-container -->
+
+<h2 style="text-align:center;margin:10px 0 0 0;font-size:1.5em;">Power History</h2>
 <div id="chart" style="width:100%;height:600px;"></div>
 
 <style>
@@ -204,6 +134,14 @@
         align-items: flex-start;
         gap: 32px;
         margin-bottom: 20px;
+        width: 100%;
+        max-width: 1200px;
+        box-sizing: border-box;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .header-flex > div {
+        width: 100%;
     }
     .status-panel {
         background-color: #f8f9fa;
@@ -212,6 +150,24 @@
         padding: 15px;
         min-width: 260px;
         margin: 0;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .nav-links {
+        width: 100%;
+        max-width: 1200px;
+        box-sizing: border-box;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        justify-content: center;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    @media (max-width: 1300px) {
+        .header-flex, .nav-links {
+            max-width: 100%;
+        }
     }
 
     .status-item {
@@ -222,27 +178,58 @@
         color: #495057;
     }
 
+
     .svg-button-container {
         margin-top: 15px;
+        margin-bottom: 28px;
         display: flex;
-        gap: 10px;
         flex-wrap: wrap;
+        gap: 18px;
+        justify-content: center;
         align-items: center;
-    }
-
-    .svg-button-container button {
-        height: 48px;
+        width: 100%;
     }
 
     .svg-button {
-        padding: 4px !important;
+        width: 70px;
+        height: 70px;
+        min-width: 70px;
+        max-width: 70px;
+        min-height: 70px;
+        max-height: 70px;
+        flex: 0 0 70px;
+        padding: 0 !important;
         display: flex;
         align-items: center;
         justify-content: center;
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
-        border-radius: 4px;
+        border-radius: 8px;
         cursor: pointer;
+        box-sizing: border-box;
+        transition: background-color 0.2s, transform 0.2s;
+    }
+
+    @media (max-width: 600px) {
+        .svg-button-container {
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+        }
+        .svg-button {
+            width: 56px;
+            height: 56px;
+            min-width: 56px;
+            max-width: 56px;
+            min-height: 56px;
+            max-height: 56px;
+            flex: 0 0 56px;
+        }
+        .svg-button img {
+            width: 32px;
+            height: 32px;
+        }
     }
 
     .svg-button:hover {
@@ -255,8 +242,11 @@
     }
 
     .svg-button img {
-        height: 40px;
-        width: auto;
+        height: 38px;
+        width: 38px;
+        object-fit: contain;
+        display: block;
+        margin: 0 auto;
     }
 
     .legend-container {
@@ -483,7 +473,7 @@
     function getLayout() {
         const isMobileDevice = isMobile();
         return {
-            title: 'Power History',
+            title: null,
             xaxis: {
                 title: 'Time',
                 tickmode: 'auto',
@@ -505,7 +495,7 @@
             },
             responsive: true,
             autosize: true,
-            margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
+            margin: { l: 0, r: 0, b: 0, t: 0, pad: 0 }
         };
     }
 
