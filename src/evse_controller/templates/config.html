@@ -250,7 +250,7 @@
                 Enable EVSE Monitoring
             </label>
         </div>
-        <div id="evse_settings" style="display: {% if config.shelly.evse.device %}block{% else %}none{% endif %}">
+    <div id="evse_settings" style="display: '{% if config.shelly.evse.device %}block{% else %}none{% endif %}';">
             <div class="form-group">
                 <label for="evse_device">EVSE Monitoring Device:</label>
                 <select id="evse_device" name="shelly[evse][device]">
