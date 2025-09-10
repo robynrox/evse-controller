@@ -125,13 +125,13 @@ class EvseController(PowerMonitorObserver):
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        self.hysteresisWindow = 100# Default hysteresis in Watts
+        self.hysteresisWindow = 40# Default hysteresis in Watts
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
         self.current_grid_power = Power()
         self.last_save_time = 0
         self.save_interval = 10  # Save every 10 seconds
         self.chargerState = EvseState.UNKNOWN
-        # Home demand levels for targeting range 0W to 240W with startup at 720W demand
+        # Home demand levels for targeting range 0W to 300W with startup at 720W demand
         # (to conserve power)
         levels = [(0, 300, 0)]
         levels.append((300, 720, 3))
@@ -312,20 +312,35 @@ class EvseController(PowerMonitorObserver):
         debug(f"calculateTargetCurrent: HomeWatts: {homeWatts}, Hysteresis: {self.hysteresisWindow}, lastTargetCurrent: {self.lastTargetCurrent}")
         desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
 
-        # Determine desired current based on home power draw with hysteresis
+        # Find the current setpoint's range
+        current_range = None
         for min_power, max_power, target_current in self.homeDemandLevels:
-            if min_power - self.hysteresisWindow <= homeWatts < max_power + self.hysteresisWindow:
-                if (homeWatts < min_power or homeWatts > max_power) and target_current != self.lastTargetCurrent:
-                    continue  # Stay within hysteresis window
-                desiredEvseCurrent = -target_current
-                debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: -{target_current}")
+            if self.lastTargetCurrent in (target_current, -target_current):
+                current_range = (min_power, max_power, target_current)
                 break
-            if min_power - self.hysteresisWindow <= -homeWatts < max_power + self.hysteresisWindow:
-                if (-homeWatts < min_power or -homeWatts > max_power) and target_current != self.lastTargetCurrent:
-                    continue  # Stay within hysteresis window
-                desiredEvseCurrent = target_current
-                debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: {target_current}")
-                break
+
+        # If we have a current setpoint, expand its range downward by hysteresis
+        in_hysteresis = False
+        if current_range:
+            min_power, max_power, target_current = current_range
+            expanded_min = min_power - self.hysteresisWindow
+            expanded_max = max_power
+            # If lastTargetCurrent is negative, invert homeWatts for discharge
+            check_power = homeWatts if self.lastTargetCurrent < 0 else -homeWatts if self.lastTargetCurrent > 0 else homeWatts
+            if expanded_min <= check_power < expanded_max:
+                in_hysteresis = True
+
+        if not in_hysteresis:
+            # Find the new setpoint
+            for min_power, max_power, target_current in self.homeDemandLevels:
+                if min_power <= homeWatts < max_power:
+                    desiredEvseCurrent = -target_current
+                    debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: -{target_current}")
+                    break
+                if min_power <= -homeWatts < max_power:
+                    desiredEvseCurrent = target_current
+                    debug(f"calculateTargetCurrent: Map: min_power: {min_power}, max_power: {max_power}, target_current: {target_current}")
+                    break
 
         # Apply control state logic
         debug(f"calculateTargetCurrent: ControlState: {self.state}, minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
