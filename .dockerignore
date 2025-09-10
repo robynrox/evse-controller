@@ -2,3 +2,10 @@ data/
 .venv/
 __pycache__/
 *.pyc
+.git/
+.devcontainer/
+lib/
+shelly-housing/
+vscode/
+*.md
+.dockerignore

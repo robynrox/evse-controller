@@ -6,12 +6,15 @@ ENV POETRY_VIRTUALENVS_CREATE=false \
     POETRY_CACHE_DIR='/var/cache/pypoetry'
 
 RUN curl -sSL https://install.python-poetry.org | python3 -
-WORKDIR /c
-COPY poetry.lock pyproject.toml /c/
+WORKDIR /app
+COPY poetry.lock pyproject.toml /app/
+
 RUN /root/.local/bin/poetry install --no-root
-COPY . /c/
+COPY . /app/
 RUN /root/.local/bin/poetry install
 
 EXPOSE 5000
 
-ENTRYPOINT /usr/local/bin/python -m evse_controller.app
+ENTRYPOINT ["/usr/local/bin/python"]
+CMD ["-m", "evse_controller.app"]
+
