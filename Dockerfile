@@ -7,6 +7,7 @@ ENV POETRY_VIRTUALENVS_CREATE=false \
 
 RUN curl -sSL https://install.python-poetry.org | python3 -
 WORKDIR /app
+
 COPY poetry.lock pyproject.toml /app/
 
 RUN /root/.local/bin/poetry install --no-root
@@ -14,6 +15,8 @@ COPY . /app/
 RUN /root/.local/bin/poetry install
 
 EXPOSE 5000
+
+RUN ln -fs /usr/share/zoneinfo/Europe/London /etc/localtime
 
 ENTRYPOINT ["/usr/local/bin/python"]
 CMD ["-m", "evse_controller.app"]

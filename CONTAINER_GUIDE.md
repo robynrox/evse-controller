@@ -76,3 +76,15 @@ All data is stored in the `evse-controller_data` Docker volume:
 - Configuration files
 - Log files
 - State information
+
+### Time zone setting
+
+The time zone is set within the Dockerfile to Europe/London as shipped. If you need to change that, it is this line that needs changing:
+
+`RUN ln -fs /usr/share/zoneinfo/Europe/London /etc/localtime`
+
+One way to change the time zone is to change what appears after `/usr/share/zoneinfo/`. A list of time zones is available here:
+
+https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+
+You would then need to rebuild the container using `[docker|podman] compose build` before bringing up a new one.
