@@ -87,4 +87,4 @@ One way to change the time zone is to change what appears after `/usr/share/zone
 
 https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 
-You would then need to rebuild the container using `[docker|podman] compose build` before bringing up a new one.
+You would then need to rebuild the image using `[docker|podman] compose build` before bringing up a new container from that image.
