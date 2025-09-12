@@ -1,4 +1,67 @@
-data/
-.venv/
+# Configuration files with sensitive data
+config.yaml
+secret.py
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environment
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+pyvenv.cfg
+/bin/
+/include/
+/Scripts/
+/lib/
+/lib64/
+/share/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Project-specific
+log/
+*.log
+history.json
+schedules.json
+evse_state.json
+data/
+
+# System-specific
+.DS_Store
+Thumbs.db
+
+# Package management
+influxdata-archive_compat.key
+state/schedule.json
+config.yaml.bak

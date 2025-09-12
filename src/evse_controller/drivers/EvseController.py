@@ -82,7 +82,7 @@ class EvseController(PowerMonitorObserver):
             tariffManager: Manager for electricity tariff rules and scheduling
         """
         # Add MAX_HISTORY_POINTS constant
-        self.MAX_HISTORY_POINTS = 300
+        self.MAX_HISTORY_POINTS = 420
 
         # Initialize power monitors
         # Initialize primary Shelly
@@ -125,9 +125,11 @@ class EvseController(PowerMonitorObserver):
         self.powerAtLastHalfHourlyLog = None
         self.nextHalfHourlyLog = 0
         self.state = ControlState.DORMANT
-        self.hysteresisWindow = 40# Default hysteresis in Watts
+        self.hysteresisWindow = 80 # Default hysteresis in Watts
         self.lastTargetCurrent = 0 # The current setpoint current in the last iteration
         self.current_grid_power = Power()
+        # For median filtering of home power
+        self._home_power_history = deque(maxlen=3)
         self.last_save_time = 0
         self.save_interval = 10  # Save every 10 seconds
         self.chargerState = EvseState.UNKNOWN
@@ -153,7 +155,6 @@ class EvseController(PowerMonitorObserver):
                 self.write_api = client.write_api(write_options=SYNCHRONOUS)
                 # Add logging to verify bucket
                 info(f"Writing to InfluxDB bucket: {config.INFLUXDB_BUCKET}")
-
             except Exception as e:
                 error(f"Failed to initialize InfluxDB: {e}")
 
@@ -308,8 +309,21 @@ class EvseController(PowerMonitorObserver):
         Returns:
             int: Target current in Amps for the EVSE
         """
-        homeWatts = power.getHomeWatts()
-        debug(f"calculateTargetCurrent: HomeWatts: {homeWatts}, Hysteresis: {self.hysteresisWindow}, lastTargetCurrent: {self.lastTargetCurrent}")
+
+        # Median filter for home power (only filter out upward spikes >400W)
+        homeWatts_raw = power.getHomeWatts()
+        self._home_power_history.append(homeWatts_raw)
+        if len(self._home_power_history) == 3:
+            prev = self._home_power_history[-2]
+            if homeWatts_raw > prev and (homeWatts_raw - prev) > 400:
+                # If power increased by more than 400W, use median
+                homeWatts = sorted(self._home_power_history)[1]
+            else:
+                # If power dropped, stayed the same, or increased <= 400W, use raw
+                homeWatts = homeWatts_raw
+        else:
+            homeWatts = homeWatts_raw
+        debug(f"calculateTargetCurrent: HomeWatts(raw): {homeWatts_raw}, HomeWatts(filtered): {homeWatts}, Hysteresis: {self.hysteresisWindow}, lastTargetCurrent: {self.lastTargetCurrent}")
         desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
 
         # Find the current setpoint's range

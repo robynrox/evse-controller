@@ -1,31 +1,22 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+FROM python:3
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ARG DEBIAN_FRONTEND=noninteractive
+ENV POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_CACHE_DIR='/var/cache/pypoetry'
 
-# Set work directory
+RUN curl -sSL https://install.python-poetry.org | python3 -
 WORKDIR /app
 
-# Install system dependencies (if needed)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+COPY poetry.lock pyproject.toml /app/
 
-# Copy poetry files if using poetry, else requirements.txt
-COPY poetry.lock pyproject.toml requirements.txt ./
+RUN /root/.local/bin/poetry install --no-root
+COPY . /app/
+RUN /root/.local/bin/poetry install
 
-# Install dependencies
-RUN pip install --upgrade pip \
-    && if [ -f "poetry.lock" ]; then pip install poetry && poetry install --no-root; fi \
-    && if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
-
-# Copy the rest of the application code
-COPY . .
-
-# Expose the port (adjust if your app uses a different port)
 EXPOSE 5000
 
-# Set the default command to run the Flask app
-CMD ["python", "-m", "evse_controller.app"]
+RUN ln -fs /usr/share/zoneinfo/Europe/London /etc/localtime
+
+ENTRYPOINT ["/usr/local/bin/python"]
+CMD ["-m", "evse_controller.app"]
