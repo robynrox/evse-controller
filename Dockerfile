@@ -20,4 +20,3 @@ RUN ln -fs /usr/share/zoneinfo/Europe/London /etc/localtime
 
 ENTRYPOINT ["/usr/local/bin/python"]
 CMD ["-m", "evse_controller.app"]
-

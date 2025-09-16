@@ -40,12 +40,12 @@ DEFAULT_CONFIG = {
                 "channel1": {
                     "name": "Secondary Channel 1",
                     "abbreviation": "Sec1",
-                    "in_use": True
+                    "in_use": False
                 },
                 "channel2": {
                     "name": "Secondary Channel 2",
                     "abbreviation": "Sec2",
-                    "in_use": True
+                    "in_use": False
                 }
             }
         },
@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
         },
         "evse": {
             "device": "",         # primary or secondary, empty if not used
-            "channel": None       # 1 or 2, None if not used
+            "channel": 2       # 1 or 2, None if not used
         }
     },
     "influxdb": {

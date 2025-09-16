@@ -1,8 +1,8 @@
 class Power:
     def __init__(self, ch1Watts: float = 0, ch1Pf: float = 0, ch2Watts: float = 0, ch2Pf: float = 0, voltage: float = 0, unixtime: int = -1, posEnergyJoulesCh0: float = 0, negEnergyJoulesCh0: float = 0, posEnergyJoulesCh1: float = 0, negEnergyJoulesCh1: float = 0, soc: int = 0):
-        self.ch1Watts = ch1Watts
+        self.ch1Watts = ch1Watts *1.17
         self.ch1Pf = ch1Pf
-        self.ch2Watts = ch2Watts
+        self.ch2Watts = ch2Watts *2.04
         self.ch2Pf = ch2Pf
         self.voltage = voltage
         self.unixtime = unixtime
