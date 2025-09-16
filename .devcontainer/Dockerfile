@@ -5,15 +5,15 @@ ENV POETRY_VIRTUALENVS_CREATE=false \
     POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR='/var/cache/pypoetry'
 
-RUN apt update && apt upgrade
+RUN apt -y update && apt -y upgrade
 
 RUN curl -sSL https://install.python-poetry.org | python3 -
-WORKDIR /app
+WORKDIR /workspaces/evse-controller
 
-COPY ./poetry.lock ./pyproject.toml /app/
+COPY ./poetry.lock ./pyproject.toml /workspaces/evse-controller/
 
 RUN /root/.local/bin/poetry install --no-root
-COPY . /app/
+COPY . /workspaces/evse-controller/
 RUN /root/.local/bin/poetry install
 
 EXPOSE 5000
