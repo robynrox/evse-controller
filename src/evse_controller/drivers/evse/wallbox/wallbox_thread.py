@@ -171,6 +171,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         """Check if we need to handle communication failures and do so if appropriate"""
         with self._state_lock:
             consecutive_errors = self._state.consecutive_connection_errors
+            current_state = self._state.evse_state
+            
+        # Don't attempt reset if we're in UNCONTROLLED state
+        if current_state == EvseState.UNCONTROLLED:
+            # In UNCONTROLLED state, we don't want to interfere with the Wallbox
+            # so we don't attempt automatic resets
+            return
             
         if consecutive_errors < self._reset_attempt_threshold:
             return
@@ -194,6 +201,11 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""
         with self._state_lock:
+            # Don't attempt reset if we're in UNCONTROLLED state
+            if self._state.evse_state == EvseState.UNCONTROLLED:
+                warning("Skipping comms failure handling in UNCONTROLLED state - not attempting API reset")
+                return False
+            
             self._state.evse_state = EvseState.COMMS_FAILURE
 
         if not all([self._wallbox_username, self._wallbox_password, self._wallbox_serial]):
@@ -247,13 +259,21 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
-                # Direct construction instead of using from_modbus_register
-                new_state = EvseState(state_reg)
-                # Update power model with new current
-                if new_state != self._state.evse_state or current != self._state.current:
-                    self._power_model.set_current(float(current))
+                # If we're in UNCONTROLLED state, we don't override it with the Modbus state
+                # but we still update other values like battery level and current
+                if self._state.evse_state == EvseState.UNCONTROLLED:
+                    # In UNCONTROLLED state, we preserve our internal state but still update
+                    # battery level and current for monitoring purposes
+                    pass
+                else:
+                    # Direct construction instead of using from_modbus_register
+                    new_state = EvseState(state_reg)
+                    # Update power model with new current
+                    if new_state != self._state.evse_state or current != self._state.current:
+                        self._power_model.set_current(float(current))
+                    
+                    self._state.evse_state = new_state
                 
-                self._state.evse_state = new_state
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg
                 if self._state.evse_state == EvseState.PAUSED:
@@ -266,11 +286,23 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
         except ConnectionError:
             with self._state_lock:
+                # Even in UNCONTROLLED state, we still count communication errors
+                # but we don't change the state to COMMS_FAILURE
                 self._state.consecutive_connection_errors += 1
+                # Preserve UNCONTROLLED state even when there are communication errors
+                if self._state.evse_state != EvseState.UNCONTROLLED:
+                    # Only set to COMMS_FAILURE if we're not in UNCONTROLLED state
+                    if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
+                        self._state.evse_state = EvseState.COMMS_FAILURE
             raise  # Re-raise ConnectionError to be caught by the controller
         except Exception as e:
             with self._state_lock:
                 self._state.consecutive_connection_errors += 1
+                # Preserve UNCONTROLLED state even when there are communication errors
+                if self._state.evse_state != EvseState.UNCONTROLLED:
+                    # Only set to COMMS_FAILURE if we're not in UNCONTROLLED state
+                    if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
+                        self._state.evse_state = EvseState.COMMS_FAILURE
             error(f"Error reading EVSE state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
 
@@ -306,8 +338,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 current_value = self._state.current
                 current_state = self._state.evse_state
                 
+                # If we're in UNCONTROLLED state, any SET_CURRENT command should transition us out
+                if current_state == EvseState.UNCONTROLLED:
+                    info("Transitioning from UNCONTROLLED to controlled state")
+                    # When transitioning from UNCONTROLLED, we need to actually send the command
+                    # to change the state, so we don't return early
+                    # Also update our internal state tracking to indicate we're no longer UNCONTROLLED
+                    self._state.evse_state = EvseState.UNKNOWN  # Will be updated by _update_state after command
                 # If current value is the same and state is appropriate, no need to change
-                if current_value == cmd.value and (
+                elif current_value == cmd.value and (
                     (cmd.value > 0 and current_state == EvseState.CHARGING) or
                     (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
                     (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
@@ -325,6 +364,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
             self._set_current(cmd.value)
+        elif cmd.command == EvseCommand.SET_UNCONTROLLED:
+            self._set_uncontrolled()
 
     def _set_current(self, current: int):
         try:
@@ -362,6 +403,23 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 # (don't do self._client.close())
             except:
                 pass
+
+    def _set_uncontrolled(self):
+        """Put the Wallbox in an uncontrolled state where it won't respond to Modbus commands
+        until a standard state is requested."""
+        try:
+            with self._state_lock:
+                # Set the state to UNCONTROLLED in our internal state tracking
+                self._state.evse_state = EvseState.UNCONTROLLED
+                info("Wallbox set to UNCONTROLLED state - Modbus control temporarily disabled")
+                
+                # We don't actually send any Modbus commands to the Wallbox for this state
+                # as the intention is to stop interacting with it via Modbus
+                # The state change is purely internal to our tracking
+                
+        except Exception as e:
+            error(f"Error setting uncontrolled state: {str(e)}")
+            raise ConnectionError(f"Communication error: {str(e)}")
 
     def _handle_error(self):
         # Error handling and auto-reset logic
