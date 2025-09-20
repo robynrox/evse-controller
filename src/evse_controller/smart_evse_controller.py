@@ -111,8 +111,8 @@ def print_usage_instructions():
     """Print usage instructions for the text-based interface."""
     print("\nAvailable commands:")
     print("p | pause: Enter pause state")
-    print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
-    print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
+    print("c | charge: Enter full charge state")
+    print("d | discharge: Enter full discharge state")
     print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
     print("g | go | octgo: Switch to Octopus Go tariff")
     print("f | flux: Switch to Octopus Flux tariff")
