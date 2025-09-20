@@ -44,6 +44,7 @@ class ExecState(Enum):
     POWER_HOME = 7
     BALANCE = 8
     PAUSE_UNTIL_DISCONNECT = 9
+    UNCONTROLLED = 10
 
 
 # Initialize core components at module level
@@ -104,6 +105,28 @@ def handle_list_schedule_command():
     print("Scheduled events:")
     for event in events:
         print(f"- {event.timestamp.isoformat()} -> {event.state}")
+
+
+def print_usage_instructions():
+    """Print usage instructions for the text-based interface."""
+    print("\nAvailable commands:")
+    print("p | pause: Enter pause state")
+    print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
+    print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
+    print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
+    print("g | go | octgo: Switch to Octopus Go tariff")
+    print("f | flux: Switch to Octopus Flux tariff")
+    print("cosy: Switch to Cosy Octopus tariff")
+    print("u | unplug: Allow the vehicle to be unplugged")
+    print("z | uncontrolled: Allow EVSE to operate independently without Modbus control")
+    print("solar: Enter solar-only charging mode")
+    print("power-home: Enter power home state")
+    print("balance: Enter power balance state")
+    print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
+    print("           (current is expressed in Amps)")
+    print("schedule YYYY-MM-DDTHH:MM:SS state: Schedule a state change at a specific time")
+    print("list-schedule: List all scheduled events")
+
 
 _shutdown_event = threading.Event()
 
@@ -207,6 +230,11 @@ def main():
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
+                case "z" | "uncontrolled":
+                    info("Entering uncontrolled state - EVSE will operate independently")
+                    evseController.setUncontrolled()
+                    execState = ExecState.UNCONTROLLED
+                    nextStateCheck = time.time()
                 case "solar":
                     info("Entering solar charging state")
                     execState = ExecState.SOLAR
@@ -220,19 +248,7 @@ def main():
                     execState = ExecState.BALANCE
                     nextStateCheck = time.time()
                 case "help" | "h" | "?":
-                    print("\nAvailable commands:")
-                    print("p | pause: Enter pause state")
-                    print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
-                    print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
-                    print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
-                    print("g | go | octgo: Switch to Octopus Go tariff")
-                    print("f | flux: Switch to Octopus Flux tariff")
-                    print("cosy: Switch to Cosy Octopus tariff")
-                    print("u | unplug: Allow the vehicle to be unplugged")
-                    print("solar: Enter solar-only charging mode")
-                    print("power-home: Enter power home state")
-                    print("balance: Enter power balance state")
-                    print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
+                    print_usage_instructions()
                 case _:
                     try:
                         currentAmps = int(command)
@@ -247,22 +263,7 @@ def main():
                             evseController.setControlState(ControlState.DORMANT)
                         execState = ExecState.FIXED
                     except ValueError:
-                        print("You can enter the following to change state:")
-                        print("p | pause: Enter pause state for ten minutes then resume smart tariff controller state")
-                        print("c | charge: Enter full charge state for one hour then resume smart tariff controller state")
-                        print("d | discharge: Enter full discharge state for one hour then resume smart tariff controller state")
-                        print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
-                        print("g | go | octgo: Switch to Octopus Go tariff")
-                        print("f | flux: Switch to Octopus Flux tariff")
-                        print("cosy: Switch to Cosy Octopus tariff")
-                        print("u | unplug: Allow the vehicle to be unplugged")
-                        print("solar: Enter solar-only charging mode")
-                        print("power-home: Enter power home state")
-                        print("balance: Enter power balance state")
-                        print("[current]: Enter fixed current state (positive to charge, negative to discharge)")
-                        print("           (current is expressed in Amps)")
-                        print("schedule YYYY-MM-DDTHH:MM:SS state: Schedule a state change at a specific time")
-                        print("list-schedule: List all scheduled events")
+                        print_usage_instructions()
         except queue.Empty:
             pass
 
@@ -285,6 +286,12 @@ def main():
                         warning("Internal error: No previous state found, falling back to PAUSE mode")
                         execState = ExecState.PAUSE
                     previous_state = None
+
+            elif execState == ExecState.UNCONTROLLED:
+                # In UNCONTROLLED state, we don't send any control commands to the EVSE
+                # The EVSE operates independently via the setUncontrolled() method
+                info("CONTROL UNCONTROLLED - EVSE operating independently")
+                # No action needed - the EVSE is already in uncontrolled mode
 
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
                 info(f"CONTROL {execState}")
