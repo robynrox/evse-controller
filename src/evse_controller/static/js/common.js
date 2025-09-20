@@ -6,6 +6,7 @@ const VALID_STATES = {
     'flux': 'Octopus Flux tariff',
     'cosy': 'Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
+    'uncontrolled': 'Allow EVSE to operate independently without Modbus control',
     'solar': 'Solar-only charging mode',
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'

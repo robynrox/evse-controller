@@ -14,12 +14,14 @@ class EvseState(Enum):
     ERROR = 7
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
+    UNCONTROLLED = 997
     COMMS_FAILURE = 998
     UNKNOWN = 999
 
 
 class EvseCommand(Enum):
     SET_CURRENT = auto()
+    SET_UNCONTROLLED = auto()
 
 
 @dataclass
