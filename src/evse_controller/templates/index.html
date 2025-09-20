@@ -16,7 +16,9 @@
             OCTGO: "/static/images/Go_black.svg",
             FLUX: "/static/images/Flux_black.svg",
             COSY: "/static/images/Cosy_black.svg",
-            UNCONTROLLED: "/static/images/Uncontrolled_black.svg"
+            UNCONTROLLED: "/static/images/Uncontrolled_black.svg",
+            OCPP_ON: "/static/images/OCPP_ON_black.svg",
+            OCPP_OFF: "/static/images/OCPP_OFF_black.svg"
         };
 </script>
 <style>
@@ -104,6 +106,12 @@
     <button class="svg-button" onclick="sendCommand('uncontrolled')" title="Allow EVSE to operate independently without Modbus control">
         <img src="" id="uncontrolled-icon" alt="Uncontrolled Mode">
     </button>
+    <button class="svg-button" onclick="sendCommand('enable-ocpp')" title="Enable OCPP connectivity for the Wallbox">
+        <img src="" id="ocpp-on-icon" alt="OCPP ON">
+    </button>
+    <button class="svg-button" onclick="sendCommand('disable-ocpp')" title="Disable OCPP connectivity for the Wallbox">
+        <img src="" id="ocpp-off-icon" alt="OCPP OFF">
+    </button>
     <button onclick="toggleLegend()">Show/Hide Command Reference</button>
 </div>
 
@@ -176,6 +184,16 @@
                 <img src="" id="legend-uncontrolled-icon" alt="Uncontrolled icon">
                 <div class="legend-text">
                     <strong>Uncontrolled:</strong> Allow EVSE to operate independently without Modbus control
+                </div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-text">
+                    <strong>Enable OCPP:</strong> Enable OCPP connectivity for the Wallbox
+                </div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-text">
+                    <strong>Disable OCPP:</strong> Disable OCPP connectivity for the Wallbox
                 </div>
             </div>
         </div>
@@ -336,6 +354,8 @@
         document.getElementById('flux-icon').src = ICONS.FLUX;
         document.getElementById('cosy-icon').src = ICONS.COSY;
         document.getElementById('uncontrolled-icon').src = ICONS.UNCONTROLLED;
+        document.getElementById('ocpp-on-icon').src = ICONS.OCPP_ON;
+        document.getElementById('ocpp-off-icon').src = ICONS.OCPP_OFF;
 
         // Set legend icons
         document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;

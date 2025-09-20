@@ -42,6 +42,8 @@ VALID_COMMANDS = {
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
     'uncontrolled': 'Allow EVSE to operate independently without Modbus control',
+    'enable-ocpp': 'Enable OCPP connectivity for the Wallbox',
+    'disable-ocpp': 'Disable OCPP connectivity for the Wallbox',
     'solar': 'Solar-only charging mode',
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'
