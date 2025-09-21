@@ -259,12 +259,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
-                # If we're in UNCONTROLLED state, we don't override it with the Modbus state
+                # If we're in UNCONTROLLED state, we don't override our tracked state with the Modbus state
                 # but we still update other values like battery level and current
                 if self._state.evse_state == EvseState.UNCONTROLLED:
                     # In UNCONTROLLED state, we preserve our internal state but still update
                     # battery level and current for monitoring purposes
-                    pass
+                    # We also store the actual Modbus state for when we transition out of UNCONTROLLED
+                    self._state._actual_modbus_state = EvseState(state_reg)
                 else:
                     # Direct construction instead of using from_modbus_register
                     new_state = EvseState(state_reg)
@@ -343,8 +344,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     info("Transitioning from UNCONTROLLED to controlled state")
                     # When transitioning from UNCONTROLLED, we need to actually send the command
                     # to change the state, so we don't return early
-                    # Also update our internal state tracking to indicate we're no longer UNCONTROLLED
-                    self._state.evse_state = EvseState.UNKNOWN  # Will be updated by _update_state after command
+                    # Use the actual Modbus state that we've been tracking
+                    self._state.evse_state = self._state._actual_modbus_state
                 # If current value is the same and state is appropriate, no need to change
                 elif current_value == cmd.value and (
                     (cmd.value > 0 and current_state == EvseState.CHARGING) or
@@ -409,6 +410,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         until a standard state is requested."""
         try:
             with self._state_lock:
+                # Store the current state as the actual Modbus state before transitioning to UNCONTROLLED
+                self._state._actual_modbus_state = self._state.evse_state
                 # Set the state to UNCONTROLLED in our internal state tracking
                 self._state.evse_state = EvseState.UNCONTROLLED
                 info("Wallbox set to UNCONTROLLED state - Modbus control temporarily disabled")

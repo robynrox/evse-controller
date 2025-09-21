@@ -40,6 +40,8 @@ class EvseAsyncState:
     consecutive_connection_errors: int = 0
     power_watts: float = 0.0
     power_factor: float = 1.0
+    # Field to store actual Modbus state when in UNCONTROLLED mode
+    _actual_modbus_state: EvseState = EvseState.UNKNOWN
 
 
 # Define a TypeVar for the EvseThreadInterface
