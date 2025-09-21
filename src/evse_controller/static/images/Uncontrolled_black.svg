@@ -1,12 +1,17 @@
-<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background circle -->
-  <circle cx="100" cy="100" r="90" fill="white" stroke="black" stroke-width="4"/>
-  
-  <!-- Large "U" letter in the center -->
-  <text x="100" y="125" font-family="Arial, sans-serif" font-size="80" font-weight="bold" 
-        text-anchor="middle" fill="black">U</text>
-  
-  <!-- Small "nc" subscript to indicate "uncontrolled" -->
-  <text x="135" y="145" font-family="Arial, sans-serif" font-size="20" font-weight="bold" 
-        text-anchor="middle" fill="black">nc</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
+  <defs>
+    <style>
+      .label {font-family: Arial, sans-serif; font-size: 150px; font-weight: bold; text-anchor: middle; alignment-baseline: middle;}
+      .c{fill:none;}
+    </style>
+  </defs>
+  <g id="a">
+    <!-- OCPP text -->
+    <text x="250" y="175" class="label" fill="black">CTL</text>
+    <!-- ON text -->
+    <text x="250" y="325" class="label" fill="black">OFF</text>
+  </g>
+  <g id="b">
+    <rect class="c" width="595.27559" height="595.27559"/>
+  </g>
 </svg>
