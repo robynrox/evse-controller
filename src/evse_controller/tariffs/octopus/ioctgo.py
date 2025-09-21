@@ -173,7 +173,7 @@ class IntelligentOctopusGoTariff(Tariff):
             
             if target_amps > 0:
                 # Use calculated discharge current but load follow if more current needed
-                return ControlState.LOAD_FOLLOW_DISCHARGE, int(target_amps), self.MAX_DISCHARGE_CURRENT, f"IOCTGO Smart discharge: {target_amps:.1f}A to hit target SoC"
+                return ControlState.DISCHARGE, int(target_amps), self.MAX_DISCHARGE_CURRENT, f"IOCTGO Smart discharge: {target_amps:.1f}A to hit target SoC"
             else:
                 # No discharge needed, use load follow
                 return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO Day rate: load follow discharge (no excess SoC)"
