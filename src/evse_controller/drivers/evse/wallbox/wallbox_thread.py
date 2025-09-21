@@ -335,6 +335,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _execute_command(self, cmd: EvseCommandData):
         if cmd.command == EvseCommand.SET_CURRENT:
             # First check if the requested current matches current state
+            was_in_uncontrolled_state = False
             with self._state_lock:
                 current_value = self._state.current
                 current_state = self._state.evse_state
@@ -346,21 +347,31 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     # to change the state, so we don't return early
                     # Use the actual Modbus state that we've been tracking
                     self._state.evse_state = self._state._actual_modbus_state
-                # If current value is the same and state is appropriate, no need to change
-                elif current_value == cmd.value and (
-                    (cmd.value > 0 and current_state == EvseState.CHARGING) or
-                    (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
-                    (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
-                ):
-                    debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
-                    return
+                    was_in_uncontrolled_state = True
 
-            # Check if we're allowed to change state yet
+            # Check if we're allowed to change state yet (even when transitioning from UNCONTROLLED)
             if time.time() < self._next_state_change_allowed:
                 warning(f"Command received before minimum delay period elapsed. "
                     f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
                 return
 
+            # For non-UNCONTROLLED states, check if current value is the same and state is appropriate
+            if not was_in_uncontrolled_state:
+                with self._state_lock:
+                    current_value = self._state.current
+                    current_state = self._state.evse_state
+                    
+                    if current_value == cmd.value and (
+                        (cmd.value > 0 and current_state == EvseState.CHARGING) or
+                        (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
+                        (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
+                    ):
+                        debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
+                        return
+
+            # Set next state change time based on the current and new values
+            with self._state_lock:
+                current_value = self._state.current
             self._next_state_change_allowed = self._calculate_next_state_change_time(
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
