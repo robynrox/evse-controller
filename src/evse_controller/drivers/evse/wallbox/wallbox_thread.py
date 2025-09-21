@@ -259,12 +259,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
-                # If we're in UNCONTROLLED state, we don't override it with the Modbus state
+                # If we're in UNCONTROLLED state, we don't override our tracked state with the Modbus state
                 # but we still update other values like battery level and current
                 if self._state.evse_state == EvseState.UNCONTROLLED:
                     # In UNCONTROLLED state, we preserve our internal state but still update
                     # battery level and current for monitoring purposes
-                    pass
+                    # We also store the actual Modbus state for when we transition out of UNCONTROLLED
+                    self._state._actual_modbus_state = EvseState(state_reg)
                 else:
                     # Direct construction instead of using from_modbus_register
                     new_state = EvseState(state_reg)
@@ -334,6 +335,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _execute_command(self, cmd: EvseCommandData):
         if cmd.command == EvseCommand.SET_CURRENT:
             # First check if the requested current matches current state
+            was_in_uncontrolled_state = False
             with self._state_lock:
                 current_value = self._state.current
                 current_state = self._state.evse_state
@@ -343,29 +345,41 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     info("Transitioning from UNCONTROLLED to controlled state")
                     # When transitioning from UNCONTROLLED, we need to actually send the command
                     # to change the state, so we don't return early
-                    # Also update our internal state tracking to indicate we're no longer UNCONTROLLED
-                    self._state.evse_state = EvseState.UNKNOWN  # Will be updated by _update_state after command
-                # If current value is the same and state is appropriate, no need to change
-                elif current_value == cmd.value and (
-                    (cmd.value > 0 and current_state == EvseState.CHARGING) or
-                    (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
-                    (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
-                ):
-                    debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
-                    return
+                    # Use the actual Modbus state that we've been tracking
+                    self._state.evse_state = self._state._actual_modbus_state
+                    was_in_uncontrolled_state = True
 
-            # Check if we're allowed to change state yet
+            # Check if we're allowed to change state yet (even when transitioning from UNCONTROLLED)
             if time.time() < self._next_state_change_allowed:
                 warning(f"Command received before minimum delay period elapsed. "
                     f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
                 return
 
+            # For non-UNCONTROLLED states, check if current value is the same and state is appropriate
+            if not was_in_uncontrolled_state:
+                with self._state_lock:
+                    current_value = self._state.current
+                    current_state = self._state.evse_state
+                    
+                    if current_value == cmd.value and (
+                        (cmd.value > 0 and current_state == EvseState.CHARGING) or
+                        (cmd.value < 0 and current_state == EvseState.DISCHARGING) or
+                        (cmd.value == 0 and current_state in [EvseState.PAUSED, EvseState.DISCONNECTED])
+                    ):
+                        debug(f"Ignoring command as current state ({current_value}A, {current_state}) already matches desired state ({cmd.value}A)")
+                        return
+
+            # Set next state change time based on the current and new values
+            with self._state_lock:
+                current_value = self._state.current
             self._next_state_change_allowed = self._calculate_next_state_change_time(
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
             self._set_current(cmd.value)
         elif cmd.command == EvseCommand.SET_UNCONTROLLED:
             self._set_uncontrolled()
+        elif cmd.command == EvseCommand.CLEAR_UNCONTROLLED:
+            self._clear_uncontrolled()
 
     def _set_current(self, current: int):
         try:
@@ -409,6 +423,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         until a standard state is requested."""
         try:
             with self._state_lock:
+                # Store the current state as the actual Modbus state before transitioning to UNCONTROLLED
+                self._state._actual_modbus_state = self._state.evse_state
                 # Set the state to UNCONTROLLED in our internal state tracking
                 self._state.evse_state = EvseState.UNCONTROLLED
                 info("Wallbox set to UNCONTROLLED state - Modbus control temporarily disabled")
@@ -419,6 +435,28 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 
         except Exception as e:
             error(f"Error setting uncontrolled state: {str(e)}")
+            raise ConnectionError(f"Communication error: {str(e)}")
+
+    def _clear_uncontrolled(self):
+        """Clear the UNCONTROLLED state and restore the actual Modbus state.
+        
+        This method transitions the Wallbox thread from UNCONTROLLED state to the actual
+        Modbus state that was being tracked while in UNCONTROLLED mode.
+        """
+        try:
+            with self._state_lock:
+                # Check if we're actually in UNCONTROLLED state
+                if self._state.evse_state != EvseState.UNCONTROLLED:
+                    debug("CLEAR_UNCONTROLLED command received but not in UNCONTROLLED state - ignoring")
+                    return
+                
+                # Restore the actual Modbus state that we've been tracking
+                restored_state = self._state._actual_modbus_state
+                self._state.evse_state = restored_state
+                info(f"Wallbox cleared UNCONTROLLED state - restored to {restored_state}")
+                
+        except Exception as e:
+            error(f"Error clearing uncontrolled state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
 
     def _handle_error(self):
