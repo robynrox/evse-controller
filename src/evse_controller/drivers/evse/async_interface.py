@@ -22,6 +22,7 @@ class EvseState(Enum):
 class EvseCommand(Enum):
     SET_CURRENT = auto()
     SET_UNCONTROLLED = auto()
+    CLEAR_UNCONTROLLED = auto()
 
 
 @dataclass

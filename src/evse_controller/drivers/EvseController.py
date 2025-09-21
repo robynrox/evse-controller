@@ -815,6 +815,10 @@ class EvseController(PowerMonitorObserver):
         """Set the control state and log the transition."""
         if state != self.state:
             info(f"CONTROL Setting control state to {state}")
+            # If we're transitioning from UNCONTROLLED state to any other state,
+            # we need to send a command to the Wallbox thread to take control
+            transitioning_from_uncontrolled = (self.state == ControlState.UNCONTROLLED)
+            
             self.state = state
             match state:
                 case ControlState.DORMANT:
@@ -843,6 +847,18 @@ class EvseController(PowerMonitorObserver):
                     # In UNCONTROLLED state, we don't set any current ranges
                     # The EVSE operates independently
                     pass
+            
+            # If we're transitioning from UNCONTROLLED state, send a command to take control
+            if transitioning_from_uncontrolled and state != ControlState.UNCONTROLLED:
+                # Send a CLEAR_UNCONTROLLED command to the Wallbox thread
+                try:
+                    cmd = EvseCommandData(command=EvseCommand.CLEAR_UNCONTROLLED)
+                    if not self.evse.send_command(cmd):
+                        raise RuntimeError("Failed to send CLEAR_UNCONTROLLED command to EVSE thread")
+                    info("Sent CLEAR_UNCONTROLLED command to Wallbox thread")
+                except Exception as e:
+                    error(f"Failed to send CLEAR_UNCONTROLLED command: {e}")
+            
             if state != ControlState.UNCONTROLLED:
                 info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
             else:

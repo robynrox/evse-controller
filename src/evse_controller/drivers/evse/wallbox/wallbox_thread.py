@@ -378,6 +378,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             self._set_current(cmd.value)
         elif cmd.command == EvseCommand.SET_UNCONTROLLED:
             self._set_uncontrolled()
+        elif cmd.command == EvseCommand.CLEAR_UNCONTROLLED:
+            self._clear_uncontrolled()
 
     def _set_current(self, current: int):
         try:
@@ -433,6 +435,28 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 
         except Exception as e:
             error(f"Error setting uncontrolled state: {str(e)}")
+            raise ConnectionError(f"Communication error: {str(e)}")
+
+    def _clear_uncontrolled(self):
+        """Clear the UNCONTROLLED state and restore the actual Modbus state.
+        
+        This method transitions the Wallbox thread from UNCONTROLLED state to the actual
+        Modbus state that was being tracked while in UNCONTROLLED mode.
+        """
+        try:
+            with self._state_lock:
+                # Check if we're actually in UNCONTROLLED state
+                if self._state.evse_state != EvseState.UNCONTROLLED:
+                    debug("CLEAR_UNCONTROLLED command received but not in UNCONTROLLED state - ignoring")
+                    return
+                
+                # Restore the actual Modbus state that we've been tracking
+                restored_state = self._state._actual_modbus_state
+                self._state.evse_state = restored_state
+                info(f"Wallbox cleared UNCONTROLLED state - restored to {restored_state}")
+                
+        except Exception as e:
+            error(f"Error clearing uncontrolled state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
 
     def _handle_error(self):
