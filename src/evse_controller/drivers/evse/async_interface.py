@@ -14,12 +14,15 @@ class EvseState(Enum):
     ERROR = 7
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
+    UNCONTROLLED = 997
     COMMS_FAILURE = 998
     UNKNOWN = 999
 
 
 class EvseCommand(Enum):
     SET_CURRENT = auto()
+    SET_UNCONTROLLED = auto()
+    CLEAR_UNCONTROLLED = auto()
 
 
 @dataclass
@@ -38,6 +41,8 @@ class EvseAsyncState:
     consecutive_connection_errors: int = 0
     power_watts: float = 0.0
     power_factor: float = 1.0
+    # Field to store actual Modbus state when in UNCONTROLLED mode
+    _actual_modbus_state: EvseState = EvseState.UNKNOWN
 
 
 # Define a TypeVar for the EvseThreadInterface

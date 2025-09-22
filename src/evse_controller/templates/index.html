@@ -5,18 +5,19 @@
 <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
 <script>
     // Icon filename constants
-    const ICONS = {
-        UNPLUG: "/static/images/Pause_to_remove_plug_black.svg",
-        SOLAR: "/static/images/S2V_-_Solar_only_charging_black.svg",
-        CHARGE: "/static/images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg",
-        DISCHARGE: "/static/images/V2G_-_Discharge_black.svg",
-        POWER_HOME: "/static/images/V2H_-_Battery_to_House_black.svg",
-        BALANCE: "/static/images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg",
-        PAUSE: "/static/images/On-Off_black.svg",
-        OCTGO: "/static/images/Go_black.svg",
-        FLUX: "/static/images/Flux_black.svg",
-        COSY: "/static/images/Cosy_black.svg"
-    };
+        const ICONS = {
+            UNPLUG: "/static/images/Pause_to_remove_plug_black.svg",
+            SOLAR: "/static/images/S2V_-_Solar_only_charging_black.svg",
+            CHARGE: "/static/images/S2V_G2V_-_Solar_and_Grid_to_Battery_black.svg",
+            DISCHARGE: "/static/images/V2G_-_Discharge_black.svg",
+            POWER_HOME: "/static/images/V2H_-_Battery_to_House_black.svg",
+            BALANCE: "/static/images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg",
+            PAUSE: "/static/images/On-Off_black.svg",
+            OCTGO: "/static/images/Go_black.svg",
+            FLUX: "/static/images/Flux_black.svg",
+            COSY: "/static/images/Cosy_black.svg",
+            UNCONTROLLED: "/static/images/Uncontrolled_black.svg"
+        };
 </script>
 <style>
     /* Override the default body constraints for the dashboard */
@@ -123,7 +124,10 @@
     <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
         <img src="" id="cosy-icon" alt="Cosy Octopus">
     </button>
-    <button onclick="toggleLegend()">Command References</button>
+    <button class="svg-button" onclick="sendCommand('uncontrolled')" title="Allow EVSE to operate independently without Modbus control">
+        <img src="" id="uncontrolled-icon" alt="Uncontrolled Mode">
+    </button>
+    <button onclick="toggleLegend()">Show/Hide Command Reference</button>
 </div>
 
 <div class="legend-container">
@@ -189,6 +193,12 @@
                 <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
                 <div class="legend-text">
                     <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
+                </div>
+            </div>
+            <div class="legend-item">
+                <img src="" id="legend-uncontrolled-icon" alt="Uncontrolled icon">
+                <div class="legend-text">
+                    <strong>Uncontrolled:</strong> Allow EVSE to operate independently without Modbus control
                 </div>
             </div>
         </div>
@@ -372,6 +382,7 @@
         document.getElementById('octgo-icon').src = ICONS.OCTGO;
         document.getElementById('flux-icon').src = ICONS.FLUX;
         document.getElementById('cosy-icon').src = ICONS.COSY;
+        document.getElementById('uncontrolled-icon').src = ICONS.UNCONTROLLED;
 
         // Set legend icons
         document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
@@ -384,6 +395,7 @@
         document.getElementById('legend-octgo-icon').src = ICONS.OCTGO;
         document.getElementById('legend-flux-icon').src = ICONS.FLUX;
         document.getElementById('legend-cosy-icon').src = ICONS.COSY;
+        document.getElementById('legend-uncontrolled-icon').src = ICONS.UNCONTROLLED;
     });
 
     async function sendCommand(command) {
