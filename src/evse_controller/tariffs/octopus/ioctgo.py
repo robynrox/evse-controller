@@ -172,7 +172,7 @@ class IntelligentOctopusGoTariff(Tariff):
             target_amps = self.calculate_target_discharge_current(battery_level, dayMinute)
             
             if target_amps > 0:
-                # Use calculated discharge current but load follow if more current needed
+                # Use calculated discharge current with DISCHARGE mode to maintain minimum level
                 return ControlState.DISCHARGE, int(target_amps), self.MAX_DISCHARGE_CURRENT, f"IOCTGO Smart discharge: {target_amps:.1f}A to hit target SoC"
             else:
                 # No discharge needed, use load follow
