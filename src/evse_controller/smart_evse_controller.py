@@ -46,6 +46,21 @@ class ExecState(Enum):
     PAUSE_UNTIL_DISCONNECT = 9
     UNCONTROLLED = 10
 
+# Global variable to track OCPP state
+ocpp_enabled = False
+
+def can_transition_from_uncontrolled():
+    """Check if we can transition from UNCONTROLLED state.
+    
+    Returns:
+        bool: True if transition is allowed, False otherwise
+    """
+    global execState, ocpp_enabled
+    if execState == ExecState.UNCONTROLLED and ocpp_enabled:
+        print("Error: Cannot exit UNCONTROLLED state while OCPP is enabled. Disable OCPP first.")
+        return False
+    return True
+
 
 # Initialize core components at module level
 tariffManager = TariffManager()
@@ -120,6 +135,8 @@ def print_usage_instructions():
     print("cosy: Switch to Cosy Octopus tariff")
     print("u | unplug: Allow the vehicle to be unplugged")
     print("z | uncontrolled: Allow EVSE to operate independently without Modbus control")
+    print("enable-ocpp: Enable OCPP connectivity for the Wallbox")
+    print("disable-ocpp: Disable OCPP connectivity for the Wallbox")
     print("solar: Enter solar-only charging mode")
     print("power-home: Enter power home state")
     print("balance: Enter power balance state")
@@ -189,70 +206,103 @@ def main():
             command = execQueue.get(True, 1)
             match command.lower():
                 case "p" | "pause":
-                    info("Entering pause state")
-                    execState = ExecState.PAUSE
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering pause state")
+                        execState = ExecState.PAUSE
+                        nextStateCheck = time.time()
                 case "c" | "charge":
-                    info("Entering charge state")
-                    execState = ExecState.CHARGE
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering charge state")
+                        execState = ExecState.CHARGE
+                        nextStateCheck = time.time()
                 case "d" | "discharge":
-                    info("Entering discharge state")
-                    execState = ExecState.DISCHARGE
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering discharge state")
+                        execState = ExecState.DISCHARGE
+                        nextStateCheck = time.time()
                 case "s" | "smart":
-                    info("Entering smart tariff controller state")
-                    execState = ExecState.SMART
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering smart tariff controller state")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
-                    info("Switching to Octopus Go tariff")
-                    tariffManager.set_tariff("OCTGO")
-                    execState = ExecState.SMART
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Switching to Octopus Go tariff")
+                        tariffManager.set_tariff("OCTGO")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
                 case "ioctgo":
-                    info("Switching to Intelligent Octopus Go tariff")
-                    tariffManager.set_tariff("IOCTGO")
-                    execState = ExecState.SMART
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Switching to Intelligent Octopus Go tariff")
+                        tariffManager.set_tariff("IOCTGO")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
                 case "f" | "flux":
-                    info("Switching to Octopus Flux tariff")
-                    tariffManager.set_tariff("FLUX")
-                    execState = ExecState.SMART
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Switching to Octopus Flux tariff")
+                        tariffManager.set_tariff("FLUX")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
                 case "cosy":
-                    info("Switching to Cosy Octopus tariff")
-                    tariffManager.set_tariff("COSY")
-                    execState = ExecState.SMART
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Switching to Cosy Octopus tariff")
+                        tariffManager.set_tariff("COSY")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
                 case "schedule":
                     handle_schedule_command(command.split())
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
-                    if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
-                        info("Entering pause-until-disconnect state")
-                        previous_state = execState
-                        execState = ExecState.PAUSE_UNTIL_DISCONNECT
-                        nextStateCheck = time.time()
-                    else:
-                        debug("Already in pause-until-disconnect state, ignoring command")
+                    if can_transition_from_uncontrolled():
+                        if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
+                            info("Entering pause-until-disconnect state")
+                            previous_state = execState
+                            execState = ExecState.PAUSE_UNTIL_DISCONNECT
+                            nextStateCheck = time.time()
+                        else:
+                            debug("Already in pause-until-disconnect state, ignoring command")
                 case "z" | "uncontrolled":
                     info("Entering uncontrolled state - EVSE will operate independently")
                     evseController.setUncontrolled()
                     execState = ExecState.UNCONTROLLED
                     nextStateCheck = time.time()
+                case "enable-ocpp":
+                    info("Enabling OCPP connectivity for the Wallbox")
+                    if execState != ExecState.UNCONTROLLED:
+                        print("Error: OCPP can only be enabled when EVSE is in UNCONTROLLED state")
+                    else:
+                        success = evseController.enableOcpp()
+                        if success:
+                            ocpp_enabled = True
+                            print("OCPP enabled successfully")
+                        else:
+                            print("Failed to enable OCPP")
+                    # Stay in current state
+                case "disable-ocpp":
+                    info("Disabling OCPP connectivity for the Wallbox")
+                    success = evseController.disableOcpp()
+                    if success:
+                        ocpp_enabled = False
+                        print("OCPP disabled successfully")
+                    else:
+                        print("Failed to disable OCPP")
+                    # Stay in current state
                 case "solar":
-                    info("Entering solar charging state")
-                    execState = ExecState.SOLAR
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering solar charging state")
+                        execState = ExecState.SOLAR
+                        nextStateCheck = time.time()
                 case "power-home" | "ph":
-                    info("Entering power home state")
-                    execState = ExecState.POWER_HOME
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering power home state")
+                        execState = ExecState.POWER_HOME
+                        nextStateCheck = time.time()
                 case "balance" | "b":
-                    info("Entering power balance state")
-                    execState = ExecState.BALANCE
-                    nextStateCheck = time.time()
+                    if can_transition_from_uncontrolled():
+                        info("Entering power balance state")
+                        execState = ExecState.BALANCE
+                        nextStateCheck = time.time()
                 case "help" | "h" | "?":
                     print_usage_instructions()
                 case _:
@@ -298,6 +348,8 @@ def main():
                 # The EVSE operates independently via the setUncontrolled() method
                 info("CONTROL UNCONTROLLED - EVSE operating independently")
                 # No action needed - the EVSE is already in uncontrolled mode
+                # OCPP state tracking is handled in command parsing to prevent exiting 
+                # UNCONTROLLED when OCPP is enabled
 
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
                 info(f"CONTROL {execState}")

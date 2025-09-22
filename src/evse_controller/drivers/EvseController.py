@@ -949,6 +949,60 @@ class EvseController(PowerMonitorObserver):
         except Exception as e:
             error(f"Failed to set uncontrolled state: {e}")
 
+    def enableOcpp(self):
+        """Enable OCPP connectivity for the Wallbox.
+        
+        This method can only be called when the EVSE is in UNCONTROLLED state.
+        """
+        try:
+            # Check if EVSE is in UNCONTROLLED state
+            evse_state = self.evse.get_state()
+            if evse_state.evse_state != EvseState.UNCONTROLLED:
+                error("OCPP can only be enabled when EVSE is in UNCONTROLLED state")
+                return False
+                
+            # Enable OCPP connectivity via the Wallbox API
+            from evse_controller.utils.config import config
+            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+            
+            wallbox_api = WallboxAPIWithOCPP(
+                config.WALLBOX_USERNAME,
+                config.WALLBOX_PASSWORD
+            )
+            
+            response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
+            
+            info(f"OCPP enabled successfully: {response}")
+            return True
+            
+        except Exception as e:
+            error(f"Failed to enable OCPP: {e}")
+            return False
+
+    def disableOcpp(self):
+        """Disable OCPP connectivity for the Wallbox.
+        
+        This method must be called before exiting UNCONTROLLED state if OCPP was enabled.
+        """
+        try:
+            # Disable OCPP connectivity via the Wallbox API
+            from evse_controller.utils.config import config
+            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+            
+            wallbox_api = WallboxAPIWithOCPP(
+                config.WALLBOX_USERNAME,
+                config.WALLBOX_PASSWORD
+            )
+            
+            response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
+            
+            info(f"OCPP disabled successfully: {response}")
+            return True
+            
+        except Exception as e:
+            error(f"Failed to disable OCPP: {e}")
+            return False
+
     def stop(self):
         """Stop the controller and cleanup resources."""
         if self._shutdown_event.is_set():

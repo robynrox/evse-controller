@@ -8,7 +8,7 @@ from evse_controller.drivers.evse.async_interface import EvseThreadInterface, Ev
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import EvseState
-from wallbox import Wallbox
+from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
