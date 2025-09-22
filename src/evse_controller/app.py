@@ -521,6 +521,8 @@ def get_status():
     })
 
 # Run the Flask app in a separate thread
+
+
 def run_flask():
     """Run the Flask app, trying port 5000 first, falling back to 5001 if occupied."""
     import socket
@@ -535,13 +537,8 @@ def run_flask():
 
     port = 5000 if not is_port_in_use(5000) else 5001
     info(f"Starting Flask server on port {port}")
-    
-    # Add ProxyFix middleware to handle reverse proxies correctly
     app.wsgi_app = ProxyFix(app.wsgi_app)
-    
-    # Verify custom handler is being used
     debug("Starting Flask with CustomWSGIRequestHandler")
-    
     try:
         app.run(host='0.0.0.0', 
                 port=port, 
@@ -549,7 +546,8 @@ def run_flask():
                 request_handler=CustomWSGIRequestHandler)
     except Exception as e:
         error(f"Flask server crashed: {str(e)}", exc_info=True)
-        # Optionally restart the server here
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask, daemon=True)
