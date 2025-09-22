@@ -3,16 +3,16 @@ from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
-class OctopusGoTariff(Tariff):
-    """Implementation of Octopus Go tariff logic.
+class IntelligentOctopusGoTariff(Tariff):
+    """Implementation of Intelligent Octopus Go tariff logic.
 
-    Octopus Go provides a cheap rate between 00:30 and 05:30,
+    Intelligent Octopus Go provides a cheap rate between 23:30 and 05:30,
     with a standard rate at other times. It also features adaptive discharge
     logic that adjusts discharge rate based on time remaining to reach target.
 
     This class is a sample of such a driver that is easy to get started with.
     You may find that it works very well for you. What it does is to charge at
-    the maximum rate during the cheap rate of Octopus Go, and at
+    the maximum rate during the cheap rate of Intelligent Octopus Go, and at
     other times it discharges either to meet the house load when it reaches a
     level at which that's worthwhile, and it will also perform a bulk discharge
     towards the end of the day, targeting a state of charge given, so that the
@@ -20,7 +20,7 @@ class OctopusGoTariff(Tariff):
     
     You can adjust your vehicle's battery capacity where it says
     battery_capacity_kwh=59. You can also adjust the bulk discharge start time
-    if you want it to start earlier or later than 16:00. You can vary the
+    if you want it to start earlier or later than 17:30. You can vary the
     minimum bulk discharge current if you like, although the Wallbox becomes
     progressively worse at efficient energy conversion when the current is
     lower than the 10 amps given. You can adjust the target state of charge
@@ -29,11 +29,11 @@ class OctopusGoTariff(Tariff):
     discharge period.
 
     Attributes:
-        time_of_use (dict): Dictionary defining Octopus Go time periods and rates
+        time_of_use (dict): Dictionary defining Intelligent Octopus Go time periods and rates
     """
 
-    def __init__(self, battery_capacity_kwh=59, bulk_discharge_start_time="16:00"):
-        """Initialize Octopus Go tariff with specific time periods and rates.
+    def __init__(self, battery_capacity_kwh=59, bulk_discharge_start_time="17:30"):
+        """Initialize Intelligent Octopus Go tariff with specific time periods and rates.
         
         Args:
             battery_capacity_kwh (int): Battery capacity in kWh (typically 30, 40, or 59)
@@ -41,8 +41,8 @@ class OctopusGoTariff(Tariff):
         """
         super().__init__()
         self.time_of_use = {
-            "low":  {"start": "00:30", "end": "05:30", "import_rate": 0.0850, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "00:30", "import_rate": 0.3142, "export_rate": 0.15}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": 0.0700, "export_rate": 0.15},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": 0.3142, "export_rate": 0.15}
         }
         
         # === CONFIGURABLE PARAMETERS ===
@@ -53,11 +53,11 @@ class OctopusGoTariff(Tariff):
         self.MAX_CHARGE_CURRENT = config.WALLBOX_MAX_CHARGE_CURRENT  # Default from config
         self.MAX_DISCHARGE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT  # Default from config
 
-        # Target SoC at start of cheap rate period (00:30)
+        # Target SoC at start of cheap rate period (23:30)
         self.TARGET_SOC_AT_CHEAP_START = 54  # For 59kWh battery aiming for 90% by end of cheap period
 
         # Time to start bulk discharge (in "HH:MM" format)
-        self.BULK_DISCHARGE_START_TIME_STR = bulk_discharge_start_time  # 16:00
+        self.BULK_DISCHARGE_START_TIME_STR = bulk_discharge_start_time  # 17:30
         # Convert to minutes since midnight for internal use
         self.BULK_DISCHARGE_START_TIME = self._time_to_minutes(bulk_discharge_start_time)
 
@@ -66,11 +66,11 @@ class OctopusGoTariff(Tariff):
         # significantly reduces at lower currents
         self.MIN_DISCHARGE_CURRENT = 10  # Amps
 
-        # Cheap rate duration in hours (00:30-05:30)
-        self.CHEAP_RATE_DURATION_HOURS = 5  # Hours of cheap rate period (00:30-05:30)
+        # Cheap rate duration in hours (23:30-05:30)
+        self.CHEAP_RATE_DURATION_HOURS = 6  # Hours of cheap rate period (23:30-05:30)
 
         # === END CONFIGURABLE PARAMETERS ===
-
+        
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight.
         
@@ -93,15 +93,17 @@ class OctopusGoTariff(Tariff):
         self.BULK_DISCHARGE_START_TIME = self._time_to_minutes(time_str)
 
     def is_off_peak(self, dayMinute: int) -> bool:
-        """Check if current time is during off-peak period (00:30-05:30)"""
-        return 30 <= dayMinute < 330
+        """Check if current time is during off-peak period (23:30-05:30)"""
+        # Off-peak is from 23:30 (1410 minutes) to 05:30 (330 minutes)
+        # This crosses midnight, so we check if time is >= 23:30 OR < 05:30
+        return dayMinute >= 1410 or dayMinute < 330
 
     def is_expensive_period(self, dayMinute: int) -> bool:
-        """No specifically expensive periods in Octopus Go"""
+        """No specifically expensive periods in Intelligent Octopus Go"""
         return False
 
     def calculate_target_discharge_current(self, current_soc: float, dayMinute: int) -> float:
-        """Calculate the appropriate discharge current to hit target SoC at 00:30.
+        """Calculate the appropriate discharge current to hit target SoC at 23:30.
         
         Args:
             current_soc: Current battery state of charge (%)
@@ -110,14 +112,11 @@ class OctopusGoTariff(Tariff):
         Returns:
             Discharge current in amps, or 0 if no discharge needed or below minimum threshold
         """
-        # Time until start of cheap rate period (00:30)
-        if dayMinute >= 30:  # Already past or at the start of cheap rate period today
-            # Next cheap rate period is tomorrow at 00:30
-            minutes_until_cheap_start = 30 + 1440 - dayMinute
-        else:
-            # Cheap rate period starts today at 00:30
-            minutes_until_cheap_start = 30 - dayMinute
+        # Time until start of cheap rate period (23:30)
+        if dayMinute >= 1410:  # Already in cheap rate period
+            return 0
             
+        minutes_until_cheap_start = 1410 - dayMinute
         hours_until_cheap_start = minutes_until_cheap_start / 60.0
         
         # Calculate required discharge to hit target SoC
@@ -158,26 +157,26 @@ class OctopusGoTariff(Tariff):
         battery_level = state.battery_level
 
         if battery_level == -1:
-            return ControlState.CHARGE, 3, 3, "OCTGO SoC unknown, charge at 3A until known"
+            return ControlState.CHARGE, 3, 3, "IOCTGO SoC unknown, charge at 3A until known"
         elif self.is_off_peak(dayMinute):
             if battery_level < config.MAX_CHARGE_PERCENT:
-                return ControlState.CHARGE, None, None, "OCTGO Night rate: charge at max rate"
+                return ControlState.CHARGE, None, None, "IOCTGO Night rate: charge at max rate"
             else:
-                return ControlState.DORMANT, None, None, "OCTGO Night rate: SoC max, remain dormant"
+                return ControlState.DORMANT, None, None, "IOCTGO Night rate: SoC max, remain dormant"
         elif battery_level <= 25:
-            return ControlState.DORMANT, None, None, "OCTGO Battery depleted, remain dormant"
+            return ControlState.DORMANT, None, None, "IOCTGO Battery depleted, remain dormant"
         elif 330 <= dayMinute < self.BULK_DISCHARGE_START_TIME:  # 05:30 to bulk discharge start time
-            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "OCTGO Day rate before bulk discharge: load follow discharge"
+            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO Day rate before bulk discharge: load follow discharge"
         else:
-            # Smart discharge period (from bulk discharge start time until 00:30)
+            # Smart discharge period (from bulk discharge start time until 23:30)
             target_amps = self.calculate_target_discharge_current(battery_level, dayMinute)
             
             if target_amps > 0:
                 # Use calculated discharge current with DISCHARGE mode to maintain minimum level
-                return ControlState.DISCHARGE, int(target_amps), self.MAX_DISCHARGE_CURRENT, f"OCTGO Smart discharge: {target_amps:.1f}A to hit target SoC"
+                return ControlState.DISCHARGE, int(target_amps), self.MAX_DISCHARGE_CURRENT, f"IOCTGO Smart discharge: {target_amps:.1f}A to hit target SoC"
             else:
                 # No discharge needed, use load follow
-                return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "OCTGO Day rate: load follow discharge (no excess SoC)"
+                return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO Day rate: load follow discharge (no excess SoC)"
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels and corresponding charge/discharge currents.

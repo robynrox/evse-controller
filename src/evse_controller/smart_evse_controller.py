@@ -130,6 +130,7 @@ def print_usage_instructions():
     print("d | discharge: Enter full discharge state")
     print("s | smart: Enter the smart tariff controller state for whichever smart tariff is active")
     print("g | go | octgo: Switch to Octopus Go tariff")
+    print("ioctgo: Switch to Intelligent Octopus Go tariff")
     print("f | flux: Switch to Octopus Flux tariff")
     print("cosy: Switch to Cosy Octopus tariff")
     print("u | unplug: Allow the vehicle to be unplugged")
@@ -228,6 +229,12 @@ def main():
                     if can_transition_from_uncontrolled():
                         info("Switching to Octopus Go tariff")
                         tariffManager.set_tariff("OCTGO")
+                        execState = ExecState.SMART
+                        nextStateCheck = time.time()
+                case "ioctgo":
+                    if can_transition_from_uncontrolled():
+                        info("Switching to Intelligent Octopus Go tariff")
+                        tariffManager.set_tariff("IOCTGO")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                 case "f" | "flux":

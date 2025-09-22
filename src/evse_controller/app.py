@@ -38,6 +38,7 @@ VALID_COMMANDS = {
     'discharge': 'Start discharging at maximum rate',
     'smart': 'Enter smart tariff control mode',
     'octgo': 'Switch to Octopus Go tariff',
+    'ioctgo': 'Switch to Intelligent Octopus Go tariff',
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
