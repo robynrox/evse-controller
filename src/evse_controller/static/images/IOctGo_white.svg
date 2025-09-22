@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
+  <defs>
+    <style>
+      .label {font-family: Arial, sans-serif; font-size: 150px; font-weight: bold; text-anchor: middle; alignment-baseline: middle;}
+      .c{fill:none;}
+    </style>
+  </defs>
+  <g id="a">
+    <!-- OCPP text -->
+    <text x="250" y="175" class="label" fill="white">INT</text>
+    <!-- ON text -->
+    <text x="250" y="325" class="label" fill="white">GO</text>
+  </g>
+  <g id="b">
+    <rect class="c" width="595.27559" height="595.27559"/>
+  </g>
+</svg>
