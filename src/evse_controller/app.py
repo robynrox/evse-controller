@@ -524,9 +524,10 @@ def get_status():
     })
 
 # Run the Flask app in a separate thread
-def run_flask():
+def run_flask(max_restarts=3):
     """Run the Flask app, trying port 5000 first, falling back to 5001 if occupied."""
     import socket
+    import time
 
     def is_port_in_use(port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -536,23 +537,32 @@ def run_flask():
             except socket.error:
                 return True
 
-    port = 5000 if not is_port_in_use(5000) else 5001
-    info(f"Starting Flask server on port {port}")
-    
-    # Add ProxyFix middleware to handle reverse proxies correctly
-    app.wsgi_app = ProxyFix(app.wsgi_app)
-    
-    # Verify custom handler is being used
-    debug("Starting Flask with CustomWSGIRequestHandler")
-    
-    try:
-        app.run(host='0.0.0.0', 
-                port=port, 
-                threaded=True, 
-                request_handler=CustomWSGIRequestHandler)
-    except Exception as e:
-        error(f"Flask server crashed: {str(e)}", exc_info=True)
-        # Optionally restart the server here
+    restarts = 0
+    while restarts <= max_restarts:
+        port = 5000 if not is_port_in_use(5000) else 5001
+        info(f"Starting Flask server on port {port}")
+        
+        # Add ProxyFix middleware to handle reverse proxies correctly
+        app.wsgi_app = ProxyFix(app.wsgi_app)
+        
+        # Verify custom handler is being used
+        debug("Starting Flask with CustomWSGIRequestHandler")
+        
+        try:
+            app.run(host='0.0.0.0', 
+                    port=port, 
+                    threaded=True, 
+                    request_handler=CustomWSGIRequestHandler)
+            # If we reach here, the server exited normally
+            break
+        except Exception as e:
+            error(f"Flask server crashed: {str(e)}", exc_info=True)
+            restarts += 1
+            if restarts <= max_restarts:
+                error(f"Attempting to restart Flask server ({restarts}/{max_restarts})...")
+                time.sleep(2)  # Wait 2 seconds before restart
+            else:
+                error("Max restart attempts reached. Flask server will not be restarted.")
 
 # Start the Flask server in a separate thread
 flask_thread = threading.Thread(target=run_flask, daemon=True)
