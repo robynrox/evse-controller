@@ -29,6 +29,24 @@
         margin: 20px;
         /* Keep some margin from the window edges */
     }
+    
+    @media (max-width: 600px) {
+        body {
+            margin: 4px;
+        }
+        .header-flex,
+        .legend-container,
+        #chart {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        h1, .status-panel, .nav-links {
+            text-align: center;
+            width: 100%;
+        }
+    }
 
     /* Page-specific styles only */
     #chart {
@@ -43,29 +61,32 @@
         flex-wrap: wrap;
         gap: 10px;
     }
-</style>
 {% endblock %}
 
 {% block content %}
-<h1>EVSE Control Interface</h1>
-<div class="nav-links">
-    <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
-    <a href="{{ url_for('config_page') }}">Configuration →</a>
-</div>
 
-<div class="status-panel">
-    <div class="status-item">
-        <span class="status-info">
-            <strong>Current State:</strong> <span id="current-state">Loading...</span>
-        </span>
-        <span class="separator">|</span>
-        <span class="status-info">
-            <strong>Battery:</strong> <span id="battery-soc">Loading...</span>
-        </span>
-        <span class="separator">|</span>
-    </div>
-    <div class="status-item">
-        <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
+<div class="header-flex">
+    <div>
+        <h1>EVSE Control Interface</h1>
+        <div class="status-panel" style="margin-bottom: 8px;">
+            <div class="status-item">
+                <span class="status-info">
+                    <strong>Battery:</strong> <span id="battery-soc" style="color: red;">Loading...</span>
+                </span>
+                <span class="separator">|</span>
+                <span class="status-info">
+                    <strong>Current State:</strong> <span id="current-state">Loading...</span>
+                </span>
+                <span class="separator">|</span>
+            </div>
+            <div class="status-item">
+                <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
+            </div>
+        </div>
+        <div class="nav-links">
+            <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
+            <a href="{{ url_for('config_page') }}">Configuration →</a>
+        </div>
     </div>
 </div>
 
@@ -214,12 +235,20 @@
 <div id="chart" style="width:100%;height:600px;"></div>
 
 <style>
+    .header-flex {
+        display: flex;
+        align-items: flex-start;
+        gap: 32px;
+        margin-bottom: 20px;
+    }
+    
     .status-panel {
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
         border-radius: 4px;
         padding: 15px;
-        margin: 20px 0;
+        min-width: 260px;
+        margin: 0;
     }
 
     .status-item {
@@ -345,6 +374,23 @@
 
         .svg-button-container button:last-child {
             width: 100%;
+        }
+        
+        .status-panel,
+        .command-legend,
+        .legend-toggle,
+        .svg-button,
+        .legend-item,
+        .nav-links,
+        .header-flex {
+            border-width: 1px !important;
+        }
+        .status-panel,
+        .command-legend,
+        .legend-toggle,
+        .svg-button,
+        .legend-item {
+            border-radius: 2px !important;
         }
     }
 </style>
