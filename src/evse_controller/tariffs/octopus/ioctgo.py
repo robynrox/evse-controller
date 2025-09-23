@@ -66,6 +66,19 @@ class IntelligentOctopusGoTariff(Tariff):
         # significantly reduces at lower currents
         self.MIN_DISCHARGE_CURRENT = 10  # Amps
 
+        # Battery state of charge threshold for switching between discharge strategies
+        self.SOC_THRESHOLD_FOR_STRATEGY = 50  # Percent
+
+        # Grid power import thresholds for enabling discharge (in Watts)
+        # When SoC >= SOC_THRESHOLD_FOR_STRATEGY, use this threshold
+        # Also optimise for always sending up to 240 W back to the grid.
+        # (Optimising for lower cost.)
+        self.GRID_IMPORT_THRESHOLD_HIGH_SOC = 200  # Watts
+        # When SoC < SOC_THRESHOLD_FOR_STRATEGY, use this threshold
+        # Also optimise for always drawing up to 240 W from the grid.
+        # (Optimising for the battery to last longer.)
+        self.GRID_IMPORT_THRESHOLD_LOW_SOC = 720   # Watts
+
         # Cheap rate duration in hours (23:30-05:30)
         self.CHEAP_RATE_DURATION_HOURS = 6  # Hours of cheap rate period (23:30-05:30)
 
@@ -194,12 +207,14 @@ class IntelligentOctopusGoTariff(Tariff):
         # The battery_level is already available in the state parameter
         battery_level = state.battery_level
 
-        # If SoC > 50%:
-        if battery_level >= 50:
+        # If SoC >= SOC_THRESHOLD_FOR_STRATEGY:
+        if battery_level >= self.SOC_THRESHOLD_FOR_STRATEGY:
             # Cover all of the home demand as far as possible. Try to avoid energy coming from the grid.
             levels = []
-            levels.append((0, 410, 0))
-            levels.append((410, 720, 3))
+            # Use configurable threshold for high SoC
+            threshold = self.GRID_IMPORT_THRESHOLD_HIGH_SOC
+            levels.append((0, threshold, 0))  # Up to threshold (but not including)
+            levels.append((threshold, threshold + 310, 3))
             for current in range(4, 32):
                 end = current * 240
                 start = end - 240
@@ -209,7 +224,9 @@ class IntelligentOctopusGoTariff(Tariff):
             # Use a more conservative strategy of meeting some of the requirement from the battery and
             # allowing 0 to 240 W to come from the grid.
             levels = []
-            levels.append((0, 720, 0))
+            # Use configurable threshold for low SoC
+            threshold = self.GRID_IMPORT_THRESHOLD_LOW_SOC
+            levels.append((0, threshold, 0))  # Up to threshold (but not including)
             for current in range(3, 32):
                 start = current * 240
                 end = start + 240
