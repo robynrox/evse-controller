@@ -50,7 +50,7 @@
 
     /* Page-specific styles only */
     #chart {
-        width: 100%;
+        width: 110%;
         height: 80vh;
         max-height: 600px;
     }
@@ -539,6 +539,13 @@
                 titlefont: { size: isMobileDevice ? 12 : 14 },
                 tickfont: { size: isMobileDevice ? 10 : 12 }
             },
+            legend: {
+                orientation: "h",
+                yanchor: "top",
+                y: -0.2,
+                xanchor: "center",
+                x: 0.5
+            },
             responsive: true,
             autosize: true,
             margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
@@ -548,7 +555,10 @@
     // Wrap all our initialization code in a DOMContentLoaded event handler
     document.addEventListener('DOMContentLoaded', function () {
         // Initialize the empty chart - traces will be added dynamically
-        Plotly.newPlot('chart', [], getLayout());
+        Plotly.newPlot('chart', [], getLayout(), {
+            displayModeBar: false,
+            staticPlot: true
+        });
 
         let firstLoad = true;
 
@@ -580,10 +590,16 @@
                 const layout = getLayout();
 
                 if (firstLoad) {
-                    Plotly.newPlot('chart', traces, layout);
+                    Plotly.newPlot('chart', traces, layout, {
+                        displayModeBar: false,
+                        staticPlot: true
+                    });
                     firstLoad = false;
                 } else {
-                    Plotly.react('chart', traces, layout);
+                    Plotly.react('chart', traces, layout, {
+                        displayModeBar: false,
+                        staticPlot: true
+                    });
                 }
             } catch (error) {
                 console.error('Error updating chart:', error);
