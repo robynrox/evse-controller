@@ -786,7 +786,9 @@ class EvseController(PowerMonitorObserver):
             debug(logMsg)
             return
 
+        # Always log the power state information
         debug(logMsg)
+        
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:
             resetState = True
@@ -803,13 +805,14 @@ class EvseController(PowerMonitorObserver):
         if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
             resetState = True
         if resetState:
-            if (self.evseCurrent != desiredEvseCurrent):
-                info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
-            # Don't send current commands when in UNCONTROLLED state
+            # Only log ADJUST message and set current when not in UNCONTROLLED state
             if self.state != ControlState.UNCONTROLLED:
+                if (self.evseCurrent != desiredEvseCurrent):
+                    info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self._setCurrent(desiredEvseCurrent)
             else:
-                debug("Skipping current setting in UNCONTROLLED state")
+                # In UNCONTROLLED state, don't log ADJUST message or set current
+                debug("Skipping current adjustment in UNCONTROLLED state")
 
     def setControlState(self, state: ControlState):
         """Set the control state and log the transition."""
