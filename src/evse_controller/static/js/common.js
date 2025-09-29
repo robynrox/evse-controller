@@ -3,6 +3,7 @@ const VALID_STATES = {
     'discharge': 'Discharge at maximum rate',
     'pause': 'Stop charging/discharging',
     'octgo': 'Octopus Go tariff',
+    'ioctgo': 'Intelligent Octopus Go tariff',
     'flux': 'Octopus Flux tariff',
     'cosy': 'Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',

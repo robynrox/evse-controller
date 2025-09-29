@@ -216,7 +216,7 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     charging:
       max_charge_percent: 90           # Maximum battery charge percentage
       solar_period_max_charge: 80      # Maximum charge during solar generation periods
-      default_tariff: "COSY"           # COSY, OCTGO or FLUX
+      default_tariff: "COSY"           # COSY, OCTGO, IOCTGO or FLUX
     ```
 
   Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
@@ -257,7 +257,7 @@ Detailed explanation of each configuration option:
 #### Charging Section
 - `max_charge_percent`: Maximum battery charge percentage (0-100)
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
-- `default_tariff`: Default electricity tariff (COSY, OCTGO, or FLUX)
+- `default_tariff`: Default electricity tariff (COSY, OCTGO, IOCTGO, or FLUX)
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
