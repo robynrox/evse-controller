@@ -44,20 +44,20 @@ class ExecState(Enum):
     POWER_HOME = 7
     BALANCE = 8
     PAUSE_UNTIL_DISCONNECT = 9
-    UNCONTROLLED = 10
+    FREERUN = 10
 
 # Global variable to track OCPP state
 ocpp_enabled = False
 
-def can_transition_from_uncontrolled():
-    """Check if we can transition from UNCONTROLLED state.
+def can_transition_from_freerun():
+    """Check if we can transition from FREERUN state.
     
     Returns:
         bool: True if transition is allowed, False otherwise
     """
     global execState, ocpp_enabled
-    if execState == ExecState.UNCONTROLLED and ocpp_enabled:
-        print("Error: Cannot exit UNCONTROLLED state while OCPP is enabled. Disable OCPP first.")
+    if execState == ExecState.FREERUN and ocpp_enabled:
+        print("Error: Cannot exit FREERUN state while OCPP is enabled. Disable OCPP first.")
         return False
     return True
 
@@ -134,7 +134,7 @@ def print_usage_instructions():
     print("f | flux: Switch to Octopus Flux tariff")
     print("cosy: Switch to Cosy Octopus tariff")
     print("u | unplug: Allow the vehicle to be unplugged")
-    print("z | uncontrolled: Allow EVSE to operate independently without Modbus control")
+    print("z | freerun: Allow EVSE to operate independently without Modbus control")
     print("enable-ocpp: Enable OCPP connectivity for the Wallbox")
     print("disable-ocpp: Disable OCPP connectivity for the Wallbox")
     print("solar: Enter solar-only charging mode")
@@ -206,45 +206,45 @@ def main():
             command = execQueue.get(True, 1)
             match command.lower():
                 case "p" | "pause":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering pause state")
                         execState = ExecState.PAUSE
                         nextStateCheck = time.time()
                 case "c" | "charge":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering charge state")
                         execState = ExecState.CHARGE
                         nextStateCheck = time.time()
                 case "d" | "discharge":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering discharge state")
                         execState = ExecState.DISCHARGE
                         nextStateCheck = time.time()
                 case "s" | "smart":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering smart tariff controller state")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Switching to Octopus Go tariff")
                         tariffManager.set_tariff("OCTGO")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                 case "ioctgo":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Switching to Intelligent Octopus Go tariff")
                         tariffManager.set_tariff("IOCTGO")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                 case "f" | "flux":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Switching to Octopus Flux tariff")
                         tariffManager.set_tariff("FLUX")
                         execState = ExecState.SMART
                         nextStateCheck = time.time()
                 case "cosy":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Switching to Cosy Octopus tariff")
                         tariffManager.set_tariff("COSY")
                         execState = ExecState.SMART
@@ -254,7 +254,7 @@ def main():
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
                             info("Entering pause-until-disconnect state")
                             previous_state = execState
@@ -262,15 +262,15 @@ def main():
                             nextStateCheck = time.time()
                         else:
                             debug("Already in pause-until-disconnect state, ignoring command")
-                case "z" | "uncontrolled":
-                    info("Entering uncontrolled state - EVSE will operate independently")
-                    evseController.setUncontrolled()
-                    execState = ExecState.UNCONTROLLED
+                case "z" | "freerun":
+                    info("Entering free run state - EVSE will operate independently")
+                    evseController.setFreeRun()
+                    execState = ExecState.FREERUN
                     nextStateCheck = time.time()
                 case "enable-ocpp":
                     info("Enabling OCPP connectivity for the Wallbox")
-                    if execState != ExecState.UNCONTROLLED:
-                        print("Error: OCPP can only be enabled when EVSE is in UNCONTROLLED state")
+                    if execState != ExecState.FREERUN:
+                        print("Error: OCPP can only be enabled when EVSE is in FREERUN state")
                     else:
                         success = evseController.enableOcpp()
                         if success:
@@ -289,17 +289,17 @@ def main():
                         print("Failed to disable OCPP")
                     # Stay in current state
                 case "solar":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering solar charging state")
                         execState = ExecState.SOLAR
                         nextStateCheck = time.time()
                 case "power-home" | "ph":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering power home state")
                         execState = ExecState.POWER_HOME
                         nextStateCheck = time.time()
                 case "balance" | "b":
-                    if can_transition_from_uncontrolled():
+                    if can_transition_from_freerun():
                         info("Entering power balance state")
                         execState = ExecState.BALANCE
                         nextStateCheck = time.time()
@@ -343,13 +343,13 @@ def main():
                         execState = ExecState.PAUSE
                     previous_state = None
 
-            elif execState == ExecState.UNCONTROLLED:
-                # In UNCONTROLLED state, we don't send any control commands to the EVSE
-                # The EVSE operates independently via the setUncontrolled() method
-                info("CONTROL UNCONTROLLED - EVSE operating independently")
-                # No action needed - the EVSE is already in uncontrolled mode
+            elif execState == ExecState.FREERUN:
+                # In FREERUN state, we don't send any control commands to the EVSE
+                # The EVSE operates independently via the setFreeRun() method
+                info("CONTROL FREERUN - EVSE operating independently")
+                # No action needed - the EVSE is already in freerun mode
                 # OCPP state tracking is handled in command parsing to prevent exiting 
-                # UNCONTROLLED when OCPP is enabled
+                # FREERUN when OCPP is enabled
 
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
                 info(f"CONTROL {execState}")

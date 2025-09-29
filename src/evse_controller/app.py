@@ -42,7 +42,7 @@ VALID_COMMANDS = {
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
-    'uncontrolled': 'Allow EVSE to operate independently without Modbus control',
+    'free_run': 'Allow EVSE to operate independently without Modbus control',
     'enable-ocpp': 'Enable OCPP connectivity for the Wallbox',
     'disable-ocpp': 'Disable OCPP connectivity for the Wallbox',
     'solar': 'Solar-only charging mode',

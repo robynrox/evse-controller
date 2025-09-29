@@ -31,7 +31,7 @@ class ControlState(Enum):
     LOAD_FOLLOW_DISCHARGE: Discharge while following grid load, stop if load too low
     LOAD_FOLLOW_BIDIRECTIONAL: Bidirectional power flow following grid load
     PAUSE_UNTIL_DISCONNECT: Temporary pause state for safe cable removal
-    UNCONTROLLED: EVSE operates independently without Modbus control
+    FREERUN: EVSE operates independently without Modbus control
     """
 
     DORMANT = 0
@@ -52,8 +52,8 @@ class ControlState(Enum):
     LOAD_FOLLOW_BIDIRECTIONAL = 5
     # New state for pause-to-remove functionality
     PAUSE_UNTIL_DISCONNECT = 6
-    # New state for uncontrolled operation
-    UNCONTROLLED = 7
+    # New state for free run operation
+    FREERUN = 7
 
 
 class EvseController(PowerMonitorObserver):
@@ -805,22 +805,22 @@ class EvseController(PowerMonitorObserver):
         if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
             resetState = True
         if resetState:
-            # Only log ADJUST message and set current when not in UNCONTROLLED state
-            if self.state != ControlState.UNCONTROLLED:
+            # Only log ADJUST message and set current when not in FREERUN state
+            if self.state != ControlState.FREERUN:
                 if (self.evseCurrent != desiredEvseCurrent):
                     info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self._setCurrent(desiredEvseCurrent)
             else:
-                # In UNCONTROLLED state, don't log ADJUST message or set current
-                debug("Skipping current adjustment in UNCONTROLLED state")
+                # In FREERUN state, don't log ADJUST message or set current
+                debug("Skipping current adjustment in FREERUN state")
 
     def setControlState(self, state: ControlState):
         """Set the control state and log the transition."""
         if state != self.state:
             info(f"CONTROL Setting control state to {state}")
-            # If we're transitioning from UNCONTROLLED state to any other state,
+            # If we're transitioning from FREERUN state to any other state,
             # we need to send a command to the Wallbox thread to take control
-            transitioning_from_uncontrolled = (self.state == ControlState.UNCONTROLLED)
+            transitioning_from_freerun = (self.state == ControlState.FREERUN)
             
             self.state = state
             match state:
@@ -846,26 +846,26 @@ class EvseController(PowerMonitorObserver):
                     self.maxChargeCurrent = config.WALLBOX_MAX_CHARGE_CURRENT
                     self.minDischargeCurrent = 0
                     self.maxDischargeCurrent = config.WALLBOX_MAX_DISCHARGE_CURRENT
-                case ControlState.UNCONTROLLED:
-                    # In UNCONTROLLED state, we don't set any current ranges
+                case ControlState.FREERUN:
+                    # In FREERUN state, we don't set any current ranges
                     # The EVSE operates independently
                     pass
             
-            # If we're transitioning from UNCONTROLLED state, send a command to take control
-            if transitioning_from_uncontrolled and state != ControlState.UNCONTROLLED:
-                # Send a CLEAR_UNCONTROLLED command to the Wallbox thread
+            # If we're transitioning from FREERUN state, send a command to take control
+            if transitioning_from_freerun and state != ControlState.FREERUN:
+                # Send a CLEAR_FREERUN command to the Wallbox thread
                 try:
-                    cmd = EvseCommandData(command=EvseCommand.CLEAR_UNCONTROLLED)
+                    cmd = EvseCommandData(command=EvseCommand.CLEAR_FREERUN)
                     if not self.evse.send_command(cmd):
-                        raise RuntimeError("Failed to send CLEAR_UNCONTROLLED command to EVSE thread")
-                    info("Sent CLEAR_UNCONTROLLED command to Wallbox thread")
+                        raise RuntimeError("Failed to send CLEAR_FREERUN command to EVSE thread")
+                    info("Sent CLEAR_FREERUN command to Wallbox thread")
                 except Exception as e:
-                    error(f"Failed to send CLEAR_UNCONTROLLED command: {e}")
+                    error(f"Failed to send CLEAR_FREERUN command: {e}")
             
-            if state != ControlState.UNCONTROLLED:
+            if state != ControlState.FREERUN:
                 info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
             else:
-                info("CONTROL Setting control state to UNCONTROLLED: EVSE operating independently")
+                info("CONTROL Setting control state to FREERUN: EVSE operating independently")
 
     def setDischargeCurrentRange(self, minCurrent, maxCurrent):
         if self.minDischargeCurrent != minCurrent or self.maxDischargeCurrent != maxCurrent:
@@ -935,33 +935,33 @@ class EvseController(PowerMonitorObserver):
         except Exception as e:
             error(f"Failed to set current: {e}")
 
-    def setUncontrolled(self):
-        """Set the EVSE to uncontrolled state.
+    def setFreeRun(self):
+        """Set the EVSE to FREERUN state.
         
         In this state, the EVSE controller will not send Modbus commands to the Wallbox,
         allowing it to operate independently until a standard state is requested.
         """
         try:
-            # Set the control state to UNCONTROLLED to prevent other commands from being sent
-            self.setControlState(ControlState.UNCONTROLLED)
+            # Set the control state to FREERUN to prevent other commands from being sent
+            self.setControlState(ControlState.FREERUN)
             
-            # Send the SET_UNCONTROLLED command to the EVSE thread
-            cmd = EvseCommandData(command=EvseCommand.SET_UNCONTROLLED)
+            # Send the SET_FREERUN command to the EVSE thread
+            cmd = EvseCommandData(command=EvseCommand.SET_FREERUN)
             if not self.evse.send_command(cmd):
                 raise RuntimeError("Failed to send command to EVSE thread")
         except Exception as e:
-            error(f"Failed to set uncontrolled state: {e}")
+            error(f"Failed to set free run state: {e}")
 
     def enableOcpp(self):
         """Enable OCPP connectivity for the Wallbox.
         
-        This method can only be called when the EVSE is in UNCONTROLLED state.
+        This method can only be called when the EVSE is in FREERUN state.
         """
         try:
-            # Check if EVSE is in UNCONTROLLED state
+            # Check if EVSE is in FREERUN state
             evse_state = self.evse.get_state()
-            if evse_state.evse_state != EvseState.UNCONTROLLED:
-                error("OCPP can only be enabled when EVSE is in UNCONTROLLED state")
+            if evse_state.evse_state != EvseState.FREERUN:
+                error("OCPP can only be enabled when EVSE is in FREERUN state")
                 return False
                 
             # Enable OCPP connectivity via the Wallbox API
@@ -985,7 +985,7 @@ class EvseController(PowerMonitorObserver):
     def disableOcpp(self):
         """Disable OCPP connectivity for the Wallbox.
         
-        This method must be called before exiting UNCONTROLLED state if OCPP was enabled.
+        This method must be called before exiting FREERUN state if OCPP was enabled.
         """
         try:
             # Disable OCPP connectivity via the Wallbox API

@@ -550,8 +550,8 @@ class TestWallboxThread(TestCase):
             self.thread.stop()
             self.thread.join(timeout=1)
 
-    def test_uncontrolled_state(self):
-        """Test the UNCONTROLLED state functionality"""
+    def test_freerun_state(self):
+        """Test the FREERUN state functionality"""
         try:
             self.thread.start()
             time.sleep(self.thread._poll_interval * 2)
@@ -566,29 +566,29 @@ class TestWallboxThread(TestCase):
             self.assertEqual(state.evse_state, EvseState.CHARGING)
             self.assertEqual(state.current, 16)
             
-            # Send SET_UNCONTROLLED command
-            cmd = EvseCommandData(command=EvseCommand.SET_UNCONTROLLED)
+            # Send SET_FREERUN command
+            cmd = EvseCommandData(command=EvseCommand.SET_FREERUN)
             success = self.thread.send_command(cmd)
             self.assertTrue(success)
             time.sleep(0.1)  # Allow command to process
             
-            # Verify we're in UNCONTROLLED state
+            # Verify we're in FREERUN state
             state = self.thread.get_state()
-            self.assertEqual(state.evse_state, EvseState.UNCONTROLLED)
+            self.assertEqual(state.evse_state, EvseState.FREERUN)
             
-            # Even though we're in UNCONTROLLED state, the Wallbox should still report its actual state
+            # Even though we're in FREERUN state, the Wallbox should still report its actual state
             # Update the mock registers to simulate the Wallbox changing state on its own
             self.mock_client._registers[self.thread._READ_STATE_REG] = [4]  # Paused
             self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [0]
             time.sleep(self.thread._poll_interval * 2)
             
-            # We should still be in UNCONTROLLED state internally, but with updated values
+            # We should still be in FREERUN state internally, but with updated values
             state = self.thread.get_state()
-            self.assertEqual(state.evse_state, EvseState.UNCONTROLLED)
+            self.assertEqual(state.evse_state, EvseState.FREERUN)
             self.assertEqual(state.current, 0)
             self.assertEqual(state.battery_level, 80)  # Should still have battery level
             
-            # Send a SET_CURRENT command to transition out of UNCONTROLLED state
+            # Send a SET_CURRENT command to transition out of FREERUN state
             cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=10)
             success = self.thread.send_command(cmd)
             self.assertTrue(success)
@@ -597,16 +597,16 @@ class TestWallboxThread(TestCase):
             # Should now be in charging state (or at least attempting to charge)
             state = self.thread.get_state()
             # The state might not immediately reflect CHARGING as it depends on the Wallbox response
-            # but it should no longer be UNCONTROLLED
-            self.assertNotEqual(state.evse_state, EvseState.UNCONTROLLED)
+            # but it should no longer be FREERUN
+            self.assertNotEqual(state.evse_state, EvseState.FREERUN)
             
         finally:
             # Ensure thread is stopped even if test fails
             self.thread.stop()
             self.thread.join(timeout=1)
 
-    def test_uncontrolled_state_prevents_auto_reset(self):
-        """Test that UNCONTROLLED state prevents automatic Wallbox resets"""
+    def test_freerun_state_prevents_auto_reset(self):
+        """Test that FREERUN state prevents automatic Wallbox resets"""
         mock_api = MockWallboxApi("test_user", "test_pass")
         thread = WallboxThread(
             "dummy_host",
@@ -623,15 +623,15 @@ class TestWallboxThread(TestCase):
             thread.start()
             time.sleep(thread._poll_interval * 2)  # Initial startup
             
-            # Put the thread in UNCONTROLLED state
-            cmd = EvseCommandData(command=EvseCommand.SET_UNCONTROLLED)
+            # Put the thread in FREERUN state
+            cmd = EvseCommandData(command=EvseCommand.SET_FREERUN)
             success = thread.send_command(cmd)
             self.assertTrue(success)
             time.sleep(0.1)  # Allow command to process
             
-            # Verify we're in UNCONTROLLED state
+            # Verify we're in FREERUN state
             state = thread.get_state()
-            self.assertEqual(state.evse_state, EvseState.UNCONTROLLED)
+            self.assertEqual(state.evse_state, EvseState.FREERUN)
             
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
@@ -640,12 +640,12 @@ class TestWallboxThread(TestCase):
             time.sleep(thread._poll_interval * 12)
             
             # Verify that despite having enough errors, no reset was attempted
-            # because we're in UNCONTROLLED state
+            # because we're in FREERUN state
             self.assertFalse(mock_api.reset_called)
             
-            # State should not be COMMS_FAILURE because we're in UNCONTROLLED state
+            # State should not be COMMS_FAILURE because we're in FREERUN state
             state = thread.get_state()
-            self.assertEqual(state.evse_state, EvseState.UNCONTROLLED)
+            self.assertEqual(state.evse_state, EvseState.FREERUN)
             self.assertGreaterEqual(state.consecutive_connection_errors, 10)
             
         finally:
