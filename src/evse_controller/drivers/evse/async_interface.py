@@ -136,3 +136,8 @@ class EvseThreadInterface(ABC):
         TODO: Make the minimum threshold configurable via config file
         """
         pass
+
+    @abstractmethod
+    def set_last_ocpp_change_time(self, change_time: float) -> None:
+        """Set the time of the last OCPP state change to implement delay mechanism."""
+        pass

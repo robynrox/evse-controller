@@ -9,6 +9,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import EvseState
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
@@ -81,6 +82,14 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+        
+        # Add tracking for OCPP state change to implement 2-minute delay for resets
+        self._last_ocpp_change_time = 0
+        self._ocpp_delay_duration = 120  # 2 minutes in seconds
+        
+        # Subscribe to OCPP state change events
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51
@@ -179,6 +188,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             # so we don't attempt automatic resets
             return
             
+        # Don't attempt reset if we're in OCPP delay period (2 minutes after OCPP state change)
+        if self.is_in_ocpp_delay():
+            time_remaining = self._ocpp_delay_duration - (current_time - self._last_ocpp_change_time)
+            debug(f"In OCPP delay period. Waiting {time_remaining:.1f}s before allowing resets due to Wallbox Modbus not responding")
+            return
+            
         if consecutive_errors < self._reset_attempt_threshold:
             return
 
@@ -197,6 +212,23 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         else:
             warning("Reset attempt failed - will retry after cooldown period")
             # Keep the consecutive errors count high so we'll try again after cooldown
+
+    def _handle_ocpp_state_change(self, change_time: float) -> None:
+        """Handle OCPP state change event from the event bus."""
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time
+    
+    def set_last_ocpp_change_time(self, change_time: float) -> None:
+        """Set the time of the last OCPP state change to implement delay mechanism.
+        This method is maintained for backward compatibility but now uses the event bus."""
+        self._event_bus.publish(EventType.OCPP_STATE_CHANGED, change_time)
+            
+    def is_in_ocpp_delay(self):
+        """Check if we're currently in the OCPP delay period after an OCPP state change."""
+        with self._state_lock:
+            current_time = time.time()
+            time_since_ocpp_change = current_time - self._last_ocpp_change_time
+            return time_since_ocpp_change < self._ocpp_delay_duration
 
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""

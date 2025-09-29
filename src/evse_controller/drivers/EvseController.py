@@ -8,7 +8,9 @@ from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.utils.config import config
 from evse_controller.drivers.Shelly import PowerMonitorShelly
-
+from evse_controller.utils.config import config
+from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+            
 try:
     import influxdb_client
     from influxdb_client.client.write_api import SYNCHRONOUS
@@ -963,19 +965,32 @@ class EvseController(PowerMonitorObserver):
             if evse_state.evse_state != EvseState.FREERUN:
                 error("OCPP can only be enabled when EVSE is in FREERUN state")
                 return False
-                
-            # Enable OCPP connectivity via the Wallbox API
-            from evse_controller.utils.config import config
-            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
-            
+
+            # Check current OCPP status to avoid unnecessary API calls
             wallbox_api = WallboxAPIWithOCPP(
                 config.WALLBOX_USERNAME,
                 config.WALLBOX_PASSWORD
             )
             
-            response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
+            current_status = wallbox_api.get_ocpp_status(config.WALLBOX_SERIAL)
+            is_ocpp_enabled = current_status.get("type") == "ocpp"
             
-            info(f"OCPP enabled successfully: {response}")
+            # Only make the API call if OCPP is not already enabled
+            if not is_ocpp_enabled:
+                response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
+                
+                # Publish OCPP state change event since we made an actual change
+                try:
+                    from evse_controller.drivers.evse.event_bus import EventBus, EventType
+                    event_bus = EventBus()
+                    event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+                except Exception as e:
+                    error(f"Could not publish OCPP state change event: {e}")
+                
+                info(f"OCPP enabled successfully: {response}")
+            else:
+                info("OCPP was already enabled, no action needed")
+            
             return True
             
         except Exception as e:
@@ -988,18 +1003,31 @@ class EvseController(PowerMonitorObserver):
         This method must be called before exiting FREERUN state if OCPP was enabled.
         """
         try:
-            # Disable OCPP connectivity via the Wallbox API
-            from evse_controller.utils.config import config
-            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
-            
+            # Check current OCPP status to avoid unnecessary API calls
             wallbox_api = WallboxAPIWithOCPP(
                 config.WALLBOX_USERNAME,
                 config.WALLBOX_PASSWORD
             )
             
-            response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
+            current_status = wallbox_api.get_ocpp_status(config.WALLBOX_SERIAL)
+            is_ocpp_enabled = current_status.get("type") == "ocpp"
             
-            info(f"OCPP disabled successfully: {response}")
+            # Only make the API call if OCPP is actually enabled
+            if is_ocpp_enabled:
+                response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
+                
+                # Publish OCPP state change event since we made an actual change
+                try:
+                    from evse_controller.drivers.evse.event_bus import EventBus, EventType
+                    event_bus = EventBus()
+                    event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+                except Exception as e:
+                    error(f"Could not publish OCPP state change event: {e}")
+                
+                info(f"OCPP disabled successfully: {response}")
+            else:
+                info("OCPP was already disabled, no action needed")
+            
             return True
             
         except Exception as e:

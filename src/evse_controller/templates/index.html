@@ -18,8 +18,7 @@
             FLUX: "/static/images/Flux_black.svg",
             COSY: "/static/images/Cosy_black.svg",
             FREERUN: "/static/images/Freerun_black.svg",
-            OCPP_ON: "/static/images/OCPP_ON_black.svg",
-            OCPP_OFF: "/static/images/OCPP_OFF_black.svg"
+            OCPP: "/static/images/OCPP_ON_black.svg"
         };
 </script>
 <style>
@@ -132,11 +131,8 @@
     <button class="svg-button" onclick="sendCommand('free_run')" title="Allow EVSE to operate independently without Modbus control">
         <img src="" id="free-run-icon" alt="Free Run Mode">
     </button>
-    <button class="svg-button" onclick="sendCommand('enable-ocpp')" title="Enable OCPP connectivity for the Wallbox">
-        <img src="" id="ocpp-on-icon" alt="OCPP ON">
-    </button>
-    <button class="svg-button" onclick="sendCommand('disable-ocpp')" title="Disable OCPP connectivity for the Wallbox">
-        <img src="" id="ocpp-off-icon" alt="OCPP OFF">
+    <button class="svg-button" onclick="sendCommand('enable-ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
+        <img src="" id="ocpp-icon" alt="OCPP Mode">
     </button>
     <button onclick="toggleLegend()">Show/Hide Command Reference</button>
 </div>
@@ -412,8 +408,7 @@
         document.getElementById('flux-icon').src = ICONS.FLUX;
         document.getElementById('cosy-icon').src = ICONS.COSY;
         document.getElementById('free-run-icon').src = ICONS.FREERUN;
-        document.getElementById('ocpp-on-icon').src = ICONS.OCPP_ON;
-        document.getElementById('ocpp-off-icon').src = ICONS.OCPP_OFF;
+        document.getElementById('ocpp-icon').src = ICONS.OCPP;
 
         // Set legend icons
         document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
