@@ -7,7 +7,8 @@ const VALID_STATES = {
     'flux': 'Octopus Flux tariff',
     'cosy': 'Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
-    'free_run': 'Allow EVSE to operate independently without Modbus control',
+    'freerun': 'Disable OCPP connectivity and enter FREERUN mode',
+    'ocpp': 'Enter OCPP mode - EVSE controlled via OCPP protocol',
     'solar': 'Solar-only charging mode',
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'
@@ -17,7 +18,7 @@ function populateStateSelect(selectElement) {
     for (const [state, description] of Object.entries(VALID_STATES)) {
         const option = document.createElement('option');
         option.value = state;
-        option.textContent = description;
+        option.textContent = `${state} - ${description}`;
         selectElement.appendChild(option);
     }
 }
