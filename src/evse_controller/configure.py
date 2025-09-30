@@ -484,7 +484,7 @@ def interactive_config():
 
     config["charging"]["startup_state"] = questionary.select(
         "Startup state:",
-        choices=["FREERUN", "COSY", "OCTGO", "FLUX"],  # FREERUN as default option
+        choices=["FREERUN", "COSY", "OCTGO", "IOCTGO", "FLUX"],  # FREERUN as default option
         default=config["charging"]["startup_state"]
     ).ask()
 
