@@ -288,15 +288,17 @@
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
         </div>
         <div class="form-group">
-            <label for="default_tariff">Default Tariff:</label>
-            <select id="default_tariff" name="charging[default_tariff]" required>
-                <option value="COSY" {% if config.charging.default_tariff=='COSY' %}selected{% endif %}>COSY
+            <label for="startup_state">Startup State:</label>
+            <select id="startup_state" name="charging[startup_state]" required>
+                <option value="FREERUN" {% if config.charging.startup_state=='FREERUN' %}selected{% endif %}>FREERUN
                 </option>
-                <option value="OCTGO" {% if config.charging.default_tariff=='OCTGO' %}selected{% endif %}>OCTGO
+                <option value="COSY" {% if config.charging.startup_state=='COSY' %}selected{% endif %}>COSY
                 </option>
-                <option value="IOCTGO" {% if config.charging.default_tariff=='IOCTGO' %}selected{% endif %}>IOCTGO
+                <option value="OCTGO" {% if config.charging.startup_state=='OCTGO' %}selected{% endif %}>OCTGO
                 </option>
-                <option value="FLUX" {% if config.charging.default_tariff=='FLUX' %}selected{% endif %}>FLUX
+                <option value="IOCTGO" {% if config.charging.startup_state=='IOCTGO' %}selected{% endif %}>IOCTGO
+                </option>
+                <option value="FLUX" {% if config.charging.startup_state=='FLUX' %}selected{% endif %}>FLUX
                 </option>
             </select>
         </div>

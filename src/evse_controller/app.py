@@ -316,7 +316,7 @@ def config_page():
             # Update charging settings
             config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))
             config.SOLAR_PERIOD_MAX_CHARGE = int(request.form.get('charging[solar_period_max_charge]', 80))
-            config.DEFAULT_TARIFF = request.form.get('charging[default_tariff]', 'COSY')
+            config.STARTUP_STATE = request.form.get('charging[startup_state]', 'FREERUN')
 
             # Update logging settings
             config.FILE_LOGGING = request.form.get('logging[file_level]', 'INFO')

@@ -69,7 +69,18 @@ def ensure_ocpp_disabled():
 tariffManager = TariffManager()
 evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
-execState = ExecState.SMART
+
+# Set initial state based on startup configuration
+from evse_controller.utils.config import config
+if config.STARTUP_STATE == "FREERUN":
+    execState = ExecState.FREERUN
+    evseController.setFreeRun()  # Set the EVSE to freerun mode
+else:
+    # For tariff-based startup states
+    execState = ExecState.SMART
+    # Set the appropriate tariff based on startup state if it's a valid tariff
+    if config.STARTUP_STATE in tariffManager.tariffs:
+        tariffManager.set_tariff(config.STARTUP_STATE)
 scheduler = Scheduler()
 
 def get_system_state():

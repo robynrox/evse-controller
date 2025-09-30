@@ -54,7 +54,7 @@ class Config:
                         'charging': {
                             'max_charge_percent': 90,
                             'solar_period_max_charge': 80,
-                            'default_tariff': 'COSY'
+                            'startup_state': 'FREERUN'
                         },
                         'logging': {
                             'file_level': 'INFO',
@@ -122,9 +122,9 @@ class Config:
         self._config_data[section][key] = value
 
     # Charging section properties
-    DEFAULT_TARIFF = property(
-        lambda self: self._get_config_value("charging", "default_tariff", "COSY"),
-        lambda self, value: self._set_config_value("charging", "default_tariff", value)
+    STARTUP_STATE = property(
+        lambda self: self._get_config_value("charging", "startup_state", "FREERUN"),
+        lambda self, value: self._set_config_value("charging", "startup_state", value)
     )
 
     MAX_CHARGE_PERCENT = property(
@@ -313,7 +313,7 @@ class Config:
             'charging': {
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
                 'solar_period_max_charge': self.SOLAR_PERIOD_MAX_CHARGE,
-                'default_tariff': self.DEFAULT_TARIFF
+                'startup_state': self.STARTUP_STATE
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

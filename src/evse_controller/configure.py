@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
     "charging": {
         "max_charge_percent": 90,
         "solar_period_max_charge": 80,
-        "default_tariff": "COSY"
+        "startup_state": "FREERUN"
     },
     "logging": {
         "file_level": "INFO",
@@ -143,6 +143,19 @@ def load_existing_config() -> Dict[str, Any]:
                 # Ensure InfluxDB bucket exists (backward compatibility)
                 if "influxdb" in config and "bucket" not in config["influxdb"]:
                     config["influxdb"]["bucket"] = "powerlog"
+
+                # Handle backward compatibility: migrate default_tariff to startup_state if needed
+                if "charging" in config:
+                    if "startup_state" not in config["charging"]:
+                        # Only migrate if startup_state doesn't already exist
+                        if "default_tariff" in config["charging"]:
+                            # Migrate from old default_tariff to new startup_state
+                            config["charging"]["startup_state"] = config["charging"]["default_tariff"]
+                            # Remove the old default_tariff to avoid duplication
+                            del config["charging"]["default_tariff"]
+                        else:
+                            # If neither exists, set to the new default
+                            config["charging"]["startup_state"] = "FREERUN"
 
                 return config
         except yaml.YAMLError as e:
@@ -473,10 +486,10 @@ def interactive_config():
         validate=lambda text: text.isdigit() and 0 <= int(text) <= 100
     ).ask())
 
-    config["charging"]["default_tariff"] = questionary.select(
-        "Default tariff:",
-        choices=["COSY", "OCTGO", "FLUX"],  # Added FLUX as an option
-        default=config["charging"]["default_tariff"]
+    config["charging"]["startup_state"] = questionary.select(
+        "Startup state:",
+        choices=["FREERUN", "COSY", "OCTGO", "FLUX"],  # FREERUN as default option
+        default=config["charging"]["startup_state"]
     ).ask()
 
     # Logging configuration
