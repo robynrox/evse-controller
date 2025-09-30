@@ -25,6 +25,8 @@ class TariffManager:
     def set_tariff(self, tariff_name):
         if tariff_name in self.tariffs:
             self.current_tariff = self.tariffs[tariff_name]
+            # Initialize the newly selected tariff
+            self.current_tariff.initialize_tariff()
             return True
         return False
 

@@ -48,6 +48,22 @@ class WallboxAPIWithOCPP(Wallbox):
         except requests.exceptions.HTTPError as err:
             raise err
     
+    def is_ocpp_enabled(self, charger_id):
+        """
+        Check if OCPP is currently enabled for a charger
+        
+        Args:
+            charger_id (str): The ID of the charger
+            
+        Returns:
+            bool: True if OCPP is enabled, False otherwise
+            
+        Raises:
+            requests.exceptions.HTTPError: If the API request fails
+        """
+        status = self.get_ocpp_status(charger_id)
+        return status.get("type") == "ocpp"
+    
     def _send_ocpp_configuration(self, charger_id, address=None, charge_point_identity=None, password=None, ocpp_type="ocpp"):
         """
         Internal method to send OCPP configuration to a charger

@@ -2,6 +2,10 @@ from ..base import Tariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.utils.logging_config import debug, info, warning, error
+from datetime import datetime
 
 class IntelligentOctopusGoTariff(Tariff):
     """Implementation of Intelligent Octopus Go tariff logic.
@@ -45,6 +49,12 @@ class IntelligentOctopusGoTariff(Tariff):
             "high": {"start": "05:30", "end": "23:30", "import_rate": 0.3142, "export_rate": 0.15}
         }
         
+        # OCPP state tracking
+        self._ocpp_enabled = None  # Will be initialized to current state
+        self._last_ocpp_disable_day = None  # Track which day OCPP was last disabled (YYYY-MM-DD)
+        self._scheduled_ocpp_disable_time = None  # Track when OCPP should be disabled based on SoC threshold (minutes since midnight)
+        self._last_soc_check = -1  # Track last SoC to detect changes
+        
         # === CONFIGURABLE PARAMETERS ===
         # These parameters can be adjusted based on your specific setup
         self.BATTERY_CAPACITY_KWH = battery_capacity_kwh  # Default value for your setup
@@ -82,6 +92,16 @@ class IntelligentOctopusGoTariff(Tariff):
         # Cheap rate duration in hours (23:30-05:30)
         self.CHEAP_RATE_DURATION_HOURS = 6  # Hours of cheap rate period (23:30-05:30)
 
+        # OCPP smart operation parameters
+        self.SMART_OCPP_OPERATION = True  # Flag to enable smart OCPP management
+        self.OCPP_ENABLE_SOC_THRESHOLD = 30  # Enable OCPP when SoC drops below this level (%)
+        self.OCPP_DISABLE_SOC_THRESHOLD = 95  # Disable OCPP when SoC reaches this level (%)
+        self.OCPP_ENABLE_TIME_STR = "23:30"  # Time to enable OCPP if SoC threshold not reached
+        self.OCPP_DISABLE_TIME_STR = "11:00"  # Time to disable OCPP if SoC threshold not reached
+        # Convert times to minutes since midnight for internal use
+        self.OCPP_ENABLE_TIME = self._time_to_minutes("23:30")
+        self.OCPP_DISABLE_TIME = self._time_to_minutes("11:00")
+
         # === END CONFIGURABLE PARAMETERS ===
         
     def _time_to_minutes(self, time_str: str) -> int:
@@ -104,6 +124,52 @@ class IntelligentOctopusGoTariff(Tariff):
         """
         self.BULK_DISCHARGE_START_TIME_STR = time_str
         self.BULK_DISCHARGE_START_TIME = self._time_to_minutes(time_str)
+        
+    def _get_next_half_hour(self, current_minutes: int) -> int:
+        """Get the next half-hour boundary in minutes since midnight.
+        
+        Args:
+            current_minutes: Current time in minutes since midnight
+            
+        Returns:
+            int: Minutes since midnight for next half-hour boundary (XX:00 or XX:30)
+        """
+        # Calculate the next half-hour boundary (either :00 or :30)
+        current_hour = current_minutes // 60
+        current_minute = current_minutes % 60
+        
+        if current_minute < 30:
+            # Go to next half hour (XX:30)
+            return current_hour * 60 + 30
+        else:
+            # Go to next hour :00
+            return (current_hour + 1) * 60
+
+    def _is_time_in_ocpp_operational_window(self, start_time_minutes: int, end_time_minutes: int, current_time_minutes: int) -> bool:
+        """Check if current time is within the OCPP operational window (handles cross-midnight periods).
+        
+        This function determines if the current time falls within the OCPP operational
+        window, which spans from OCPP enable time (23:30) to OCPP disable time (11:00).
+        Since this window crosses midnight, special handling is required.
+        
+        For example: Enable at 23:30, disable at 11:00 the next day
+        - Matches times from 23:30 to 24:00 (midnight) on day 1
+        - Matches times from 00:00 to 11:00 on day 2
+        
+        Args:
+            start_time_minutes: OCPP enable time in minutes since midnight (e.g., 1410 for 23:30)
+            end_time_minutes: OCPP disable time in minutes since midnight (e.g., 660 for 11:00)
+            current_time_minutes: Current time in minutes since midnight
+            
+        Returns:
+            bool: True if current time is within the OCPP operational window
+        """
+        if start_time_minutes < end_time_minutes:
+            # Period doesn't cross midnight (unusual for OCPP but handle it)
+            return start_time_minutes <= current_time_minutes < end_time_minutes
+        else:
+            # Normal case: OCPP period crosses midnight (e.g., 23:30 to 11:00)
+            return current_time_minutes >= start_time_minutes or current_time_minutes < end_time_minutes
 
     def is_off_peak(self, dayMinute: int) -> bool:
         """Check if current time is during off-peak period (23:30-05:30)"""
@@ -234,3 +300,201 @@ class IntelligentOctopusGoTariff(Tariff):
                 levels.append((start, end, current))
             levels.append((32 * 240, 99999, 32))
         evseController.setHomeDemandLevels(levels)
+        
+        # Manage OCPP state periodically - this is called regularly by the tariff system
+        # so it's a good place to check and update OCPP state
+        if self.SMART_OCPP_OPERATION:
+            self._manage_ocpp_state(state, dayMinute)
+
+    def initialize_ocpp_state(self):
+        """Initialize the OCPP state by checking the current state from the Wallbox API."""
+        try:
+            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+            from evse_controller.utils.config import config
+            
+            if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
+                warning("Cannot initialize OCPP state - missing Wallbox credentials or serial number")
+                self._ocpp_enabled = False
+                return False
+
+            wallbox_api = WallboxAPIWithOCPP(
+                config.WALLBOX_USERNAME,
+                config.WALLBOX_PASSWORD
+            )
+            
+            is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
+            
+            self._ocpp_enabled = is_ocpp_enabled
+            info(f"IOCTGO: Initialized OCPP state, currently {'enabled' if is_ocpp_enabled else 'disabled'}")
+            return True
+            
+        except Exception as e:
+            error(f"Failed to initialize OCPP state: {e}")
+            self._ocpp_enabled = False  # Default to disabled if we can't check
+            return False
+
+    def should_enable_ocpp(self, state: EvseAsyncState, dayMinute: int) -> bool:
+        """Determine if OCPP should be enabled based on SoC or time.
+        
+        Args:
+            state: Current EVSE state including battery level
+            dayMinute: Current time in minutes since midnight
+            
+        Returns:
+            bool: True if OCPP should be enabled AND is currently disabled
+        """
+        if not self.SMART_OCPP_OPERATION:
+            return False
+            
+        # Don't enable if OCPP is already enabled
+        if self._ocpp_enabled:
+            return False
+            
+        # Check if SoC has dropped below threshold
+        if state.battery_level != -1 and state.battery_level <= self.OCPP_ENABLE_SOC_THRESHOLD:
+            return True
+            
+        # Check if it's time to enable (23:30) and not already past the disable time
+        enable_time_minutes = self._time_to_minutes(self.OCPP_ENABLE_TIME_STR)
+        disable_time_minutes = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+        
+        # Check if we're in the right time period for enable
+        if self._is_time_in_ocpp_operational_window(enable_time_minutes, disable_time_minutes, dayMinute):
+            if dayMinute >= enable_time_minutes:
+                return True
+                
+        return False
+
+    def should_disable_ocpp(self, state: EvseAsyncState, dayMinute: int) -> bool:
+        """Determine if OCPP should be disabled based on SoC or time.
+        
+        Args:
+            state: Current EVSE state including battery level
+            dayMinute: Current time in minutes since midnight
+            
+        Returns:
+            bool: True if OCPP should be disabled AND is currently enabled
+        """
+        if not self.SMART_OCPP_OPERATION:
+            return False
+        
+        # Don't disable if OCPP is already disabled
+        if not self._ocpp_enabled:
+            return False
+            
+        # Don't disable if we've already disabled OCPP today (once per day limit)
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        if self._last_ocpp_disable_day == current_date:
+            return False
+            
+        # OCPP should never be disabled before 05:30 AM
+        EARLY_DISABLE_CUTOFF = self._time_to_minutes("05:30")
+        
+        # Check if SoC has reached the high threshold
+        if (state.battery_level != -1 and 
+            state.battery_level >= self.OCPP_DISABLE_SOC_THRESHOLD):
+            # If we haven't scheduled a disable time yet, calculate and store it
+            if self._scheduled_ocpp_disable_time is None:
+                # Calculate the next half-hour boundary after reaching the threshold,
+                # but don't allow disabling before 05:30
+                next_half_hour = self._get_next_half_hour(dayMinute)
+                # Ensure the scheduled time is not before the early disable cutoff
+                self._scheduled_ocpp_disable_time = max(next_half_hour, EARLY_DISABLE_CUTOFF)
+            
+            # Check if we've reached the scheduled disable time
+            if dayMinute >= self._scheduled_ocpp_disable_time:
+                return True
+        
+        # Check if it's time to disable (11:00) regardless of SoC
+        disable_time_minutes = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+        if dayMinute >= disable_time_minutes:
+            return True
+            
+        return False
+
+    def initialize_tariff(self):
+        """Initialize IOCTGO tariff-specific state.
+        
+        This method is called when IOCTGO tariff is first selected to initialize
+        the OCPP state by checking the current state from the Wallbox API.
+        
+        Returns:
+            bool: True if initialization was successful
+        """
+        # Initialize OCPP state when tariff is first activated
+        return self.initialize_ocpp_state()
+
+    def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
+        """Manage OCPP state internally by calling Wallbox API directly.
+        
+        This method handles OCPP enable/disable operations without changing
+        the main system state. It's called periodically to check if OCPP
+        state should be changed based on SoC or time conditions.
+        
+        Args:
+            state: Current EVSE state including battery level
+            dayMinute: Current time in minutes since midnight
+        """
+        try:
+            # Use cached OCPP state - only we should be changing it under normal circumstances
+            is_ocpp_currently_enabled = self._ocpp_enabled if self._ocpp_enabled is not None else False
+            
+            # Check if we should enable OCPP
+            should_enable = self.should_enable_ocpp(state, dayMinute)
+            
+            # Check if we should disable OCPP
+            should_disable = self.should_disable_ocpp(state, dayMinute)
+            
+            # Handle OCPP state changes by calling Wallbox API only when needed
+            if should_enable and not is_ocpp_currently_enabled:
+                info("IOCTGO: Enabling OCPP via Wallbox API")
+                
+                if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
+                    debug("Cannot enable OCPP - missing Wallbox credentials or serial number")
+                    return
+
+                wallbox_api = WallboxAPIWithOCPP(
+                    config.WALLBOX_USERNAME,
+                    config.WALLBOX_PASSWORD
+                )
+                
+                response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
+                self._ocpp_enabled = True
+                info(f"OCPP enabled successfully via Wallbox API: {response}")
+                
+                # Clear any scheduled disable time since we're enabling OCPP
+                self._scheduled_ocpp_disable_time = None
+                
+                # Publish OCPP state change event for any listeners
+                event_bus = EventBus()
+                event_bus.publish(EventType.OCPP_STATE_CHANGED, dayMinute)
+                
+            elif should_disable and is_ocpp_currently_enabled:
+                info("IOCTGO: Disabling OCPP via Wallbox API")
+                
+                if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
+                    debug("Cannot disable OCPP - missing Wallbox credentials or serial number")
+                    return
+
+                wallbox_api = WallboxAPIWithOCPP(
+                    config.WALLBOX_USERNAME,
+                    config.WALLBOX_PASSWORD
+                )
+                
+                response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
+                self._ocpp_enabled = False
+                info(f"OCPP disabled successfully via Wallbox API: {response}")
+                
+                # Track that OCPP was disabled today (for once-per-day limit)
+                self._last_ocpp_disable_day = datetime.now().strftime("%Y-%m-%d")
+                
+                # Clear the scheduled disable time since we've executed it
+                self._scheduled_ocpp_disable_time = None
+                
+                # Publish OCPP state change event for any listeners
+                event_bus = EventBus()
+                event_bus.publish(EventType.OCPP_STATE_CHANGED, dayMinute)
+                
+        except Exception as e:
+            error(f"Failed to manage OCPP state: {e}")

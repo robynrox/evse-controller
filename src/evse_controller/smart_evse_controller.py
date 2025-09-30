@@ -264,7 +264,6 @@ def main():
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "ioctgo":
-                    ensure_ocpp_disabled()
                     info("Switching to Intelligent Octopus Go tariff")
                     tariffManager.set_tariff("IOCTGO")
                     execState = ExecState.SMART
