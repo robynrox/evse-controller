@@ -128,10 +128,10 @@
     <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
         <img src="" id="cosy-icon" alt="Cosy Octopus">
     </button>
-    <button class="svg-button" onclick="sendCommand('free_run')" title="Allow EVSE to operate independently without Modbus control">
+    <button class="svg-button" onclick="sendCommand('freerun')" title="Allow EVSE to operate independently without Modbus control">
         <img src="" id="free-run-icon" alt="Free Run Mode">
     </button>
-    <button class="svg-button" onclick="sendCommand('enable-ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
+    <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
         <img src="" id="ocpp-icon" alt="OCPP Mode">
     </button>
     <button onclick="toggleLegend()">Show/Hide Command Reference</button>
@@ -211,17 +211,13 @@
             <div class="legend-item">
                 <img src="" id="legend-free-run-icon" alt="Free Run icon">
                 <div class="legend-text">
-                    <strong>Free Run:</strong> Allow EVSE to operate independently without Modbus control
+                    <strong>Free Run:</strong> Turn off OCPP mode if it is on and allow EVSE to operate independently without Modbus control
                 </div>
             </div>
             <div class="legend-item">
+                <img src="" id="legend-ocpp-icon" alt="OCPP Mode icon">
                 <div class="legend-text">
-                    <strong>Enable OCPP:</strong> Enable OCPP connectivity for the Wallbox
-                </div>
-            </div>
-            <div class="legend-item">
-                <div class="legend-text">
-                    <strong>Disable OCPP:</strong> Disable OCPP connectivity for the Wallbox
+                    <strong>OCPP Mode:</strong> Enter OCPP mode - EVSE controlled via OCPP protocol
                 </div>
             </div>
         </div>
@@ -423,6 +419,7 @@
         document.getElementById('legend-flux-icon').src = ICONS.FLUX;
         document.getElementById('legend-cosy-icon').src = ICONS.COSY;
         document.getElementById('legend-free-run-icon').src = ICONS.FREERUN;
+        document.getElementById('legend-ocpp-icon').src = ICONS.OCPP;
     });
 
     async function sendCommand(command) {
