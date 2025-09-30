@@ -42,9 +42,8 @@ VALID_COMMANDS = {
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
-    'free_run': 'Allow EVSE to operate independently without Modbus control',
-    'enable-ocpp': 'Enable OCPP connectivity for the Wallbox (enters OCPP mode)',
-    'disable-ocpp': 'Disable OCPP connectivity for the Wallbox (exits to FREERUN)',
+    'freerun': 'Turn off OCPP mode if it is on, and enter FREERUN mode',
+    'ocpp': 'Turn on OCPP mode in which a third party controls the Wallbox',
     'solar': 'Solar-only charging mode',
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'

@@ -955,10 +955,7 @@ class EvseController(PowerMonitorObserver):
             error(f"Failed to set free run state: {e}")
 
     def enableOcpp(self):
-        """Enable OCPP connectivity for the Wallbox.
-        
-        This method can only be called when the EVSE is in FREERUN state.
-        """
+        """Enable OCPP mode for the Wallbox."""
         try:
             # Check if EVSE is in FREERUN state
             evse_state = self.evse.get_state()
@@ -998,10 +995,7 @@ class EvseController(PowerMonitorObserver):
             return False
 
     def disableOcpp(self):
-        """Disable OCPP connectivity for the Wallbox.
-        
-        This method must be called before exiting FREERUN state if OCPP was enabled.
-        """
+        """Disable OCPP mode for the Wallbox."""
         try:
             # Check current OCPP status to avoid unnecessary API calls
             wallbox_api = WallboxAPIWithOCPP(

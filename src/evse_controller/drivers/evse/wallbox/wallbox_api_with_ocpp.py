@@ -95,7 +95,7 @@ class WallboxAPIWithOCPP(Wallbox):
     
     def enable_ocpp(self, charger_id):
         """
-        Enable OCPP connectivity for a charger
+        Enable OCPP mode for a charger
         
         Args:
             charger_id (str): The ID of the charger
@@ -120,7 +120,7 @@ class WallboxAPIWithOCPP(Wallbox):
     
     def disable_ocpp(self, charger_id):
         """
-        Disable OCPP configuration for a charger
+        Disable OCPP mode for a charger
         
         Args:
             charger_id (str): The ID of the charger

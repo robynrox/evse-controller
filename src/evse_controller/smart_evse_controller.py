@@ -65,6 +65,25 @@ def ensure_ocpp_disabled():
     return success
 
 
+def enter_freerun_mode():
+    """Enter FREERUN mode with proper OCPP handling."""
+    global execState  # Ensure we can modify the global execState variable
+    info("Disabling OCPP mode for the Wallbox (exits to FREERUN)")
+    success = evseController.disableOcpp()
+    if success:
+        print("OCPP disabled successfully")
+        execState = ExecState.FREERUN
+        # Publish OCPP state change event to implement the 2-minute delay
+        from evse_controller.drivers.evse.event_bus import EventBus, EventType
+        event_bus = EventBus()
+        event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+    else:
+        print("Failed to disable OCPP")
+    # Set freerun mode at the EVSE level regardless of OCPP success/failure
+    evseController.setFreeRun()
+    return success
+
+
 # Initialize core components at module level
 tariffManager = TariffManager()
 evseController = EvseController(tariffManager)
@@ -148,9 +167,8 @@ def print_usage_instructions():
     print("f | flux: Switch to Octopus Flux tariff")
     print("cosy: Switch to Cosy Octopus tariff")
     print("u | unplug: Allow the vehicle to be unplugged")
-    print("z | freerun: Allow EVSE to operate independently without Modbus control")
-    print("enable-ocpp: Enable OCPP connectivity for the Wallbox (enters OCPP mode)")
-    print("disable-ocpp: Disable OCPP connectivity for the Wallbox (exits to FREERUN)")
+    print("z | freerun | disable-ocpp: Turn off OCPP if it is on and enter free-running state")
+    print("enable-ocpp: Turn on OCPP mode and monitor Wallbox state only")
     print("solar: Enter solar-only charging mode")
     print("power-home: Enter power home state")
     print("balance: Enter power balance state")
@@ -276,13 +294,11 @@ def main():
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
-                case "z" | "freerun":
-                    info("Entering free run state - EVSE will operate independently")
-                    evseController.setFreeRun()
-                    execState = ExecState.FREERUN
+                case "z" | "freerun" | "disable-ocpp":
+                    success = enter_freerun_mode()
                     nextStateCheck = time.time()
-                case "enable-ocpp":
-                    info("Enabling OCPP connectivity for the Wallbox")
+                case "enable-ocpp" | "ocpp":
+                    info("Enabling OCPP mode for the Wallbox")
                     # Go to FREERUN first to match OCPP operational mode
                     evseController.setFreeRun()
                     execState = ExecState.FREERUN
@@ -296,19 +312,6 @@ def main():
                         print("OCPP enabled successfully and OCPP state entered")
                     else:
                         print("Failed to enable OCPP")
-                case "disable-ocpp":
-                    info("Disabling OCPP connectivity for the Wallbox")
-                    success = evseController.disableOcpp()
-                    if success:
-                        print("OCPP disabled successfully")
-                        execState = ExecState.FREERUN
-                        # Publish OCPP state change event to implement the 2-minute delay
-                        from evse_controller.drivers.evse.event_bus import EventBus, EventType
-                        event_bus = EventBus()
-                        event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
-                    else:
-                        print("Failed to disable OCPP")
-                    # Stay in current state
                 case "solar":
                     # If we're in OCPP state, disable OCPP first
                     ensure_ocpp_disabled()
