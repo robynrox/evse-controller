@@ -388,11 +388,12 @@ If you don't have access to a 3D printer, you MUST still properly enclose the Sh
 
 Always follow local electrical codes and safety regulations when installing power monitoring equipment.
 
-## Running as a Service
+## Additional Documentation
 
-For instructions on running EVSE Controller as a persistent service that starts automatically with your system, see
-[CONTAINER_GUIDE.md](CONTAINER_GUIDE.md). This includes:
-- Container-based deployment (recommended)
-- Alternative deployment methods
-- Monitoring and maintenance
-- Troubleshooting guide
+This project includes several documentation files:
+
+- [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md) - Instructions for running as a persistent service with container-based deployment
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Guidelines for contributing to the project
+- [TESTING_CHECKLIST.md](TESTING_CHECKLIST.md) - Checklist for testing features and functionality
+- [TODO.md](TODO.md) - Current development tasks and roadmap items
+- [CONTRIBUTORS.md](CONTRIBUTORS.md) - List of project contributors
