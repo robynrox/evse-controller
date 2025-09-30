@@ -72,11 +72,7 @@ DEFAULT_CONFIG = {
     },
     "logging": {
         "file_level": "INFO",
-        "console_level": "WARNING",
-        "directory": "log",
-        "file_prefix": "evse",
-        "max_bytes": 10485760,  # 10MB
-        "backup_count": 30
+        "console_level": "WARNING"
     }
 }
 
@@ -505,28 +501,6 @@ def interactive_config():
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default=config["logging"]["console_level"]
     ).ask()
-
-    config["logging"]["directory"] = questionary.text(
-        "Log directory:",
-        default=config["logging"]["directory"]
-    ).ask()
-
-    config["logging"]["file_prefix"] = questionary.text(
-        "Log file prefix:",
-        default=config["logging"]["file_prefix"]
-    ).ask()
-
-    config["logging"]["max_bytes"] = int(questionary.text(
-        "Maximum log file size (bytes):",
-        default=str(config["logging"]["max_bytes"]),
-        validate=lambda text: text.isdigit() and int(text) > 0
-    ).ask())
-
-    config["logging"]["backup_count"] = int(questionary.text(
-        "Number of backup log files to keep:",
-        default=str(config["logging"]["backup_count"]),
-        validate=lambda text: text.isdigit() and int(text) > 0
-    ).ask())
 
     return config
 
