@@ -214,7 +214,7 @@ class IntelligentOctopusGoTariff(Tariff):
             # Use configurable threshold for high SoC
             threshold = self.GRID_IMPORT_THRESHOLD_HIGH_SOC
             levels.append((0, threshold, 0))  # Up to threshold (but not including)
-            levels.append((threshold, threshold + 310, 3))
+            levels.append((threshold, 720, 3))
             for current in range(4, 32):
                 end = current * 240
                 start = end - 240
@@ -227,7 +227,8 @@ class IntelligentOctopusGoTariff(Tariff):
             # Use configurable threshold for low SoC
             threshold = self.GRID_IMPORT_THRESHOLD_LOW_SOC
             levels.append((0, threshold, 0))  # Up to threshold (but not including)
-            for current in range(3, 32):
+            levels.append((threshold, 1080, 3))
+            for current in range(4, 32):
                 start = current * 240
                 end = start + 240
                 levels.append((start, end, current))
