@@ -10,6 +10,7 @@ from evse_controller.utils.config import config
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
             
 try:
     import influxdb_client
@@ -65,6 +66,10 @@ class EvseController(PowerMonitorObserver):
     power consumption and following configured demand levels. It supports various control
     states including smart charging, load following, and bidirectional power flow.
 
+    The controller respects both internal FREERUN state and external OCPP mode. When
+    either is active, the controller will not send commands to the Wallbox to avoid
+    interfering with external control systems.
+
     Args:
         tariffManager: Manager for electricity tariff rules and scheduling
 
@@ -78,6 +83,7 @@ class EvseController(PowerMonitorObserver):
         tariffManager: Manager for electricity tariff rules and scheduling
         batteryChargeLevel (int): Current battery charge level percentage
         evseCurrent (float): Current EVSE charging/discharging rate
+        _ocpp_mode_active (bool): Whether the Wallbox is currently in OCPP mode
     """
 
     def __init__(self, tariffManager):
@@ -182,6 +188,25 @@ class EvseController(PowerMonitorObserver):
 
         self.evse_power_model = SimpleEvseModel()  # Add this line
         self._shutdown_event = threading.Event()
+        
+        # Initialize OCPP state tracking
+        # Check the actual OCPP status but fall back to False if it can't be determined
+        self._ocpp_mode_active = False
+        try:
+            wallbox_api = WallboxAPIWithOCPP(
+                config.WALLBOX_USERNAME,
+                config.WALLBOX_PASSWORD
+            )
+            self._ocpp_mode_active = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
+            info(f"Initial OCPP mode status checked: {'ACTIVE' if self._ocpp_mode_active else 'INACTIVE'}")
+        except Exception as e:
+            error(f"Could not determine initial OCPP status, assuming inactive: {e}")
+            # OCPP remains False if credentials are incorrect or unavailable
+            self._ocpp_mode_active = False
+        
+        # Subscribe to OCPP state change events
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
 
     def _update_channel_metadata(self):
         """Update the channel metadata in the history dictionary.
@@ -807,14 +832,17 @@ class EvseController(PowerMonitorObserver):
         if self.chargerState == EvseState.DISCHARGING and desiredEvseCurrent == 0:
             resetState = True
         if resetState:
-            # Only log ADJUST message and set current when not in FREERUN state
-            if self.state != ControlState.FREERUN:
+            # Only log ADJUST message and set current when not in FREERUN state or OCPP mode
+            if self.state != ControlState.FREERUN and not self._ocpp_mode_active:
                 if (self.evseCurrent != desiredEvseCurrent):
                     info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self._setCurrent(desiredEvseCurrent)
-            else:
+            elif self.state == ControlState.FREERUN:
                 # In FREERUN state, don't log ADJUST message or set current
                 debug("Skipping current adjustment in FREERUN state")
+            elif self._ocpp_mode_active:
+                # In OCPP mode, don't log ADJUST message or set current
+                debug("Skipping current adjustment in OCPP mode")
 
     def setControlState(self, state: ControlState):
         """Set the control state and log the transition."""
@@ -969,8 +997,7 @@ class EvseController(PowerMonitorObserver):
                 config.WALLBOX_PASSWORD
             )
             
-            current_status = wallbox_api.get_ocpp_status(config.WALLBOX_SERIAL)
-            is_ocpp_enabled = current_status.get("type") == "ocpp"
+            is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
             
             # Only make the API call if OCPP is not already enabled
             if not is_ocpp_enabled:
@@ -978,9 +1005,9 @@ class EvseController(PowerMonitorObserver):
                 
                 # Publish OCPP state change event since we made an actual change
                 try:
-                    from evse_controller.drivers.evse.event_bus import EventBus, EventType
                     event_bus = EventBus()
-                    event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+                    # Pass the new OCPP state (True for enabled) and timestamp
+                    event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": True, "timestamp": time.time()})
                 except Exception as e:
                     error(f"Could not publish OCPP state change event: {e}")
                 
@@ -1003,8 +1030,7 @@ class EvseController(PowerMonitorObserver):
                 config.WALLBOX_PASSWORD
             )
             
-            current_status = wallbox_api.get_ocpp_status(config.WALLBOX_SERIAL)
-            is_ocpp_enabled = current_status.get("type") == "ocpp"
+            is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
             
             # Only make the API call if OCPP is actually enabled
             if is_ocpp_enabled:
@@ -1012,9 +1038,9 @@ class EvseController(PowerMonitorObserver):
                 
                 # Publish OCPP state change event since we made an actual change
                 try:
-                    from evse_controller.drivers.evse.event_bus import EventBus, EventType
                     event_bus = EventBus()
-                    event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+                    # Pass the new OCPP state (False for disabled) and timestamp
+                    event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": False, "timestamp": time.time()})
                 except Exception as e:
                     error(f"Could not publish OCPP state change event: {e}")
                 
@@ -1027,6 +1053,36 @@ class EvseController(PowerMonitorObserver):
         except Exception as e:
             error(f"Failed to disable OCPP: {e}")
             return False
+
+    def is_in_ocpp_mode(self) -> bool:
+        """Check if the Wallbox is currently in OCPP mode."""
+        return self._ocpp_mode_active
+
+    def _handle_ocpp_state_change(self, event_data) -> None:
+        """Handle OCPP state change event from the event bus.
+        
+        Args:
+            event_data: Dictionary containing 'ocpp_enabled' (bool) and 'timestamp' (float)
+        """
+        if isinstance(event_data, dict) and "ocpp_enabled" in event_data:
+            self._ocpp_mode_active = event_data["ocpp_enabled"]
+            info(f"OCPP mode status updated via event: {'ACTIVE' if self._ocpp_mode_active else 'INACTIVE'}")
+        else:
+            # Fallback: treat as if OCPP is enabled if we don't have structured data
+            # This maintains backward compatibility if other parts of the system
+            # publish events with just a timestamp
+            if isinstance(event_data, (int, float)):
+                # If event_data is just a timestamp, we need to check current status
+                try:
+                    wallbox_api = WallboxAPIWithOCPP(
+                        config.WALLBOX_USERNAME,
+                        config.WALLBOX_PASSWORD
+                    )
+                    is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
+                    self._ocpp_mode_active = is_ocpp_enabled
+                    info(f"OCPP mode status updated via event: {'ACTIVE' if self._ocpp_mode_active else 'INACTIVE'}")
+                except Exception as e:
+                    error(f"Failed to check OCPP status in event handler: {e}")
 
     def stop(self):
         """Stop the controller and cleanup resources."""
@@ -1041,8 +1097,13 @@ class EvseController(PowerMonitorObserver):
             self._save_history()
             self._save_persistent_state()
             
-            # Stop charging before cleanup
-            self._setCurrent(0)
+            # Stop charging before cleanup, but only if not in FREERUN state or OCPP mode
+            if self.state != ControlState.FREERUN and not self._ocpp_mode_active:
+                self._setCurrent(0)
+            elif self.state == ControlState.FREERUN:
+                debug("Skipping stop command in FREERUN state")
+            elif self._ocpp_mode_active:
+                debug("Skipping stop command in OCPP mode")
 
             # Stop threads first
             if hasattr(self.thread, 'stop'):
