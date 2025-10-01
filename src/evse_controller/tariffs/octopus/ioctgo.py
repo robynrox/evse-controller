@@ -36,7 +36,7 @@ class IntelligentOctopusGoTariff(Tariff):
         time_of_use (dict): Dictionary defining Intelligent Octopus Go time periods and rates
     """
 
-    def __init__(self, battery_capacity_kwh=59, bulk_discharge_start_time="17:30"):
+    def __init__(self, battery_capacity_kwh=59, bulk_discharge_start_time="16:00"):
         """Initialize Intelligent Octopus Go tariff with specific time periods and rates.
         
         Args:
@@ -64,7 +64,7 @@ class IntelligentOctopusGoTariff(Tariff):
         self.MAX_DISCHARGE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT  # Default from config
 
         # Target SoC at start of cheap rate period (23:30)
-        self.TARGET_SOC_AT_CHEAP_START = 54  # For 59kWh battery aiming for 90% by end of cheap period
+        self.TARGET_SOC_AT_CHEAP_START = 54  # For 59kWh battery aiming for 90% by end of cheap period if OCPP off
 
         # Time to start bulk discharge (in "HH:MM" format)
         self.BULK_DISCHARGE_START_TIME_STR = bulk_discharge_start_time  # 17:30
@@ -74,7 +74,7 @@ class IntelligentOctopusGoTariff(Tariff):
         # Minimum discharge current threshold - below this we use load following instead
         # 10A is a reasonable minimum as efficiency of Wallbox dc-to-ac conversion 
         # significantly reduces at lower currents
-        self.MIN_DISCHARGE_CURRENT = 10  # Amps
+        self.MIN_DISCHARGE_CURRENT = 3  # Amps
 
         # Battery state of charge threshold for switching between discharge strategies
         self.SOC_THRESHOLD_FOR_STRATEGY = 50  # Percent
@@ -83,14 +83,11 @@ class IntelligentOctopusGoTariff(Tariff):
         # When SoC >= SOC_THRESHOLD_FOR_STRATEGY, use this threshold
         # Also optimise for always sending up to 240 W back to the grid.
         # (Optimising for lower cost.)
-        self.GRID_IMPORT_THRESHOLD_HIGH_SOC = 200  # Watts
+        self.GRID_IMPORT_THRESHOLD_HIGH_SOC = 0  # Watts
         # When SoC < SOC_THRESHOLD_FOR_STRATEGY, use this threshold
         # Also optimise for always drawing up to 240 W from the grid.
         # (Optimising for the battery to last longer.)
         self.GRID_IMPORT_THRESHOLD_LOW_SOC = 720   # Watts
-
-        # Cheap rate duration in hours (23:30-05:30)
-        self.CHEAP_RATE_DURATION_HOURS = 6  # Hours of cheap rate period (23:30-05:30)
 
         # OCPP smart operation parameters
         self.SMART_OCPP_OPERATION = True  # Flag to enable smart OCPP management
