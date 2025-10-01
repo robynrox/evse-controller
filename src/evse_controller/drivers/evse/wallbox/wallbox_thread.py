@@ -178,6 +178,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
     def _check_and_handle_comms_failures(self):
         """Check if we need to handle communication failures and do so if appropriate"""
+        current_time = time.time()
         with self._state_lock:
             consecutive_errors = self._state.consecutive_connection_errors
             current_state = self._state.evse_state
@@ -196,8 +197,6 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             
         if consecutive_errors < self._reset_attempt_threshold:
             return
-
-        current_time = time.time()
         scaled_cooldown = self._get_scaled_delay(self._reset_cooldown_period)
         time_since_last_reset = current_time - self._last_reset_attempt
 
