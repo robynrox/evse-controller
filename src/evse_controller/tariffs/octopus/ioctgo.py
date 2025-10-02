@@ -6,6 +6,7 @@ from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAP
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.utils.logging_config import debug, info, warning, error
 from datetime import datetime
+import time
 
 class IntelligentOctopusGoTariff(Tariff):
     """Implementation of Intelligent Octopus Go tariff logic.

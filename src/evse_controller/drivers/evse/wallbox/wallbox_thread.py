@@ -212,10 +212,18 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             warning("Reset attempt failed - will retry after cooldown period")
             # Keep the consecutive errors count high so we'll try again after cooldown
 
-    def _handle_ocpp_state_change(self, change_time: float) -> None:
+    def _handle_ocpp_state_change(self, event_data) -> None:
         """Handle OCPP state change event from the event bus."""
+        # The event_data could be the timestamp directly or contain it
+        # If it's a float, use it directly; if it's a dict with a timestamp, extract it
+        # For this specific use case, event_data should be a timestamp
         with self._state_lock:
-            self._last_ocpp_change_time = change_time
+            if isinstance(event_data, (int, float)):
+                self._last_ocpp_change_time = event_data
+            else:
+                # If event_data is a dict or other format, use current time as fallback
+                self._last_ocpp_change_time = time.time()
+                warning(f"OCPP state change handler received unexpected data format: {type(event_data)}, using current time")
     
     def set_last_ocpp_change_time(self, change_time: float) -> None:
         """Set the time of the last OCPP state change to implement delay mechanism.
