@@ -407,11 +407,11 @@ class IntelligentOctopusGoTariff(Tariff):
         return success
 
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
-        """Manage OCPP state internally by calling Wallbox API directly.
+        """Manage OCPP state by publishing events to the event bus.
         
-        This method handles OCPP enable/disable operations without changing
-        the main system state. It's called periodically to check if OCPP
-        state should be changed based on SoC or time conditions.
+        This method handles OCPP enable/disable operations by publishing
+        requests to the event bus, allowing the EvseController to handle
+        the actual operations and maintain state synchronization.
         
         Args:
             state: Current EVSE state including battery level
@@ -427,55 +427,30 @@ class IntelligentOctopusGoTariff(Tariff):
             # Check if we should disable OCPP
             should_disable = self.should_disable_ocpp(state, dayMinute)
             
-            # Handle OCPP state changes by calling Wallbox API only when needed
+            # Handle OCPP state changes by publishing events to the event bus
             if should_enable and not is_ocpp_currently_enabled:
-                info("IOCTGO: Enabling OCPP via Wallbox API")
+                info("IOCTGO: Requesting OCPP enable via event bus")
                 
-                if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
-                    debug("Cannot enable OCPP - missing Wallbox credentials or serial number")
-                    return
-
-                wallbox_api = WallboxAPIWithOCPP(
-                    config.WALLBOX_USERNAME,
-                    config.WALLBOX_PASSWORD
-                )
-                
-                response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
-                self._ocpp_enabled = True
-                info(f"OCPP enabled successfully via Wallbox API: {response}")
-                
-                # When OCPP is enabled, set the initial dynamic disable time to default
-                # and clear any existing dynamic disable time
-                self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
-                
-                # Publish OCPP state change event for any listeners
-                event_bus = EventBus()
-                event_bus.publish(EventType.OCPP_STATE_CHANGED, dayMinute)
+                # Publish OCPP enable request event
+                try:
+                    event_bus = EventBus()
+                    event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
+                    # When OCPP is enabled, set the initial dynamic disable time to default
+                    # and clear any existing dynamic disable time
+                    self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+                except Exception as e:
+                    error(f"Could not publish OCPP enable request event: {e}")
                 
             elif should_disable and is_ocpp_currently_enabled:
-                info("IOCTGO: Disabling OCPP via Wallbox API")
-                
-                if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
-                    debug("Cannot disable OCPP - missing Wallbox credentials or serial number")
-                    return
-
-                wallbox_api = WallboxAPIWithOCPP(
-                    config.WALLBOX_USERNAME,
-                    config.WALLBOX_PASSWORD
-                )
-                
-                response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
-                self._ocpp_enabled = False
-                info(f"OCPP disabled successfully via Wallbox API: {response}")
-                
-
-                
-                # Clear the dynamic disable time since we've executed it
-                self._dynamic_ocpp_disable_time = None
-                
-                # Publish OCPP state change event for any listeners
-                event_bus = EventBus()
-                event_bus.publish(EventType.OCPP_STATE_CHANGED, dayMinute)
+                info("IOCTGO: Requesting OCPP disable via event bus")
+                # Publish OCPP disable request event
+                try:
+                    event_bus = EventBus()
+                    event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
+                    # Clear the dynamic disable time since we've executed it
+                    self._dynamic_ocpp_disable_time = None
+                except Exception as e:
+                    error(f"Could not publish OCPP disable request event: {e}")
                 
             # If OCPP is enabled, check SoC at specific times to potentially update dynamic disable time
             elif is_ocpp_currently_enabled:

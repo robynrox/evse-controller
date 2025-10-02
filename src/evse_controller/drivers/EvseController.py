@@ -204,9 +204,10 @@ class EvseController(PowerMonitorObserver):
             # OCPP remains False if credentials are incorrect or unavailable
             self._ocpp_mode_active = False
         
-        # Subscribe to OCPP state change events
+        # Subscribe to OCPP enable/disable request events
         self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_ENABLE_REQUESTED, self._handle_ocpp_enable_request)
+        self._event_bus.subscribe(EventType.OCPP_DISABLE_REQUESTED, self._handle_ocpp_disable_request)
 
     def _update_channel_metadata(self):
         """Update the channel metadata in the history dictionary.
@@ -985,36 +986,31 @@ class EvseController(PowerMonitorObserver):
     def enableOcpp(self):
         """Enable OCPP mode for the Wallbox."""
         try:
-            # Check if EVSE is in FREERUN state
-            evse_state = self.evse.get_state()
-            if evse_state.evse_state != EvseState.FREERUN:
-                error("OCPP can only be enabled when EVSE is in FREERUN state")
-                return False
+            # Use the controller's internally tracked OCPP state to avoid unnecessary API calls
+            if self._ocpp_mode_active:
+                info("OCPP was already enabled, no action needed")
+                return True
 
-            # Check current OCPP status to avoid unnecessary API calls
+            # OCPP is currently inactive, proceed with enabling
             wallbox_api = WallboxAPIWithOCPP(
                 config.WALLBOX_USERNAME,
                 config.WALLBOX_PASSWORD
             )
             
-            is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
+            response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
             
-            # Only make the API call if OCPP is not already enabled
-            if not is_ocpp_enabled:
-                response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
-                
-                # Publish OCPP state change event since we made an actual change
-                try:
-                    event_bus = EventBus()
-                    # Pass the new OCPP state (True for enabled) and timestamp
-                    event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": True, "timestamp": time.time()})
-                except Exception as e:
-                    error(f"Could not publish OCPP state change event: {e}")
-                
-                info(f"OCPP enabled successfully: {response}")
-            else:
-                info("OCPP was already enabled, no action needed")
+            # Update internal state
+            self._ocpp_mode_active = True
             
+            # Publish OCPP state change event since we made an actual change
+            try:
+                event_bus = EventBus()
+                # Pass the new OCPP state (True for enabled) and timestamp
+                event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": True, "timestamp": time.time()})
+            except Exception as e:
+                error(f"Could not publish OCPP state change event: {e}")
+            
+            info(f"OCPP enabled successfully: {response}")
             return True
             
         except Exception as e:
@@ -1024,65 +1020,64 @@ class EvseController(PowerMonitorObserver):
     def disableOcpp(self):
         """Disable OCPP mode for the Wallbox."""
         try:
-            # Check current OCPP status to avoid unnecessary API calls
+            # Use the controller's internally tracked OCPP state to avoid unnecessary API calls
+            if not self._ocpp_mode_active:
+                info("OCPP was already disabled, no action needed")
+                return True
+
+            # OCPP is currently active, proceed with disabling
             wallbox_api = WallboxAPIWithOCPP(
                 config.WALLBOX_USERNAME,
                 config.WALLBOX_PASSWORD
             )
             
-            is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
+            response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
             
-            # Only make the API call if OCPP is actually enabled
-            if is_ocpp_enabled:
-                response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
-                
-                # Publish OCPP state change event since we made an actual change
-                try:
-                    event_bus = EventBus()
-                    # Pass the new OCPP state (False for disabled) and timestamp
-                    event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": False, "timestamp": time.time()})
-                except Exception as e:
-                    error(f"Could not publish OCPP state change event: {e}")
-                
-                info(f"OCPP disabled successfully: {response}")
-            else:
-                info("OCPP was already disabled, no action needed")
+            # Update internal state
+            self._ocpp_mode_active = False
             
+            # Publish OCPP state change event since we made an actual change
+            try:
+                event_bus = EventBus()
+                # Pass the new OCPP state (False for disabled) and timestamp
+                event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": False, "timestamp": time.time()})
+            except Exception as e:
+                error(f"Could not publish OCPP state change event: {e}")
+            
+            info(f"OCPP disabled successfully: {response}")
             return True
             
         except Exception as e:
             error(f"Failed to disable OCPP: {e}")
             return False
 
-    def is_in_ocpp_mode(self) -> bool:
-        """Check if the Wallbox is currently in OCPP mode."""
-        return self._ocpp_mode_active
-
-    def _handle_ocpp_state_change(self, event_data) -> None:
-        """Handle OCPP state change event from the event bus.
+    def _handle_ocpp_enable_request(self, request_data) -> None:
+        """Handle OCPP enable request event from the event bus.
         
         Args:
-            event_data: Dictionary containing 'ocpp_enabled' (bool) and 'timestamp' (float)
+            request_data: Data associated with the request (can be timestamp or more structured data)
         """
-        if isinstance(event_data, dict) and "ocpp_enabled" in event_data:
-            self._ocpp_mode_active = event_data["ocpp_enabled"]
-            info(f"OCPP mode status updated via event: {'ACTIVE' if self._ocpp_mode_active else 'INACTIVE'}")
+        # Use the controller's main enableOcpp method to avoid code duplication
+        # and ensure proper event publishing
+        success = self.enableOcpp()
+        if success:
+            info("OCPP enabled successfully via enable request")
         else:
-            # Fallback: treat as if OCPP is enabled if we don't have structured data
-            # This maintains backward compatibility if other parts of the system
-            # publish events with just a timestamp
-            if isinstance(event_data, (int, float)):
-                # If event_data is just a timestamp, we need to check current status
-                try:
-                    wallbox_api = WallboxAPIWithOCPP(
-                        config.WALLBOX_USERNAME,
-                        config.WALLBOX_PASSWORD
-                    )
-                    is_ocpp_enabled = wallbox_api.is_ocpp_enabled(config.WALLBOX_SERIAL)
-                    self._ocpp_mode_active = is_ocpp_enabled
-                    info(f"OCPP mode status updated via event: {'ACTIVE' if self._ocpp_mode_active else 'INACTIVE'}")
-                except Exception as e:
-                    error(f"Failed to check OCPP status in event handler: {e}")
+            error("Failed to enable OCPP via enable request")
+
+    def _handle_ocpp_disable_request(self, request_data) -> None:
+        """Handle OCPP disable request event from the event bus.
+        
+        Args:
+            request_data: Data associated with the request (can be timestamp or more structured data)
+        """
+        # Use the controller's main disableOcpp method to avoid code duplication
+        # and ensure proper event publishing
+        success = self.disableOcpp()
+        if success:
+            info("OCPP disabled successfully via disable request")
+        else:
+            error("Failed to disable OCPP via disable request")
 
     def stop(self):
         """Stop the controller and cleanup resources."""

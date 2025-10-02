@@ -47,38 +47,43 @@ class ExecState(Enum):
     FREERUN = 10
     OCPP = 11
 
-# Global variable to track OCPP state
-ocpp_enabled = False
-
 def ensure_ocpp_disabled():
-    """Ensure OCPP is disabled by calling the disable API.
+    """Ensure OCPP is disabled by publishing an OCPP disable request event.
     This function can be called even if OCPP is already disabled.
     """
-    global ocpp_enabled
-    success = evseController.disableOcpp()
-    if success:
+    # Publish OCPP disable request event instead of calling API directly
+    try:
+        from evse_controller.drivers.evse.event_bus import EventBus, EventType
+        event_bus = EventBus()
+        event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
         # Mark as disabled in our logical state
-        ocpp_enabled = False
-        print("OCPP disabled successfully or was already disabled")
-    else:
-        print("Failed to disable OCPP")
-    return success
+        print("OCPP disable request sent successfully")
+        return True
+    except Exception as e:
+        error(f"Failed to send OCPP disable request: {e}")
+        print("Failed to send OCPP disable request")
+        return False
 
 
 def enter_freerun_mode():
     """Enter FREERUN mode with proper OCPP handling."""
     global execState  # Ensure we can modify the global execState variable
     info("Disabling OCPP mode for the Wallbox (exits to FREERUN)")
-    success = evseController.disableOcpp()
-    if success:
-        print("OCPP disabled successfully")
-        execState = ExecState.FREERUN
-        # Publish OCPP state change event to implement the 2-minute delay
+    # Publish OCPP disable request event instead of calling API directly
+    try:
         from evse_controller.drivers.evse.event_bus import EventBus, EventType
         event_bus = EventBus()
-        event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
-    else:
-        print("Failed to disable OCPP")
+        event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
+        print("OCPP disable request sent successfully")
+        success = True
+    except Exception as e:
+        error(f"Failed to send OCPP disable request: {e}")
+        print("Failed to send OCPP disable request")
+        success = False
+    
+    if success:
+        execState = ExecState.FREERUN
+    
     # Set freerun mode at the EVSE level regardless of OCPP success/failure
     evseController.setFreeRun()
     return success
@@ -301,16 +306,23 @@ def main():
                     # Go to FREERUN first to match OCPP operational mode
                     evseController.setFreeRun()
                     execState = ExecState.FREERUN
-                    success = evseController.enableOcpp()
-                    if success:
-                        # Publish OCPP state change event to implement the 2-minute delay
+                    # Publish OCPP enable request event instead of calling API directly
+                    try:
                         from evse_controller.drivers.evse.event_bus import EventBus, EventType
                         event_bus = EventBus()
-                        event_bus.publish(EventType.OCPP_STATE_CHANGED, time.time())
+                        event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
+                        success = True
+                        print("OCPP enable request sent successfully")
+                    except Exception as e:
+                        error(f"Failed to send OCPP enable request: {e}")
+                        print("Failed to send OCPP enable request")
+                        success = False
+                    
+                    if success:
                         execState = ExecState.OCPP
-                        print("OCPP enabled successfully and OCPP state entered")
+                        print("OCPP enable request sent successfully and OCPP state entered")
                     else:
-                        print("Failed to enable OCPP")
+                        print("Failed to send OCPP enable request")
                 case "solar":
                     # If we're in OCPP state, disable OCPP first
                     ensure_ocpp_disabled()
