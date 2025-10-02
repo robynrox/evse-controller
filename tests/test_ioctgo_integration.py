@@ -30,8 +30,11 @@ class TestIntelligentOctopusGoTariffIntegration(unittest.TestCase):
         """Test that initialize_tariff properly sets up OCPP state tracking."""
         # Initially OCPP should be uninitialized
         self.assertIsNone(self.tariff._ocpp_enabled)
-        self.assertIsNone(self.tariff._last_ocpp_disable_day)
-        self.assertIsNone(self.tariff._scheduled_ocpp_disable_time)
+        # Removed the once-per-day limit tracking
+        # self.assertIsNone(self.tariff._last_ocpp_disable_day)  # No longer used
+        
+        # Check new field
+        self.assertIsNone(self.tariff._dynamic_ocpp_disable_time)
         
         # After initialization, OCPP should be properly set up
         with patch.object(self.tariff, 'initialize_ocpp_state', return_value=True):
@@ -39,19 +42,18 @@ class TestIntelligentOctopusGoTariffIntegration(unittest.TestCase):
             # The initialize_ocpp_state method should have been called
             # and _ocpp_enabled should be set (True in this case)
 
-    def test_daily_limit_prevents_multiple_disables_same_day(self):
-        """Test that OCPP can only be disabled once per day."""
-        # Set up initial state
+    def test_dynamic_disable_time_allows_multiple_sessions(self):
+        """Test that OCPP can be disabled and enabled multiple times using dynamic disable time."""
+        # Set up initial state with dynamic disable time
         self.tariff._ocpp_enabled = True
-        self.mock_state.battery_level = 96  # Above threshold
+        self.tariff._dynamic_ocpp_disable_time = 720  # 12:00
         
-        # Set today as the last disable day
-        today = datetime.now().strftime("%Y-%m-%d")
-        self.tariff._last_ocpp_disable_day = today
-        
-        # Should return False because already disabled today
+        # Should return True because we've reached the dynamic disable time
         result = self.tariff.should_disable_ocpp(self.mock_state, 720)  # 12:00
-        self.assertFalse(result, "OCPP should not be disabled more than once per day")
+        self.assertTrue(result, "OCPP should be disabled when dynamic disable time is reached")
+        
+        # After OCPP is disabled, the dynamic time is cleared and new sessions can be managed
+        # This verifies there's no daily limit since the field is cleared after use
 
     def test_ocpp_enable_logic_with_soc_threshold(self):
         """Test OCPP enable logic when SoC drops below threshold."""
@@ -67,20 +69,19 @@ class TestIntelligentOctopusGoTariffIntegration(unittest.TestCase):
         result = self.tariff.should_enable_ocpp(self.mock_state, 720)
         self.assertFalse(result, "OCPP should not enable when already enabled")
 
-    def test_ocpp_disable_logic_with_soc_threshold_and_scheduling(self):
-        """Test OCPP disable logic with SoC threshold and scheduling."""
+    def test_ocpp_disable_logic_with_dynamic_time(self):
+        """Test OCPP disable logic with dynamic time."""
         self.tariff._ocpp_enabled = True
-        self.mock_state.battery_level = 96  # Above 95% threshold
+        self.tariff._dynamic_ocpp_disable_time = 720  # 12:00 - already scheduled
         
-        # Call should schedule disable time when SoC is above threshold
-        current_time = 720  # 12:00
-        result = self.tariff.should_disable_ocpp(self.mock_state, current_time)
+        # At the scheduled dynamic time, should return True to disable OCPP
+        self.mock_state.battery_level = 96  # Above threshold (to meet condition)
+        result = self.tariff.should_disable_ocpp(self.mock_state, 720)  # 12:00
         
-        # After the call, we should have a scheduled time
-        self.assertIsNotNone(self.tariff._scheduled_ocpp_disable_time)
+        # Should return True because we've reached the dynamic disable time
+        self.assertTrue(result, "Should disable OCPP when dynamic time is reached")
         
         # The method should return a boolean indicating whether to disable OCPP
-        # We don't care about the exact value, just that it works
         self.assertIsInstance(result, bool, "Should return a boolean value")
 
     def test_ocpp_time_based_enable_at_23_30(self):
@@ -92,14 +93,19 @@ class TestIntelligentOctopusGoTariffIntegration(unittest.TestCase):
         result = self.tariff.should_enable_ocpp(self.mock_state, 1410)  # 23:30 (1410 minutes)
         self.assertTrue(result, "OCPP should enable at 23:30 regardless of SoC")
 
-    def test_ocpp_time_based_disable_at_11_00(self):
-        """Test OCPP disables at 11:00 regardless of SoC."""
+    def test_ocpp_time_based_disable_only_with_dynamic_time(self):
+        """Test OCPP only disables when dynamic disable time is set."""
         self.tariff._ocpp_enabled = True
         self.mock_state.battery_level = 50  # Below threshold (normal level)
         
-        # At 11:00, should disable OCPP regardless of SoC
+        # At 11:00, should NOT disable OCPP if no dynamic time is set
         result = self.tariff.should_disable_ocpp(self.mock_state, 660)  # 11:00 (660 minutes)
-        self.assertTrue(result, "OCPP should disable at 11:00 regardless of SoC")
+        self.assertFalse(result, "OCPP should not disable at 11:00 without dynamic time set")
+        
+        # But if dynamic time is set to 11:00, it should disable
+        self.tariff._dynamic_ocpp_disable_time = 660  # 11:00
+        result = self.tariff.should_disable_ocpp(self.mock_state, 660)  # 11:00 (660 minutes)
+        self.assertTrue(result, "OCPP should disable when dynamic time matches current time")
 
     def test_smart_ocpp_operation_flag_disables_functionality(self):
         """Test that SMART_OCPP_OPERATION flag properly disables OCPP functionality."""

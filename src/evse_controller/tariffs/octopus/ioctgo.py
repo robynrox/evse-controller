@@ -51,9 +51,9 @@ class IntelligentOctopusGoTariff(Tariff):
         
         # OCPP state tracking
         self._ocpp_enabled = None  # Will be initialized to current state
-        self._last_ocpp_disable_day = None  # Track which day OCPP was last disabled (YYYY-MM-DD)
         self._scheduled_ocpp_disable_time = None  # Track when OCPP should be disabled based on SoC threshold (minutes since midnight)
         self._last_soc_check = -1  # Track last SoC to detect changes
+        self._dynamic_ocpp_disable_time = None  # Track dynamic OCPP disable time (minutes since midnight)
         
         # === CONFIGURABLE PARAMETERS ===
         # These parameters can be adjusted based on your specific setup
@@ -379,35 +379,12 @@ class IntelligentOctopusGoTariff(Tariff):
         if not self._ocpp_enabled:
             return False
             
-        # Don't disable if we've already disabled OCPP today (once per day limit)
-        from datetime import datetime
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        if self._last_ocpp_disable_day == current_date:
-            return False
-            
-        # OCPP should never be disabled before 05:30 AM
-        EARLY_DISABLE_CUTOFF = self._time_to_minutes("05:30")
-        
-        # Check if SoC has reached the high threshold
-        if (state.battery_level != -1 and 
-            state.battery_level >= self.OCPP_DISABLE_SOC_THRESHOLD):
-            # If we haven't scheduled a disable time yet, calculate and store it
-            if self._scheduled_ocpp_disable_time is None:
-                # Calculate the next half-hour boundary after reaching the threshold,
-                # but don't allow disabling before 05:30
-                next_half_hour = self._get_next_half_hour(dayMinute)
-                # Ensure the scheduled time is not before the early disable cutoff
-                self._scheduled_ocpp_disable_time = max(next_half_hour, EARLY_DISABLE_CUTOFF)
-            
-            # Check if we've reached the scheduled disable time
-            if dayMinute >= self._scheduled_ocpp_disable_time:
+        # Check if the dynamic disable time has been reached
+        if self._dynamic_ocpp_disable_time is not None:
+            # If we've reached the dynamic disable time, return True to disable OCPP
+            if dayMinute >= self._dynamic_ocpp_disable_time:
                 return True
         
-        # Check if it's time to disable (11:00) regardless of SoC
-        disable_time_minutes = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
-        if dayMinute >= disable_time_minutes:
-            return True
-            
         return False
 
     def initialize_tariff(self):
@@ -420,7 +397,14 @@ class IntelligentOctopusGoTariff(Tariff):
             bool: True if initialization was successful
         """
         # Initialize OCPP state when tariff is first activated
-        return self.initialize_ocpp_state()
+        success = self.initialize_ocpp_state()
+        
+        # If OCPP is already enabled when this tariff starts, set the default disable time
+        if success and self._ocpp_enabled:
+            # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME_STR (11:00)
+            self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+        
+        return success
 
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
         """Manage OCPP state internally by calling Wallbox API directly.
@@ -460,8 +444,9 @@ class IntelligentOctopusGoTariff(Tariff):
                 self._ocpp_enabled = True
                 info(f"OCPP enabled successfully via Wallbox API: {response}")
                 
-                # Clear any scheduled disable time since we're enabling OCPP
-                self._scheduled_ocpp_disable_time = None
+                # When OCPP is enabled, set the initial dynamic disable time to default
+                # and clear any existing dynamic disable time
+                self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
                 
                 # Publish OCPP state change event for any listeners
                 event_bus = EventBus()
@@ -483,15 +468,59 @@ class IntelligentOctopusGoTariff(Tariff):
                 self._ocpp_enabled = False
                 info(f"OCPP disabled successfully via Wallbox API: {response}")
                 
-                # Track that OCPP was disabled today (for once-per-day limit)
-                self._last_ocpp_disable_day = datetime.now().strftime("%Y-%m-%d")
+
                 
-                # Clear the scheduled disable time since we've executed it
-                self._scheduled_ocpp_disable_time = None
+                # Clear the dynamic disable time since we've executed it
+                self._dynamic_ocpp_disable_time = None
                 
                 # Publish OCPP state change event for any listeners
                 event_bus = EventBus()
                 event_bus.publish(EventType.OCPP_STATE_CHANGED, dayMinute)
                 
+            # If OCPP is enabled, check SoC at specific times to potentially update dynamic disable time
+            elif is_ocpp_currently_enabled:
+                # Check if we're at the right times to evaluate SoC for dynamic disable time
+                # Based on the requirement: check at xx:29, xx:59 (which includes 05:29)
+                current_minute = dayMinute % 60
+                
+                # Check for xx:29 and xx:59 times (29 and 59 minutes past the hour)
+                is_check_time = (current_minute == 29 or current_minute == 59)
+                
+                if is_check_time:
+                    # Check if SoC has reached the threshold for dynamic disable time
+                    EARLY_DISABLE_CUTOFF = self._time_to_minutes("05:30")
+                    
+                    if (state.battery_level != -1 and 
+                        state.battery_level >= self.OCPP_DISABLE_SOC_THRESHOLD):
+                        # If SoC has reached threshold and dynamic disable time needs updating
+                        # Apply consistent logic for all check times: schedule for next half-hour boundary
+                        # But only allow scheduling from 05:30 onwards (EARLY_DISABLE_CUTOFF)
+                        if (dayMinute >= self._time_to_minutes("05:29") and 
+                            (self._dynamic_ocpp_disable_time is None or 
+                             self._dynamic_ocpp_disable_time == self._time_to_minutes(self.OCPP_DISABLE_TIME_STR))):
+                            # Calculate the next aligned half-hour boundary as the new disable time
+                            next_aligned_time = self._get_next_half_hour(dayMinute)
+                            # Ensure the new time is not before the early cutoff (05:30)  
+                            new_disable_time = max(next_aligned_time, EARLY_DISABLE_CUTOFF)
+                            
+                            # Only update if the calculated time is valid (not in the past relative to now)
+                            if new_disable_time > dayMinute:
+                                self._dynamic_ocpp_disable_time = new_disable_time
+                                info(f"IOCTGO: Updated dynamic OCPP disable time to {self._minutes_to_time_str(self._dynamic_ocpp_disable_time)} "
+                                     f"based on SoC threshold reached ({state.battery_level}%)")
+        
         except Exception as e:
             error(f"Failed to manage OCPP state: {e}")
+
+    def _minutes_to_time_str(self, minutes: int) -> str:
+        """Convert minutes since midnight to HH:MM format.
+        
+        Args:
+            minutes: Minutes since midnight
+            
+        Returns:
+            str: Time in HH:MM format
+        """
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours:02d}:{mins:02d}"
