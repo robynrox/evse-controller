@@ -217,6 +217,20 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       max_charge_percent: 90           # Maximum battery charge percentage
       solar_period_max_charge: 80      # Maximum charge during solar generation periods
       startup_state: "FREERUN"         # FREERUN, COSY, OCTGO, IOCTGO or FLUX (previously the key had the name of default_tariff)
+    tariffs:
+      ioctgo:
+        battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
+        target_soc_at_cheap_start: 54  # Target SoC at start of cheap rate period (23:30)
+        bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
+        min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
+        soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
+        grid_import_threshold_high_soc: 0   # Grid import threshold when SoC is high (W)
+        grid_import_threshold_low_soc: 720  # Grid import threshold when SoC is low (W)
+        smart_ocpp_operation: true     # Enable intelligent OCPP management
+        ocpp_enable_soc_threshold: 30  # Enable OCPP when SoC drops below this level (%)
+        ocpp_disable_soc_threshold: 95 # Disable OCPP when SoC reaches this level (%)
+        ocpp_enable_time: "23:30"      # Time to enable OCPP if SoC threshold not reached
+        ocpp_disable_time: "11:00"     # Time to disable OCPP if SoC threshold not reached
     ```
 
   Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
@@ -258,6 +272,22 @@ Detailed explanation of each configuration option:
 - `max_charge_percent`: Maximum battery charge percentage (0-100)
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
+
+#### Intelligent Octopus Go Tariff Section
+The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. These parameters **cannot be configured using the interactive text-based configuration tool** and must be edited directly in `config.yaml` when using that approach instead of the web interface.
+
+- `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
+- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (0-100)
+- `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
+- `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
+- `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100)
+- `grid_import_threshold_high_soc`: When SoC >= threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover the house load completely
+- `grid_import_threshold_low_soc`: When SoC < threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover most of the house load with a small amount coming from the grid
+- `smart_ocpp_operation`: Flag to enable intelligent OCPP management based on SoC and time (true/false)
+- `ocpp_enable_soc_threshold`: Enable OCPP when SoC drops below this level (0-100)
+- `ocpp_disable_soc_threshold`: Disable OCPP in the next half hour slot when SoC rises to this level (0-100)
+- `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")
+- `ocpp_disable_time`: Time to disable OCPP even if the SoC does not rise to the desired level in "HH:MM" format (default "11:00")
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
