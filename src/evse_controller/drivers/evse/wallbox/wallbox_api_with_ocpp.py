@@ -7,7 +7,11 @@ from wallbox import Wallbox
 
 
 class WallboxAPIWithOCPP(Wallbox):
-    """Extended Wallbox class that includes support for OCPP endpoints"""
+    """Extended Wallbox class that includes support for OCPP endpoints.
+    
+    This class includes a 5-minute cache for OCPP status requests to prevent
+    excessive API calls and potential rate-limiting issues.
+    """
     
     def __init__(self, username, password, requestGetTimeout=None, jwtTokenDrift=0):
         """
@@ -25,6 +29,9 @@ class WallboxAPIWithOCPP(Wallbox):
         self._ocpp_status_cache = {}
         self._ocpp_status_cache_timestamp = {}
         self._cache_timeout = 300  # 5 minutes in seconds
+        
+        # Initialize cache for OCPP configuration credentials (these rarely change)
+        self._ocpp_config_cache = {}
     
     def _get_cache_key(self, charger_id):
         """Generate a cache key for the given charger_id."""
@@ -41,19 +48,55 @@ class WallboxAPIWithOCPP(Wallbox):
         
         return (current_time - cached_time) < self._cache_timeout
     
-    def _clear_cache(self, charger_id=None):
-        """Clear the OCPP status cache, either for a specific charger or all chargers."""
+    def _clear_status_cache(self, charger_id=None):
+        """Clear the OCPP status cache, either for a specific charger or all chargers.
+        
+        The config cache is not cleared as those parameters rarely change.
+        """
         if charger_id is None:
-            # Clear all cache
+            # Clear all status cache
             self._ocpp_status_cache.clear()
             self._ocpp_status_cache_timestamp.clear()
         else:
-            # Clear cache for specific charger
+            # Clear status cache for specific charger
             cache_key = self._get_cache_key(charger_id)
             if cache_key in self._ocpp_status_cache:
                 del self._ocpp_status_cache[cache_key]
             if cache_key in self._ocpp_status_cache_timestamp:
                 del self._ocpp_status_cache_timestamp[cache_key]
+    
+    def _get_ocpp_config_params(self, charger_id):
+        """Get OCPP configuration parameters with persistent caching.
+        
+        This method caches the OCPP configuration parameters (address, chargePointIdentity, password)
+        which rarely change, reducing the need for status API calls.
+        
+        Args:
+            charger_id (str): The ID of the charger
+            
+        Returns:
+            dict: The configuration parameters
+        """
+        cache_key = self._get_cache_key(charger_id)
+        
+        # Check if we have cached config parameters
+        if cache_key in self._ocpp_config_cache:
+            return self._ocpp_config_cache[cache_key]
+        
+        # Get current OCPP status to retrieve the configuration parameters
+        current_status = self.get_ocpp_status(charger_id)
+        
+        # Extract the configuration parameters that rarely change
+        config_params = {
+            "address": current_status.get("address"),
+            "chargePointIdentity": current_status.get("chargePointIdentity"), 
+            "password": current_status.get("password")
+        }
+        
+        # Cache the configuration parameters persistently
+        self._ocpp_config_cache[cache_key] = config_params
+        
+        return config_params
     
     def get_ocpp_status(self, charger_id):
         """
@@ -171,25 +214,20 @@ class WallboxAPIWithOCPP(Wallbox):
         Raises:
             requests.exceptions.HTTPError: If the API request fails
         """
-        # Get current OCPP status
-        current_status = self.get_ocpp_status(charger_id)
+        # Get the OCPP configuration parameters (credentials that rarely change)
+        config_params = self._get_ocpp_config_params(charger_id)
         
-        # Check if OCPP is already enabled
-        if current_status.get("type") == "ocpp":
-            # OCPP is already enabled, no need to make API call
-            return {"message": "OCPP was already enabled, no action needed", "status": "unchanged"}
-        
-        # Use the current configuration but change the type to "ocpp" to enable
+        # Update the type to enable OCPP
         result = self._send_ocpp_configuration(
             charger_id, 
-            current_status.get("address"), 
-            current_status.get("chargePointIdentity"), 
-            current_status.get("password"), 
+            config_params.get("address"), 
+            config_params.get("chargePointIdentity"), 
+            config_params.get("password"), 
             "ocpp"
         )
         
-        # Clear the cache after successful update
-        self._clear_cache(charger_id)
+        # Clear the status cache after successful update (config cache is kept)
+        self._clear_status_cache(charger_id)
         
         return result
     
@@ -206,26 +244,20 @@ class WallboxAPIWithOCPP(Wallbox):
         Raises:
             requests.exceptions.HTTPError: If the API request fails
         """
-        # Get current OCPP status
-        current_status = self.get_ocpp_status(charger_id)
+        # Get the OCPP configuration parameters (credentials that rarely change)
+        config_params = self._get_ocpp_config_params(charger_id)
         
-        # Check if OCPP is already disabled
-        if current_status.get("type") != "ocpp":
-            # OCPP is already disabled, no need to make API call
-            return {"message": "OCPP was already disabled, no action needed", "status": "unchanged"}
-        
-        # Use the current configuration but change the type to "wallbox" to disable
+        # Update the type to disable OCPP
         result = self._send_ocpp_configuration(
             charger_id, 
-            current_status.get("address"), 
-            current_status.get("chargePointIdentity"), 
-            current_status.get("password"), 
+            config_params.get("address"), 
+            config_params.get("chargePointIdentity"), 
+            config_params.get("password"), 
             "wallbox"
         )
         
-        # Clear the cache after successful update
-        self._clear_cache(charger_id)
+        # Clear the status cache after successful update (config cache is kept)
+        self._clear_status_cache(charger_id)
         
         return result
-    
-    
+
