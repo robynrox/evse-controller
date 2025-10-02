@@ -325,6 +325,20 @@ def config_page():
             config.SIMULATOR_BATTERY_CAPACITY_KWH = float(request.form.get('simulator[battery_capacity]', 50))
             config.SIMULATOR_SPEED = int(request.form.get('simulator[speed]', 60))
 
+            # Update Intelligent Octopus Go tariff parameters
+            config.IOCTGO_BATTERY_CAPACITY_KWH = float(request.form.get('tariffs.ioctgo[battery_capacity_kwh]', 59))
+            config.IOCTGO_TARGET_SOC_AT_CHEAP_START = int(request.form.get('tariffs.ioctgo[target_soc_at_cheap_start]', 54))
+            config.IOCTGO_BULK_DISCHARGE_START_TIME = request.form.get('tariffs.ioctgo[bulk_discharge_start_time]', '16:00')
+            config.IOCTGO_MIN_DISCHARGE_CURRENT = float(request.form.get('tariffs.ioctgo[min_discharge_current]', 3))
+            config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = int(request.form.get('tariffs.ioctgo[soc_threshold_for_strategy]', 50))
+            config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = int(request.form.get('tariffs.ioctgo[grid_import_threshold_high_soc]', 0))
+            config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = int(request.form.get('tariffs.ioctgo[grid_import_threshold_low_soc]', 720))
+            config.IOCTGO_SMART_OCPP_OPERATION = bool(request.form.get('tariffs.ioctgo[smart_ocpp_operation]'))
+            config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = int(request.form.get('tariffs.ioctgo[ocpp_enable_soc_threshold]', 30))
+            config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = int(request.form.get('tariffs.ioctgo[ocpp_disable_soc_threshold]', 95))
+            config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
+            config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
+
             # Handle channel configuration for both devices
             devices = ['primary']
             if config.SHELLY_SECONDARY_URL:

@@ -63,6 +63,22 @@ class Config:
                             'file_prefix': 'evse',
                             'max_bytes': 10485760,
                             'backup_count': 30
+                        },
+                        'tariffs': {
+                            'ioctgo': {
+                                'battery_capacity_kwh': 59,
+                                'target_soc_at_cheap_start': 54,
+                                'bulk_discharge_start_time': '16:00',
+                                'min_discharge_current': 3,
+                                'soc_threshold_for_strategy': 50,
+                                'grid_import_threshold_high_soc': 0,
+                                'grid_import_threshold_low_soc': 720,
+                                'smart_ocpp_operation': True,
+                                'ocpp_enable_soc_threshold': 30,
+                                'ocpp_disable_soc_threshold': 95,
+                                'ocpp_enable_time': '23:30',
+                                'ocpp_disable_time': '11:00'
+                            }
                         }
                     }
             else:
@@ -177,6 +193,67 @@ class Config:
     WALLBOX_MAX_DISCHARGE_CURRENT = property(
         lambda self: self._get_config_value("wallbox", "max_discharge_current", 32),
         lambda self, value: self._set_config_value("wallbox", "max_discharge_current", value)
+    )
+
+    # Intelligent Octopus Go tariff parameters
+    IOCTGO_BATTERY_CAPACITY_KWH = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "battery_capacity_kwh", 59),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "battery_capacity_kwh", value)
+    )
+
+    IOCTGO_TARGET_SOC_AT_CHEAP_START = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", value)
+    )
+
+    IOCTGO_BULK_DISCHARGE_START_TIME = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "bulk_discharge_start_time", "16:00"),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "bulk_discharge_start_time", value)
+    )
+
+    IOCTGO_MIN_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "min_discharge_current", 3),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_discharge_current", value)
+    )
+
+    IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", value)
+    )
+
+    IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", 0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", value)
+    )
+
+    IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", 720),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", value)
+    )
+
+    IOCTGO_SMART_OCPP_OPERATION = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "smart_ocpp_operation", True),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "smart_ocpp_operation", value)
+    )
+
+    IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", 30),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", value)
+    )
+
+    IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", 95),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", value)
+    )
+
+    IOCTGO_OCPP_ENABLE_TIME = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_enable_time", "23:30"),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_enable_time", value)
+    )
+
+    IOCTGO_OCPP_DISABLE_TIME = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_disable_time", "11:00"),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_time", value)
     )
 
     # Wallbox simulator properties
@@ -314,6 +391,22 @@ class Config:
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
                 'solar_period_max_charge': self.SOLAR_PERIOD_MAX_CHARGE,
                 'startup_state': self.STARTUP_STATE
+            },
+            'tariffs': {
+                'ioctgo': {
+                    'battery_capacity_kwh': self.IOCTGO_BATTERY_CAPACITY_KWH,
+                    'target_soc_at_cheap_start': self.IOCTGO_TARGET_SOC_AT_CHEAP_START,
+                    'bulk_discharge_start_time': self.IOCTGO_BULK_DISCHARGE_START_TIME,
+                    'min_discharge_current': self.IOCTGO_MIN_DISCHARGE_CURRENT,
+                    'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+                    'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
+                    'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
+                    'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,
+                    'ocpp_enable_soc_threshold': self.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD,
+                    'ocpp_disable_soc_threshold': self.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD,
+                    'ocpp_enable_time': self.IOCTGO_OCPP_ENABLE_TIME,
+                    'ocpp_disable_time': self.IOCTGO_OCPP_DISABLE_TIME
+                }
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

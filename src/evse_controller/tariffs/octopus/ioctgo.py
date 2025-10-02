@@ -36,12 +36,12 @@ class IntelligentOctopusGoTariff(Tariff):
         time_of_use (dict): Dictionary defining Intelligent Octopus Go time periods and rates
     """
 
-    def __init__(self, battery_capacity_kwh=59, bulk_discharge_start_time="16:00"):
+    def __init__(self, battery_capacity_kwh=None, bulk_discharge_start_time=None):
         """Initialize Intelligent Octopus Go tariff with specific time periods and rates.
         
         Args:
-            battery_capacity_kwh (int): Battery capacity in kWh (typically 30, 40, or 59)
-            bulk_discharge_start_time (str): Time to start bulk discharge in "HH:MM" format
+            battery_capacity_kwh (int): Battery capacity in kWh (typically 30, 40, or 59) - if None, uses config value
+            bulk_discharge_start_time (str): Time to start bulk discharge in "HH:MM" format - if None, uses config value
         """
         super().__init__()
         self.time_of_use = {
@@ -57,47 +57,48 @@ class IntelligentOctopusGoTariff(Tariff):
         
         # === CONFIGURABLE PARAMETERS ===
         # These parameters can be adjusted based on your specific setup
-        self.BATTERY_CAPACITY_KWH = battery_capacity_kwh  # Default value for your setup
+        self.BATTERY_CAPACITY_KWH = battery_capacity_kwh if battery_capacity_kwh is not None else config.IOCTGO_BATTERY_CAPACITY_KWH
 
         # Maximum charge/discharge current in Amps (typically based on your Wallbox)
         self.MAX_CHARGE_CURRENT = config.WALLBOX_MAX_CHARGE_CURRENT  # Default from config
         self.MAX_DISCHARGE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT  # Default from config
 
         # Target SoC at start of cheap rate period (23:30)
-        self.TARGET_SOC_AT_CHEAP_START = 54  # For 59kWh battery aiming for 90% by end of cheap period if OCPP off
+        self.TARGET_SOC_AT_CHEAP_START = config.IOCTGO_TARGET_SOC_AT_CHEAP_START  # For 59kWh battery aiming for 90% by end of cheap period if OCPP off
 
-        # Time to start bulk discharge (in "HH:MM" format)
-        self.BULK_DISCHARGE_START_TIME_STR = bulk_discharge_start_time  # 17:30
+        # Time to start bulk discharge (in "HH:MM" format) - if not provided as parameter, use config value
+        bulk_discharge_start_time = bulk_discharge_start_time if bulk_discharge_start_time is not None else config.IOCTGO_BULK_DISCHARGE_START_TIME
+        self.BULK_DISCHARGE_START_TIME_STR = bulk_discharge_start_time
         # Convert to minutes since midnight for internal use
         self.BULK_DISCHARGE_START_TIME = self._time_to_minutes(bulk_discharge_start_time)
 
         # Minimum discharge current threshold - below this we use load following instead
         # 10A is a reasonable minimum as efficiency of Wallbox dc-to-ac conversion 
         # significantly reduces at lower currents
-        self.MIN_DISCHARGE_CURRENT = 3  # Amps
+        self.MIN_DISCHARGE_CURRENT = config.IOCTGO_MIN_DISCHARGE_CURRENT  # Amps
 
         # Battery state of charge threshold for switching between discharge strategies
-        self.SOC_THRESHOLD_FOR_STRATEGY = 50  # Percent
+        self.SOC_THRESHOLD_FOR_STRATEGY = config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY  # Percent
 
         # Grid power import thresholds for enabling discharge (in Watts)
         # When SoC >= SOC_THRESHOLD_FOR_STRATEGY, use this threshold
         # Also optimise for always sending up to 240 W back to the grid.
         # (Optimising for lower cost.)
-        self.GRID_IMPORT_THRESHOLD_HIGH_SOC = 0  # Watts
+        self.GRID_IMPORT_THRESHOLD_HIGH_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC  # Watts
         # When SoC < SOC_THRESHOLD_FOR_STRATEGY, use this threshold
         # Also optimise for always drawing up to 240 W from the grid.
         # (Optimising for the battery to last longer.)
-        self.GRID_IMPORT_THRESHOLD_LOW_SOC = 720   # Watts
+        self.GRID_IMPORT_THRESHOLD_LOW_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC   # Watts
 
         # OCPP smart operation parameters
-        self.SMART_OCPP_OPERATION = True  # Flag to enable smart OCPP management
-        self.OCPP_ENABLE_SOC_THRESHOLD = 30  # Enable OCPP when SoC drops below this level (%)
-        self.OCPP_DISABLE_SOC_THRESHOLD = 95  # Disable OCPP when SoC reaches this level (%)
-        self.OCPP_ENABLE_TIME_STR = "23:30"  # Time to enable OCPP if SoC threshold not reached
-        self.OCPP_DISABLE_TIME_STR = "11:00"  # Time to disable OCPP if SoC threshold not reached
+        self.SMART_OCPP_OPERATION = config.IOCTGO_SMART_OCPP_OPERATION  # Flag to enable smart OCPP management
+        self.OCPP_ENABLE_SOC_THRESHOLD = config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD  # Enable OCPP when SoC drops below this level (%)
+        self.OCPP_DISABLE_SOC_THRESHOLD = config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD  # Disable OCPP when SoC reaches this level (%)
+        self.OCPP_ENABLE_TIME_STR = config.IOCTGO_OCPP_ENABLE_TIME  # Time to enable OCPP if SoC threshold not reached
+        self.OCPP_DISABLE_TIME_STR = config.IOCTGO_OCPP_DISABLE_TIME  # Time to disable OCPP if SoC threshold not reached
         # Convert times to minutes since midnight for internal use
-        self.OCPP_ENABLE_TIME = self._time_to_minutes("23:30")
-        self.OCPP_DISABLE_TIME = self._time_to_minutes("11:00")
+        self.OCPP_ENABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_ENABLE_TIME)
+        self.OCPP_DISABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_DISABLE_TIME)
 
         # === END CONFIGURABLE PARAMETERS ===
         
@@ -114,7 +115,7 @@ class IntelligentOctopusGoTariff(Tariff):
         return hours * 60 + minutes
         
     def set_bulk_discharge_start_time(self, time_str: str):
-        """Update the bulk discharge start time.
+        """Update the bulk discharge start time (for testing).
         
         Args:
             time_str (str): Time in "HH:MM" format
@@ -351,9 +352,9 @@ class IntelligentOctopusGoTariff(Tariff):
         if state.battery_level != -1 and state.battery_level <= self.OCPP_ENABLE_SOC_THRESHOLD:
             return True
             
-        # Check if it's time to enable (23:30) and not already past the disable time
-        enable_time_minutes = self._time_to_minutes(self.OCPP_ENABLE_TIME_STR)
-        disable_time_minutes = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+        # Check if it's time to enable and not already past the disable time
+        enable_time_minutes = self.OCPP_ENABLE_TIME
+        disable_time_minutes = self.OCPP_DISABLE_TIME
         
         # Check if we're in the right time period for enable
         if self._is_time_in_ocpp_operational_window(enable_time_minutes, disable_time_minutes, dayMinute):
@@ -401,8 +402,8 @@ class IntelligentOctopusGoTariff(Tariff):
         
         # If OCPP is already enabled when this tariff starts, set the default disable time
         if success and self._ocpp_enabled:
-            # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME_STR (11:00)
-            self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+            # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME
+            self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
         
         return success
 
@@ -437,7 +438,7 @@ class IntelligentOctopusGoTariff(Tariff):
                     event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
                     # When OCPP is enabled, set the initial dynamic disable time to default
                     # and clear any existing dynamic disable time
-                    self._dynamic_ocpp_disable_time = self._time_to_minutes(self.OCPP_DISABLE_TIME_STR)
+                    self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
                 except Exception as e:
                     error(f"Could not publish OCPP enable request event: {e}")
                 
@@ -472,7 +473,7 @@ class IntelligentOctopusGoTariff(Tariff):
                         # But only allow scheduling from 05:30 onwards (EARLY_DISABLE_CUTOFF)
                         if (dayMinute >= self._time_to_minutes("05:29") and 
                             (self._dynamic_ocpp_disable_time is None or 
-                             self._dynamic_ocpp_disable_time == self._time_to_minutes(self.OCPP_DISABLE_TIME_STR))):
+                             self._dynamic_ocpp_disable_time == self.OCPP_DISABLE_TIME)):
                             # Calculate the next aligned half-hour boundary as the new disable time
                             next_aligned_time = self._get_next_half_hour(dayMinute)
                             # Ensure the new time is not before the early cutoff (05:30)  
