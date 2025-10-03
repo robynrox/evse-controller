@@ -384,7 +384,7 @@ class IntelligentOctopusGoTariff(Tariff):
         # Check if the dynamic disable time has been reached
         if self._dynamic_ocpp_disable_time is not None:
             # If we've reached the dynamic disable time, return True to disable OCPP
-            if dayMinute >= self._dynamic_ocpp_disable_time:
+            if self._dynamic_ocpp_disable_time <= dayMinute < self.OCPP_ENABLE_TIME:
                 return True
         
         return False
