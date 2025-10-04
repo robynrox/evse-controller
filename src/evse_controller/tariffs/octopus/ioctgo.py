@@ -5,8 +5,8 @@ from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.utils.logging_config import debug, info, warning, error
-from datetime import datetime
 import time
+import threading
 
 class IntelligentOctopusGoTariff(Tariff):
     """Implementation of Intelligent Octopus Go tariff logic.
@@ -56,6 +56,9 @@ class IntelligentOctopusGoTariff(Tariff):
         self._last_soc_check = -1  # Track last SoC to detect changes
         self._dynamic_ocpp_disable_time = None  # Track dynamic OCPP disable time (minutes since midnight)
         
+        # Threading lock for safe access to _ocpp_enabled state
+        self._state_lock = threading.Lock()
+        
         # === CONFIGURABLE PARAMETERS ===
         # These parameters can be adjusted based on your specific setup
         self.BATTERY_CAPACITY_KWH = battery_capacity_kwh if battery_capacity_kwh is not None else config.IOCTGO_BATTERY_CAPACITY_KWH
@@ -101,6 +104,10 @@ class IntelligentOctopusGoTariff(Tariff):
         self.OCPP_ENABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_ENABLE_TIME)
         self.OCPP_DISABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_DISABLE_TIME)
 
+        # Subscribe to OCPP state change events to keep internal state synchronized
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_changed)
+        
         # === END CONFIGURABLE PARAMETERS ===
         
     def _time_to_minutes(self, time_str: str) -> int:
@@ -308,9 +315,6 @@ class IntelligentOctopusGoTariff(Tariff):
     def initialize_ocpp_state(self):
         """Initialize the OCPP state by checking the current state from the Wallbox API."""
         try:
-            from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
-            from evse_controller.utils.config import config
-            
             if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
                 warning("Cannot initialize OCPP state - missing Wallbox credentials or serial number")
                 self._ocpp_enabled = False
@@ -346,7 +350,10 @@ class IntelligentOctopusGoTariff(Tariff):
             return False
             
         # Don't enable if OCPP is already enabled
-        if self._ocpp_enabled:
+        with self._state_lock:
+            ocpp_enabled = self._ocpp_enabled
+            
+        if ocpp_enabled:
             return False
             
         # Check if SoC has dropped below threshold
@@ -378,13 +385,17 @@ class IntelligentOctopusGoTariff(Tariff):
             return False
         
         # Don't disable if OCPP is already disabled
-        if not self._ocpp_enabled:
+        with self._state_lock:
+            ocpp_enabled = self._ocpp_enabled
+            dynamic_disable_time = self._dynamic_ocpp_disable_time
+            
+        if not ocpp_enabled:
             return False
             
         # Check if the dynamic disable time has been reached
-        if self._dynamic_ocpp_disable_time is not None:
+        if dynamic_disable_time is not None:
             # If we've reached the dynamic disable time, return True to disable OCPP
-            if self._dynamic_ocpp_disable_time <= dayMinute < self.OCPP_ENABLE_TIME:
+            if dynamic_disable_time <= dayMinute < self.OCPP_ENABLE_TIME:
                 return True
         
         return False
@@ -402,9 +413,12 @@ class IntelligentOctopusGoTariff(Tariff):
         success = self.initialize_ocpp_state()
         
         # If OCPP is already enabled when this tariff starts, set the default disable time
-        if success and self._ocpp_enabled:
-            # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME
-            self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
+        if success:
+            with self._state_lock:
+                ocpp_enabled = self._ocpp_enabled
+                if ocpp_enabled:
+                    # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME
+                    self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
         
         return success
 
@@ -420,8 +434,9 @@ class IntelligentOctopusGoTariff(Tariff):
             dayMinute: Current time in minutes since midnight
         """
         try:
-            # Use cached OCPP state - only we should be changing it under normal circumstances
-            is_ocpp_currently_enabled = self._ocpp_enabled if self._ocpp_enabled is not None else False
+            # Use thread-safe access to OCPP state
+            with self._state_lock:
+                is_ocpp_currently_enabled = self._ocpp_enabled if self._ocpp_enabled is not None else False
             
             # Check if we should enable OCPP
             should_enable = self.should_enable_ocpp(state, dayMinute)
@@ -439,7 +454,8 @@ class IntelligentOctopusGoTariff(Tariff):
                     event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
                     # When OCPP is enabled, set the initial dynamic disable time to default
                     # and clear any existing dynamic disable time
-                    self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
+                    with self._state_lock:
+                        self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
                 except Exception as e:
                     error(f"Could not publish OCPP enable request event: {e}")
                 
@@ -450,7 +466,8 @@ class IntelligentOctopusGoTariff(Tariff):
                     event_bus = EventBus()
                     event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
                     # Clear the dynamic disable time since we've executed it
-                    self._dynamic_ocpp_disable_time = None
+                    with self._state_lock:
+                        self._dynamic_ocpp_disable_time = None
                 except Exception as e:
                     error(f"Could not publish OCPP disable request event: {e}")
                 
@@ -472,9 +489,11 @@ class IntelligentOctopusGoTariff(Tariff):
                         # If SoC has reached threshold and dynamic disable time needs updating
                         # Apply consistent logic for all check times: schedule for next half-hour boundary
                         # But only allow scheduling from 05:30 onwards (EARLY_DISABLE_CUTOFF)
+                        with self._state_lock:
+                            dynamic_time_check = self._dynamic_ocpp_disable_time
                         if (dayMinute >= self._time_to_minutes("05:29") and 
-                            (self._dynamic_ocpp_disable_time is None or 
-                             self._dynamic_ocpp_disable_time == self.OCPP_DISABLE_TIME)):
+                            (dynamic_time_check is None or 
+                             dynamic_time_check == self.OCPP_DISABLE_TIME)):
                             # Calculate the next aligned half-hour boundary as the new disable time
                             next_aligned_time = self._get_next_half_hour(dayMinute)
                             # Ensure the new time is not before the early cutoff (05:30)  
@@ -482,7 +501,8 @@ class IntelligentOctopusGoTariff(Tariff):
                             
                             # Only update if the calculated time is valid (not in the past relative to now)
                             if new_disable_time > dayMinute:
-                                self._dynamic_ocpp_disable_time = new_disable_time
+                                with self._state_lock:
+                                    self._dynamic_ocpp_disable_time = new_disable_time
                                 info(f"IOCTGO: Updated dynamic OCPP disable time to {self._minutes_to_time_str(self._dynamic_ocpp_disable_time)} "
                                      f"based on SoC threshold reached ({state.battery_level}%)")
         
@@ -501,3 +521,22 @@ class IntelligentOctopusGoTariff(Tariff):
         hours = minutes // 60
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
+
+    def _handle_ocpp_state_changed(self, is_enabled: bool):
+        """Handle OCPP state change events from the event bus.
+        
+        Args:
+            is_enabled: True if OCPP is enabled, False if disabled
+        """
+        with self._state_lock:
+            old_state = self._ocpp_enabled
+            self._ocpp_enabled = is_enabled
+            info(f"IOCTGO: OCPP state changed from {'enabled' if old_state else 'disabled'} to {'enabled' if is_enabled else 'disabled'}")
+
+    def _cleanup(self):
+        """Clean up event bus subscriptions when the tariff is destroyed."""
+        if hasattr(self, '_event_bus'):
+            try:
+                self._event_bus.unsubscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_changed)
+            except:
+                pass  # Ignore errors during cleanup
