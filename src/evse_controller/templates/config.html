@@ -27,6 +27,16 @@
         border-left: 2px solid #eee;
         margin-bottom: 15px;
     }
+    
+    /* Notification styles */
+    .notification {
+        background-color: #e7f3ff;
+        border: 1px solid #bde0ff;
+        border-radius: 4px;
+        padding: 10px;
+        margin: 10px 0;
+        color: #004085;
+    }
 </style>
 {% endblock %}
 
@@ -288,13 +298,17 @@
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
         </div>
         <div class="form-group">
-            <label for="default_tariff">Default Tariff:</label>
-            <select id="default_tariff" name="charging[default_tariff]" required>
-                <option value="COSY" {% if config.charging.default_tariff=='COSY' %}selected{% endif %}>COSY
+            <label for="startup_state">Startup State:</label>
+            <select id="startup_state" name="charging[startup_state]" required>
+                <option value="FREERUN" {% if config.charging.startup_state=='FREERUN' %}selected{% endif %}>FREERUN
                 </option>
-                <option value="OCTGO" {% if config.charging.default_tariff=='OCTGO' %}selected{% endif %}>OCTGO
+                <option value="COSY" {% if config.charging.startup_state=='COSY' %}selected{% endif %}>COSY
                 </option>
-                <option value="FLUX" {% if config.charging.default_tariff=='FLUX' %}selected{% endif %}>FLUX
+                <option value="OCTGO" {% if config.charging.startup_state=='OCTGO' %}selected{% endif %}>OCTGO
+                </option>
+                <option value="IOCTGO" {% if config.charging.startup_state=='IOCTGO' %}selected{% endif %}>IOCTGO
+                </option>
+                <option value="FLUX" {% if config.charging.startup_state=='FLUX' %}selected{% endif %}>FLUX
                 </option>
             </select>
         </div>
@@ -327,6 +341,88 @@
                 <option value="CRITICAL" {% if config.logging.console_level=='CRITICAL' %}selected{% endif %}>
                     CRITICAL</option>
             </select>
+        </div>
+    </div>
+    <div class="config-section">
+        <h2>Intelligent Octopus Go Tariff Configuration</h2>
+        <div class="form-group">
+            <label for="ioctgo_battery_capacity_kwh">Vehicle Battery Capacity (kWh):</label>
+            <input type="number" id="ioctgo_battery_capacity_kwh" name="tariffs.ioctgo[battery_capacity_kwh]" 
+                   value="{{ config.tariffs.ioctgo.battery_capacity_kwh }}" min="10" max="200" step="0.1">
+            <small>Set to 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_target_soc_at_cheap_start">Target SoC at Cheap Rate Start (%):</label>
+            <input type="number" id="ioctgo_target_soc_at_cheap_start" name="tariffs.ioctgo[target_soc_at_cheap_start]" 
+                   value="{{ config.tariffs.ioctgo.target_soc_at_cheap_start }}" min="0" max="100">
+            <small>Target state of charge at start of cheap rate period (23:30).</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_bulk_discharge_start_time">Bulk Discharge Start Time (HH:MM):</label>
+            <input type="text" id="ioctgo_bulk_discharge_start_time" name="tariffs.ioctgo[bulk_discharge_start_time]" 
+                   value="{{ config.tariffs.ioctgo.bulk_discharge_start_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
+            <small>Time to start bulk discharge. Default 16:00. Adjust to start earlier or later</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_min_discharge_current">Minimum Discharge Current (A):</label>
+            <input type="number" id="ioctgo_min_discharge_current" name="tariffs.ioctgo[min_discharge_current]" 
+                   value="{{ config.tariffs.ioctgo.min_discharge_current }}" min="3" max="32" step="1">
+            <small>Minimum sustained discharge current threshold during bulk discharge period. Wallbox efficiency reduces at lower currents</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_soc_threshold_strategy">SoC Threshold for Strategy (%):</label>
+            <input type="number" id="ioctgo_soc_threshold_strategy" name="tariffs.ioctgo[soc_threshold_for_strategy]" 
+                   value="{{ config.tariffs.ioctgo.soc_threshold_for_strategy }}" min="0" max="100">
+            <small>Battery state of charge threshold for switching between discharge strategies</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_grid_import_threshold_high_soc">Grid Import Threshold - High SoC (W):</label>
+            <input type="number" id="ioctgo_grid_import_threshold_high_soc" name="tariffs.ioctgo[grid_import_threshold_high_soc]" 
+                   value="{{ config.tariffs.ioctgo.grid_import_threshold_high_soc }}" min="0" max="5000">
+            <small>When SoC >= threshold, grid import level greater than this amount starts load following. The system aims to cover the house load completely.</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_grid_import_threshold_low_soc">Grid Import Threshold - Low SoC (W):</label>
+            <input type="number" id="ioctgo_grid_import_threshold_low_soc" name="tariffs.ioctgo[grid_import_threshold_low_soc]" 
+                   value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000">
+            <small>When SoC < threshold, grid import level greater than this amount starts load following. The system aims to cover most of the house load with a small amount coming from the grid.</small>
+        </div>
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="ioctgo_smart_ocpp_operation" name="tariffs.ioctgo[smart_ocpp_operation]" 
+                    {% if config.tariffs.ioctgo.smart_ocpp_operation %}checked{% endif %}>
+                Enable Smart OCPP Operation
+            </label>
+            <small>Flag to enable intelligent OCPP management based on SoC and time</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_ocpp_enable_soc_threshold">OCPP Enable SoC Threshold (%):</label>
+            <input type="number" id="ioctgo_ocpp_enable_soc_threshold" name="tariffs.ioctgo[ocpp_enable_soc_threshold]" 
+                   value="{{ config.tariffs.ioctgo.ocpp_enable_soc_threshold }}" min="0" max="100">
+            <small>Enable OCPP when SoC drops below this level</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_ocpp_disable_soc_threshold">OCPP Disable SoC Threshold (%):</label>
+            <input type="number" id="ioctgo_ocpp_disable_soc_threshold" name="tariffs.ioctgo[ocpp_disable_soc_threshold]" 
+                   value="{{ config.tariffs.ioctgo.ocpp_disable_soc_threshold }}" min="0" max="100">
+            <small>Disable OCPP in the next half hour slot when SoC rises to this level</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_ocpp_enable_time">OCPP Enable Time (HH:MM):</label>
+            <input type="text" id="ioctgo_ocpp_enable_time" name="tariffs.ioctgo[ocpp_enable_time]" 
+                   value="{{ config.tariffs.ioctgo.ocpp_enable_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
+            <small>Time to enable OCPP if SoC does not fall to the lower limit. Default is 23:30</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_ocpp_disable_time">OCPP Disable Time (HH:MM):</label>
+            <input type="text" id="ioctgo_ocpp_disable_time" name="tariffs.ioctgo[ocpp_disable_time]" 
+                   value="{{ config.tariffs.ioctgo.ocpp_disable_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
+            <small>Time to disable OCPP even if the SoC does not rise to the desired level.</small>
+        </div>
+        <div class="form-group">
+            <div class="notification">
+                <strong>Note:</strong> After changing any of these parameters, you must switch away from the IOCTGO tariff and back to it (e.g., go to PAUSE mode and then back to IOCTGO) for changes to take effect.
+            </div>
         </div>
     </div>
 

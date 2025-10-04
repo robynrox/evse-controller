@@ -133,3 +133,16 @@ class Tariff:
         else:
             # If period crosses midnight (e.g., "23:00" to "01:00")
             return current >= start or current < end
+
+    def initialize_tariff(self):
+        """Initialize tariff-specific state when tariff is activated.
+        
+        This method is called when a tariff is first selected to allow
+        any tariff-specific initialization (such as OCPP state initialization).
+        Override in specific tariffs if needed.
+        
+        Returns:
+            bool: True if initialization was successful or not needed
+        """
+        # Default implementation does nothing
+        return True

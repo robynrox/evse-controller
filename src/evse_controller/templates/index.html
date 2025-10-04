@@ -17,9 +17,8 @@
             IOCTGO: "/static/images/IOctGo_black.svg",
             FLUX: "/static/images/Flux_black.svg",
             COSY: "/static/images/Cosy_black.svg",
-            UNCONTROLLED: "/static/images/Uncontrolled_black.svg",
-            OCPP_ON: "/static/images/OCPP_ON_black.svg",
-            OCPP_OFF: "/static/images/OCPP_OFF_black.svg"
+            FREERUN: "/static/images/Freerun_black.svg",
+            OCPP: "/static/images/OCPP_ON_black.svg"
         };
 </script>
 <style>
@@ -129,14 +128,11 @@
     <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
         <img src="" id="cosy-icon" alt="Cosy Octopus">
     </button>
-    <button class="svg-button" onclick="sendCommand('uncontrolled')" title="Allow EVSE to operate independently without Modbus control">
-        <img src="" id="uncontrolled-icon" alt="Uncontrolled Mode">
+    <button class="svg-button" onclick="sendCommand('freerun')" title="Allow EVSE to operate independently without Modbus control">
+        <img src="" id="free-run-icon" alt="Free Run Mode">
     </button>
-    <button class="svg-button" onclick="sendCommand('enable-ocpp')" title="Enable OCPP connectivity for the Wallbox">
-        <img src="" id="ocpp-on-icon" alt="OCPP ON">
-    </button>
-    <button class="svg-button" onclick="sendCommand('disable-ocpp')" title="Disable OCPP connectivity for the Wallbox">
-        <img src="" id="ocpp-off-icon" alt="OCPP OFF">
+    <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
+        <img src="" id="ocpp-icon" alt="OCPP Mode">
     </button>
     <button onclick="toggleLegend()">Show/Hide Command Reference</button>
 </div>
@@ -213,26 +209,21 @@
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-uncontrolled-icon" alt="Uncontrolled icon">
+                <img src="" id="legend-free-run-icon" alt="Free Run icon">
                 <div class="legend-text">
-                    <strong>Uncontrolled:</strong> Allow EVSE to operate independently without Modbus control
+                    <strong>Free Run:</strong> Turn off OCPP mode if it is on and allow EVSE to operate independently without Modbus control
                 </div>
             </div>
             <div class="legend-item">
+                <img src="" id="legend-ocpp-icon" alt="OCPP Mode icon">
                 <div class="legend-text">
-                    <strong>Enable OCPP:</strong> Enable OCPP connectivity for the Wallbox
-                </div>
-            </div>
-            <div class="legend-item">
-                <div class="legend-text">
-                    <strong>Disable OCPP:</strong> Disable OCPP connectivity for the Wallbox
+                    <strong>OCPP Mode:</strong> Enter OCPP mode - EVSE controlled via OCPP protocol
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<h1>Power History</h1>
 <div id="chart" style="width:100%;height:600px;"></div>
 
 <style>
@@ -411,9 +402,8 @@
         document.getElementById('ioctgo-icon').src = ICONS.IOCTGO;
         document.getElementById('flux-icon').src = ICONS.FLUX;
         document.getElementById('cosy-icon').src = ICONS.COSY;
-        document.getElementById('uncontrolled-icon').src = ICONS.UNCONTROLLED;
-        document.getElementById('ocpp-on-icon').src = ICONS.OCPP_ON;
-        document.getElementById('ocpp-off-icon').src = ICONS.OCPP_OFF;
+        document.getElementById('free-run-icon').src = ICONS.FREERUN;
+        document.getElementById('ocpp-icon').src = ICONS.OCPP;
 
         // Set legend icons
         document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
@@ -427,7 +417,8 @@
         document.getElementById('legend-ioctgo-icon').src = ICONS.IOCTGO;
         document.getElementById('legend-flux-icon').src = ICONS.FLUX;
         document.getElementById('legend-cosy-icon').src = ICONS.COSY;
-        document.getElementById('legend-uncontrolled-icon').src = ICONS.UNCONTROLLED;
+        document.getElementById('legend-free-run-icon').src = ICONS.FREERUN;
+        document.getElementById('legend-ocpp-icon').src = ICONS.OCPP;
     });
 
     async function sendCommand(command) {

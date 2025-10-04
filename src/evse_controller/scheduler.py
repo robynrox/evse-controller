@@ -105,3 +105,13 @@ class Scheduler:
                 json.dump(data, f, default=str)
         except Exception as e:
             error(f"Error saving schedule: {e}")
+
+    def get_next_event(self):
+        """Get the next scheduled event that is enabled."""
+        now = datetime.now()
+        # Find the next enabled event
+        future_events = [event for event in self.events if event.timestamp > now and event.enabled]
+        if future_events:
+            # Return the event with the earliest timestamp
+            return min(future_events, key=lambda x: x.timestamp)
+        return None

@@ -7,6 +7,7 @@ from evse_controller.drivers.evse.async_interface import (
     EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData, EvseState
 )
 from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
 
 class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     """
@@ -90,6 +91,13 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self.running = False
         self.last_current_change = 0
         self.current_change_interval = 5  # Minimum 5 seconds between current changes
+        
+        # OCPP delay tracking
+        self._last_ocpp_change_time = 0
+        
+        # Subscribe to OCPP state change events
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
 
         info(f"SIMULATOR: Initialized with battery level {self.state.battery_level}%, "
              f"capacity {self.battery_capacity_wh/1000} kWh, simulation speed {self.simulation_speed}x")
@@ -294,3 +302,14 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     def is_empty(self) -> bool:
         """Check if the battery is effectively empty."""
         return self.state.battery_level <= self.empty_threshold
+
+    def _handle_ocpp_state_change(self, change_time: float) -> None:
+        """Handle OCPP state change event from the event bus."""
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time
+    
+    def set_last_ocpp_change_time(self, change_time: float) -> None:
+        """Set the time of the last OCPP state change to implement delay mechanism."""
+        # Publish the event to the event bus instead of directly setting the value
+        from evse_controller.drivers.evse.event_bus import EventType
+        self._event_bus.publish(EventType.OCPP_STATE_CHANGED, change_time)

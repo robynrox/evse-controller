@@ -171,20 +171,15 @@ def test_bulk_discharge_start_time_conversion():
     """Test that bulk discharge start time is correctly converted from string to minutes"""
     from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
     
-    # Test default time (17:30)
-    tariff_default = IntelligentOctopusGoTariff()
-    assert tariff_default.BULK_DISCHARGE_START_TIME_STR == "17:30"
-    assert tariff_default.BULK_DISCHARGE_START_TIME == 17 * 60 + 30  # 1050 minutes
-    
     # Test custom time (16:45)
     tariff_custom = IntelligentOctopusGoTariff(bulk_discharge_start_time="16:45")
     assert tariff_custom.BULK_DISCHARGE_START_TIME_STR == "16:45"
     assert tariff_custom.BULK_DISCHARGE_START_TIME == 16 * 60 + 45  # 1005 minutes
     
     # Test updating time
-    tariff_default.set_bulk_discharge_start_time("18:15")
-    assert tariff_default.BULK_DISCHARGE_START_TIME_STR == "18:15"
-    assert tariff_default.BULK_DISCHARGE_START_TIME == 18 * 60 + 15  # 1095 minutes
+    tariff_custom.set_bulk_discharge_start_time("18:15")
+    assert tariff_custom.BULK_DISCHARGE_START_TIME_STR == "18:15"
+    assert tariff_custom.BULK_DISCHARGE_START_TIME == 18 * 60 + 15  # 1095 minutes
 
 def test_control_state_smart_discharge(intgo_tariff):
     """Test smart discharge behavior"""

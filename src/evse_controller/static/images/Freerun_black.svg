@@ -7,9 +7,9 @@
   </defs>
   <g id="a">
     <!-- OCPP text -->
-    <text x="250" y="175" class="label" fill="black">CTL</text>
+    <text x="250" y="175" class="label" fill="black">FREE</text>
     <!-- ON text -->
-    <text x="250" y="325" class="label" fill="black">OFF</text>
+    <text x="250" y="325" class="label" fill="black">RUN</text>
   </g>
   <g id="b">
     <rect class="c" width="595.27559" height="595.27559"/>
