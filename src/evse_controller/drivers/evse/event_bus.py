@@ -7,7 +7,8 @@ from enum import Enum
 
 
 class EventType(Enum):
-    OCPP_STATE_CHANGED = "ocpp_state_changed"
+    OCPP_ENABLED = "ocpp_enabled"
+    OCPP_DISABLED = "ocpp_disabled"
     OCPP_ENABLE_REQUESTED = "ocpp_enable_requested"
     OCPP_DISABLE_REQUESTED = "ocpp_disable_requested"
     # Other event types can be added here

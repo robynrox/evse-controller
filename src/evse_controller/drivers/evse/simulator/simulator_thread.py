@@ -97,7 +97,8 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         
         # Subscribe to OCPP state change events
         self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         info(f"SIMULATOR: Initialized with battery level {self.state.battery_level}%, "
              f"capacity {self.battery_capacity_wh/1000} kWh, simulation speed {self.simulation_speed}x")
@@ -303,13 +304,20 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         """Check if the battery is effectively empty."""
         return self.state.battery_level <= self.empty_threshold
 
-    def _handle_ocpp_state_change(self, change_time: float) -> None:
-        """Handle OCPP state change event from the event bus."""
+    def _handle_ocpp_state_change(self, event_data) -> None:
+        """Handle OCPP state change event from the event bus.
+        
+        This handler now only expects boolean values (True/False) indicating 
+        whether OCPP is enabled or disabled, but for the simulator's delay mechanism
+        it uses the current time regardless of what the event data contains.
+        """
         with self._state_lock:
-            self._last_ocpp_change_time = change_time
+            # For delay mechanism purposes, we just need to record when the change occurred
+            # We use current time regardless of what the event data contains
+            self._last_ocpp_change_time = time.time()
     
     def set_last_ocpp_change_time(self, change_time: float) -> None:
         """Set the time of the last OCPP state change to implement delay mechanism."""
-        # Publish the event to the event bus instead of directly setting the value
-        from evse_controller.drivers.evse.event_bus import EventType
-        self._event_bus.publish(EventType.OCPP_STATE_CHANGED, change_time)
+        # Store the time directly instead of publishing an event
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time

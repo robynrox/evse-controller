@@ -104,9 +104,10 @@ class IntelligentOctopusGoTariff(Tariff):
         self.OCPP_ENABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_ENABLE_TIME)
         self.OCPP_DISABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_DISABLE_TIME)
 
-        # Subscribe to OCPP state change events to keep internal state synchronized
+        # Subscribe to OCPP enable/disable events to keep internal state synchronized
         self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_changed)
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
         
         # === END CONFIGURABLE PARAMETERS ===
         
@@ -522,21 +523,25 @@ class IntelligentOctopusGoTariff(Tariff):
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
 
-    def _handle_ocpp_state_changed(self, is_enabled: bool):
-        """Handle OCPP state change events from the event bus.
-        
-        Args:
-            is_enabled: True if OCPP is enabled, False if disabled
-        """
+    def _handle_ocpp_enabled(self) -> None:
+        """Handle OCPP enabled event from the event bus."""
         with self._state_lock:
             old_state = self._ocpp_enabled
-            self._ocpp_enabled = is_enabled
-            info(f"IOCTGO: OCPP state changed from {'enabled' if old_state else 'disabled'} to {'enabled' if is_enabled else 'disabled'}")
+            self._ocpp_enabled = True
+            info(f"IOCTGO: OCPP state changed from {'enabled' if old_state else 'disabled'} to enabled")
+
+    def _handle_ocpp_disabled(self) -> None:
+        """Handle OCPP disabled event from the event bus."""
+        with self._state_lock:
+            old_state = self._ocpp_enabled
+            self._ocpp_enabled = False
+            info(f"IOCTGO: OCPP state changed from {'enabled' if old_state else 'disabled'} to disabled")
 
     def _cleanup(self):
         """Clean up event bus subscriptions when the tariff is destroyed."""
         if hasattr(self, '_event_bus'):
             try:
-                self._event_bus.unsubscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_changed)
+                self._event_bus.unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+                self._event_bus.unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
             except:
                 pass  # Ignore errors during cleanup

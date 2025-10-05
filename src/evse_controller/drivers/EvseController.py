@@ -1002,15 +1002,14 @@ class EvseController(PowerMonitorObserver):
             # Update internal state
             self._ocpp_mode_active = True
             
-            # Publish OCPP state change event since we made an actual change
+            # Publish OCPP enabled event since we made an actual change
             try:
                 event_bus = EventBus()
-                # Pass the new OCPP state (True for enabled) and timestamp
-                event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": True, "timestamp": time.time()})
+                event_bus.publish(EventType.OCPP_ENABLED)
             except Exception as e:
-                error(f"Could not publish OCPP state change event: {e}")
+                error(f"Could not publish OCPP enabled event: {e}")
             
-            info(f"OCPP enabled successfully: {response}")
+            info("OCPP enabled successfully")
             return True
             
         except Exception as e:
@@ -1039,12 +1038,11 @@ class EvseController(PowerMonitorObserver):
             # Publish OCPP state change event since we made an actual change
             try:
                 event_bus = EventBus()
-                # Pass the new OCPP state (False for disabled) and timestamp
-                event_bus.publish(EventType.OCPP_STATE_CHANGED, {"ocpp_enabled": False, "timestamp": time.time()})
+                event_bus.publish(EventType.OCPP_DISABLED)
             except Exception as e:
-                error(f"Could not publish OCPP state change event: {e}")
+                error(f"Could not publish OCPP disabled event: {e}")
             
-            info(f"OCPP disabled successfully: {response}")
+            info("OCPP disabled successfully")
             return True
             
         except Exception as e:

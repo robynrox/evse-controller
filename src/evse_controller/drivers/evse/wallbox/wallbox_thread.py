@@ -89,7 +89,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         
         # Subscribe to OCPP state change events
         self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_STATE_CHANGED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51
@@ -213,22 +214,22 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             # Keep the consecutive errors count high so we'll try again after cooldown
 
     def _handle_ocpp_state_change(self, event_data) -> None:
-        """Handle OCPP state change event from the event bus."""
-        # The event_data could be the timestamp directly or contain it
-        # If it's a float, use it directly; if it's a dict with a timestamp, extract it
-        # For this specific use case, event_data should be a timestamp
+        """Handle OCPP state change event from the event bus.
+        
+        This handler now only expects boolean values (True/False) indicating 
+        whether OCPP is enabled or disabled, but for backward compatibility
+        it accepts any data type and uses the current time for the delay mechanism.
+        """
         with self._state_lock:
-            if isinstance(event_data, (int, float)):
-                self._last_ocpp_change_time = event_data
-            else:
-                # If event_data is a dict or other format, use current time as fallback
-                self._last_ocpp_change_time = time.time()
-                warning(f"OCPP state change handler received unexpected data format: {type(event_data)}, using current time")
+            # For delay mechanism purposes, we just need to record when the change occurred
+            # We use current time regardless of what the event data contains
+            self._last_ocpp_change_time = time.time()
     
     def set_last_ocpp_change_time(self, change_time: float) -> None:
         """Set the time of the last OCPP state change to implement delay mechanism.
-        This method is maintained for backward compatibility but now uses the event bus."""
-        self._event_bus.publish(EventType.OCPP_STATE_CHANGED, change_time)
+        This method is maintained for backward compatibility but now stores the time directly."""
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time
             
     def is_in_ocpp_delay(self):
         """Check if we're currently in the OCPP delay period after an OCPP state change."""
