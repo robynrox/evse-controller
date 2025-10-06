@@ -7,6 +7,7 @@ from evse_controller.drivers.evse.async_interface import (
     EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData, EvseState
 )
 from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
 
 class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     """
@@ -90,6 +91,14 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self.running = False
         self.last_current_change = 0
         self.current_change_interval = 5  # Minimum 5 seconds between current changes
+        
+        # OCPP delay tracking
+        self._last_ocpp_change_time = 0
+        
+        # Subscribe to OCPP state change events
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         info(f"SIMULATOR: Initialized with battery level {self.state.battery_level}%, "
              f"capacity {self.battery_capacity_wh/1000} kWh, simulation speed {self.simulation_speed}x")
@@ -294,3 +303,21 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     def is_empty(self) -> bool:
         """Check if the battery is effectively empty."""
         return self.state.battery_level <= self.empty_threshold
+
+    def _handle_ocpp_state_change(self, event_data) -> None:
+        """Handle OCPP state change event from the event bus.
+        
+        This handler now only expects boolean values (True/False) indicating 
+        whether OCPP is enabled or disabled, but for the simulator's delay mechanism
+        it uses the current time regardless of what the event data contains.
+        """
+        with self._state_lock:
+            # For delay mechanism purposes, we just need to record when the change occurred
+            # We use current time regardless of what the event data contains
+            self._last_ocpp_change_time = time.time()
+    
+    def set_last_ocpp_change_time(self, change_time: float) -> None:
+        """Set the time of the last OCPP state change to implement delay mechanism."""
+        # Store the time directly instead of publishing an event
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time

@@ -1,5 +1,13 @@
 ## Development Setup
 
+### Using a dev container
+
+The dev container definition installs and runs Poetry to download and install
+the dependencies needed. If you additionally want to use Qwen Code, there is a
+script that installs Qwen Code for you in the dev container here:
+
+`tools/install_qwen_in_dev_container.sh`
+
 ### Required Poetry Plugins
 
 Before starting development, install the following Poetry plugins:

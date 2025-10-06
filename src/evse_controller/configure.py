@@ -68,15 +68,11 @@ DEFAULT_CONFIG = {
     "charging": {
         "max_charge_percent": 90,
         "solar_period_max_charge": 80,
-        "default_tariff": "COSY"
+        "startup_state": "FREERUN"
     },
     "logging": {
         "file_level": "INFO",
-        "console_level": "WARNING",
-        "directory": "log",
-        "file_prefix": "evse",
-        "max_bytes": 10485760,  # 10MB
-        "backup_count": 30
+        "console_level": "WARNING"
     }
 }
 
@@ -143,6 +139,19 @@ def load_existing_config() -> Dict[str, Any]:
                 # Ensure InfluxDB bucket exists (backward compatibility)
                 if "influxdb" in config and "bucket" not in config["influxdb"]:
                     config["influxdb"]["bucket"] = "powerlog"
+
+                # Handle backward compatibility: migrate default_tariff to startup_state if needed
+                if "charging" in config:
+                    if "startup_state" not in config["charging"]:
+                        # Only migrate if startup_state doesn't already exist
+                        if "default_tariff" in config["charging"]:
+                            # Migrate from old default_tariff to new startup_state
+                            config["charging"]["startup_state"] = config["charging"]["default_tariff"]
+                            # Remove the old default_tariff to avoid duplication
+                            del config["charging"]["default_tariff"]
+                        else:
+                            # If neither exists, set to the new default
+                            config["charging"]["startup_state"] = "FREERUN"
 
                 return config
         except yaml.YAMLError as e:
@@ -473,10 +482,10 @@ def interactive_config():
         validate=lambda text: text.isdigit() and 0 <= int(text) <= 100
     ).ask())
 
-    config["charging"]["default_tariff"] = questionary.select(
-        "Default tariff:",
-        choices=["COSY", "OCTGO", "FLUX"],  # Added FLUX as an option
-        default=config["charging"]["default_tariff"]
+    config["charging"]["startup_state"] = questionary.select(
+        "Startup state:",
+        choices=["FREERUN", "COSY", "OCTGO", "IOCTGO", "FLUX"],  # FREERUN as default option
+        default=config["charging"]["startup_state"]
     ).ask()
 
     # Logging configuration
@@ -492,28 +501,6 @@ def interactive_config():
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default=config["logging"]["console_level"]
     ).ask()
-
-    config["logging"]["directory"] = questionary.text(
-        "Log directory:",
-        default=config["logging"]["directory"]
-    ).ask()
-
-    config["logging"]["file_prefix"] = questionary.text(
-        "Log file prefix:",
-        default=config["logging"]["file_prefix"]
-    ).ask()
-
-    config["logging"]["max_bytes"] = int(questionary.text(
-        "Maximum log file size (bytes):",
-        default=str(config["logging"]["max_bytes"]),
-        validate=lambda text: text.isdigit() and int(text) > 0
-    ).ask())
-
-    config["logging"]["backup_count"] = int(questionary.text(
-        "Number of backup log files to keep:",
-        default=str(config["logging"]["backup_count"]),
-        validate=lambda text: text.isdigit() and int(text) > 0
-    ).ask())
 
     return config
 

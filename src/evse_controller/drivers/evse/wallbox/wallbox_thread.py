@@ -9,6 +9,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import EvseState
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
@@ -81,6 +82,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+        
+        # Add tracking for OCPP state change to implement 2-minute delay for resets
+        self._last_ocpp_change_time = 0
+        self._ocpp_delay_duration = 120  # 2 minutes in seconds
+        
+        # Subscribe to OCPP state change events
+        self._event_bus = EventBus()
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51
@@ -169,20 +179,25 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
     def _check_and_handle_comms_failures(self):
         """Check if we need to handle communication failures and do so if appropriate"""
+        current_time = time.time()
         with self._state_lock:
             consecutive_errors = self._state.consecutive_connection_errors
             current_state = self._state.evse_state
             
-        # Don't attempt reset if we're in UNCONTROLLED state
-        if current_state == EvseState.UNCONTROLLED:
-            # In UNCONTROLLED state, we don't want to interfere with the Wallbox
+        # Don't attempt reset if we're in FREERUN state
+        if current_state == EvseState.FREERUN:
+            # In FREERUN state, we don't want to interfere with the Wallbox
             # so we don't attempt automatic resets
+            return
+            
+        # Don't attempt reset if we're in OCPP delay period (2 minutes after OCPP state change)
+        if self.is_in_ocpp_delay():
+            time_remaining = self._ocpp_delay_duration - (current_time - self._last_ocpp_change_time)
+            debug(f"In OCPP delay period. Waiting {time_remaining:.1f}s before allowing resets due to Wallbox Modbus not responding")
             return
             
         if consecutive_errors < self._reset_attempt_threshold:
             return
-
-        current_time = time.time()
         scaled_cooldown = self._get_scaled_delay(self._reset_cooldown_period)
         time_since_last_reset = current_time - self._last_reset_attempt
 
@@ -198,12 +213,37 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             warning("Reset attempt failed - will retry after cooldown period")
             # Keep the consecutive errors count high so we'll try again after cooldown
 
+    def _handle_ocpp_state_change(self, event_data) -> None:
+        """Handle OCPP state change event from the event bus.
+        
+        This handler now only expects boolean values (True/False) indicating 
+        whether OCPP is enabled or disabled, but for backward compatibility
+        it accepts any data type and uses the current time for the delay mechanism.
+        """
+        with self._state_lock:
+            # For delay mechanism purposes, we just need to record when the change occurred
+            # We use current time regardless of what the event data contains
+            self._last_ocpp_change_time = time.time()
+    
+    def set_last_ocpp_change_time(self, change_time: float) -> None:
+        """Set the time of the last OCPP state change to implement delay mechanism.
+        This method is maintained for backward compatibility but now stores the time directly."""
+        with self._state_lock:
+            self._last_ocpp_change_time = change_time
+            
+    def is_in_ocpp_delay(self):
+        """Check if we're currently in the OCPP delay period after an OCPP state change."""
+        with self._state_lock:
+            current_time = time.time()
+            time_since_ocpp_change = current_time - self._last_ocpp_change_time
+            return time_since_ocpp_change < self._ocpp_delay_duration
+
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""
         with self._state_lock:
-            # Don't attempt reset if we're in UNCONTROLLED state
-            if self._state.evse_state == EvseState.UNCONTROLLED:
-                warning("Skipping comms failure handling in UNCONTROLLED state - not attempting API reset")
+            # Don't attempt reset if we're in FREERUN state
+            if self._state.evse_state == EvseState.FREERUN:
+                warning("Skipping comms failure handling in FREERUN state - not attempting API reset")
                 return False
             
             self._state.evse_state = EvseState.COMMS_FAILURE
@@ -259,12 +299,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
-                # If we're in UNCONTROLLED state, we don't override our tracked state with the Modbus state
+                # If we're in FREERUN state, we don't override our tracked state with the Modbus state
                 # but we still update other values like battery level and current
-                if self._state.evse_state == EvseState.UNCONTROLLED:
-                    # In UNCONTROLLED state, we preserve our internal state but still update
+                if self._state.evse_state == EvseState.FREERUN:
+                    # In FREERUN state, we preserve our internal state but still update
                     # battery level and current for monitoring purposes
-                    # We also store the actual Modbus state for when we transition out of UNCONTROLLED
+                    # We also store the actual Modbus state for when we transition out of FREERUN
                     self._state._actual_modbus_state = EvseState(state_reg)
                 else:
                     # Direct construction instead of using from_modbus_register
@@ -287,21 +327,21 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
         except ConnectionError:
             with self._state_lock:
-                # Even in UNCONTROLLED state, we still count communication errors
+                # Even in FREERUN state, we still count communication errors
                 # but we don't change the state to COMMS_FAILURE
                 self._state.consecutive_connection_errors += 1
-                # Preserve UNCONTROLLED state even when there are communication errors
-                if self._state.evse_state != EvseState.UNCONTROLLED:
-                    # Only set to COMMS_FAILURE if we're not in UNCONTROLLED state
+                # Preserve FREERUN state even when there are communication errors
+                if self._state.evse_state != EvseState.FREERUN:
+                    # Only set to COMMS_FAILURE if we're not in FREERUN state
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
             raise  # Re-raise ConnectionError to be caught by the controller
         except Exception as e:
             with self._state_lock:
                 self._state.consecutive_connection_errors += 1
-                # Preserve UNCONTROLLED state even when there are communication errors
-                if self._state.evse_state != EvseState.UNCONTROLLED:
-                    # Only set to COMMS_FAILURE if we're not in UNCONTROLLED state
+                # Preserve FREERUN state even when there are communication errors
+                if self._state.evse_state != EvseState.FREERUN:
+                    # Only set to COMMS_FAILURE if we're not in FREERUN state
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
             error(f"Error reading EVSE state: {str(e)}")
@@ -335,28 +375,28 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _execute_command(self, cmd: EvseCommandData):
         if cmd.command == EvseCommand.SET_CURRENT:
             # First check if the requested current matches current state
-            was_in_uncontrolled_state = False
+            was_in_freerun_state = False
             with self._state_lock:
                 current_value = self._state.current
                 current_state = self._state.evse_state
                 
-                # If we're in UNCONTROLLED state, any SET_CURRENT command should transition us out
-                if current_state == EvseState.UNCONTROLLED:
-                    info("Transitioning from UNCONTROLLED to controlled state")
-                    # When transitioning from UNCONTROLLED, we need to actually send the command
+                # If we're in FREERUN state, any SET_CURRENT command should transition us out
+                if current_state == EvseState.FREERUN:
+                    info("Transitioning from FREERUN to controlled state")
+                    # When transitioning from FREERUN, we need to actually send the command
                     # to change the state, so we don't return early
                     # Use the actual Modbus state that we've been tracking
                     self._state.evse_state = self._state._actual_modbus_state
-                    was_in_uncontrolled_state = True
+                    was_in_freerun_state = True
 
-            # Check if we're allowed to change state yet (even when transitioning from UNCONTROLLED)
+            # Check if we're allowed to change state yet (even when transitioning from FREERUN)
             if time.time() < self._next_state_change_allowed:
                 warning(f"Command received before minimum delay period elapsed. "
                     f"Waiting {self._next_state_change_allowed - time.time():.1f} seconds")
                 return
 
-            # For non-UNCONTROLLED states, check if current value is the same and state is appropriate
-            if not was_in_uncontrolled_state:
+            # For non-freerun states, check if current value is the same and state is appropriate
+            if not was_in_freerun_state:
                 with self._state_lock:
                     current_value = self._state.current
                     current_state = self._state.evse_state
@@ -376,10 +416,10 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 current_value, cmd.value)
             debug(f"Next state change allowed in {self._get_scaled_delay(self._next_state_change_allowed - time.time()):.1f} seconds")
             self._set_current(cmd.value)
-        elif cmd.command == EvseCommand.SET_UNCONTROLLED:
-            self._set_uncontrolled()
-        elif cmd.command == EvseCommand.CLEAR_UNCONTROLLED:
-            self._clear_uncontrolled()
+        elif cmd.command == EvseCommand.SET_FREERUN:
+            self._set_freerun()
+        elif cmd.command == EvseCommand.CLEAR_FREERUN:
+            self._clear_freerun()
 
     def _set_current(self, current: int):
         try:
@@ -418,45 +458,45 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             except:
                 pass
 
-    def _set_uncontrolled(self):
-        """Put the Wallbox in an uncontrolled state where it won't respond to Modbus commands
+    def _set_freerun(self):
+        """Put the Wallbox in a free run state where it won't respond to Modbus commands
         until a standard state is requested."""
         try:
             with self._state_lock:
-                # Store the current state as the actual Modbus state before transitioning to UNCONTROLLED
+                # Store the current state as the actual Modbus state before transitioning to FREERUN
                 self._state._actual_modbus_state = self._state.evse_state
-                # Set the state to UNCONTROLLED in our internal state tracking
-                self._state.evse_state = EvseState.UNCONTROLLED
-                info("Wallbox set to UNCONTROLLED state - Modbus control temporarily disabled")
+                # Set the state to FREERUN in our internal state tracking
+                self._state.evse_state = EvseState.FREERUN
+                info("Wallbox set to FREERUN state - Modbus control temporarily disabled")
                 
                 # We don't actually send any Modbus commands to the Wallbox for this state
                 # as the intention is to stop interacting with it via Modbus
                 # The state change is purely internal to our tracking
                 
         except Exception as e:
-            error(f"Error setting uncontrolled state: {str(e)}")
+            error(f"Error setting free run state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
 
-    def _clear_uncontrolled(self):
-        """Clear the UNCONTROLLED state and restore the actual Modbus state.
+    def _clear_freerun(self):
+        """Clear the FREERUN state and restore the actual Modbus state.
         
-        This method transitions the Wallbox thread from UNCONTROLLED state to the actual
-        Modbus state that was being tracked while in UNCONTROLLED mode.
+        This method transitions the Wallbox thread from FREERUN state to the actual
+        Modbus state that was being tracked while in FREERUN mode.
         """
         try:
             with self._state_lock:
-                # Check if we're actually in UNCONTROLLED state
-                if self._state.evse_state != EvseState.UNCONTROLLED:
-                    debug("CLEAR_UNCONTROLLED command received but not in UNCONTROLLED state - ignoring")
+                # Check if we're actually in FREERUN state
+                if self._state.evse_state != EvseState.FREERUN:
+                    debug("CLEAR_FREERUN command received but not in FREERUN state - ignoring")
                     return
                 
                 # Restore the actual Modbus state that we've been tracking
                 restored_state = self._state._actual_modbus_state
                 self._state.evse_state = restored_state
-                info(f"Wallbox cleared UNCONTROLLED state - restored to {restored_state}")
+                info(f"Wallbox cleared FREERUN state - restored to {restored_state}")
                 
         except Exception as e:
-            error(f"Error clearing uncontrolled state: {str(e)}")
+            error(f"Error clearing free run state: {str(e)}")
             raise ConnectionError(f"Communication error: {str(e)}")
 
     def _handle_error(self):
