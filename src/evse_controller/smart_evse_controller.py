@@ -398,8 +398,10 @@ def main():
                     evseController.setControlState(ControlState.DORMANT)
                 elif execState == ExecState.CHARGE:
                     evseController.setControlState(ControlState.CHARGE)
+                    evseController.setChargeCurrentRange(config.WALLBOX_MAX_CHARGE_CURRENT, config.WALLBOX_MAX_CHARGE_CURRENT)
                 elif execState == ExecState.DISCHARGE:
                     evseController.setControlState(ControlState.DISCHARGE)
+                    evseController.setDischargeCurrentRange(config.WALLBOX_MAX_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
