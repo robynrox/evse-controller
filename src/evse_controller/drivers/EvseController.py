@@ -838,12 +838,6 @@ class EvseController(PowerMonitorObserver):
                 if (self.evseCurrent != desiredEvseCurrent):
                     info(f"ADJUST Changing from {self.evseCurrent} A to {desiredEvseCurrent} A")
                 self._setCurrent(desiredEvseCurrent)
-            elif self.state == ControlState.FREERUN:
-                # In FREERUN state, don't log ADJUST message or set current
-                debug("Skipping current adjustment in FREERUN state")
-            elif self._ocpp_mode_active:
-                # In OCPP mode, don't log ADJUST message or set current
-                debug("Skipping current adjustment in OCPP mode")
 
     def setControlState(self, state: ControlState):
         """Set the control state and log the transition."""

@@ -350,7 +350,8 @@ def main():
                             evseController.setChargeCurrentRange(currentAmps, currentAmps)
                         elif currentAmps < 0:
                             evseController.setControlState(ControlState.DISCHARGE)
-                            evseController.setDischargeCurrentRange(currentAmps, currentAmps)
+                            # setDischargeCurrentRange takes positive current values
+                            evseController.setDischargeCurrentRange(-currentAmps, -currentAmps)
                         else:
                             evseController.setControlState(ControlState.DORMANT)
                         execState = ExecState.FIXED
@@ -398,8 +399,10 @@ def main():
                     evseController.setControlState(ControlState.DORMANT)
                 elif execState == ExecState.CHARGE:
                     evseController.setControlState(ControlState.CHARGE)
+                    evseController.setChargeCurrentRange(config.WALLBOX_MAX_CHARGE_CURRENT, config.WALLBOX_MAX_CHARGE_CURRENT)
                 elif execState == ExecState.DISCHARGE:
                     evseController.setControlState(ControlState.DISCHARGE)
+                    evseController.setDischargeCurrentRange(config.WALLBOX_MAX_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
 
             if execState == ExecState.SMART:
                 dayMinute = now.tm_hour * 60 + now.tm_min
