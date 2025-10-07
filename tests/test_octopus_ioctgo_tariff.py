@@ -59,13 +59,13 @@ def test_control_state_off_peak(intgo_tariff):
     assert state == ControlState.CHARGE
     assert min_current is None
     assert max_current is None
-    assert "IOCTGO Night rate: charge at max rate" in message
+    assert "IOCTGO Cheap rate: charge at max rate" in message
 
     # Test with battery full
     state = create_test_state(config.MAX_CHARGE_PERCENT)
     state, min_current, max_current, message = intgo_tariff.get_control_state(state, 1420)  # 23:40
     assert state == ControlState.DORMANT
-    assert "IOCTGO Night rate: SoC max" in message
+    assert "IOCTGO Cheap rate: SoC max" in message
 
 def test_control_state_low_battery(intgo_tariff):
     """Test behavior with low battery level during peak period"""
@@ -243,4 +243,4 @@ def test_control_state_evening_discharge_edge_cases(intgo_tariff):
     # At start of cheap rate
     control_state, min_current, max_current, message = intgo_tariff.get_control_state(state, 1410)  # 23:30
     assert control_state == ControlState.CHARGE
-    assert "Night rate" in message
+    assert "Cheap rate" in message
