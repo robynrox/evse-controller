@@ -513,14 +513,14 @@ class IntelligentOctopusGoTariff(Tariff):
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
 
-    def _handle_ocpp_enabled(self) -> None:
+    def _handle_ocpp_enabled(self, event_data=None) -> None:
         """Handle OCPP enabled event from the event bus."""
         with self._state_lock:
             old_state = self._ocpp_enabled
             self._ocpp_enabled = True
             info(f"IOCTGO OCPP state changed to enabled")
 
-    def _handle_ocpp_disabled(self) -> None:
+    def _handle_ocpp_disabled(self, event_data=None) -> None:
         """Handle OCPP disabled event from the event bus."""
         with self._state_lock:
             old_state = self._ocpp_enabled

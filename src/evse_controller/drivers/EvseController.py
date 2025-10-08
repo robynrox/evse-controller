@@ -83,7 +83,7 @@ class EvseController(PowerMonitorObserver):
         tariffManager: Manager for electricity tariff rules and scheduling
         batteryChargeLevel (int): Current battery charge level percentage
         evseCurrent (float): Current EVSE charging/discharging rate
-        _ocpp_mode_active (bool): Whether the Wallbox is currently in OCPP mode
+        _ocpp_mode_active (bool): Whether the Wallbox is currently in OCPP mode (tracked via EventBus events)
     """
 
     def __init__(self, tariffManager):
@@ -204,10 +204,10 @@ class EvseController(PowerMonitorObserver):
             # OCPP remains False if credentials are incorrect or unavailable
             self._ocpp_mode_active = False
         
-        # Subscribe to OCPP enable/disable request events
+        # Subscribe to OCPP state change events to keep internal state synchronized
         self._event_bus = EventBus()
-        # Do not subscribe to OCPP request events as they are now handled by the OCPPManager
-        # The EvseController will only publish actual state changes
+        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
 
     def _update_channel_metadata(self):
         """Update the channel metadata in the history dictionary.
@@ -977,71 +977,55 @@ class EvseController(PowerMonitorObserver):
         except Exception as e:
             error(f"Failed to set free run state: {e}")
 
-    def enableOcpp(self):
-        """Enable OCPP mode for the Wallbox."""
-        try:
-            # Use the controller's internally tracked OCPP state to avoid unnecessary API calls
-            if self._ocpp_mode_active:
-                info("OCPP was already enabled, no action needed")
-                return True
+    def _handle_ocpp_enabled(self, event_data=None):
+        """Handle OCPP enabled event from the event bus.
+        
+        Updates the internal OCPP state tracking when OCPP mode is enabled.
+        
+        Args:
+            event_data: Event data (ignored but required for EventBus callback signature)
+        """
+        old_state = self._ocpp_mode_active
+        self._ocpp_mode_active = True
+        if old_state != self._ocpp_mode_active:
+            info("EvseController: OCPP state changed to enabled")
+        
+    def _handle_ocpp_disabled(self, event_data=None):
+        """Handle OCPP disabled event from the event bus.
+        
+        Updates the internal OCPP state tracking when OCPP mode is disabled.
+        
+        Args:
+            event_data: Event data (ignored but required for EventBus callback signature)
+        """
+        old_state = self._ocpp_mode_active
+        self._ocpp_mode_active = False
+        if old_state != self._ocpp_mode_active:
+            info("EvseController: OCPP state changed to disabled")
 
-            # OCPP is currently inactive, proceed with enabling
-            wallbox_api = WallboxAPIWithOCPP(
-                config.WALLBOX_USERNAME,
-                config.WALLBOX_PASSWORD
-            )
-            
-            response = wallbox_api.enable_ocpp(config.WALLBOX_SERIAL)
-            
-            # Update internal state
-            self._ocpp_mode_active = True
-            
-            # Publish OCPP enabled event since we made an actual change
-            try:
-                event_bus = EventBus()
-                event_bus.publish(EventType.OCPP_ENABLED)
-            except Exception as e:
-                error(f"Could not publish OCPP enabled event: {e}")
-            
-            info("OCPP enabled successfully")
-            return True
-            
-        except Exception as e:
-            error(f"Failed to enable OCPP: {e}")
-            return False
+    def enableOcpp(self):
+        """Enable OCPP mode for the Wallbox - DEPRECATED.
+        
+        This method is deprecated. OCPP state is now managed by the OCPPManager.
+        Direct calls to enable OCPP should use the OCPPManager instead.
+        
+        Returns:
+            bool: Always returns False as this method is deprecated
+        """
+        warning("EvseController.enableOcpp() is deprecated. Use OCPPManager instead.")
+        return False
 
     def disableOcpp(self):
-        """Disable OCPP mode for the Wallbox."""
-        try:
-            # Use the controller's internally tracked OCPP state to avoid unnecessary API calls
-            if not self._ocpp_mode_active:
-                info("OCPP was already disabled, no action needed")
-                return True
-
-            # OCPP is currently active, proceed with disabling
-            wallbox_api = WallboxAPIWithOCPP(
-                config.WALLBOX_USERNAME,
-                config.WALLBOX_PASSWORD
-            )
-            
-            response = wallbox_api.disable_ocpp(config.WALLBOX_SERIAL)
-            
-            # Update internal state
-            self._ocpp_mode_active = False
-            
-            # Publish OCPP state change event since we made an actual change
-            try:
-                event_bus = EventBus()
-                event_bus.publish(EventType.OCPP_DISABLED)
-            except Exception as e:
-                error(f"Could not publish OCPP disabled event: {e}")
-            
-            info("OCPP disabled successfully")
-            return True
-            
-        except Exception as e:
-            error(f"Failed to disable OCPP: {e}")
-            return False
+        """Disable OCPP mode for the Wallbox - DEPRECATED.
+        
+        This method is deprecated. OCPP state is now managed by the OCPPManager.
+        Direct calls to disable OCPP should use the OCPPManager instead.
+        
+        Returns:
+            bool: Always returns False as this method is deprecated
+        """
+        warning("EvseController.disableOcpp() is deprecated. Use OCPPManager instead.")
+        return False
 
 
 
@@ -1080,3 +1064,13 @@ class EvseController(PowerMonitorObserver):
 
         except Exception as e:
             error(f"Error during controller shutdown: {e}")
+            
+    def _cleanup(self):
+        """Cleanup event bus subscriptions when the controller is destroyed."""
+        try:
+            if hasattr(self, '_event_bus'):
+                self._event_bus.unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+                self._event_bus.unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+        except Exception as e:
+            # Ignore errors during cleanup
+            pass
