@@ -53,10 +53,10 @@ class OCPPManager:
         self._api_client = None
         self._initialized = True
         
-        # Configuration for retries
-        self.max_retries = 5
-        self.base_delay = 5  # seconds
-        self.max_delay = 300  # 5 minutes
+        # Configuration for retries - more reasonable values
+        self.max_retries = 10  # More retries for persistent rate limiting
+        self.base_delay = 1  # seconds - start with shorter delays
+        self.max_delay = 60  # 1 minute maximum backoff to reduce wait times
 
     def start(self):
         """Start the OCPP manager worker threads"""
@@ -145,7 +145,8 @@ class OCPPManager:
                 
         except Exception as e:
             # Check if it's a rate limit error (429)
-            if "429" in str(e) or "rate" in str(e).lower():
+            error_str = str(e).lower()
+            if "429" in error_str or "rate" in error_str or "limit" in error_str:
                 return {'status_code': 429, 'successful': False, 'error': str(e)}
             else:
                 return {'status_code': None, 'successful': False, 'error': str(e)}
@@ -164,8 +165,14 @@ class OCPPManager:
         while not self._stop_event.is_set():
             try:
                 # Get job from queue with timeout to allow checking stop_event
-                job = self.request_queue.get(timeout=1)
-                
+                try:
+                    job = self.request_queue.get(timeout=0.5)  # Shorter timeout
+                except queue.Empty:
+                    # Sleep briefly when queue is empty to reduce CPU usage
+                    if not self._stop_event.is_set():
+                        time.sleep(0.1)  # Small sleep to yield CPU
+                    continue  # Continue loop to check for stop_event or new jobs
+                    
                 # Check if it's a sentinel value to stop
                 if job is None:
                     break
@@ -189,10 +196,11 @@ class OCPPManager:
                         error(f"OCPP Manager: Request failed after {self.max_retries} attempts: {result.get('error', 'Unknown error')}")
                         self._handle_persistent_error(job)
                         
-            except queue.Empty:
-                continue  # Continue loop to check for stop_event
             except Exception as e:
                 error(f"OCPP Manager: Error processing request: {e}")
+                # Sleep longer on unexpected errors
+                if not self._stop_event.is_set():
+                    time.sleep(1)
 
     def _process_retries(self):
         """Process retry queue"""
@@ -204,12 +212,15 @@ class OCPPManager:
                         # Pop the job from the queue and put it back to the main queue
                         self.retry_queue.get()  # Remove the job
                         self.request_queue.put(job)
+                    else:
+                        # Sleep longer when no retries are pending to reduce CPU usage
+                        time.sleep(0.5)  # 500ms sleep when nothing to do
                 else:
-                    # Sleep briefly if no retries are pending
-                    time.sleep(0.1)
+                    # Sleep longer when queue is empty to reduce CPU usage
+                    time.sleep(1.0)  # 1 second sleep when queue is empty
             except Exception as e:
                 error(f"OCPP Manager: Error in retry processing: {e}")
-                time.sleep(1)
+                time.sleep(2)  # Longer sleep on error
 
     def _handle_successful_response(self, job: Dict[str, Any], result: Dict[str, Any]):
         """Handle successful API response"""

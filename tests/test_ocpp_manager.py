@@ -45,15 +45,15 @@ class TestOCPPManager(TestCase):
 
     def test_calculate_backoff_delay_with_jitter(self):
         """Test exponential backoff calculation with jitter."""
-        # Test first retry (should be around base_delay=5 seconds)
+        # Test first retry (should be around base_delay=1 seconds)
         delay1 = self.ocpp_manager._calculate_backoff_delay(1)
-        self.assertGreaterEqual(delay1, 5 * 0.8)  # With 0.8 jitter
-        self.assertLessEqual(delay1, 5 * 1.2)    # With 1.2 jitter
+        self.assertGreaterEqual(delay1, 1 * 0.8)  # With 0.8 jitter
+        self.assertLessEqual(delay1, 1 * 1.2)    # With 1.2 jitter
         
-        # Test second retry (should be around 10 seconds)
+        # Test second retry (should be around 2 seconds)
         delay2 = self.ocpp_manager._calculate_backoff_delay(2)
-        self.assertGreaterEqual(delay2, 10 * 0.8)  # 5 * 2^1 with jitter
-        self.assertLessEqual(delay2, 10 * 1.2)
+        self.assertGreaterEqual(delay2, 2 * 0.8)  # 1 * 2^1 with jitter
+        self.assertLessEqual(delay2, 2 * 1.2)
 
     def test_calculate_backoff_delay_respects_max_delay(self):
         """Test that backoff delay respects the maximum delay."""
