@@ -206,8 +206,8 @@ class EvseController(PowerMonitorObserver):
         
         # Subscribe to OCPP enable/disable request events
         self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLE_REQUESTED, self._handle_ocpp_enable_request)
-        self._event_bus.subscribe(EventType.OCPP_DISABLE_REQUESTED, self._handle_ocpp_disable_request)
+        # Do not subscribe to OCPP request events as they are now handled by the OCPPManager
+        # The EvseController will only publish actual state changes
 
     def _update_channel_metadata(self):
         """Update the channel metadata in the history dictionary.
@@ -1043,33 +1043,7 @@ class EvseController(PowerMonitorObserver):
             error(f"Failed to disable OCPP: {e}")
             return False
 
-    def _handle_ocpp_enable_request(self, request_data) -> None:
-        """Handle OCPP enable request event from the event bus.
-        
-        Args:
-            request_data: Data associated with the request (can be timestamp or more structured data)
-        """
-        # Use the controller's main enableOcpp method to avoid code duplication
-        # and ensure proper event publishing
-        success = self.enableOcpp()
-        if success:
-            info("OCPP enabled successfully via enable request")
-        else:
-            error("Failed to enable OCPP via enable request")
 
-    def _handle_ocpp_disable_request(self, request_data) -> None:
-        """Handle OCPP disable request event from the event bus.
-        
-        Args:
-            request_data: Data associated with the request (can be timestamp or more structured data)
-        """
-        # Use the controller's main disableOcpp method to avoid code duplication
-        # and ensure proper event publishing
-        success = self.disableOcpp()
-        if success:
-            info("OCPP disabled successfully via disable request")
-        else:
-            error("Failed to disable OCPP via disable request")
 
     def stop(self):
         """Stop the controller and cleanup resources."""

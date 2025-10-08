@@ -48,14 +48,13 @@ class ExecState(Enum):
     OCPP = 11
 
 def ensure_ocpp_disabled():
-    """Ensure OCPP is disabled by publishing an OCPP disable request event.
+    """Ensure OCPP is disabled by using the OCPPManager.
     This function can be called even if OCPP is already disabled.
     """
-    # Publish OCPP disable request event instead of calling API directly
+    # Use OCPPManager to disable OCPP
     try:
-        from evse_controller.drivers.evse.event_bus import EventBus, EventType
-        event_bus = EventBus()
-        event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+        ocpp_manager.set_state(False)  # Disable OCPP
         # Mark as disabled in our logical state
         print("OCPP disable request sent successfully")
         return True
@@ -69,11 +68,10 @@ def enter_freerun_mode():
     """Enter FREERUN mode with proper OCPP handling."""
     global execState  # Ensure we can modify the global execState variable
     info("Disabling OCPP mode for the Wallbox (exits to FREERUN)")
-    # Publish OCPP disable request event instead of calling API directly
+    # Use OCPPManager to disable OCPP
     try:
-        from evse_controller.drivers.evse.event_bus import EventBus, EventType
-        event_bus = EventBus()
-        event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+        ocpp_manager.set_state(False)  # Disable OCPP
         print("OCPP disable request sent successfully")
         success = True
     except Exception as e:
@@ -93,6 +91,10 @@ def enter_freerun_mode():
 tariffManager = TariffManager()
 evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
+
+# Initialize the OCPP manager to start worker threads
+from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+ocpp_manager.initialize()
 
 # Set initial state based on startup configuration
 from evse_controller.utils.config import config
@@ -306,11 +308,10 @@ def main():
                     # Go to FREERUN first to match OCPP operational mode
                     evseController.setFreeRun()
                     execState = ExecState.FREERUN
-                    # Publish OCPP enable request event instead of calling API directly
+                    # Use OCPPManager to enable OCPP
                     try:
-                        from evse_controller.drivers.evse.event_bus import EventBus, EventType
-                        event_bus = EventBus()
-                        event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
+                        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+                        ocpp_manager.set_state(True)  # Enable OCPP
                         success = True
                         print("OCPP enable request sent successfully")
                     except Exception as e:

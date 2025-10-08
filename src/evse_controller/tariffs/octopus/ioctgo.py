@@ -111,7 +111,11 @@ class IntelligentOctopusGoTariff(Tariff):
         # === END CONFIGURABLE PARAMETERS ===
         
         # Initialize OCPP state when tariff is first instantiated
-        self._initialize_ocpp_state_internal()
+        # The OCPPManager will handle asynchronous state discovery
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+        ocpp_manager.initialize()
+        # Get initial state from the manager
+        self._ocpp_enabled = ocpp_manager.get_state()
         
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight.
@@ -406,11 +410,10 @@ class IntelligentOctopusGoTariff(Tariff):
 
 
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
-        """Manage OCPP state by publishing events to the event bus.
+        """Manage OCPP state by using the OCPPManager.
         
-        This method handles OCPP enable/disable operations by publishing
-        requests to the event bus, allowing the EvseController to handle
-        the actual operations and maintain state synchronization.
+        This method handles OCPP enable/disable operations by using
+        the OCPPManager, which handles rate limiting and retries.
         
         Args:
             state: Current EVSE state including battery level
@@ -429,34 +432,34 @@ class IntelligentOctopusGoTariff(Tariff):
 
             debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable:{should_enable}, should_disable:{should_disable}")
             
-            # Handle OCPP state changes by publishing events to the event bus
+            from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+            
+            # Handle OCPP state changes through the OCPP Manager
             if should_enable and not is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP enable via event bus")
+                info("IOCTGO Requesting OCPP enable via OCPP Manager")
                 
-                # Publish OCPP enable request event
+                # Request OCPP manager to enable OCPP
                 try:
-                    event_bus = EventBus()
-                    event_bus.publish(EventType.OCPP_ENABLE_REQUESTED, time.time())
+                    ocpp_manager.set_state(True)
                     info("IOCTGO Enabling OCPP mode as per tariff driver rules")
                     # When OCPP is enabled, set the initial dynamic disable time to default
                     # and clear any existing dynamic disable time
                     with self._state_lock:
                         self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
                 except Exception as e:
-                    error(f"IOCTGO Could not publish OCPP enable request event: {e}")
+                    error(f"IOCTGO Could not request OCPP enable: {e}")
                 
             elif should_disable and is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP disable via event bus")
-                # Publish OCPP disable request event
+                info("IOCTGO Requesting OCPP disable via OCPP Manager")
+                # Request OCPP manager to disable OCPP
                 try:
-                    event_bus = EventBus()
-                    event_bus.publish(EventType.OCPP_DISABLE_REQUESTED, time.time())
+                    ocpp_manager.set_state(False)
                     info("IOCTGO Disabling OCPP mode as per tariff driver rules")
                     # Clear the dynamic disable time since we've executed it
                     with self._state_lock:
                         self._dynamic_ocpp_disable_time = None
                 except Exception as e:
-                    error(f"IOCTGO Could not publish OCPP disable request event: {e}")
+                    error(f"IOCTGO Could not request OCPP disable: {e}")
                 
             # If OCPP is enabled, check SoC at specific times to potentially update dynamic disable time
             elif is_ocpp_currently_enabled:
