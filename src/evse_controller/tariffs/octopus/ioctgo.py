@@ -110,6 +110,9 @@ class IntelligentOctopusGoTariff(Tariff):
         
         # === END CONFIGURABLE PARAMETERS ===
         
+        # Initialize OCPP state when tariff is first instantiated
+        self._initialize_ocpp_state_internal()
+        
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight.
         
@@ -312,7 +315,7 @@ class IntelligentOctopusGoTariff(Tariff):
         if self.SMART_OCPP_OPERATION:
             self._manage_ocpp_state(state, dayMinute)
 
-    def initialize_ocpp_state(self):
+    def _initialize_ocpp_state_internal(self):
         """Initialize the OCPP state by checking the current state from the Wallbox API."""
         try:
             if not all([config.WALLBOX_USERNAME, config.WALLBOX_PASSWORD, config.WALLBOX_SERIAL]):
@@ -400,32 +403,7 @@ class IntelligentOctopusGoTariff(Tariff):
         
         return False
 
-    def initialize_tariff(self):
-        """Initialize IOCTGO tariff-specific state.
-        
-        This method is called when IOCTGO tariff is first selected to initialize
-        the OCPP state by checking the current state from the Wallbox API.
-        
-        Returns:
-            bool: True if initialization was successful
-        """
-        # Initialize OCPP state when tariff is first activated
-        success = self.initialize_ocpp_state()
-        
-        # If OCPP is already enabled when this tariff starts, set the default disable time
-        if success:
-            with self._state_lock:
-                ocpp_enabled = self._ocpp_enabled
-                if ocpp_enabled:
-                    # When OCPP is already active, set the default disable time to OCPP_DISABLE_TIME
-                    self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
-                    info("IOCTGO Initialising - OCPP mode is enabled")
-                else:
-                    info("IOCTGO Initialising - OCPP mode is disabled")
-        else:
-            info("IOCTGO Initialising - could not determine OCPP state")
-        
-        return success
+
 
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
         """Manage OCPP state by publishing events to the event bus.
