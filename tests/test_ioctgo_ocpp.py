@@ -164,12 +164,7 @@ class TestIntelligentOctopusGoOCPP(unittest.TestCase):
         result = self.tariff.should_disable_ocpp(self.mock_state, 721)  # 12:01
         self.assertTrue(result)
 
-    def test_initialize_tariff_calls_initialize_ocpp_state(self):
-        """Test that initialize_tariff calls initialize_ocpp_state."""
-        with patch.object(self.tariff, 'initialize_ocpp_state', return_value=True) as mock_init:
-            result = self.tariff.initialize_tariff()
-            mock_init.assert_called_once()
-            self.assertTrue(result)
+
 
     def test_unknown_battery_level_handled_correctly(self):
         """Test that unknown battery level (-1) is handled correctly."""

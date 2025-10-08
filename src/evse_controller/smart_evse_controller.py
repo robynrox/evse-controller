@@ -350,7 +350,8 @@ def main():
                             evseController.setChargeCurrentRange(currentAmps, currentAmps)
                         elif currentAmps < 0:
                             evseController.setControlState(ControlState.DISCHARGE)
-                            evseController.setDischargeCurrentRange(currentAmps, currentAmps)
+                            # setDischargeCurrentRange takes positive current values
+                            evseController.setDischargeCurrentRange(-currentAmps, -currentAmps)
                         else:
                             evseController.setControlState(ControlState.DORMANT)
                         execState = ExecState.FIXED
