@@ -103,7 +103,7 @@ else:
     # For tariff-based startup states
     execState = ExecState.SMART
     # Set the appropriate tariff based on startup state if it's a valid tariff
-    if config.STARTUP_STATE in tariffManager.tariffs:
+    if config.STARTUP_STATE in tariffManager.tariff_classes:
         tariffManager.set_tariff(config.STARTUP_STATE)
 scheduler = Scheduler()
 

@@ -16,6 +16,14 @@
   - EVSE hardware interface (`drivers/evse/`)
   - Tariff management (`tariffs/`)
 
+## Tariff Management System
+
+### TariffManager Implementation
+- The TariffManager creates tariff instances only when needed rather than keeping all instances in memory
+- Stores tariff classes in the `tariff_classes` attribute to instantiate on demand
+- Each tariff is properly initialized when instantiated, ensuring correct state synchronization
+- Initialization now happens in each tariff's constructor rather than through a separate `initialize_tariff()` method
+
 ## Scheduling System
 
 ### Schedulable States
