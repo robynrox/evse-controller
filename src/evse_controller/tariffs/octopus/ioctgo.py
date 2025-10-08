@@ -448,6 +448,8 @@ class IntelligentOctopusGoTariff(Tariff):
             
             # Check if we should disable OCPP
             should_disable = self.should_disable_ocpp(state, dayMinute)
+
+            debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable:{should_enable}, should_disable:{should_disable}")
             
             # Handle OCPP state changes by publishing events to the event bus
             if should_enable and not is_ocpp_currently_enabled:
@@ -491,6 +493,7 @@ class IntelligentOctopusGoTariff(Tariff):
                 if dayMinute < self._time_to_minutes("05:29"):
                     is_check_time = False
                 
+                debug(f"IOCTGO OCPP disable check, is_check_time:{is_check_time}")
                 if is_check_time:
                     info("IOCTGO Checking whether to disable OCPP state")
                     if (state.battery_level != -1 and 
