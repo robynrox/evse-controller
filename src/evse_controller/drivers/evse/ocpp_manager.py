@@ -6,6 +6,7 @@ import threading
 import queue
 import time
 import random
+import traceback
 from enum import Enum
 from typing import Dict, Any, Optional
 
@@ -55,7 +56,7 @@ class OCPPManager:
         
         # Configuration for retries - more reasonable values
         self.max_retries = 10  # More retries for persistent rate limiting
-        self.base_delay = 1  # seconds - start with shorter delays
+        self.base_delay = 5  # seconds
         self.max_delay = 60  # 1 minute maximum backoff to reduce wait times
 
     def start(self):
@@ -126,29 +127,82 @@ class OCPPManager:
     def _execute_request(self, job: Dict[str, Any]):
         """Execute a single OCPP request"""
         try:
+            debug(f"OCPP Manager: Starting execution of job: {job['command'].value}")
             api_client = self._get_api_client()
             if not api_client:
+                debug("OCPP Manager: No API client available, assuming OCPP is off")
                 # If no credentials, assume OCPP is off
                 return {'status_code': None, 'successful': True, 'ocpp_enabled': False}
                 
+            debug(f"OCPP Manager: Executing request: {job['command'].value}")
+                
             if job['command'] == OCPPCommand.GET_STATE:
+                debug(f"OCPP Manager: Calling is_ocpp_enabled for serial {config.WALLBOX_SERIAL}")
                 ocpp_enabled = api_client.is_ocpp_enabled(config.WALLBOX_SERIAL)
+                debug(f"OCPP Manager: is_ocpp_enabled returned: {ocpp_enabled}")
                 return {'status_code': 200, 'successful': True, 'ocpp_enabled': ocpp_enabled}
                 
             elif job['command'] == OCPPCommand.SET_ENABLED:
-                api_client.set_ocpp_enabled(config.WALLBOX_SERIAL, True)
-                return {'status_code': 200, 'successful': True, 'ocpp_enabled': True}
+                debug(f"OCPP Manager: Calling enable_ocpp for serial {config.WALLBOX_SERIAL}")
+                try:
+                    result = api_client.enable_ocpp(config.WALLBOX_SERIAL)
+                    debug(f"OCPP Manager: enable_ocpp returned: {result}")
+                    debug(f"OCPP Manager: enable_ocpp result type: {type(result)}")
+                    # Check if result indicates success
+                    if isinstance(result, dict):
+                        # Look for success indicators in the response
+                        success_indicators = [
+                            'type' in result and result['type'] == 'ocpp',
+                            'success' in result and result['success'] is True,
+                            'status' in result and result['status'] == 'ok'
+                        ]
+                        is_success = any(success_indicators) or len(result) > 0  # Non-empty dict usually means success
+                        debug(f"OCPP Manager: enable_ocpp interpreted as success: {is_success}")
+                    else:
+                        is_success = result is not None
+                        debug(f"OCPP Manager: enable_ocpp non-dict result interpreted as success: {is_success}")
+                    return {'status_code': 200, 'successful': True, 'ocpp_enabled': True, 'raw_result': result}
+                except Exception as enable_err:
+                    debug(f"OCPP Manager: Exception in enable_ocpp: {enable_err}")
+                    debug(f"OCPP Manager: Exception type: {type(enable_err).__name__}")
+                    raise enable_err  # Re-raise to be caught by outer except
                 
             elif job['command'] == OCPPCommand.SET_DISABLED:
-                api_client.set_ocpp_enabled(config.WALLBOX_SERIAL, False)
-                return {'status_code': 200, 'successful': True, 'ocpp_enabled': False}
+                debug(f"OCPP Manager: Calling disable_ocpp for serial {config.WALLBOX_SERIAL}")
+                try:
+                    result = api_client.disable_ocpp(config.WALLBOX_SERIAL)
+                    debug(f"OCPP Manager: disable_ocpp returned: {result}")
+                    debug(f"OCPP Manager: disable_ocpp result type: {type(result)}")
+                    # Check if result indicates success
+                    if isinstance(result, dict):
+                        # Look for success indicators in the response
+                        success_indicators = [
+                            'type' in result and result['type'] == 'wallbox',
+                            'success' in result and result['success'] is True,
+                            'status' in result and result['status'] == 'ok'
+                        ]
+                        is_success = any(success_indicators) or len(result) > 0  # Non-empty dict usually means success
+                        debug(f"OCPP Manager: disable_ocpp interpreted as success: {is_success}")
+                    else:
+                        is_success = result is not None
+                        debug(f"OCPP Manager: disable_ocpp non-dict result interpreted as success: {is_success}")
+                    return {'status_code': 200, 'successful': True, 'ocpp_enabled': False, 'raw_result': result}
+                except Exception as disable_err:
+                    debug(f"OCPP Manager: Exception in disable_ocpp: {disable_err}")
+                    debug(f"OCPP Manager: Exception type: {type(disable_err).__name__}")
+                    raise disable_err  # Re-raise to be caught by outer except
                 
         except Exception as e:
-            # Check if it's a rate limit error (429)
             error_str = str(e).lower()
+            debug(f"OCPP Manager: Exception during request execution: {e}")
+            debug(f"OCPP Manager: Exception type: {type(e).__name__}")
+            debug(f"OCPP Manager: Exception traceback: {traceback.format_exc()}")
+            # Check if it's a rate limit error (429)
             if "429" in error_str or "rate" in error_str or "limit" in error_str:
+                debug(f"OCPP Manager: Detected rate limit error: {e}")
                 return {'status_code': 429, 'successful': False, 'error': str(e)}
             else:
+                debug(f"OCPP Manager: Other error during request: {e}")
                 return {'status_code': None, 'successful': False, 'error': str(e)}
 
     def _calculate_backoff_delay(self, attempt_count: int) -> float:
