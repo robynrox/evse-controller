@@ -14,6 +14,7 @@ from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
 from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.utils.redaction import redact_sensitive_data
 
 
 class OCPPCommand(Enum):
@@ -139,14 +140,14 @@ class OCPPManager:
             if job['command'] == OCPPCommand.GET_STATE:
                 debug(f"OCPP Manager: Calling is_ocpp_enabled for serial {config.WALLBOX_SERIAL}")
                 ocpp_enabled = api_client.is_ocpp_enabled(config.WALLBOX_SERIAL)
-                debug(f"OCPP Manager: is_ocpp_enabled returned: {ocpp_enabled}")
+                debug(f"OCPP Manager: is_ocpp_enabled returned: {redact_sensitive_data(ocpp_enabled)}")
                 return {'status_code': 200, 'successful': True, 'ocpp_enabled': ocpp_enabled}
                 
             elif job['command'] == OCPPCommand.SET_ENABLED:
                 debug(f"OCPP Manager: Calling enable_ocpp for serial {config.WALLBOX_SERIAL}")
                 try:
                     result = api_client.enable_ocpp(config.WALLBOX_SERIAL)
-                    debug(f"OCPP Manager: enable_ocpp returned: {result}")
+                    debug(f"OCPP Manager: enable_ocpp returned: {redact_sensitive_data(result)}")
                     debug(f"OCPP Manager: enable_ocpp result type: {type(result)}")
                     # Check if result indicates success
                     if isinstance(result, dict):
@@ -171,7 +172,7 @@ class OCPPManager:
                 debug(f"OCPP Manager: Calling disable_ocpp for serial {config.WALLBOX_SERIAL}")
                 try:
                     result = api_client.disable_ocpp(config.WALLBOX_SERIAL)
-                    debug(f"OCPP Manager: disable_ocpp returned: {result}")
+                    debug(f"OCPP Manager: disable_ocpp returned: {redact_sensitive_data(result)}")
                     debug(f"OCPP Manager: disable_ocpp result type: {type(result)}")
                     # Check if result indicates success
                     if isinstance(result, dict):

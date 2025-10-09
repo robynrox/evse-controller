@@ -6,6 +6,7 @@ import requests
 import time
 from wallbox import Wallbox
 from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.utils.redaction import redact_sensitive_data
 
 
 class WallboxAPIWithOCPP(Wallbox):
@@ -140,6 +141,8 @@ class WallboxAPIWithOCPP(Wallbox):
             response.raise_for_status()
             result = response.json()
             debug(f"OCPP API: Successfully retrieved status for charger {charger_id}: type={result.get('type')}")
+            # Log the full result with sensitive data redacted
+            debug(f"OCPP API: Full status result (redacted): {redact_sensitive_data(result)}")
             
             # Cache the result
             self._ocpp_status_cache[cache_key] = result
@@ -226,6 +229,8 @@ class WallboxAPIWithOCPP(Wallbox):
             response.raise_for_status()
             result = response.json()
             debug(f"OCPP API: Successfully updated OCPP configuration for charger {charger_id}")
+            # Log the full result with sensitive data redacted
+            debug(f"OCPP API: Configuration update result (redacted): {redact_sensitive_data(result)}")
             return result
         except requests.exceptions.HTTPError as err:
             error(f"OCPP API: HTTP error {err} when updating configuration for charger {charger_id}")
