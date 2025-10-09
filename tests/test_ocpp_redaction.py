@@ -1,5 +1,5 @@
 import unittest
-from src.evse_controller.utils.redaction import redact_sensitive_data
+from evse_controller.utils.redaction import redact_sensitive_data
 
 
 class TestOCPPRedaction(unittest.TestCase):
