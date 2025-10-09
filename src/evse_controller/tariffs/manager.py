@@ -9,24 +9,26 @@ from evse_controller.utils.logging_config import debug
 
 class TariffManager:
     def __init__(self):
-        self.tariffs = {
-            "OCTGO": OctopusGoTariff(),
-            "IOCTGO": IntelligentOctopusGoTariff(),
-            "COSY": CosyOctopusTariff(),
-            "FLUX": OctopusFluxTariff()
+        # Store tariff classes instead of instances to instantiate only when needed
+        self.tariff_classes = {
+            "OCTGO": OctopusGoTariff,
+            "IOCTGO": IntelligentOctopusGoTariff,
+            "COSY": CosyOctopusTariff,
+            "FLUX": OctopusFluxTariff
         }
         # Check if startup state is a tariff that exists in our tariffs dictionary
-        if config.STARTUP_STATE in self.tariffs:
-            self.current_tariff = self.tariffs[config.STARTUP_STATE]
+        if config.STARTUP_STATE in self.tariff_classes:
+            # Instantiate the tariff for the startup state
+            self.current_tariff = self.tariff_classes[config.STARTUP_STATE]()
         else:
             # For non-tariff startup states (like FREERUN), set to None
             self.current_tariff = None
 
     def set_tariff(self, tariff_name):
-        if tariff_name in self.tariffs:
-            self.current_tariff = self.tariffs[tariff_name]
-            # Initialize the newly selected tariff
-            self.current_tariff.initialize_tariff()
+        if tariff_name in self.tariff_classes:
+            # Create a new instance of the requested tariff
+            self.current_tariff = self.tariff_classes[tariff_name]()
+            # The initialization now happens in the tariff's constructor
             return True
         return False
 

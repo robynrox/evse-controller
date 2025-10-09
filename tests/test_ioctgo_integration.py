@@ -26,21 +26,13 @@ class TestIntelligentOctopusGoTariffIntegration(unittest.TestCase):
         self.mock_state = Mock(spec=EvseAsyncState)
         self.mock_state.battery_level = 50  # Default to 50% SoC
 
-    def test_initialize_tariff_sets_up_ocpp_correctly(self):
-        """Test that initialize_tariff properly sets up OCPP state tracking."""
-        # Initially OCPP should be uninitialized
-        self.assertIsNone(self.tariff._ocpp_enabled)
-        # Removed the once-per-day limit tracking
-        # self.assertIsNone(self.tariff._last_ocpp_disable_day)  # No longer used
-        
-        # Check new field
+    def test_constructor_initializes_ocpp_state_properly(self):
+        """Test that constructor properly sets up OCPP state tracking."""
+        # NOTE: Since initialization now happens in the constructor, 
+        # _ocpp_enabled will be set during setUp() based on the mock API call
+        # In a real environment it would check the current OCPP state
+        # For this test we focus on the dynamic disable time
         self.assertIsNone(self.tariff._dynamic_ocpp_disable_time)
-        
-        # After initialization, OCPP should be properly set up
-        with patch.object(self.tariff, 'initialize_ocpp_state', return_value=True):
-            self.tariff.initialize_tariff()
-            # The initialize_ocpp_state method should have been called
-            # and _ocpp_enabled should be set (True in this case)
 
     def test_dynamic_disable_time_allows_multiple_sessions(self):
         """Test that OCPP can be disabled and enabled multiple times using dynamic disable time."""
