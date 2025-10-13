@@ -16,6 +16,23 @@
   - EVSE hardware interface (`drivers/evse/`)
   - Tariff management (`tariffs/`)
 
+## Tariff Management System
+
+### TariffManager Implementation
+- The TariffManager creates tariff instances only when needed rather than keeping all instances in memory
+- Stores tariff classes in the `tariff_classes` attribute to instantiate on demand
+- Each tariff is properly initialized when instantiated, ensuring correct state synchronization
+- Initialization now happens in each tariff's constructor rather than through a separate `initialize_tariff()` method
+
+## OCPP Management System
+
+### OCPPManager Implementation
+- The new `OCPPManager` handles all OCPP state discovery and management asynchronously
+- Implements rate limiting with exponential backoff and retry logic
+- Uses the existing event bus system to communicate state changes
+- Properly handles credential validation with graceful degradation when credentials are missing
+- Decouples OCPP state management from the rest of the system using an asynchronous approach
+
 ## Scheduling System
 
 ### Schedulable States

@@ -3,7 +3,10 @@ Extended Wallbox class with OCPP endpoint support
 """
 import json
 import requests
+import time
 from wallbox import Wallbox
+from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.utils.redaction import redact_sensitive_data
 
 
 class WallboxAPIWithOCPP(Wallbox):
@@ -115,30 +118,46 @@ class WallboxAPIWithOCPP(Wallbox):
         
         # Check if we have a valid cached response
         if self._is_cache_valid(cache_key):
+            debug(f"OCPP API: Returning cached status for charger {charger_id}")
             return self._ocpp_status_cache[cache_key]
         
         # Ensure we have a valid authentication token
+        debug(f"OCPP API: Authenticating for charger {charger_id}")
         self.authenticate()
         
         try:
+            debug(f"OCPP API: Making request to get OCPP status for charger {charger_id}")
             response = requests.get(
                 f"{self.baseUrl}v3/chargers/{charger_id}/ocpp-configuration",
                 headers=self.headers,
                 timeout=self._requestGetTimeout
             )
+            debug(f"OCPP API: Response status {response.status_code} for charger {charger_id}")
+            
+            if response.status_code == 429:
+                warning(f"OCPP API: Rate limited (429) when getting status for charger {charger_id}")
+                raise requests.exceptions.HTTPError(f"Rate limited: {response.status_code}")
+            
             response.raise_for_status()
             result = response.json()
+            debug(f"OCPP API: Successfully retrieved status for charger {charger_id}: type={result.get('type')}")
+            # Log the full result with sensitive data redacted
+            debug(f"OCPP API: Full status result (redacted): {redact_sensitive_data(result)}")
             
             # Cache the result
-            import time
             self._ocpp_status_cache[cache_key] = result
             self._ocpp_status_cache_timestamp[cache_key] = time.time()
             
             return result
         except requests.exceptions.HTTPError as err:
             # Clear the cache if request fails to avoid using stale data
-            self._clear_cache(charger_id)
+            error(f"OCPP API: HTTP error {err} when getting status for charger {charger_id}")
+            self._clear_status_cache(charger_id)
             raise err
+        except Exception as e:
+            error(f"OCPP API: Unexpected error {e} when getting status for charger {charger_id}")
+            self._clear_status_cache(charger_id)
+            raise e
     
     def is_ocpp_enabled(self, charger_id):
         """
@@ -153,8 +172,11 @@ class WallboxAPIWithOCPP(Wallbox):
         Raises:
             requests.exceptions.HTTPError: If the API request fails
         """
+        debug(f"OCPP API: Checking if OCPP is enabled for charger {charger_id}")
         status = self.get_ocpp_status(charger_id)
-        return status.get("type") == "ocpp"
+        is_enabled = status.get("type") == "ocpp"
+        debug(f"OCPP API: OCPP is {'enabled' if is_enabled else 'disabled'} for charger {charger_id}")
+        return is_enabled
     
     def _send_ocpp_configuration(self, charger_id, address=None, charge_point_identity=None, password=None, ocpp_type="ocpp"):
         """
@@ -174,6 +196,7 @@ class WallboxAPIWithOCPP(Wallbox):
             requests.exceptions.HTTPError: If the API request fails
         """
         # Ensure we have a valid authentication token
+        debug(f"OCPP API: Authenticating for OCPP configuration update for charger {charger_id}")
         self.authenticate()
         
         # Prepare the request data
@@ -189,6 +212,7 @@ class WallboxAPIWithOCPP(Wallbox):
         if password is not None:
             data["password"] = password
             
+        debug(f"OCPP API: Sending OCPP configuration for charger {charger_id}, type={ocpp_type}")
         try:
             response = requests.post(
                 f"{self.baseUrl}v3/chargers/{charger_id}/ocpp-configuration",
@@ -196,10 +220,24 @@ class WallboxAPIWithOCPP(Wallbox):
                 json=data,
                 timeout=self._requestGetTimeout
             )
+            debug(f"OCPP API: Configuration update response status {response.status_code} for charger {charger_id}")
+            
+            if response.status_code == 429:
+                warning(f"OCPP API: Rate limited (429) when updating configuration for charger {charger_id}")
+                raise requests.exceptions.HTTPError(f"Rate limited: {response.status_code}")
+            
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            debug(f"OCPP API: Successfully updated OCPP configuration for charger {charger_id}")
+            # Log the full result with sensitive data redacted
+            debug(f"OCPP API: Configuration update result (redacted): {redact_sensitive_data(result)}")
+            return result
         except requests.exceptions.HTTPError as err:
+            error(f"OCPP API: HTTP error {err} when updating configuration for charger {charger_id}")
             raise err
+        except Exception as e:
+            error(f"OCPP API: Unexpected error {e} when updating configuration for charger {charger_id}")
+            raise e
     
     def enable_ocpp(self, charger_id):
         """
@@ -214,6 +252,7 @@ class WallboxAPIWithOCPP(Wallbox):
         Raises:
             requests.exceptions.HTTPError: If the API request fails
         """
+        info(f"OCPP API: Enabling OCPP mode for charger {charger_id}")
         # Get the OCPP configuration parameters (credentials that rarely change)
         config_params = self._get_ocpp_config_params(charger_id)
         
@@ -228,6 +267,7 @@ class WallboxAPIWithOCPP(Wallbox):
         
         # Clear the status cache after successful update (config cache is kept)
         self._clear_status_cache(charger_id)
+        info(f"OCPP API: Successfully enabled OCPP mode for charger {charger_id}")
         
         return result
     
@@ -244,6 +284,7 @@ class WallboxAPIWithOCPP(Wallbox):
         Raises:
             requests.exceptions.HTTPError: If the API request fails
         """
+        info(f"OCPP API: Disabling OCPP mode for charger {charger_id}")
         # Get the OCPP configuration parameters (credentials that rarely change)
         config_params = self._get_ocpp_config_params(charger_id)
         
@@ -258,6 +299,7 @@ class WallboxAPIWithOCPP(Wallbox):
         
         # Clear the status cache after successful update (config cache is kept)
         self._clear_status_cache(charger_id)
+        info(f"OCPP API: Successfully disabled OCPP mode for charger {charger_id}")
         
         return result
 
