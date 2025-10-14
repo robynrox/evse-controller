@@ -131,11 +131,21 @@ class Config:
         return self.get(f"{section}.{key}", default)
 
     def _set_config_value(self, section: str, key: str, value: Any):
-        """Generic setter for config values"""
+        """Generic setter for config values with dot notation support"""
         self._ensure_initialized()
-        if section not in self._config_data:
-            self._config_data[section] = {}
-        self._config_data[section][key] = value
+        # Combine section and key to form the full path (like "tariffs.ioctgo.battery_capacity_kwh")
+        full_key = f"{section}.{key}"
+        keys = full_key.split('.')
+        
+        # Navigate to the parent of the target key
+        config_ref = self._config_data
+        for k in keys[:-1]:  # Go to parent section
+            if k not in config_ref:
+                config_ref[k] = {}
+            config_ref = config_ref[k]
+        
+        # Set the final value
+        config_ref[keys[-1]] = value
 
     # Charging section properties
     STARTUP_STATE = property(
