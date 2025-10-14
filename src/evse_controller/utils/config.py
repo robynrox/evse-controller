@@ -106,12 +106,46 @@ class Config:
                         config["wallbox"]["use_simulator"] = False
                         print(f"Debug: Wallbox URL found but no use_simulator flag, defaulting to False", file=sys.stderr)
 
+                    # Clean up any duplicate dotted keys that may have been created by older versions
+                    # For example, remove 'tariffs.ioctgo' if 'tariffs' with 'ioctgo' subkey exists
+                    self._cleanup_duplicate_config_keys(config)
+
                     return config
             print(f"Error: Config file not found: {self.CONFIG_FILE}", file=sys.stderr)
             return {}
         except Exception as e:
             print(f"Error: Failed to load config: {e}", file=sys.stderr)
             return {}
+
+    def _cleanup_duplicate_config_keys(self, config_dict: Dict[str, Any]):
+        """Remove duplicate config entries that were created by older versions of the code.
+
+        This handles cases where dotted keys like 'tariffs.ioctgo' were incorrectly
+        created as top-level keys instead of nested structures.
+        """
+        # Find all keys that contain dots
+        dotted_keys = [key for key in config_dict.keys() if '.' in key]
+        
+        for dotted_key in dotted_keys:
+            # Split the dotted key to see its path
+            path_parts = dotted_key.split('.')
+            
+            # For example, if we have a key 'tariffs.ioctgo' which should be 'tariffs' -> 'ioctgo'
+            # we'll check if the parent path ('tariffs') already has the nested structure
+            if len(path_parts) >= 2:
+                parent_key = path_parts[0]
+                nested_key = path_parts[1]
+                
+                # If the parent key exists in config and has the nested key,
+                # and the dotted key also exists, remove the dotted key
+                # (the dotted key would have been incorrectly created by old code)
+                if (parent_key in config_dict and 
+                    isinstance(config_dict[parent_key], dict) and 
+                    nested_key in config_dict[parent_key] and
+                    dotted_key in config_dict):
+                    # Remove the old dotted key as it represents duplicate data
+                    del config_dict[dotted_key]
+                    print(f"Debug: Removed duplicate config key '{dotted_key}'", file=sys.stderr)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from config with dot notation support."""

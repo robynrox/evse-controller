@@ -626,3 +626,77 @@ class TestConfig:
                 assert saved_config['tariffs']['ioctgo']['battery_capacity_kwh'] == 80
                 assert saved_config['tariffs']['ioctgo']['target_soc_at_cheap_start'] == 70
                 assert saved_config['tariffs']['ioctgo']['min_discharge_current'] == 6
+
+    def test_no_duplicate_config_keys_all_dotted_sections(self):
+        """Test that all dotted sections (tariffs.ioctgo, shelly.grid, shelly.evse, wallbox.simulator) 
+        don't create duplicate config structures"""
+        config = Config()
+        # Force initialization
+        _ = config.WALLBOX_URL
+
+        # Set values for all dotted sections
+        config.IOCTGO_BATTERY_CAPACITY_KWH = 80
+        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 70
+        
+        config.SIMULATOR_INITIAL_BATTERY_LEVEL = 65
+        config.SIMULATOR_BATTERY_CAPACITY_KWH = 60
+        
+        config.SHELLY_GRID_DEVICE = "primary"
+        config.SHELLY_GRID_CHANNEL = 2
+        config.SHELLY_EVSE_DEVICE = "secondary"
+        config.SHELLY_EVSE_CHANNEL = 1
+
+        # Check internal structure - verify no dotted keys exist at root level
+        dotted_keys_at_root = []
+        for key in config._config_data.keys():
+            if '.' in key:
+                dotted_keys_at_root.append(key)
+        
+        assert not dotted_keys_at_root, f"Found dotted keys at root level: {dotted_keys_at_root}"
+
+        # Verify proper nested structure exists
+        assert 'tariffs' in config._config_data
+        assert 'ioctgo' in config._config_data['tariffs']
+        assert 'wallbox' in config._config_data
+        assert 'simulator' in config._config_data['wallbox']
+        assert 'shelly' in config._config_data
+        assert 'grid' in config._config_data['shelly']
+        assert 'evse' in config._config_data['shelly']
+
+        # Verify specific values are correctly nested
+        assert config._config_data['tariffs']['ioctgo']['battery_capacity_kwh'] == 80
+        assert config._config_data['wallbox']['simulator']['initial_battery_level'] == 65
+        assert config._config_data['shelly']['grid']['device'] == "primary"
+        assert config._config_data['shelly']['evse']['device'] == "secondary"
+
+        # Check that save and load operations don't create duplication
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch('evse_controller.utils.config.get_config_file') as mock_get_config:
+                config_path = Path(temp_dir) / "config.yaml"
+                mock_get_config.return_value = config_path
+
+                config.save()
+
+                # Load the saved config
+                with open(config_path, 'r') as f:
+                    saved_config = yaml.safe_load(f)
+
+                # Verify the saved config doesn't have any dotted keys at root level
+                saved_dotted_keys = []
+                for key in saved_config.keys():
+                    if '.' in key:
+                        saved_dotted_keys.append(key)
+                
+                assert not saved_dotted_keys, f"Found dotted keys in saved config: {saved_dotted_keys}"
+
+                # Verify proper structure is maintained
+                assert 'tariffs' in saved_config and 'ioctgo' in saved_config['tariffs']
+                assert 'wallbox' in saved_config and 'simulator' in saved_config['wallbox']
+                assert 'shelly' in saved_config and 'grid' in saved_config['shelly']
+                assert 'shelly' in saved_config and 'evse' in saved_config['shelly']
+
+                # Verify values were saved properly
+                assert saved_config['tariffs']['ioctgo']['battery_capacity_kwh'] == 80
+                assert saved_config['wallbox']['simulator']['initial_battery_level'] == 65
+                assert saved_config['shelly']['grid']['device'] == "primary"
+                assert saved_config['shelly']['evse']['device'] == "secondary"
