@@ -581,3 +581,48 @@ class TestConfig:
                 Config._testing = original_testing
                 Config._config_data = original_config_data
                 Config._instance = original_instance
+
+    def test_no_duplicate_config_keys_after_setting_ioctgo_values(self):
+        """Test that setting IOCTGO values doesn't create duplicate config structure"""
+        config = Config()
+        # Force initialization
+        _ = config.WALLBOX_URL
+
+        # Set IOCTGO values which previously caused duplication issue
+        config.IOCTGO_BATTERY_CAPACITY_KWH = 80
+        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 70
+        config.IOCTGO_MIN_DISCHARGE_CURRENT = 6
+
+        # Check internal structure - there should be a 'tariffs' key with 'ioctgo' inside
+        # There should NOT be a key named 'tariffs.ioctgo' (with dot in the name)
+        assert 'tariffs' in config._config_data
+        assert 'ioctgo' in config._config_data['tariffs']
+        assert 'tariffs.ioctgo' not in config._config_data  # This is the key test
+
+        # Verify the values are correctly nested
+        ioctgo_config = config._config_data['tariffs']['ioctgo']
+        assert ioctgo_config['battery_capacity_kwh'] == 80
+        assert ioctgo_config['target_soc_at_cheap_start'] == 70
+        assert ioctgo_config['min_discharge_current'] == 6
+
+        # Check that save and load operations don't create duplication
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch('evse_controller.utils.config.get_config_file') as mock_get_config:
+                config_path = Path(temp_dir) / "config.yaml"
+                mock_get_config.return_value = config_path
+
+                config.save()
+
+                # Load the saved config
+                with open(config_path, 'r') as f:
+                    saved_config = yaml.safe_load(f)
+
+                # Verify the saved config doesn't have the duplicated structure
+                assert 'tariffs' in saved_config
+                assert 'ioctgo' in saved_config['tariffs']
+                assert 'tariffs.ioctgo' not in saved_config  # Main test for regression
+
+                # Verify values were saved properly
+                assert saved_config['tariffs']['ioctgo']['battery_capacity_kwh'] == 80
+                assert saved_config['tariffs']['ioctgo']['target_soc_at_cheap_start'] == 70
+                assert saved_config['tariffs']['ioctgo']['min_discharge_current'] == 6
