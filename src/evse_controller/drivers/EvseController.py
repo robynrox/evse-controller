@@ -585,6 +585,116 @@ class EvseController(PowerMonitorObserver):
 
         return log_msg
 
+    def _build_measurements_data(self, power, evse_power=0, desired_evse_current=0, primary_power=None, secondary_power=None):
+        """
+        Build a structured data object with power values from all channels.
+
+        Args:
+            power: The Power object from the monitor
+            evse_power: The calculated EVSE power (used if no EVSE channel is configured)
+            desired_evse_current: The desired EVSE current
+            primary_power: The Power object from the primary monitor (optional)
+            secondary_power: The Power object from the secondary monitor (optional)
+
+        Returns:
+            A dictionary containing the structured measurement data
+        """
+        # Get the grid power from the configured channel
+        grid_device = config.SHELLY_GRID_DEVICE
+        grid_channel = config.SHELLY_GRID_CHANNEL
+
+        # Use instantaneous values if available
+        if grid_device == "primary" and primary_power is not None:
+            grid_power = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
+        elif grid_device == "secondary" and secondary_power is not None:
+            grid_power = round(secondary_power.ch1Watts if grid_channel == 1 else secondary_power.ch2Watts)
+        else:
+            # Fallback
+            grid_power = 0
+            debug(f"No grid power data available for {grid_device}.{grid_channel}")
+
+        # Get EVSE power
+        evse_power_value = 0
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            evse_device = config.SHELLY_EVSE_DEVICE
+            evse_channel = config.SHELLY_EVSE_CHANNEL
+
+            # Use instantaneous values if available
+            if evse_device == "primary" and primary_power is not None:
+                evse_power_value = round(primary_power.ch1Watts if evse_channel == 1 else primary_power.ch2Watts)
+            elif evse_device == "secondary" and secondary_power is not None:
+                evse_power_value = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
+            else:
+                # Fallback
+                evse_power_value = round(evse_power)
+                debug(f"No EVSE power data available for {evse_device}.{evse_channel}, using calculated value: {evse_power_value}")
+        else:
+            evse_power_value = round(evse_power)
+
+        # Collect all channel powers and abbreviations for measurements
+        channel_powers = {}
+        total_non_grid_power = 0
+
+        # Process all channels
+        for device in ["primary", "secondary"]:
+            device_power = primary_power if device == "primary" else secondary_power
+
+            for ch_num in [1, 2]:
+
+                # Skip the grid channel
+                if device == grid_device and ch_num == grid_channel:
+                    continue
+
+                # Skip channels that are not in use
+                if not config.is_channel_in_use(device, ch_num):
+                    continue
+
+                # Get the channel power
+                channel_power = None
+
+                # Use instantaneous values if available
+                if device_power is not None:
+                    channel_power = round(device_power.ch1Watts if ch_num == 1 else device_power.ch2Watts)
+
+                if channel_power is not None:
+                    # Get the channel abbreviation
+                    abbr = config.get_channel_abbreviation(device, ch_num)
+
+                    # Store for measurements
+                    channel_powers[abbr] = channel_power
+
+                    # Add to total non-grid power
+                    total_non_grid_power += channel_power
+
+        # Calculate home power
+        home_power = round(grid_power - total_non_grid_power)
+
+        # Add grid power to channel_powers
+        grid_abbr = config.get_channel_abbreviation(grid_device, grid_channel)
+        channel_powers[grid_abbr] = grid_power
+
+        # Build the structured measurements data
+        measurements_data = {
+            "timestamp": time.time(),
+            "home_power": home_power,
+            "evse_power": evse_power_value if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL else None,
+            "grid_power": grid_power,
+            "channel_powers": channel_powers,
+            "voltage": power.voltage,
+            "evse_current": self.evseCurrent,
+            "target_current": desired_evse_current,
+            "soc": round(power.soc) if power.soc is not None else -1,
+            "charger_state": self.chargerState.name if self.chargerState else "UNKNOWN"
+        }
+
+        # Add EVSE power separately if configured
+        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
+            evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
+            measurements_data["evse_power"] = evse_power_value
+            measurements_data["channel_powers"][evse_abbr] = evse_power_value
+
+        return measurements_data
+
     def _format_influxdb_field_name(self, channel_name: str) -> str:
         """Format a channel name for use as an InfluxDB field name.
         
@@ -745,6 +855,10 @@ class EvseController(PowerMonitorObserver):
 
         # Build the log message with power values
         logMsg = self._build_power_log_message(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
+        
+        # Build structured measurements data and publish via event bus
+        measurements_data = self._build_measurements_data(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
+        self._event_bus.publish(EventType.MEASUREMENTS_UPDATE, measurements_data)
 
         # Get grid power for InfluxDB (needed later)
         grid_device = config.SHELLY_GRID_DEVICE

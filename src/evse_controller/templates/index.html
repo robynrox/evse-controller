@@ -46,6 +46,76 @@
             width: 100%;
         }
     }
+    
+    /* Real-time measurements panel */
+    .measurements-panel {
+        flex-shrink: 0; /* Prevent flex item from shrinking */
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        min-width: 180px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .measurements-content h4 {
+        margin: 0 0 10px 0;
+        color: #495057;
+        font-size: 1rem;
+    }
+    
+    .measurements-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .measurements-table tr {
+        border-bottom: 1px solid #dee2e6;
+    }
+    
+    .measurements-table tr:last-child {
+        border-bottom: none;
+    }
+    
+    .measurements-table .label {
+        text-align: left;
+        padding: 2px 5px;
+        font-size: 0.85rem;
+        color: #6c757d;
+        vertical-align: top;
+    }
+    
+    .measurements-table .value {
+        text-align: right;
+        padding: 2px 5px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #495057;
+    }
+    
+    @media (min-width: 769px) {
+        /* Desktop: position in top-right of header */
+        .header-flex {
+            position: relative;
+        }
+        
+        .measurements-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        /* Mobile: position below the header */
+        .header-flex {
+            flex-direction: column;
+        }
+        
+        .measurements-panel {
+            margin-top: 15px;
+        }
+    }
 
     /* Page-specific styles only */
     #chart {
@@ -75,7 +145,7 @@
                 </span>
                 <span class="separator">|</span>
                 <span class="status-info">
-                    <strong>Current State:</strong> <span id="current-state">Loading...</span>
+                    <strong>Controller State:</strong> <span id="current-state">Loading...</span>
                 </span>
                 <span class="separator">|</span>
             </div>
@@ -86,6 +156,13 @@
         <div class="nav-links">
             <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
             <a href="{{ url_for('config_page') }}">Configuration →</a>
+        </div>
+    </div>
+    <div id="measurements-panel" class="measurements-panel">
+        <div class="measurements-content">
+            <h4>Real-time Measurements</h4>
+            <table id="measurements-table" class="measurements-table">
+            </table>
         </div>
     </div>
 </div>
@@ -598,12 +675,23 @@
             }
         }
 
+        // Load channel metadata on initial page load
+        async function loadChannelMetadata() {
+            try {
+                const response = await fetch('/api/status/history');
+                const data = await response.json();
+                channelMetadata = data.channel_metadata;
+            } catch (error) {
+                console.error('Error loading channel metadata:', error);
+            }
+        }
+
         async function updateStatus() {
             try {
-                const response = await fetch('/api/status');
+                const response = await fetch('/api/ext_status');
                 const data = await response.json();
 
-                // Update current state
+                // Update controller state
                 const stateElement = document.getElementById('current-state');
                 stateElement.textContent = data.current_state.replace(/_/g, ' ');
 
@@ -627,6 +715,11 @@
                 } else {
                     nextEventElement.textContent = 'No events scheduled';
                 }
+                
+                // Update measurements display if available
+                if (data.measurements) {
+                    updateMeasurementsDisplay(data.measurements);
+                }
             } catch (error) {
                 console.error('Error fetching status:', error);
                 document.getElementById('current-state').textContent = 'Error';
@@ -637,9 +730,10 @@
 
         // Set up update intervals
         setInterval(updateChart, 2000);  // Every 2 seconds
-        setInterval(updateStatus, 5000); // Every 5 seconds
+        setInterval(updateStatus, 1000); // Every 1 second to match measurement updates
 
         // Initial calls
+        loadChannelMetadata(); // Load metadata first
         updateChart();
         updateStatus();
 
@@ -648,6 +742,188 @@
             Plotly.relayout('chart', getLayout());
         });
     });
+
+    // Store channel metadata to map abbreviations to full names
+    let channelMetadata = null;
+    
+    async function updateMeasurementsDisplay(measurements) {
+        if (measurements) {
+            // First, try to load channel metadata if not already loaded
+            if (!channelMetadata) {
+                await loadChannelMetadata();
+            }
+            
+            // Clear the table first
+            const table = document.getElementById('measurements-table');
+            table.innerHTML = '';
+            
+            // Add channel rows first (Grid, Heatpump, Solar, Wallbox, etc.)
+            if (measurements.channel_powers) {
+                // Separate grid channel from other channels to ensure grid is first
+                const gridRows = [];
+                const otherRows = [];
+                
+                for (const [channelAbbr, power] of Object.entries(measurements.channel_powers)) {
+                    // Try to get the full name from metadata
+                    const channelName = getChannelNameFromAbbr(channelAbbr) || channelAbbr;
+                    
+                    // Create channel row
+                    const channelRow = document.createElement('tr');
+                    channelRow.className = 'channel-power-row';
+                    
+                    // Check if this is the grid channel and put it first
+                    if (isGridChannel(channelAbbr)) {
+                        channelRow.innerHTML = `
+                            <td class="label"><strong>${channelName}:</strong></td>
+                            <td class="value">${power} W</td>
+                        `;
+                        gridRows.push(channelRow);
+                    } else {
+                        channelRow.innerHTML = `
+                            <td class="label">${channelName}:</td>
+                            <td class="value">${power} W</td>
+                        `;
+                        otherRows.push(channelRow);
+                    }
+                }
+                
+                // Add grid row first (if it exists)
+                for (const row of gridRows) {
+                    table.appendChild(row);
+                }
+                
+                // Add other channel rows after grid
+                for (const row of otherRows) {
+                    table.appendChild(row);
+                }
+            }
+            
+            // Add Home (calc) after all channel rows
+            const homeRow = document.createElement('tr');
+            homeRow.className = 'channel-power-row';
+            homeRow.innerHTML = `
+                <td class="label">Home (calc):</td>
+                <td class="value">${measurements.home_power} W</td>
+            `;
+            table.appendChild(homeRow);
+            
+            // Add Voltage after Home (calc)
+            const voltageRow = document.createElement('tr');
+            voltageRow.className = 'channel-power-row';
+            voltageRow.innerHTML = `
+                <td class="label">Voltage:</td>
+                <td class="value">${Math.round(measurements.voltage)} V</td>
+            `;
+            table.appendChild(voltageRow);
+            
+            // Add Current (Setpoint)
+            const currentSetpointRow = document.createElement('tr');
+            currentSetpointRow.className = 'channel-power-row';
+            currentSetpointRow.innerHTML = `
+                <td class="label">Current (Setpoint):</td>
+                <td class="value">${Math.round(measurements.evse_current)} A</td>
+            `;
+            table.appendChild(currentSetpointRow);
+            
+            // Add Current (Target)
+            const currentTargetRow = document.createElement('tr');
+            currentTargetRow.className = 'channel-power-row';
+            currentTargetRow.innerHTML = `
+                <td class="label">Current (Target):</td>
+                <td class="value">${Math.round(measurements.target_current)} A</td>
+            `;
+            table.appendChild(currentTargetRow);
+            
+            // Add SoC
+            const socRow = document.createElement('tr');
+            socRow.className = 'channel-power-row';
+            socRow.innerHTML = `
+                <td class="label">SoC:</td>
+                <td class="value">${measurements.soc}%</td>
+            `;
+            table.appendChild(socRow);
+            
+            // Add Wallbox (meas/calc)
+            const wallboxPowerRow = document.createElement('tr');
+            wallboxPowerRow.className = 'channel-power-row';
+            
+            if (measurements.evse_power !== null && measurements.evse_power !== undefined) {
+                wallboxPowerRow.innerHTML = `
+                    <td class="label">Wallbox (meas):</td>
+                    <td class="value">${measurements.evse_power} W</td>
+                `;
+            } else {
+                wallboxPowerRow.innerHTML = `
+                    <td class="label">Wallbox (calc):</td>
+                    <td class="value">N/A</td>
+                `;
+            }
+            table.appendChild(wallboxPowerRow);
+            
+            // Add Wallbox State
+            const wallboxStateRow = document.createElement('tr');
+            wallboxStateRow.className = 'channel-power-row';
+            wallboxStateRow.innerHTML = `
+                <td class="label">Wallbox State:</td>
+                <td class="value">${measurements.charger_state}</td>
+            `;
+            table.appendChild(wallboxStateRow);
+        }
+    }
+    
+    // Function to load channel metadata from history API
+    async function loadChannelMetadata() {
+        try {
+            const response = await fetch('/api/status/history');
+            const data = await response.json();
+            channelMetadata = data.channel_metadata;
+        } catch (error) {
+            console.error('Error loading channel metadata:', error);
+            // Fallback: try to get it from a history fetch
+        }
+    }
+    
+    // Function to get full channel name from abbreviation using metadata
+    function getChannelNameFromAbbr(abbreviation) {
+        if (!channelMetadata) {
+            return abbreviation; // If no metadata available, return the abbreviation
+        }
+        
+        // Search through all devices and channels in the metadata
+        for (const deviceName in channelMetadata.channels) {
+            for (const channelKey in channelMetadata.channels[deviceName]) {
+                const channelInfo = channelMetadata.channels[deviceName][channelKey];
+                if (channelInfo.abbreviation === abbreviation) {
+                    return channelInfo.name;
+                }
+            }
+        }
+        
+        // If not found in metadata, return the abbreviation
+        return abbreviation;
+    }
+    
+    // Function to check if a channel is the grid channel
+    function isGridChannel(abbreviation) {
+        if (!channelMetadata || !channelMetadata.roles || !channelMetadata.roles.grid) {
+            return false; // If no metadata or grid role, can't determine
+        }
+        
+        // Get the grid device and channel from the roles
+        const gridDevice = channelMetadata.roles.grid.device;
+        const gridChannelNum = channelMetadata.roles.grid.channel;
+        
+        // Find the channel in the metadata that matches the grid device and channel
+        if (channelMetadata.channels && channelMetadata.channels[gridDevice]) {
+            const gridChannelKey = `channel${gridChannelNum}`;
+            const channelInfo = channelMetadata.channels[gridDevice][gridChannelKey];
+            if (channelInfo && channelInfo.abbreviation === abbreviation) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
 
     function toggleLegend() {
         const legend = document.getElementById('command-legend');

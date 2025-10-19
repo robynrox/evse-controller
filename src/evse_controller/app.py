@@ -32,6 +32,8 @@ from evse_controller.smart_evse_controller import (
     get_system_state
 )
 
+from evse_controller.drivers.evse.event_bus import EventBus, EventType
+
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
     'charge': 'Start charging at maximum rate',
@@ -48,6 +50,9 @@ VALID_COMMANDS = {
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'
 }
+
+# Global variable to cache the latest measurements
+latest_measurements = None
 
 # Get the directory containing this file
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
@@ -183,6 +188,15 @@ schedule_edit_model = api.model('ScheduleEdit', {
         enum=list(VALID_COMMANDS.keys())
     )
 })
+
+# Callback function to handle measurement updates
+def on_measurements_update(data):
+    global latest_measurements
+    latest_measurements = data
+
+# Subscribe to the measurements event when the module loads
+event_bus = EventBus()
+event_bus.subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
 
 @control_ns.route('/command')
 class ControlResource(Resource):
@@ -534,6 +548,39 @@ def get_status():
             'timestamp': next_event.timestamp.isoformat(),
             'state': next_event.state
         } if next_event else None
+    })
+
+@app.route('/api/ext_status', methods=['GET'])
+def get_extended_status():
+    """Get current system status and real-time measurements.
+    
+    Returns:
+        JSON object containing:
+        - current_state: String representing the current system state
+        - battery_soc: Integer representing battery state of charge percentage
+        - next_event: Object containing next scheduled event details, or null if none exists
+            - timestamp: ISO format timestamp
+            - state: String representing the scheduled state
+        - measurements: Object containing real-time measurements from the EVSE
+            (timestamp, home_power, evse_power, grid_power, channel_powers, 
+            voltage, evse_current, target_current, soc, charger_state)
+    """
+    current_state = get_system_state()
+    future_events = scheduler.get_future_events()
+    next_event = next(
+        (event for event in future_events if event.enabled),
+        None
+    )
+    battery_soc = evseController.getBatteryChargeLevel()
+
+    return jsonify({
+        'current_state': current_state,
+        'battery_soc': battery_soc,
+        'next_event': {
+            'timestamp': next_event.timestamp.isoformat(),
+            'state': next_event.state
+        } if next_event else None,
+        'measurements': latest_measurements
     })
 
 # Run the Flask app in a separate thread
