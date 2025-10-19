@@ -93,28 +93,126 @@
         color: #495057;
     }
     
-    @media (min-width: 769px) {
-        /* Desktop: position in top-right of header */
+    /* Common measurements panel styles */
+    .measurements-panel {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .measurements-content h4 {
+        margin: 0 0 10px 0;
+        color: #495057;
+        font-size: 1rem;
+    }
+    
+    .measurements-table {
+        width: 100%; /* Fill the container width */
+        border-collapse: collapse;
+        min-width: 180px;
+        max-width: 100%;
+    }
+    
+    .measurements-table tr {
+        border-bottom: 1px solid #dee2e6;
+    }
+    
+    .measurements-table tr:last-child {
+        border-bottom: none;
+    }
+    
+    .measurements-table .label {
+        text-align: left;
+        padding: 2px 5px;
+        font-size: 0.85rem;
+        color: #6c757d;
+        vertical-align: top;
+        white-space: nowrap; /* Prevent label wrapping */
+    }
+    
+    .measurements-table .value {
+        text-align: right;
+        padding: 2px 5px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #495057;
+        white-space: nowrap; /* Prevent value wrapping */
+    }
+    
+    /* Desktop measurements panel */
+    .desktop-measurements {
+        min-width: 180px;
+        width: 200px;
+        min-width: 200px;
+        max-width: 200px;
+        flex-shrink: 0; /* Prevent shrinking */
+    }
+    
+    @media (min-width: 801px) {
+        /* Desktop screens: position measurements panel at top-right */
         .header-flex {
             position: relative;
         }
         
-        .measurements-panel {
+        .desktop-measurements {
             position: absolute;
             top: 0;
             right: 0;
+            width: 200px;
+            min-width: 200px;
+            max-width: 200px;
+            z-index: 10; /* Ensure it's above other elements */
+        }
+        
+        /* Ensure header content doesn't overlap with measurements panel */
+        .header-content {
+            margin-right: 220px; /* Make space for the measurements panel + some padding */
         }
     }
     
-    @media (max-width: 768px) {
-        /* Mobile: position below the header */
-        .header-flex {
-            flex-direction: column;
+    /* Mobile measurements panel (at bottom of page) */
+    .mobile-measurements {
+        display: none; /* Hidden on desktop */
+        margin: 20px auto; /* Centered */
+        max-width: 500px; /* Reasonable max width */
+    }
+    
+    @media (max-width: 800px) {
+        /* Mobile/small screens: show mobile panel, hide desktop panel */
+        .desktop-measurements {
+            display: none;
         }
         
-        .measurements-panel {
-            margin-top: 15px;
+        .mobile-measurements {
+            display: block;
+            margin: 20px auto;
         }
+        
+        /* Mobile: position below the header */
+        .header-flex {
+            display: block; /* Reset to default flow */
+        }
+        
+        .header-content {
+            margin-right: 0; /* Reset margin */
+        }
+    }
+    
+    /* Table-specific styles to keep labels and values close together */
+    .measurements-table {
+        table-layout: auto; /* Allows columns to size based on content */
+    }
+    
+    .measurements-table .label {
+        width: 1%;
+        white-space: nowrap; /* Prevent label wrapping */
+    }
+    
+    .measurements-table .value {
+        width: auto;
+        white-space: nowrap; /* Prevent value wrapping */
     }
 
     /* Page-specific styles only */
@@ -136,7 +234,7 @@
 {% block content %}
 
 <div class="header-flex">
-    <div>
+    <div class="header-content">
         <h1>Ohm Sweet Ohm</h1>
         <div class="status-panel" style="margin-bottom: 8px;">
             <div class="status-item">
@@ -158,7 +256,7 @@
             <a href="{{ url_for('config_page') }}">Configuration →</a>
         </div>
     </div>
-    <div id="measurements-panel" class="measurements-panel">
+    <div id="measurements-panel" class="measurements-panel desktop-measurements">
         <div class="measurements-content">
             <h4>Real-time Measurements</h4>
             <table id="measurements-table" class="measurements-table">
@@ -211,7 +309,7 @@
     <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
         <img src="" id="ocpp-icon" alt="OCPP Mode">
     </button>
-    <button onclick="toggleLegend()">Show/Hide Command Reference</button>
+    <button onclick="toggleLegend()">Help</button>
 </div>
 
 <div class="legend-container">
@@ -303,6 +401,15 @@
 
 <div id="chart" style="width:100%;height:600px;"></div>
 
+<!-- Mobile measurements panel (appears after the graph on mobile) -->
+<div id="mobile-measurements-panel" class="measurements-panel mobile-measurements">
+    <div class="measurements-content">
+        <h4>Real-time Measurements</h4>
+        <table id="mobile-measurements-table" class="measurements-table">
+        </table>
+    </div>
+</div>
+
 <style>
     .header-flex {
         display: flex;
@@ -334,6 +441,32 @@
         gap: 10px;
         flex-wrap: wrap;
         align-items: center;
+    }
+    
+    @media (min-width: 801px) {
+        /* Ensure button container also accounts for measurements panel width */
+        .svg-button-container {
+            margin-right: 220px; /* Make space for the measurements panel */
+        }
+    }
+    
+    /* Ensure measurements panel doesn't interfere with button layout on smaller screens */
+    .header-flex {
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+    
+    .measurements-panel {
+        min-width: 200px; /* Ensure minimum width for readability */
+        flex-basis: 200px; /* Allow it to wrap properly */
+    }
+    
+    /* On smaller screens, let measurements panel take full width if needed */
+    @media (max-width: 1024px) {
+        .measurements-panel {
+            flex-basis: 100%;
+            order: -1; /* Place above the buttons on small screens */
+        }
     }
 
     .svg-button-container button {
@@ -755,9 +888,12 @@
                 await loadChannelMetadata();
             }
             
-            // Clear the table first
-            const table = document.getElementById('measurements-table');
-            table.innerHTML = '';
+            // Update both the desktop and mobile measurement tables
+            const desktopTable = document.getElementById('measurements-table');
+            const mobileTable = document.getElementById('mobile-measurements-table');
+            
+            // Create the measurement rows
+            const rows = [];
             
             // Add channel rows first (Grid, Heatpump, Solar, Wallbox, etc.)
             if (measurements.channel_powers) {
@@ -789,15 +925,11 @@
                     }
                 }
                 
-                // Add grid row first (if it exists)
-                for (const row of gridRows) {
-                    table.appendChild(row);
-                }
+                // Add grid rows
+                rows.push(...gridRows);
                 
                 // Add other channel rows after grid
-                for (const row of otherRows) {
-                    table.appendChild(row);
-                }
+                rows.push(...otherRows);
             }
             
             // Add Home (calc) after all channel rows
@@ -807,7 +939,7 @@
                 <td class="label">Home (calc):</td>
                 <td class="value">${measurements.home_power} W</td>
             `;
-            table.appendChild(homeRow);
+            rows.push(homeRow);
             
             // Add Voltage after Home (calc)
             const voltageRow = document.createElement('tr');
@@ -816,7 +948,7 @@
                 <td class="label">Voltage:</td>
                 <td class="value">${Math.round(measurements.voltage)} V</td>
             `;
-            table.appendChild(voltageRow);
+            rows.push(voltageRow);
             
             // Add Current (Setpoint)
             const currentSetpointRow = document.createElement('tr');
@@ -825,7 +957,7 @@
                 <td class="label">Current (Setpoint):</td>
                 <td class="value">${Math.round(measurements.evse_current)} A</td>
             `;
-            table.appendChild(currentSetpointRow);
+            rows.push(currentSetpointRow);
             
             // Add Current (Target)
             const currentTargetRow = document.createElement('tr');
@@ -834,7 +966,7 @@
                 <td class="label">Current (Target):</td>
                 <td class="value">${Math.round(measurements.target_current)} A</td>
             `;
-            table.appendChild(currentTargetRow);
+            rows.push(currentTargetRow);
             
             // Add SoC
             const socRow = document.createElement('tr');
@@ -843,7 +975,7 @@
                 <td class="label">SoC:</td>
                 <td class="value">${measurements.soc}%</td>
             `;
-            table.appendChild(socRow);
+            rows.push(socRow);
             
             // Add Wallbox (meas/calc)
             const wallboxPowerRow = document.createElement('tr');
@@ -860,7 +992,7 @@
                     <td class="value">N/A</td>
                 `;
             }
-            table.appendChild(wallboxPowerRow);
+            rows.push(wallboxPowerRow);
             
             // Add Wallbox State
             const wallboxStateRow = document.createElement('tr');
@@ -869,7 +1001,7 @@
                 <td class="label">Wallbox State:</td>
                 <td class="value">${measurements.charger_state}</td>
             `;
-            table.appendChild(wallboxStateRow);
+            rows.push(wallboxStateRow);
             
             // Add OCPP State at the bottom of the table
             const ocppStateRow = document.createElement('tr');
@@ -878,7 +1010,18 @@
                 <td class="label">OCPP:</td>
                 <td class="value">${measurements.ocpp_state}</td>
             `;
-            table.appendChild(ocppStateRow);
+            rows.push(ocppStateRow);
+            
+            // Update both tables with the same rows
+            if (desktopTable) {
+                desktopTable.innerHTML = '';
+                rows.forEach(row => desktopTable.appendChild(row.cloneNode(true)));
+            }
+            
+            if (mobileTable) {
+                mobileTable.innerHTML = '';
+                rows.forEach(row => mobileTable.appendChild(row.cloneNode(true)));
+            }
         }
     }
     
