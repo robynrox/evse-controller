@@ -51,8 +51,9 @@ VALID_COMMANDS = {
     'balance': 'Balance between solar charging and home power'
 }
 
-# Global variable to cache the latest measurements
+# Global variables to cache the latest measurements and OCPP state
 latest_measurements = None
+ocpp_state = "Unknown"  # Initialize to "Unknown"
 
 # Get the directory containing this file
 template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
@@ -189,14 +190,24 @@ schedule_edit_model = api.model('ScheduleEdit', {
     )
 })
 
-# Callback function to handle measurement updates
+# Callback functions to handle measurement and OCPP updates
 def on_measurements_update(data):
     global latest_measurements
     latest_measurements = data
 
-# Subscribe to the measurements event when the module loads
+def on_ocpp_enabled(data):
+    global ocpp_state
+    ocpp_state = "On"
+
+def on_ocpp_disabled(data):
+    global ocpp_state
+    ocpp_state = "Off"
+
+# Subscribe to the measurements and OCPP events when the module loads
 event_bus = EventBus()
 event_bus.subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
+event_bus.subscribe(EventType.OCPP_ENABLED, on_ocpp_enabled)
+event_bus.subscribe(EventType.OCPP_DISABLED, on_ocpp_disabled)
 
 @control_ns.route('/command')
 class ControlResource(Resource):
@@ -564,6 +575,7 @@ def get_extended_status():
         - measurements: Object containing real-time measurements from the EVSE
             (timestamp, home_power, evse_power, grid_power, channel_powers, 
             voltage, evse_current, target_current, soc, charger_state)
+        - ocpp_state: String representing the current OCPP state ("On", "Off", or "Unknown")
     """
     current_state = get_system_state()
     future_events = scheduler.get_future_events()
@@ -580,7 +592,8 @@ def get_extended_status():
             'timestamp': next_event.timestamp.isoformat(),
             'state': next_event.state
         } if next_event else None,
-        'measurements': latest_measurements
+        'measurements': latest_measurements,
+        'ocpp_state': ocpp_state
     })
 
 # Run the Flask app in a separate thread

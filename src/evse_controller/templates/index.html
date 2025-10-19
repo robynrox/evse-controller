@@ -718,6 +718,8 @@
                 
                 // Update measurements display if available
                 if (data.measurements) {
+                    // Add OCPP state to the measurements object
+                    data.measurements.ocpp_state = data.ocpp_state;
                     updateMeasurementsDisplay(data.measurements);
                 }
             } catch (error) {
@@ -868,6 +870,15 @@
                 <td class="value">${measurements.charger_state}</td>
             `;
             table.appendChild(wallboxStateRow);
+            
+            // Add OCPP State at the bottom of the table
+            const ocppStateRow = document.createElement('tr');
+            ocppStateRow.className = 'channel-power-row';
+            ocppStateRow.innerHTML = `
+                <td class="label">OCPP:</td>
+                <td class="value">${measurements.ocpp_state}</td>
+            `;
+            table.appendChild(ocppStateRow);
         }
     }
     
