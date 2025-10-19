@@ -25,7 +25,7 @@
     /* Override the default body constraints for the dashboard */
     body {
         max-width: none;
-        margin: 20px;
+        margin: 10px;
         /* Keep some margin from the window edges */
     }
     
@@ -168,7 +168,7 @@
         
         /* Ensure header content doesn't overlap with measurements panel */
         .header-content {
-            margin-right: 220px; /* Make space for the measurements panel + some padding */
+            margin-right: 250px; /* Make space for the measurements panel + some padding */
         }
     }
     
@@ -219,7 +219,7 @@
     #chart {
         width: 110%;
         height: 80vh;
-        max-height: 600px;
+        max-height: 500px;
     }
 
     .svg-button-container {
@@ -415,7 +415,6 @@
         display: flex;
         align-items: flex-start;
         gap: 32px;
-        margin-bottom: 20px;
     }
     
     .status-panel {
@@ -446,7 +445,7 @@
     @media (min-width: 801px) {
         /* Ensure button container also accounts for measurements panel width */
         .svg-button-container {
-            margin-right: 220px; /* Make space for the measurements panel */
+            margin-right: 240px; /* Make space for the measurements panel */
         }
     }
     
@@ -728,7 +727,7 @@
     function getLayout() {
         const isMobileDevice = isMobile();
         return {
-            title: 'Power History',
+            // Remove the title 'Power History'
             xaxis: {
                 title: 'Time',
                 tickmode: 'auto',
@@ -744,13 +743,13 @@
             legend: {
                 orientation: "h",
                 yanchor: "top",
-                y: -0.2,
+                y: -0.15,
                 xanchor: "center",
                 x: 0.5
             },
             responsive: true,
             autosize: true,
-            margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
+            margin: { l: 50, r: 20, b: 40, t: 20, pad: 4 }
         };
     }
 
