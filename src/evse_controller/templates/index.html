@@ -996,10 +996,18 @@
             // Add Wallbox State
             const wallboxStateRow = document.createElement('tr');
             wallboxStateRow.className = 'channel-power-row';
-            // Format the state to convert underscores to spaces and have only first letter capitalized
-            let formattedChargerState = measurements.charger_state.replace(/_/g, ' ');
-            formattedChargerState = formattedChargerState.charAt(0).toUpperCase() + 
-                                   formattedChargerState.slice(1).toLowerCase();
+
+            let formattedChargerState = '';
+            // Map technical state names to more user-friendly terms
+            if (measurements.charger_state === 'WAITING_FOR_CAR_DEMAND') {
+                formattedChargerState = 'Preparing';  // More user-friendly term
+            } else {
+                // Format the state to convert underscores to spaces and have only first letter capitalized
+                formattedChargerState = measurements.charger_state.replace(/_/g, ' ');
+                formattedChargerState = formattedChargerState.charAt(0).toUpperCase() + 
+                                    formattedChargerState.slice(1).toLowerCase();
+            }
+            
             wallboxStateRow.innerHTML = `
                 <td class="label">Wallbox State:</td>
                 <td class="value">${formattedChargerState}</td>
