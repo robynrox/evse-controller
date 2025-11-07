@@ -352,16 +352,30 @@
             <small>Set to 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles</small>
         </div>
         <div class="form-group">
-            <label for="ioctgo_target_soc_at_cheap_start">Target SoC at Cheap Rate Start (%):</label>
-            <input type="number" id="ioctgo_target_soc_at_cheap_start" name="tariffs.ioctgo[target_soc_at_cheap_start]" 
-                   value="{{ config.tariffs.ioctgo.target_soc_at_cheap_start }}" min="0" max="100">
-            <small>Target state of charge at start of cheap rate period (23:30).</small>
+            <label class="checkbox-label">
+                <input type="checkbox" id="ioctgo_enable_bulk_discharge" name="tariffs.ioctgo[enable_bulk_discharge]"
+                    {% if config.tariffs.ioctgo.enable_bulk_discharge %}checked{% endif %}>
+                Enable Bulk Discharge Operation
+            </label>
+            <small>Enable or disable bulk discharge operation</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_bulk_discharge_start_time">Bulk Discharge Start Time (HH:MM):</label>
             <input type="text" id="ioctgo_bulk_discharge_start_time" name="tariffs.ioctgo[bulk_discharge_start_time]" 
                    value="{{ config.tariffs.ioctgo.bulk_discharge_start_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
             <small>Time to start bulk discharge. Default 16:00. Adjust to start earlier or later</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_bulk_discharge_end_time">Bulk Discharge End Time (HH:MM):</label>
+            <input type="text" id="ioctgo_bulk_discharge_end_time" name="tariffs.ioctgo[bulk_discharge_end_time]" 
+                   value="{{ config.tariffs.ioctgo.bulk_discharge_end_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
+            <small>Time to end bulk discharge. Default 19:00. Adjust to end earlier or later</small>
+        </div>
+        <div class="form-group">
+            <label for="ioctgo_target_soc_at_bulk_discharge_end">Target SoC at Bulk Discharge End Time (%):</label>
+            <input type="number" id="ioctgo_target_soc_at_bulk_discharge_end" name="tariffs.ioctgo[target_soc_at_bulk_discharge_end]" 
+                   value="{{ config.tariffs.ioctgo.target_soc_at_bulk_discharge_end }}" min="0" max="100">
+            <small>Target state of charge at end of bulk discharge period.</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_min_discharge_current">Minimum Discharge Current (A):</label>
