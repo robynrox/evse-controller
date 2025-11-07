@@ -63,11 +63,11 @@
             <input type="text" id="wallbox_url" name="wallbox[url]" value="{{ config.wallbox.url }}" required>
         </div>
         <div class="form-group">
-            <label for="wallbox_username">Username (for auto-restart):</label>
+            <label for="wallbox_username">Username (for auto-restart and OCPP state read/write functions):</label>
             <input type="text" id="wallbox_username" name="wallbox[username]" value="{{ config.wallbox.username }}">
         </div>
         <div class="form-group">
-            <label for="wallbox_password">Password (for auto-restart):</label>
+            <label for="wallbox_password">Password (for auto-restart and OCPP state read/write functions):</label>
             <input type="password" id="wallbox_password" name="wallbox[password]" value="{{ config.wallbox.password }}"
                 autocomplete="off">
         </div>
