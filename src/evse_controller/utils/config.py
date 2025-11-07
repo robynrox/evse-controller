@@ -39,6 +39,9 @@ class Config:
                             'password': 'test',
                             'serial': 'test',
                             'use_simulator': True,
+                            'max_charge_current': 32,
+                            'max_discharge_current': 32,
+                            'min_charge_discharge_current': 3,
                             'simulator': {
                                 'initial_battery_level': 50,
                                 'battery_capacity_kwh': 50,
@@ -71,7 +74,6 @@ class Config:
                                 'bulk_discharge_start_time': '16:00',
                                 'bulk_discharge_end_time': '19:00',
                                 'enable_bulk_discharge': True,
-                                'min_discharge_current': 3,
                                 'soc_threshold_for_strategy': 50,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
@@ -249,6 +251,11 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "max_discharge_current", value)
     )
 
+    WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "min_charge_discharge_current", 3),
+        lambda self, value: self._set_config_value("wallbox", "min_charge_discharge_current", value)
+    )
+
     # Intelligent Octopus Go tariff parameters
     IOCTGO_BATTERY_CAPACITY_KWH = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "battery_capacity_kwh", 59),
@@ -275,10 +282,7 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "enable_bulk_discharge", value)
     )
 
-    IOCTGO_MIN_DISCHARGE_CURRENT = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "min_discharge_current", 3),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_discharge_current", value)
-    )
+
 
     IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
@@ -429,7 +433,8 @@ class Config:
                 'password': self.WALLBOX_PASSWORD,
                 'serial': self.WALLBOX_SERIAL,
                 'max_charge_current': self.WALLBOX_MAX_CHARGE_CURRENT,
-                'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT
+                'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT,
+                'min_charge_discharge_current': self.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,
@@ -463,7 +468,6 @@ class Config:
                     'bulk_discharge_start_time': self.IOCTGO_BULK_DISCHARGE_START_TIME,
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
-                    'min_discharge_current': self.IOCTGO_MIN_DISCHARGE_CURRENT,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,

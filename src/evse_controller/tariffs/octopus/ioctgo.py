@@ -24,14 +24,14 @@ class IntelligentOctopusGoTariff(Tariff):
     maximum use can be made of charging during the cheap electricity window.
     
     You can adjust your vehicle's battery capacity where it says
-    battery_capacity_kwh=59. You can also adjust the bulk discharge start time
-    if you want it to start earlier or later than 17:30. You can vary the
-    minimum bulk discharge current if you like, although the Wallbox becomes
-    progressively worse at efficient energy conversion when the current is
-    lower than the 10 amps given. You can adjust the target state of charge
-    percentage which will not always be met, but functions as a target that
-    informs the system how much current should be discharged during the bulk
-    discharge period.
+    battery_capacity_kwh=59. You can also adjust the bulk discharge start and end times
+    to control when the bulk discharge occurs. Times can span across midnight if needed.
+    The minimum discharge current sets a threshold below which the calculated
+    discharge is ignored and load following discharge is used instead, because
+    the Wallbox hardware cannot operate below this current limit. You can adjust 
+    the target state of charge percentage which will not always be met, but functions 
+    as a target that informs the system how much current should be discharged during 
+    the bulk discharge period.
 
     Attributes:
         time_of_use (dict): Dictionary defining Intelligent Octopus Go time periods and rates
@@ -87,9 +87,8 @@ class IntelligentOctopusGoTariff(Tariff):
         self.TARGET_SOC_AT_BULK_DISCHARGE_END = config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END  # Target SoC at end of bulk discharge period
 
         # Minimum discharge current threshold - below this we use load following instead
-        # 10A is a reasonable minimum as efficiency of Wallbox dc-to-ac conversion 
-        # significantly reduces at lower currents
-        self.MIN_DISCHARGE_CURRENT = config.IOCTGO_MIN_DISCHARGE_CURRENT  # Amps
+        # This is a Wallbox hardware operational limit
+        self.MIN_DISCHARGE_CURRENT = config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT  # Amps
 
         # Battery state of charge threshold for switching between discharge strategies
         self.SOC_THRESHOLD_FOR_STRATEGY = config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY  # Percent
@@ -251,7 +250,7 @@ class IntelligentOctopusGoTariff(Tariff):
         required_amps = max(0, min(required_amps, self.MAX_DISCHARGE_CURRENT))
         
         # If calculated current is below minimum threshold, return 0 to use load following instead
-        # This is because efficiency of Wallbox dc-to-ac conversion reduces at lower currents
+        # This is because the Wallbox hardware cannot operate below this current limit
         if required_amps < self.MIN_DISCHARGE_CURRENT:
             return 0
             

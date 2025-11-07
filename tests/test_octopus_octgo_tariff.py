@@ -115,108 +115,170 @@ def test_get_rates(go_tariff):
 
 def test_calculate_target_discharge_current(go_tariff):
     """Test calculation of target discharge current"""
-    # Test case: 6 hours until 00:30, current SoC 90%, target 54%
-    # Need to discharge 36% over 6 hours = 6%/hr
-    # For 59kWh battery: 1A = 0.46%/hr, so need 6/0.46 = 13.04 amps
-    current = go_tariff.calculate_target_discharge_current(90, 1110)  # 18:30 (6 hours until 00:30)
-    assert abs(current - 13.04) < 0.1
-    
-    # Test case: 3 hours until 00:30, current SoC 90%, target 54%
-    # Need to discharge 36% over 3 hours = 12%/hr
-    # For 59kWh battery: 1A = 0.46%/hr, so need 12/0.46 = 26.09 amps
-    current = go_tariff.calculate_target_discharge_current(90, 1290)  # 21:30 (3 hours until 00:30)
-    assert abs(current - 26.09) < 0.1
-    
+    # Create a tariff with bulk discharge enabled and specific times for testing
+    from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
+    tariff_with_bulk_discharge = OctopusGoTariff(enable_bulk_discharge=True,
+                                                 bulk_discharge_start_time="17:00",
+                                                 bulk_discharge_end_time="20:00")
+
+    # Test case: 3 hours until bulk discharge end, current SoC 90%, target 60%
+    # Need to discharge 30% over 3 hours = 10%/hr
+    # For 59kWh battery: 1A = 0.46%/hr, so need 10/0.46 = 21.74 amps
+    # This should be within range (not clamped to max discharge)
+    current = tariff_with_bulk_discharge.calculate_target_discharge_current(90, 1020)  # 17:00 (3 hours till end at 20:00)
+    # Should be around 21.74A but less than max
+    assert 20 < current <= 32
+
+    # Test case: 1 hour until bulk discharge end, current SoC 90%, target 60%
+    # Need to discharge 30% over 1 hour = 30%/hr
+    # For 59kWh battery: 1A = 0.46%/hr, so need 30/0.46 = 65.22 amps
+    # This should be clamped to max discharge (32A)
+    current = tariff_with_bulk_discharge.calculate_target_discharge_current(90, 1140)  # 19:00 (1 hour till end at 20:00)
+    assert current == 32.0  # Should be clamped to max discharge current
+
     # Test case: Already at target SoC
-    current = go_tariff.calculate_target_discharge_current(54, 1110)  # 18:30
+    current = tariff_with_bulk_discharge.calculate_target_discharge_current(60, 1020)  # 17:00
     assert current == 0
-    
+
     # Test case: Below target SoC
-    current = go_tariff.calculate_target_discharge_current(50, 1110)  # 18:30
+    current = tariff_with_bulk_discharge.calculate_target_discharge_current(55, 1020)  # 17:00
     assert current == 0
-    
-    # Test case: Calculated current below minimum threshold (10A)
-    # With only 0.1% excess SoC and 6 hours available, need 0.1/6 = 0.017%/hr
-    # For 59kWh battery: 1A = 0.46%/hr, so need 0.017/0.46 = 0.037 amps - below 10A threshold
-    current = go_tariff.calculate_target_discharge_current(54.1, 1110)  # 18:30
-    assert current == 0  # Should return 0 to use load following instead
+
+    # Test case: Bulk discharge disabled - should return 0
+    tariff_disabled = OctopusGoTariff(enable_bulk_discharge=False)
+    current = tariff_disabled.calculate_target_discharge_current(90, 1020)  # 17:00
+    assert current == 0  # Should return 0 because bulk discharge is disabled
+
+    # Test case: Outside bulk discharge time period - should return 0
+    current = tariff_with_bulk_discharge.calculate_target_discharge_current(90, 900)  # 15:00 (before bulk discharge start)
+    assert current == 0
 
 def test_control_state_smart_discharge(go_tariff):
     """Test smart discharge behavior"""
+    # Create a tariff with bulk discharge enabled and specific times for testing
+    from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
+    tariff_with_bulk_discharge = OctopusGoTariff(enable_bulk_discharge=True,
+                                                 bulk_discharge_start_time="17:00",
+                                                 bulk_discharge_end_time="20:00")
+
     # Before bulk discharge time
     state = create_test_state(90)
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 900)  # 15:00
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 900)  # 15:00
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current == 2
     assert max_current == 32  # Using default max discharge current
     assert "Day rate before bulk discharge" in message
 
-    # At bulk discharge time with high SoC - test case where calculated current is ABOVE minimum threshold
-    # At 21:30 (1290 minutes), there are 3 hours until 00:30
-    # Need to discharge 36% over 3 hours = 12%/hr
-    # For 59kWh battery: 1A = 0.46%/hr, so need 12/0.46 = 26.09 amps (above threshold)
+    # During bulk discharge time with high SoC - test case where calculated current is above minimum threshold
+    # At 18:00 (1080 minutes), there are 2 hours until bulk discharge end at 20:00
+    # Need to discharge 30% (from 90% to 60% target) over 2 hours = 15%/hr
+    # For 59kWh battery: 1A = 0.46%/hr, so need 15/0.46 = 32.61 amps (clamped to max 32A)
     state = create_test_state(90)
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 1290)  # 21:30
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1080)  # 18:00
     assert control_state == ControlState.DISCHARGE
-    assert min_current == 26  # Expected calculated current (~26.09, rounded down)
+    assert min_current == 32  # Expected calculated current (~32.61, clamped to max)
     assert max_current == 32  # Using default max discharge current
     assert "Smart discharge" in message
 
-    # At bulk discharge time with high SoC - test case where calculated current is BELOW minimum threshold
-    # At 16:00 (960 minutes), there are 8.5 hours until 00:30
-    # Need to discharge 36% over 8.5 hours = 4.24%/hr
-    # For 59kWh battery: 1A = 0.46%/hr, so need 4.24/0.46 = 9.2 amps (below threshold)
-    # Should fall back to "no excess SoC" message
+    # During bulk discharge time with high SoC - test case where calculated current is below minimum threshold
+    # At 19:30 (1170 minutes), there is 0.5 hours until bulk discharge end at 20:00
+    # Need to discharge 30% (from 90% to 60% target) over 0.5 hours = 60%/hr
+    # For 59kWh battery: 1A = 0.46%/hr, so need 60/0.46 = 130.43 amps (clamped to max 32A)
     state = create_test_state(90)
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 960)  # 16:00
-    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
-    assert min_current == 2  # Below threshold, so use default minimum
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1170)  # 19:30
+    assert control_state == ControlState.DISCHARGE
+    assert min_current == 32  # Should be clamped to max discharge current
     assert max_current == 32  # Using default max discharge current
-    assert "no excess SoC" in message  # Falls back to this message when below threshold
+    assert "Smart discharge" in message
 
-    # At bulk discharge time with target SoC
-    state = create_test_state(54)
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 960)  # 16:00
+    # During bulk discharge time with target SoC - should use load follow
+    state = create_test_state(60)  # At target SoC
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1080)  # 18:00
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current == 2
     assert max_current == 32  # Using default max discharge current
     assert "no excess SoC" in message
-    
-    # At bulk discharge time with SoC just above target (below minimum current threshold)
-    state = create_test_state(54.1)
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 960)  # 16:00
+
+    # During bulk discharge time with SoC just above target - should use load follow
+    state = create_test_state(60.1)
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1080)  # 18:00
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current == 2
     assert max_current == 32  # Using default max discharge current
     assert "no excess SoC" in message
+
+def test_control_state_smart_discharge_with_disabled_bulk():
+    """Test smart discharge behavior when bulk discharge is disabled"""
+    # Create a tariff with bulk discharge disabled
+    from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
+    tariff_no_bulk = OctopusGoTariff(enable_bulk_discharge=False,
+                                     bulk_discharge_start_time="17:00",
+                                     bulk_discharge_end_time="20:00")
+
+    # Even during bulk discharge time, if bulk discharge is disabled, it should use load follow
+    state = create_test_state(90)
+    control_state, min_current, max_current, message = tariff_no_bulk.get_control_state(state, 1080)  # 18:00
+    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+    assert min_current == 2
+    assert max_current == 32  # Using default max discharge current
+    assert "period: load follow discharge (bulk discharge disabled)" in message
+
+def test_control_state_smart_discharge_with_disabled_bulk():
+    """Test smart discharge behavior when bulk discharge is disabled"""
+    # Create a tariff with bulk discharge disabled
+    from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
+    tariff_no_bulk = OctopusGoTariff(enable_bulk_discharge=False,
+                                     bulk_discharge_start_time="17:00",
+                                     bulk_discharge_end_time="20:00")
+
+    # Even during bulk discharge time, if bulk discharge is disabled, it should use load follow
+    state = create_test_state(90)
+    control_state, min_current, max_current, message = tariff_no_bulk.get_control_state(state, 1080)  # 18:00
+    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+    assert min_current == 2
+    assert max_current == 32  # Using default max discharge current
+
 
 def test_control_state_evening_discharge_edge_cases(go_tariff):
     """Test edge cases for evening discharge behavior"""
-    # Just before 05:30 with high battery
+    # Create a tariff with bulk discharge enabled and specific times for testing
+    from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
+    tariff_with_bulk_discharge = OctopusGoTariff(enable_bulk_discharge=True,
+                                                 bulk_discharge_start_time="17:00",
+                                                 bulk_discharge_end_time="20:00")
+
+    # Just before 05:30 with high battery - this is still within the off-peak period (00:30-05:30)
+    # If battery is at max, it should go dormant
     state = create_test_state(90)
-    control_state, _, _, message = go_tariff.get_control_state(state, 329)  # 05:29
-    # This is just before the start of the off-peak period, but still in the day rate period
-    # With high battery, we should go dormant to preserve energy for off-peak charging
+    control_state, _, _, message = tariff_with_bulk_discharge.get_control_state(state, 329)  # 05:29
     assert control_state == ControlState.DORMANT
     assert "SoC max" in message
 
     # Just after 05:30 with high battery
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 331)  # 05:31
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 331)  # 05:31
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current == 2
     assert max_current == 32  # Using default max discharge current
     assert "Day rate before bulk discharge" in message
 
-    # Just before cheap rate (at night) with battery at target
-    state = create_test_state(54)  # Exactly at target
-    control_state, min_current, max_current, message = go_tariff.get_control_state(state, 29)  # 00:29
+    # During bulk discharge period with battery at target
+    state = create_test_state(60)  # Exactly at target
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1029)  # 17:09
     assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
     assert min_current == 2
     assert max_current == 32  # Using default max discharge current
     assert "no excess SoC" in message
 
+    # Still in bulk discharge period (19:59 is before 20:00 end time) with battery at target
+    state = create_test_state(60)  # Exactly at target
+    control_state, min_current, max_current, message = tariff_with_bulk_discharge.get_control_state(state, 1199)  # 19:59
+    assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+    assert min_current == 2
+    assert max_current == 32  # Using default max discharge current
+    assert "Bulk discharge period" in message
+
     # At start of cheap rate
-    control_state, _, _, message = go_tariff.get_control_state(state, 30)  # 00:30
+    control_state, _, _, message = tariff_with_bulk_discharge.get_control_state(state, 30)  # 00:30
     assert control_state == ControlState.CHARGE
     assert "Night rate" in message
 

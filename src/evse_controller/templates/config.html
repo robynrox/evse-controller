@@ -86,6 +86,12 @@
             <input type="number" id="max_discharge_current" name="wallbox[max_discharge_current]"
                 value="{{ config.wallbox.max_discharge_current }}" min="3" max="32" required>
         </div>
+        <div class="form-group">
+            <label for="min_charge_discharge_current">Minimum Charging/Discharging Current (A):</label>
+            <input type="number" id="min_charge_discharge_current" name="wallbox[min_charge_discharge_current]"
+                value="{{ config.wallbox.min_charge_discharge_current }}" min="3" max="32" required>
+            <small>Minimum current the Wallbox can operate at for both charging and discharging. Default is 3A.</small>
+        </div>
     </div>
 
     <div class="config-section">
@@ -344,7 +350,8 @@
         </div>
     </div>
     <div class="config-section">
-        <h2>Intelligent Octopus Go Tariff Configuration</h2>
+        <h2>Octopus Go Tariff Configuration (Shared)</h2>
+        <p>These settings apply to both the standard Octopus Go (OCTGO) and Intelligent Octopus Go (IOCTGO) tariffs.</p>
         <div class="form-group">
             <label for="ioctgo_battery_capacity_kwh">Vehicle Battery Capacity (kWh):</label>
             <input type="number" id="ioctgo_battery_capacity_kwh" name="tariffs.ioctgo[battery_capacity_kwh]" 
@@ -369,7 +376,7 @@
             <label for="ioctgo_bulk_discharge_end_time">Bulk Discharge End Time (HH:MM):</label>
             <input type="text" id="ioctgo_bulk_discharge_end_time" name="tariffs.ioctgo[bulk_discharge_end_time]" 
                    value="{{ config.tariffs.ioctgo.bulk_discharge_end_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to end bulk discharge. Default 19:00. Adjust to end earlier or later</small>
+            <small>Time to end bulk discharge. Default 19:00. Adjust to end earlier or later. Can wrap around midnight (e.g. 16:00 to 00:30)</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_target_soc_at_bulk_discharge_end">Target SoC at Bulk Discharge End Time (%):</label>
@@ -377,12 +384,7 @@
                    value="{{ config.tariffs.ioctgo.target_soc_at_bulk_discharge_end }}" min="0" max="100">
             <small>Target state of charge at end of bulk discharge period.</small>
         </div>
-        <div class="form-group">
-            <label for="ioctgo_min_discharge_current">Minimum Discharge Current (A):</label>
-            <input type="number" id="ioctgo_min_discharge_current" name="tariffs.ioctgo[min_discharge_current]" 
-                   value="{{ config.tariffs.ioctgo.min_discharge_current }}" min="3" max="32" step="1">
-            <small>Minimum sustained discharge current threshold during bulk discharge period. Wallbox efficiency reduces at lower currents</small>
-        </div>
+
         <div class="form-group">
             <label for="ioctgo_soc_threshold_strategy">SoC Threshold for Strategy (%):</label>
             <input type="number" id="ioctgo_soc_threshold_strategy" name="tariffs.ioctgo[soc_threshold_for_strategy]" 
@@ -401,6 +403,16 @@
                    value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000">
             <small>When SoC < threshold, grid import level greater than this amount starts load following. The system aims to cover most of the house load with a small amount coming from the grid.</small>
         </div>
+        <div class="form-group">
+            <div class="notification">
+                <strong>Note:</strong> After changing any of these parameters, you must switch away from the tariff and back to it (e.g., go to PAUSE mode and then back to IOCTGO/OCTGO) for changes to take effect.
+            </div>
+        </div>
+    </div>
+
+    <div class="config-section">
+        <h2>Intelligent Octopus Go Tariff Configuration (IOCTGO-specific)</h2>
+        <p>These settings apply only to the Intelligent Octopus Go (IOCTGO) tariff and are not used in standard Octopus Go (OCTGO).</p>
         <div class="form-group">
             <label class="checkbox-label">
                 <input type="checkbox" id="ioctgo_smart_ocpp_operation" name="tariffs.ioctgo[smart_ocpp_operation]" 
