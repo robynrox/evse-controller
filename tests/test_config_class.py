@@ -92,7 +92,8 @@ class TestConfig:
         assert config.IOCTGO_BULK_DISCHARGE_START_TIME == "16:00"
         assert config.IOCTGO_BULK_DISCHARGE_END_TIME == "19:00"
         assert config.IOCTGO_ENABLE_BULK_DISCHARGE is True
-        assert config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT == 3
+        assert config.WALLBOX_MIN_CHARGE_CURRENT == 3
+        assert config.WALLBOX_MIN_DISCHARGE_CURRENT == 3
         assert config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 50
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 0
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 720
@@ -440,7 +441,8 @@ class TestConfig:
         config.IOCTGO_BULK_DISCHARGE_START_TIME = "18:00"
         config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:30"
         config.IOCTGO_ENABLE_BULK_DISCHARGE = False
-        config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT = 6
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
         config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = 55
         config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = 200
         config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = 850
@@ -470,7 +472,8 @@ class TestConfig:
                 assert saved_config["tariffs"]["ioctgo"]["bulk_discharge_start_time"] == "18:00"
                 assert saved_config["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:30"
                 assert saved_config["tariffs"]["ioctgo"]["enable_bulk_discharge"] is False
-                assert saved_config["wallbox"]["min_charge_discharge_current"] == 6
+                assert saved_config["wallbox"]["min_charge_current"] == 6
+                assert saved_config["wallbox"]["min_discharge_current"] == 6
                 assert saved_config["tariffs"]["ioctgo"]["soc_threshold_for_strategy"] == 55
                 assert saved_config["tariffs"]["ioctgo"]["grid_import_threshold_high_soc"] == 200
                 assert saved_config["tariffs"]["ioctgo"]["grid_import_threshold_low_soc"] == 850
@@ -504,7 +507,8 @@ class TestConfig:
                     assert config2.IOCTGO_BULK_DISCHARGE_START_TIME == "18:00"
                     assert config2.IOCTGO_BULK_DISCHARGE_END_TIME == "19:30"
                     assert config2.IOCTGO_ENABLE_BULK_DISCHARGE is False
-                    assert config2.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT == 6
+                    assert config2.WALLBOX_MIN_CHARGE_CURRENT == 6
+                    assert config2.WALLBOX_MIN_DISCHARGE_CURRENT == 6
                     assert config2.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 55
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 200
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 850
@@ -529,7 +533,8 @@ class TestConfig:
         config.WALLBOX_URL = "test.evse.local"
         config.WALLBOX_USERNAME = "newuser"
         config.WALLBOX_PASSWORD = "newpass"
-        config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT = 6
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
         config.SHELLY_PRIMARY_URL = "http://shelly1.local"
         config.SHELLY_SECONDARY_URL = "http://shelly2.local"
         config.STARTUP_STATE = "OCPP"
@@ -556,7 +561,8 @@ class TestConfig:
                 assert saved_config["wallbox"]["url"] == "test.evse.local"
                 assert saved_config["wallbox"]["username"] == "newuser"
                 assert saved_config["wallbox"]["password"] == "newpass"
-                assert saved_config["wallbox"]["min_charge_discharge_current"] == 6
+                assert saved_config["wallbox"]["min_charge_current"] == 6
+                assert saved_config["wallbox"]["min_discharge_current"] == 6
                 assert saved_config["shelly"]["primary_url"] == "http://shelly1.local"
                 assert saved_config["shelly"]["secondary_url"] == "http://shelly2.local"
                 assert saved_config["charging"]["startup_state"] == "OCPP"
@@ -611,7 +617,8 @@ class TestConfig:
         config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = 70
         config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:00"
         config.IOCTGO_ENABLE_BULK_DISCHARGE = False
-        config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT = 6
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
 
         # Check internal structure - there should be a 'tariffs' key with 'ioctgo' inside
         # There should NOT be a key named 'tariffs.ioctgo' (with dot in the name)
@@ -626,7 +633,8 @@ class TestConfig:
         assert ioctgo_config['bulk_discharge_end_time'] == "19:00"
         assert ioctgo_config['enable_bulk_discharge'] is False
         wallbox_config = config._config_data['wallbox']
-        assert wallbox_config['min_charge_discharge_current'] == 6
+        assert wallbox_config['min_charge_current'] == 6
+        assert wallbox_config['min_discharge_current'] == 6
 
         # Check that save and load operations don't create duplication
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -650,7 +658,8 @@ class TestConfig:
                 assert saved_config['tariffs']['ioctgo']['target_soc_at_bulk_discharge_end'] == 70
                 assert saved_config['tariffs']['ioctgo']['bulk_discharge_end_time'] == "19:00"
                 assert saved_config['tariffs']['ioctgo']['enable_bulk_discharge'] is False
-                assert saved_config['wallbox']['min_charge_discharge_current'] == 6
+                assert saved_config['wallbox']['min_charge_current'] == 6
+                assert saved_config['wallbox']['min_discharge_current'] == 6
 
     def test_no_duplicate_config_keys_all_dotted_sections(self):
         """Test that all dotted sections (tariffs.ioctgo, shelly.grid, shelly.evse, wallbox.simulator) 

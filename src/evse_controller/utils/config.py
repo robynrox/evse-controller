@@ -41,7 +41,8 @@ class Config:
                             'use_simulator': True,
                             'max_charge_current': 32,
                             'max_discharge_current': 32,
-                            'min_charge_discharge_current': 3,
+                            'min_charge_current': 3,
+                            'min_discharge_current': 3,
                             'simulator': {
                                 'initial_battery_level': 50,
                                 'battery_capacity_kwh': 50,
@@ -251,9 +252,14 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "max_discharge_current", value)
     )
 
-    WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT = property(
-        lambda self: self._get_config_value("wallbox", "min_charge_discharge_current", 3),
-        lambda self, value: self._set_config_value("wallbox", "min_charge_discharge_current", value)
+    WALLBOX_MIN_CHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "min_charge_current", 3),
+        lambda self, value: self._set_config_value("wallbox", "min_charge_current", value)
+    )
+
+    WALLBOX_MIN_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "min_discharge_current", 3),
+        lambda self, value: self._set_config_value("wallbox", "min_discharge_current", value)
     )
 
     # Intelligent Octopus Go tariff parameters
@@ -434,7 +440,8 @@ class Config:
                 'serial': self.WALLBOX_SERIAL,
                 'max_charge_current': self.WALLBOX_MAX_CHARGE_CURRENT,
                 'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT,
-                'min_charge_discharge_current': self.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT
+                'min_charge_current': self.WALLBOX_MIN_CHARGE_CURRENT,
+                'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,

@@ -87,10 +87,16 @@
                 value="{{ config.wallbox.max_discharge_current }}" min="3" max="32" required>
         </div>
         <div class="form-group">
-            <label for="min_charge_discharge_current">Minimum Charging/Discharging Current (A):</label>
-            <input type="number" id="min_charge_discharge_current" name="wallbox[min_charge_discharge_current]"
-                value="{{ config.wallbox.min_charge_discharge_current }}" min="3" max="32" required>
-            <small>Minimum current the Wallbox can operate at for both charging and discharging. Default is 3A.</small>
+            <label for="min_charge_current">Minimum Charging Current (A):</label>
+            <input type="number" id="min_charge_current" name="wallbox[min_charge_current]"
+                value="{{ config.wallbox.min_charge_current }}" min="3" max="32" required>
+            <small>Minimum current the Wallbox can operate at when charging. Default is 3A.</small>
+        </div>
+        <div class="form-group">
+            <label for="min_discharge_current">Minimum Discharging Current (A):</label>
+            <input type="number" id="min_discharge_current" name="wallbox[min_discharge_current]"
+                value="{{ config.wallbox.min_discharge_current }}" min="3" max="32" required>
+            <small>Minimum current the Wallbox can operate at when discharging. Default is 3A.</small>
         </div>
     </div>
 

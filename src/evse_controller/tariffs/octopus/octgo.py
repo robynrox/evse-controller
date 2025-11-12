@@ -75,7 +75,7 @@ class OctopusGoTariff(Tariff):
 
         # Minimum discharge current threshold - below this we use load following instead
         # of calculated discharge, because the Wallbox hardware cannot operate below this limit
-        self.MIN_DISCHARGE_CURRENT = config.WALLBOX_MIN_CHARGE_DISCHARGE_CURRENT  # Amps
+        self.MIN_DISCHARGE_CURRENT = config.WALLBOX_MIN_DISCHARGE_CURRENT  # Amps
 
         # Battery state of charge threshold for switching between discharge strategies
         self.SOC_THRESHOLD_FOR_STRATEGY = config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY  # Percent
