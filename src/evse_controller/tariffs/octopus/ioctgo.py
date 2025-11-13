@@ -300,6 +300,11 @@ class IntelligentOctopusGoTariff(Tariff):
             evseController: Controller instance managing the EVSE
             dayMinute (int): Minutes since midnight (0-1439)
         """
+        if not hasattr(self, 'evseController'):
+            self.evseController = evseController
+            self.original_calculation_method = evseController.use_new_current_calculation
+            evseController.use_new_current_calculation = True
+
         # We don't actually need to get the EVSE instance here since we already have the state
         # The battery_level is already available in the state parameter
         battery_level = state.battery_level
@@ -307,35 +312,28 @@ class IntelligentOctopusGoTariff(Tariff):
         # If SoC >= SOC_THRESHOLD_FOR_STRATEGY:
         if battery_level >= self.SOC_THRESHOLD_FOR_STRATEGY:
             # Cover all of the home demand as far as possible. Try to avoid energy coming from the grid.
-            levels = []
-            # Use configurable threshold for high SoC
-            threshold = self.GRID_IMPORT_THRESHOLD_HIGH_SOC
-            levels.append((0, threshold, 0))  # Up to threshold (but not including)
-            levels.append((threshold, 720, 3))
-            for current in range(4, 32):
-                end = current * 240
-                start = end - 240
-                levels.append((start, end, current))
-            levels.append((31 * 240, 99999, 32))
+            evseController.setDischargeActivationPower(1)
+            evseController.setDischargeCurrentBias(0.5)
+            evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
         else:
             # Use a more conservative strategy of meeting some of the requirement from the battery and
-            # allowing 0 to 240 W to come from the grid.
-            levels = []
-            # Use configurable threshold for low SoC
-            threshold = self.GRID_IMPORT_THRESHOLD_LOW_SOC
-            levels.append((0, threshold, 0))  # Up to threshold (but not including)
-            levels.append((threshold, 1080, 3))
-            for current in range(4, 32):
-                start = current * 240
-                end = start + 240
-                levels.append((start, end, current))
-            levels.append((32 * 240, 99999, 32))
-        evseController.setHomeDemandLevels(levels)
+            # allowing 0 to 1 A to come from the grid.
+            evseController.setDischargeActivationPower(720)
+            evseController.setDischargeCurrentBias(-0.5)
+            evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
         
         # Manage OCPP state periodically - this is called regularly by the tariff system
         # so it's a good place to check and update OCPP state
         if self.SMART_OCPP_OPERATION:
             self._manage_ocpp_state(state, dayMinute)
+    
+    def cleanup(self):
+        """
+        Restore original calculation mode for EvseController.
+        """
+        if hasattr(self, 'original_calculation_method') and hasattr(self, 'evseController'):
+            self.evseController.use_new_current_calculation = self.original_calculation_method
+
 
     def _initialize_ocpp_state_internal(self):
         """Initialize the OCPP state by checking the current state from the Wallbox API."""

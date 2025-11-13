@@ -20,20 +20,34 @@ class TariffManager:
         if config.STARTUP_STATE in self.tariff_classes:
             # Instantiate the tariff for the startup state
             self.current_tariff = self.tariff_classes[config.STARTUP_STATE]()
+            self.tariff_name = config.STARTUP_STATE
         else:
             # For non-tariff startup states (like FREERUN), set to None
             self.current_tariff = None
+            self.tariff_name = None
 
     def set_tariff(self, tariff_name):
         if tariff_name in self.tariff_classes:
+            self.stop_tariff()
             # Create a new instance of the requested tariff
             self.current_tariff = self.tariff_classes[tariff_name]()
             # The initialization now happens in the tariff's constructor
+            self.tariff_name = tariff_name
             return True
         return False
+    
+    def start_tariff(self):
+        """Start the same tariff that was previously set."""
+        return self.set_tariff(self.tariff_name)
 
     def get_tariff(self) -> Tariff:
         return self.current_tariff
+    
+    def stop_tariff(self):
+        # Allow current tariff to exit cleanly.
+        if self.current_tariff is not None:
+            self.current_tariff.cleanup()
+        self.current_tariff = None
 
     def get_control_state(self, dayMinute):
         """Get control state from current tariff.

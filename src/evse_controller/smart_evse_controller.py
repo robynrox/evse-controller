@@ -224,6 +224,7 @@ def main():
     global execState  # Add this line to allow modification of execState
     nextStateCheck = 0
     previous_state = None
+    tariff = None
 
     # Start input thread for CLI
     inputThread = InputParser()
@@ -247,21 +248,25 @@ def main():
                 case "p" | "pause":
                     ensure_ocpp_disabled()
                     info("Entering pause state")
+                    tariffManager.stop_tariff()
                     execState = ExecState.PAUSE
                     nextStateCheck = time.time()
                 case "c" | "charge":
                     ensure_ocpp_disabled()
                     info("Entering charge state")
+                    tariffManager.stop_tariff()
                     execState = ExecState.CHARGE
                     nextStateCheck = time.time()
                 case "d" | "discharge":
                     ensure_ocpp_disabled()
                     info("Entering discharge state")
+                    tariffManager.stop_tariff()
                     execState = ExecState.DISCHARGE
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     ensure_ocpp_disabled()
                     info("Entering smart tariff controller state")
+                    tariffManager.start_tariff()
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
@@ -302,10 +307,12 @@ def main():
                         debug("Already in pause-until-disconnect state, ignoring command")
                 case "z" | "freerun" | "disable-ocpp":
                     success = enter_freerun_mode()
+                    tariffManager.stop_tariff()
                     nextStateCheck = time.time()
                 case "enable-ocpp" | "ocpp":
                     info("Enabling OCPP mode for the Wallbox")
                     # Go to FREERUN first to match OCPP operational mode
+                    tariffManager.stop_tariff()
                     evseController.setFreeRun()
                     execState = ExecState.FREERUN
                     # Use OCPPManager to enable OCPP
@@ -326,16 +333,19 @@ def main():
                         print("Failed to send OCPP enable request")
                 case "solar":
                     # If we're in OCPP state, disable OCPP first
+                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering solar charging state")
                     execState = ExecState.SOLAR
                     nextStateCheck = time.time()
                 case "power-home" | "ph":
+                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering power home state")
                     execState = ExecState.POWER_HOME
                     nextStateCheck = time.time()
                 case "balance" | "b":
+                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering power balance state")
                     execState = ExecState.BALANCE
@@ -347,13 +357,16 @@ def main():
                         currentAmps = int(command)
                         info(f"Setting current to {currentAmps}")
                         if currentAmps > 0:
+                            tariffManager.stop_tariff()
                             evseController.setControlState(ControlState.CHARGE)
                             evseController.setChargeCurrentRange(currentAmps, currentAmps)
                         elif currentAmps < 0:
+                            tariffManager.stop_tariff()
                             evseController.setControlState(ControlState.DISCHARGE)
                             # setDischargeCurrentRange takes positive current values
                             evseController.setDischargeCurrentRange(-currentAmps, -currentAmps)
                         else:
+                            tariffManager.stop_tariff()
                             evseController.setControlState(ControlState.DORMANT)
                         execState = ExecState.FIXED
                     except ValueError:

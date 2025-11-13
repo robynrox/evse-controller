@@ -78,16 +78,43 @@ def test_home_demand_levels(intgo_tariff):
     """Test home demand levels configuration"""
     mock_controller = Mock()
     mock_state = create_test_state(75)
-    
-    # Test with high battery level
+
+    # Test with high battery level (>= SOC_THRESHOLD_FOR_STRATEGY)
+    mock_state.battery_level = intgo_tariff.SOC_THRESHOLD_FOR_STRATEGY + 5  # High battery level
     intgo_tariff.set_home_demand_levels(mock_controller, mock_state, 720)
-    assert mock_controller.setHomeDemandLevels.called
     
-    # Test with low battery level
-    mock_controller.reset_mock()
-    mock_state.battery_level = 25
+    # Verify the method calls for high battery level
+    # use_new_current_calculation property is set to True to initialize
+    assert mock_controller.use_new_current_calculation == True
+    assert mock_controller.setDischargeActivationPower.called
+    assert mock_controller.setDischargeCurrentBias.called
+    assert mock_controller.setDischargeCurrentRange.called
+    
+    # Verify specific parameter values for high battery level
+    # When SoC >= SOC_THRESHOLD_FOR_STRATEGY: activation power = 1, bias = 0.5
+    mock_controller.setDischargeActivationPower.assert_called_with(1)
+    mock_controller.setDischargeCurrentBias.assert_called_with(0.5)
+
+    # Reset only the specific method calls we're checking for, keeping the instance setup
+    mock_controller.setDischargeActivationPower.reset_mock()
+    mock_controller.setDischargeCurrentBias.reset_mock()
+    mock_controller.setDischargeCurrentRange.reset_mock()
+    
+    # Test with low battery level (< SOC_THRESHOLD_FOR_STRATEGY)
+    mock_state.battery_level = intgo_tariff.SOC_THRESHOLD_FOR_STRATEGY - 10  # Low battery level
     intgo_tariff.set_home_demand_levels(mock_controller, mock_state, 720)
-    assert mock_controller.setHomeDemandLevels.called
+    
+    # Verify the method calls for low battery level
+    # use_new_current_calculation property should remain True (not changed on subsequent calls)
+    assert mock_controller.use_new_current_calculation == True
+    assert mock_controller.setDischargeActivationPower.called
+    assert mock_controller.setDischargeCurrentBias.called
+    assert mock_controller.setDischargeCurrentRange.called
+    
+    # Verify specific parameter values for low battery level
+    # When SoC < SOC_THRESHOLD_FOR_STRATEGY: activation power = 720, bias = -0.5
+    mock_controller.setDischargeActivationPower.assert_called_with(720)
+    mock_controller.setDischargeCurrentBias.assert_called_with(-0.5)
 
 def test_get_rates(intgo_tariff):
     """Test rate retrieval from time_of_use dictionary"""

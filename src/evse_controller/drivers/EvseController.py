@@ -121,6 +121,9 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
+        # Bias parameters that will be used with the new calculation method
+        self.chargeCurrentBias = 0.0
+        self.dischargeCurrentBias = 0.0
         # Initialize primary thread with no offset
         self.thread = PowerMonitorPollingThread(self.pmon, offset=0.0, name="PrimaryMonitor")
         self.thread.start()
@@ -204,10 +207,119 @@ class EvseController(PowerMonitorObserver):
             # OCPP remains False if credentials are incorrect or unavailable
             self._ocpp_mode_active = False
         
+        # Flag to determine which current calculation method to use
+        # True = use new method with configurable current limits and bias
+        # False = use traditional method with predefined power ranges (default)
+        self._use_new_current_calculation = False
+
         # Subscribe to OCPP state change events to keep internal state synchronized
         self._event_bus = EventBus()
         self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
         self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+
+    @property
+    def use_new_current_calculation(self) -> bool:
+        """Get whether the new current calculation method is enabled.
+        
+        Returns:
+            bool: True if using new method with configurable parameters, 
+                  False if using traditional power range method
+        """
+        return self._use_new_current_calculation
+
+    @use_new_current_calculation.setter
+    def use_new_current_calculation(self, value: bool) -> None:
+        """Set whether to use the new current calculation method.
+        
+        Args:
+            value: True to use new method with configurable parameters,
+                   False to use traditional power range method
+        """
+        if not isinstance(value, bool):
+            raise TypeError("use_new_current_calculation must be a boolean value")
+        
+        self._use_new_current_calculation = value
+        from evse_controller.utils.logging_config import info
+        info(f"CONTROL: Set current calculation method to {'NEW' if value else 'TRADITIONAL'}")
+
+    @staticmethod
+    def _compute_wallbox_current(home_power, discharge_current_min, discharge_current_max, 
+                                minimum_discharge_activation_power, discharge_current_bias,
+                                charge_current_min, charge_current_max, 
+                                minimum_charge_activation_power, charge_current_bias,
+                                grid_voltage):
+        """
+        Calculate the desired Wallbox current setting based on home power and configured parameters.
+
+        Args:
+            home_power (float): Current home power consumption in watts (positive = importing, negative = exporting)
+            discharge_current_min (float): Minimum discharge current in amps
+            discharge_current_max (float): Maximum discharge current in amps
+            minimum_discharge_activation_power (float): Minimum power threshold to activate discharge (positive value in watts)
+            discharge_current_bias (float): Bias adjustment for discharge current (-1.0 to 1.0, where -0.5, 0, 0.5 represent the strategies)
+            charge_current_min (float): Minimum charge current in amps
+            charge_current_max (float): Maximum charge current in amps
+            minimum_charge_activation_power (float): Minimum power threshold to activate charging (positive value in watts)
+            charge_current_bias (float): Bias adjustment for charge current (-1.0 to 1.0, where -0.5, 0, 0.5 represent the strategies)
+            grid_voltage (float): Grid voltage in volts
+
+        Returns:
+            float: Desired Wallbox current in amps (negative for discharge, positive for charge)
+        """
+        # Ensure min values are not greater than max values
+        discharge_current_min = min(discharge_current_min, discharge_current_max)
+        charge_current_min = min(charge_current_min, charge_current_max)
+        
+        # Determine if we need to discharge or charge based on home power
+        if home_power > 0:  # Importing from grid - consider discharging
+            # Determine if power exceeds discharge activation threshold
+            if home_power >= minimum_discharge_activation_power:
+                # Calculate base discharge current directly from power: I = P / V
+                # This is a direct conversion to counteract the grid import
+                base_current = home_power / grid_voltage
+                
+                # Apply bias to adjust the discharge current
+                biased_current = base_current + discharge_current_bias
+                
+                # Clamp to valid range, ensuring minimum discharge current is met if appropriate
+                result = max(discharge_current_min, min(biased_current, discharge_current_max))
+                return -result  # Negative for discharge
+            else:
+                # Not enough import to warrant discharge
+                return 0
+                
+        elif home_power < 0:  # Exporting to grid - consider charging
+            exported_power = abs(home_power)  # Convert to positive value
+
+            # Determine if exported power exceeds charge activation threshold
+            if exported_power >= minimum_charge_activation_power:
+                # Calculate base charge current directly from power: I = P / V
+                # This is a direct conversion to utilize the exported power
+                base_current = exported_power / grid_voltage
+                
+                # Apply bias to adjust the charge current
+                biased_current = base_current + charge_current_bias
+                
+                # Clamp to valid range
+                result = max(charge_current_min, min(biased_current, charge_current_max))
+                return result  # Positive for charge
+            else:
+                # Not enough exported power to warrant charging
+                return 0
+        else:  # home_power == 0 exactly
+            # When home power is exactly zero, use biases to determine if we should charge or discharge slightly
+            if discharge_current_bias > 0.1:  # Threshold to prevent oscillation
+                base_current = discharge_current_min
+                biased_current = base_current + discharge_current_bias
+                result = max(discharge_current_min, min(biased_current, discharge_current_max))
+                return -result
+            elif charge_current_bias > 0.1:  # Threshold to prevent oscillation
+                base_current = charge_current_min
+                biased_current = base_current + charge_current_bias
+                result = max(charge_current_min, min(biased_current, charge_current_max))
+                return result
+            else:
+                return 0  # Zero if neither bias is strong enough
 
     def _update_channel_metadata(self):
         """Update the channel metadata in the history dictionary.
@@ -327,7 +439,7 @@ class EvseController(PowerMonitorObserver):
             self.homeDemandLevels = newLevels
             info(f"CONTROL Setting home demand levels: {self.homeDemandLevels}")
 
-    def calculateTargetCurrent(self, power):
+    def calculateTargetCurrent(self, power: Power):
         """Calculate target EVSE current based on home power demand.
 
         Uses hysteresis to prevent oscillation when power demand is near level boundaries.
@@ -338,23 +450,45 @@ class EvseController(PowerMonitorObserver):
         Returns:
             int: Target current in Amps for the EVSE
         """
-        homeWatts = power.getHomeWatts()
-        desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
+        if self.use_new_current_calculation:
+            # Use the new method with configurable parameters
+            homeWatts = power.getHomeWatts()
+            
+            # Calculate the desired current using the new method
+            # For this, we can use parameters like min/max discharge/charge currents and biases
+            # These would come from the tariff or configuration
+            desiredEvseCurrent = round(self._compute_wallbox_current(
+                home_power=homeWatts,
+                discharge_current_min=self.minDischargeCurrent, 
+                discharge_current_max=self.maxDischargeCurrent,
+                minimum_discharge_activation_power=self.minDischargeActivation_power,
+                discharge_current_bias=self.dischargeCurrentBias,
+                charge_current_min=self.minChargeCurrent, 
+                charge_current_max=self.maxChargeCurrent,
+                minimum_charge_activation_power=self.minChargeActivationPower,
+                charge_current_bias=self.chargeCurrentBias,  # Bias from instance
+                grid_voltage=power.voltage
+            ))
+        else:
+            # Use the traditional method based on power demand levels
+            homeWatts = power.getHomeWatts()
+            desiredEvseCurrent = self.lastTargetCurrent  # Default to last current
 
-        # Determine desired current based on home power draw with hysteresis
-        for min_power, max_power, target_current in self.homeDemandLevels:
-            if min_power - self.hysteresisWindow <= homeWatts < max_power + self.hysteresisWindow:
-                if (homeWatts < min_power or homeWatts > max_power) and target_current != self.lastTargetCurrent:
-                    continue  # Stay within hysteresis window
-                desiredEvseCurrent = -target_current
-                break
-            if min_power - self.hysteresisWindow <= -homeWatts < max_power + self.hysteresisWindow:
-                if (-homeWatts < min_power or -homeWatts > max_power) and target_current != self.lastTargetCurrent:
-                    continue  # Stay within hysteresis window
-                desiredEvseCurrent = target_current
-                break
+            # Determine desired current based on home power draw with hysteresis
+            for min_power, max_power, target_current in self.homeDemandLevels:
+                if min_power - self.hysteresisWindow <= homeWatts < max_power + self.hysteresisWindow:
+                    if (homeWatts < min_power or homeWatts > max_power) and target_current != self.lastTargetCurrent:
+                        continue  # Stay within hysteresis window
+                    desiredEvseCurrent = -target_current
+                    break
+                if min_power - self.hysteresisWindow <= -homeWatts < max_power + self.hysteresisWindow:
+                    if (-homeWatts < min_power or -homeWatts > max_power) and target_current != self.lastTargetCurrent:
+                        continue  # Stay within hysteresis window
+                    desiredEvseCurrent = target_current
+                    break
 
-        # Apply control state logic
+        # Apply control state logic to both methods' results - this ensures that
+        # state-dependent current limits and inhibitions are applied regardless of calculation method
         match self.state:
             case ControlState.LOAD_FOLLOW_CHARGE:
                 if (desiredEvseCurrent < self.minChargeCurrent):
@@ -1028,6 +1162,32 @@ class EvseController(PowerMonitorObserver):
             self.minDischargeActivationPower = minDischargeActivationPower
             info(f"CONTROL Setting discharge activation power to {self.minDischargeActivationPower} W")
 
+    def setChargeCurrentBias(self, chargeCurrentBias: float):
+        """
+        Set a level of bias to use when charging. The bias is applied to the calculated current required to
+        satisfy the home demand before it is rounded and subjected to the minimum and maximum current levels.
+        The value can be anything, but typically three values are useful:
+        -0.5 aims to keep the charging current lower than that which is available, so between 0A and 1A is exported.
+        0 aims to target the available current as closely as possible, so the use of the grid is minimised and is
+        typically between -0.5A and 0.5A.
+        0.5 aims to use all of the available current for charging and draw the excess from the grid, so between
+        0A and 1A is imported.
+        """
+        self.chargeCurrentBias = chargeCurrentBias
+
+    def setDischargeCurrentBias(self, dischargeCurrentBias: float):
+        """
+        Set a level of bias to use when discharging. The bias is applied to the calculated current required to
+        satisfy the home demand before it is rounded and subjected to the minimum and maximum current levels.
+        The value can be anything, but typically three values are useful:
+        -0.5 aims to keep the discharging current lower than that which would fully satisfy home demand, and between
+        0A and 1A is imported.
+        0 aims to target the home demand as closely as possible, so the use of the grid is minimised and is
+        typically between -0.5A and 0.5A.
+        0.5 aims to satisfy the whole of the home demand and export the excess.
+        """
+        self.dischargeCurrentBias = dischargeCurrentBias
+
     def getHistory(self) -> dict:
         """
         Returns the last 300 points (nominally 5 minutes) of historical data.
@@ -1140,8 +1300,6 @@ class EvseController(PowerMonitorObserver):
         """
         warning("EvseController.disableOcpp() is deprecated. Use OCPPManager instead.")
         return False
-
-
 
     def stop(self):
         """Stop the controller and cleanup resources."""

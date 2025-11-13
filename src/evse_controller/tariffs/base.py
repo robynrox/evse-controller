@@ -146,3 +146,17 @@ class Tariff:
         """
         # Default implementation does nothing
         return True
+    
+    def cleanup(self):
+        """Clean up resources used by the tariff implementation.
+        
+        This method should be called when the tariff is no longer needed
+        to release any resources sych as threads, connections, or other
+        managed resources.
+        
+        Subclasses should override this method to perform any necessary
+        cleanup specific to their implementation.
+        """
+        # Default impl does nothing
+        pass
+
