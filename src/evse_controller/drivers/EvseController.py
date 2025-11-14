@@ -461,7 +461,7 @@ class EvseController(PowerMonitorObserver):
                 home_power=homeWatts,
                 discharge_current_min=self.minDischargeCurrent, 
                 discharge_current_max=self.maxDischargeCurrent,
-                minimum_discharge_activation_power=self.minDischargeActivation_power,
+                minimum_discharge_activation_power=self.minDischargeActivationPower,
                 discharge_current_bias=self.dischargeCurrentBias,
                 charge_current_min=self.minChargeCurrent, 
                 charge_current_max=self.maxChargeCurrent,
