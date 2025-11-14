@@ -121,6 +121,8 @@ class EvseController(PowerMonitorObserver):
         self.maxDischargeCurrent = 0
         self.minChargeCurrent = 0
         self.maxChargeCurrent = 0
+        self.minDischargeActivationPower = 0
+        self.minChargeActivationPower = 0
         # Bias parameters that will be used with the new calculation method
         self.chargeCurrentBias = 0.0
         self.dischargeCurrentBias = 0.0
