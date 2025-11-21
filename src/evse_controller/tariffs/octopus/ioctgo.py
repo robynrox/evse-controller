@@ -56,7 +56,9 @@ class IntelligentOctopusGoTariff(Tariff):
         self._ocpp_enabled = None  # Will be initialized to current state
         self._last_soc_check = -1  # Track last SoC to detect changes
         self._dynamic_ocpp_disable_time = None  # Track dynamic OCPP disable time (minutes since midnight)
-        
+        self._last_ocpp_request_time = 0  # Track time of last OCPP request (to prevent spam)
+        self._ocpp_request_cooldown = 300  # 5 minutes cooldown in seconds
+
         # Threading lock for safe access to _ocpp_enabled state
         self._state_lock = threading.Lock()
         
@@ -449,36 +451,48 @@ class IntelligentOctopusGoTariff(Tariff):
             debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable:{should_enable}, should_disable:{should_disable}")
             
             from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-            
+            import time
+
             # Handle OCPP state changes through the OCPP Manager
-            if should_enable and not is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP enable via OCPP Manager")
-                
-                # Request OCPP manager to enable OCPP
-                try:
-                    ocpp_manager.set_state(True)
-                    info("IOCTGO Enabling OCPP mode as per tariff driver rules")
-                    # When OCPP is enabled, set the initial dynamic disable time to default
-                    # and clear any existing dynamic disable time
-                    with self._state_lock:
-                        self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
-                except Exception as e:
-                    error(f"IOCTGO Could not request OCPP enable: {e}")
-                
-            elif should_disable and is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP disable via OCPP Manager")
-                # Request OCPP manager to disable OCPP
-                try:
-                    ocpp_manager.set_state(False)
-                    info("IOCTGO Disabling OCPP mode as per tariff driver rules")
-                    # Clear the dynamic disable time since we've executed it
-                    with self._state_lock:
-                        self._dynamic_ocpp_disable_time = None
-                except Exception as e:
-                    error(f"IOCTGO Could not request OCPP disable: {e}")
+            current_time = time.time()
+
+            # Check if we're still in cooldown period after last OCPP request
+            if current_time - self._last_ocpp_request_time < self._ocpp_request_cooldown:
+                debug(f"IOCTGO OCPP request cooldown active - {int(self._ocpp_request_cooldown - (current_time - self._last_ocpp_request_time))} seconds remaining")
+            else:
+                if should_enable and not is_ocpp_currently_enabled:
+                    info("IOCTGO Requesting OCPP enable via OCPP Manager")
+
+                    # Request OCPP manager to enable OCPP
+                    try:
+                        ocpp_manager.set_state(True)
+                        info("IOCTGO Enabling OCPP mode as per tariff driver rules")
+                        # Update the last request time to start cooldown period
+                        self._last_ocpp_request_time = current_time
+                        # When OCPP is enabled, set the initial dynamic disable time to default
+                        # and clear any existing dynamic disable time
+                        with self._state_lock:
+                            self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
+                    except Exception as e:
+                        error(f"IOCTGO Could not request OCPP enable: {e}")
+
+                elif should_disable and is_ocpp_currently_enabled:
+                    info("IOCTGO Requesting OCPP disable via OCPP Manager")
+                    # Request OCPP manager to disable OCPP
+                    try:
+                        ocpp_manager.set_state(False)
+                        info("IOCTGO Disabling OCPP mode as per tariff driver rules")
+                        # Update the last request time to start cooldown period
+                        self._last_ocpp_request_time = current_time
+                        # Clear the dynamic disable time since we've executed it
+                        with self._state_lock:
+                            self._dynamic_ocpp_disable_time = None
+                    except Exception as e:
+                        error(f"IOCTGO Could not request OCPP disable: {e}")
                 
             # If OCPP is enabled, check SoC at specific times to potentially update dynamic disable time
-            elif is_ocpp_currently_enabled:
+            # This should run regardless of cooldown to allow proper SoC-based disable scheduling
+            if is_ocpp_currently_enabled:
                 # Check if we're at the right times to evaluate SoC for dynamic disable time
                 # Based on the requirement: check at xx:29, xx:59 (which includes 05:29)
                 current_minute = dayMinute % 60

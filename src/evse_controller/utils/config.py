@@ -268,6 +268,11 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "battery_capacity_kwh", value)
     )
 
+    IOCTGO_TARGET_SOC_AT_CHEAP_START = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", value)
+    )
+
     IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value)
@@ -288,7 +293,10 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "enable_bulk_discharge", value)
     )
 
-
+    IOCTGO_MIN_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "min_discharge_current", 3),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_discharge_current", value)
+    )
 
     IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
