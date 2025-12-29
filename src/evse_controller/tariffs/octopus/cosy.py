@@ -7,7 +7,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error
 class CosyOctopusTariff(Tariff):
     """Implementation of Cosy Octopus tariff logic."""
 
-    def __init__(self):
+    def __init__(self, command_queue=None):
         super().__init__()
         low = 0.1286
         med = 0.2622

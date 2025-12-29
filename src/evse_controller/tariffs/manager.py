@@ -26,11 +26,11 @@ class TariffManager:
             self.current_tariff = None
             self.tariff_name = None
 
-    def set_tariff(self, tariff_name):
+    def set_tariff(self, tariff_name, command_queue=None):
         if tariff_name in self.tariff_classes:
             self.stop_tariff()
-            # Create a new instance of the requested tariff
-            self.current_tariff = self.tariff_classes[tariff_name]()
+            # Create a new instance of the requested tariff with the command queue
+            self.current_tariff = self.tariff_classes[tariff_name](command_queue=command_queue)
             # The initialization now happens in the tariff's constructor
             self.tariff_name = tariff_name
             return True

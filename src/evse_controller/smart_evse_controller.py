@@ -106,7 +106,7 @@ else:
     execState = ExecState.SMART
     # Set the appropriate tariff based on startup state if it's a valid tariff
     if config.STARTUP_STATE in tariffManager.tariff_classes:
-        tariffManager.set_tariff(config.STARTUP_STATE)
+        tariffManager.set_tariff(config.STARTUP_STATE, command_queue=execQueue)
 scheduler = Scheduler()
 
 def get_system_state():
@@ -277,7 +277,7 @@ def main():
                     nextStateCheck = time.time()
                 case "ioctgo":
                     info("Switching to Intelligent Octopus Go tariff")
-                    tariffManager.set_tariff("IOCTGO")
+                    tariffManager.set_tariff("IOCTGO", command_queue=execQueue)
                     execState = ExecState.SMART
                     nextStateCheck = time.time()
                 case "f" | "flux":

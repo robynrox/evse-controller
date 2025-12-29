@@ -1,10 +1,12 @@
 from datetime import datetime
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+import queue
+from typing import Optional
 
 class Tariff:
     """Base class for implementing electricity tariff logic.
-    
+
     This class defines the interface and common functionality for different
     electricity tariffs. Each tariff implementation should define its specific
     time periods, rates, and control logic.
@@ -21,11 +23,33 @@ class Tariff:
             }
     """
 
-    def __init__(self):
+    def __init__(self, command_queue: Optional[queue.Queue] = None):
         """Initialize base tariff with default time-of-use rates."""
         self.time_of_use = {
             "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
         }
+        self.command_queue = command_queue
+        self._time_function = lambda: __import__('time').time()  # Default to real time
+        self._datetime_function = lambda: __import__('datetime').datetime.now()  # Default to real datetime
+
+    def set_command_queue(self, command_queue: queue.Queue):
+        """Set the command queue for this tariff."""
+        self.command_queue = command_queue
+
+    def set_time_functions(self, time_func=None, datetime_func=None):
+        """Set custom time functions for testing purposes."""
+        if time_func:
+            self._time_function = time_func
+        if datetime_func:
+            self._datetime_function = datetime_func
+
+    def get_current_time(self):
+        """Get current time using the configured time function."""
+        return self._time_function()
+
+    def get_current_datetime(self):
+        """Get current datetime using the configured datetime function."""
+        return self._datetime_function()
 
     def is_off_peak(self, dayMinute: int) -> bool:
         """Determine if current time is in off-peak period.

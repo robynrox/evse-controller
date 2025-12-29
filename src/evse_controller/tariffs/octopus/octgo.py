@@ -32,7 +32,7 @@ class OctopusGoTariff(Tariff):
         time_of_use (dict): Dictionary defining Octopus Go time periods and rates
     """
 
-    def __init__(self, battery_capacity_kwh=None, bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
+    def __init__(self, command_queue=None, battery_capacity_kwh=None, bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
         """Initialize Octopus Go tariff with specific time periods and rates.
         
         Args:
