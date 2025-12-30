@@ -598,9 +598,13 @@ class IntelligentOctopusGoTariff(Tariff):
         now = self.get_current_datetime()
         target_time = now.replace(hour=23, minute=30, second=0, microsecond=0)
 
-        # If it's already past 23:30, schedule for tomorrow
+        # Since this method is only called when OCPP is triggered by SoC during the day,
+        # we want to schedule for today's 23:30. However, if the current time is already
+        # past 23:30 today (edge case), we shouldn't schedule anything
         if target_time <= now:
-            target_time += timedelta(days=1)
+            # Don't schedule anything if we're already past 23:30 today
+            info("IOCTGO Not scheduling return to IOCTGO as 23:30 is already past today")
+            return
 
         # Create a scheduled event to return to IOCTGO
         event = ScheduledEvent(target_time, "ioctgo")
