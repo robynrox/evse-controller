@@ -13,7 +13,7 @@ class OctopusFluxTariff(Tariff):
     - Standard rates at other times
     """
 
-    def __init__(self):
+    def __init__(self, command_queue=None):
         """Initialize Flux tariff with specific time periods and rates. Rates provided are for South Wales March 2025."""
         super().__init__()
         self.time_of_use = {

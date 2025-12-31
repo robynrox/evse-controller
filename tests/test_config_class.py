@@ -88,9 +88,12 @@ class TestConfig:
         _ = config.WALLBOX_URL
 
         assert config.IOCTGO_BATTERY_CAPACITY_KWH == 59
-        assert config.IOCTGO_TARGET_SOC_AT_CHEAP_START == 54
+        assert config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END == 60
         assert config.IOCTGO_BULK_DISCHARGE_START_TIME == "16:00"
-        assert config.IOCTGO_MIN_DISCHARGE_CURRENT == 3
+        assert config.IOCTGO_BULK_DISCHARGE_END_TIME == "19:00"
+        assert config.IOCTGO_ENABLE_BULK_DISCHARGE is True
+        assert config.WALLBOX_MIN_CHARGE_CURRENT == 3
+        assert config.WALLBOX_MIN_DISCHARGE_CURRENT == 3
         assert config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 50
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 0
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 720
@@ -108,8 +111,10 @@ class TestConfig:
 
         # Set new values
         config.IOCTGO_BATTERY_CAPACITY_KWH = 60
-        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 60
+        config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = 60
         config.IOCTGO_BULK_DISCHARGE_START_TIME = "17:00"
+        config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:00"
+        config.IOCTGO_ENABLE_BULK_DISCHARGE = False
         config.IOCTGO_MIN_DISCHARGE_CURRENT = 4
         config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = 60
         config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = 100
@@ -122,8 +127,10 @@ class TestConfig:
 
         # Verify values were properly set in nested structure
         assert config.IOCTGO_BATTERY_CAPACITY_KWH == 60
-        assert config.IOCTGO_TARGET_SOC_AT_CHEAP_START == 60
+        assert config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END == 60
         assert config.IOCTGO_BULK_DISCHARGE_START_TIME == "17:00"
+        assert config.IOCTGO_BULK_DISCHARGE_END_TIME == "19:00"
+        assert config.IOCTGO_ENABLE_BULK_DISCHARGE is False
         assert config.IOCTGO_MIN_DISCHARGE_CURRENT == 4
         assert config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 60
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 100
@@ -240,7 +247,9 @@ class TestConfig:
 
         # Check that IOCTGO values are properly included
         assert config_dict["tariffs"]["ioctgo"]["battery_capacity_kwh"] == 59
-        assert config_dict["tariffs"]["ioctgo"]["target_soc_at_cheap_start"] == 54
+        assert config_dict["tariffs"]["ioctgo"]["target_soc_at_bulk_discharge_end"] == 60
+        assert config_dict["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:00"
+        assert config_dict["tariffs"]["ioctgo"]["enable_bulk_discharge"] is True
 
         # Update a value and check it appears in as_dict
         config.IOCTGO_BATTERY_CAPACITY_KWH = 70
@@ -380,7 +389,9 @@ class TestConfig:
         # Test IOCTGO properties
         test_values = {
             'IOCTGO_BATTERY_CAPACITY_KWH': 75,
-            'IOCTGO_TARGET_SOC_AT_CHEAP_START': 65,
+            'IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END': 65,
+            'IOCTGO_BULK_DISCHARGE_END_TIME': "21:00",
+            'IOCTGO_ENABLE_BULK_DISCHARGE': False,
             'IOCTGO_MIN_DISCHARGE_CURRENT': 5,
             'IOCTGO_SOC_THRESHOLD_FOR_STRATEGY': 60
         }
@@ -426,9 +437,12 @@ class TestConfig:
 
         # Set new values for IOCTGO properties
         config.IOCTGO_BATTERY_CAPACITY_KWH = 80
-        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 70
+        config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = 70
         config.IOCTGO_BULK_DISCHARGE_START_TIME = "18:00"
-        config.IOCTGO_MIN_DISCHARGE_CURRENT = 6
+        config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:30"
+        config.IOCTGO_ENABLE_BULK_DISCHARGE = False
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
         config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = 55
         config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = 200
         config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = 850
@@ -454,9 +468,12 @@ class TestConfig:
 
                 # Verify all IOCTGO values were saved properly
                 assert saved_config["tariffs"]["ioctgo"]["battery_capacity_kwh"] == 80
-                assert saved_config["tariffs"]["ioctgo"]["target_soc_at_cheap_start"] == 70
+                assert saved_config["tariffs"]["ioctgo"]["target_soc_at_bulk_discharge_end"] == 70
                 assert saved_config["tariffs"]["ioctgo"]["bulk_discharge_start_time"] == "18:00"
-                assert saved_config["tariffs"]["ioctgo"]["min_discharge_current"] == 6
+                assert saved_config["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:30"
+                assert saved_config["tariffs"]["ioctgo"]["enable_bulk_discharge"] is False
+                assert saved_config["wallbox"]["min_charge_current"] == 6
+                assert saved_config["wallbox"]["min_discharge_current"] == 6
                 assert saved_config["tariffs"]["ioctgo"]["soc_threshold_for_strategy"] == 55
                 assert saved_config["tariffs"]["ioctgo"]["grid_import_threshold_high_soc"] == 200
                 assert saved_config["tariffs"]["ioctgo"]["grid_import_threshold_low_soc"] == 850
@@ -486,9 +503,12 @@ class TestConfig:
 
                     # Verify that values were properly loaded from file
                     assert config2.IOCTGO_BATTERY_CAPACITY_KWH == 80
-                    assert config2.IOCTGO_TARGET_SOC_AT_CHEAP_START == 70
+                    assert config2.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END == 70
                     assert config2.IOCTGO_BULK_DISCHARGE_START_TIME == "18:00"
-                    assert config2.IOCTGO_MIN_DISCHARGE_CURRENT == 6
+                    assert config2.IOCTGO_BULK_DISCHARGE_END_TIME == "19:30"
+                    assert config2.IOCTGO_ENABLE_BULK_DISCHARGE is False
+                    assert config2.WALLBOX_MIN_CHARGE_CURRENT == 6
+                    assert config2.WALLBOX_MIN_DISCHARGE_CURRENT == 6
                     assert config2.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 55
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 200
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 850
@@ -513,6 +533,8 @@ class TestConfig:
         config.WALLBOX_URL = "test.evse.local"
         config.WALLBOX_USERNAME = "newuser"
         config.WALLBOX_PASSWORD = "newpass"
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
         config.SHELLY_PRIMARY_URL = "http://shelly1.local"
         config.SHELLY_SECONDARY_URL = "http://shelly2.local"
         config.STARTUP_STATE = "OCPP"
@@ -539,6 +561,8 @@ class TestConfig:
                 assert saved_config["wallbox"]["url"] == "test.evse.local"
                 assert saved_config["wallbox"]["username"] == "newuser"
                 assert saved_config["wallbox"]["password"] == "newpass"
+                assert saved_config["wallbox"]["min_charge_current"] == 6
+                assert saved_config["wallbox"]["min_discharge_current"] == 6
                 assert saved_config["shelly"]["primary_url"] == "http://shelly1.local"
                 assert saved_config["shelly"]["secondary_url"] == "http://shelly2.local"
                 assert saved_config["charging"]["startup_state"] == "OCPP"
@@ -590,8 +614,11 @@ class TestConfig:
 
         # Set IOCTGO values which previously caused duplication issue
         config.IOCTGO_BATTERY_CAPACITY_KWH = 80
-        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 70
-        config.IOCTGO_MIN_DISCHARGE_CURRENT = 6
+        config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = 70
+        config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:00"
+        config.IOCTGO_ENABLE_BULK_DISCHARGE = False
+        config.WALLBOX_MIN_CHARGE_CURRENT = 6
+        config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
 
         # Check internal structure - there should be a 'tariffs' key with 'ioctgo' inside
         # There should NOT be a key named 'tariffs.ioctgo' (with dot in the name)
@@ -602,8 +629,12 @@ class TestConfig:
         # Verify the values are correctly nested
         ioctgo_config = config._config_data['tariffs']['ioctgo']
         assert ioctgo_config['battery_capacity_kwh'] == 80
-        assert ioctgo_config['target_soc_at_cheap_start'] == 70
-        assert ioctgo_config['min_discharge_current'] == 6
+        assert ioctgo_config['target_soc_at_bulk_discharge_end'] == 70
+        assert ioctgo_config['bulk_discharge_end_time'] == "19:00"
+        assert ioctgo_config['enable_bulk_discharge'] is False
+        wallbox_config = config._config_data['wallbox']
+        assert wallbox_config['min_charge_current'] == 6
+        assert wallbox_config['min_discharge_current'] == 6
 
         # Check that save and load operations don't create duplication
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -624,8 +655,11 @@ class TestConfig:
 
                 # Verify values were saved properly
                 assert saved_config['tariffs']['ioctgo']['battery_capacity_kwh'] == 80
-                assert saved_config['tariffs']['ioctgo']['target_soc_at_cheap_start'] == 70
-                assert saved_config['tariffs']['ioctgo']['min_discharge_current'] == 6
+                assert saved_config['tariffs']['ioctgo']['target_soc_at_bulk_discharge_end'] == 70
+                assert saved_config['tariffs']['ioctgo']['bulk_discharge_end_time'] == "19:00"
+                assert saved_config['tariffs']['ioctgo']['enable_bulk_discharge'] is False
+                assert saved_config['wallbox']['min_charge_current'] == 6
+                assert saved_config['wallbox']['min_discharge_current'] == 6
 
     def test_no_duplicate_config_keys_all_dotted_sections(self):
         """Test that all dotted sections (tariffs.ioctgo, shelly.grid, shelly.evse, wallbox.simulator) 

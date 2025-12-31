@@ -39,6 +39,10 @@ class Config:
                             'password': 'test',
                             'serial': 'test',
                             'use_simulator': True,
+                            'max_charge_current': 32,
+                            'max_discharge_current': 32,
+                            'min_charge_current': 3,
+                            'min_discharge_current': 3,
                             'simulator': {
                                 'initial_battery_level': 50,
                                 'battery_capacity_kwh': 50,
@@ -67,9 +71,10 @@ class Config:
                         'tariffs': {
                             'ioctgo': {
                                 'battery_capacity_kwh': 59,
-                                'target_soc_at_cheap_start': 54,
+                                'target_soc_at_bulk_discharge_end': 60,
                                 'bulk_discharge_start_time': '16:00',
-                                'min_discharge_current': 3,
+                                'bulk_discharge_end_time': '19:00',
+                                'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
@@ -105,6 +110,14 @@ class Config:
                     if "wallbox" in config and config["wallbox"].get("url") and "use_simulator" not in config["wallbox"]:
                         config["wallbox"]["use_simulator"] = False
                         print(f"Debug: Wallbox URL found but no use_simulator flag, defaulting to False", file=sys.stderr)
+
+                    # Handle backward compatibility for IOCTGO target SoC parameter
+                    # If old parameter exists but new one doesn't, migrate the value
+                    if ("tariffs" in config and "ioctgo" in config["tariffs"] and 
+                        "target_soc_at_cheap_start" in config["tariffs"]["ioctgo"] and
+                        "target_soc_at_bulk_discharge_end" not in config["tariffs"]["ioctgo"]):
+                        config["tariffs"]["ioctgo"]["target_soc_at_bulk_discharge_end"] = config["tariffs"]["ioctgo"]["target_soc_at_cheap_start"]
+                        print(f"Debug: Migrated IOCTGO target_soc_at_cheap_start to target_soc_at_bulk_discharge_end", file=sys.stderr)
 
                     # Clean up any duplicate dotted keys that may have been created by older versions
                     # For example, remove 'tariffs.ioctgo' if 'tariffs' with 'ioctgo' subkey exists
@@ -239,6 +252,16 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "max_discharge_current", value)
     )
 
+    WALLBOX_MIN_CHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "min_charge_current", 3),
+        lambda self, value: self._set_config_value("wallbox", "min_charge_current", value)
+    )
+
+    WALLBOX_MIN_DISCHARGE_CURRENT = property(
+        lambda self: self._get_config_value("wallbox", "min_discharge_current", 3),
+        lambda self, value: self._set_config_value("wallbox", "min_discharge_current", value)
+    )
+
     # Intelligent Octopus Go tariff parameters
     IOCTGO_BATTERY_CAPACITY_KWH = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "battery_capacity_kwh", 59),
@@ -250,9 +273,24 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", value)
     )
 
+    IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value)
+    )
+
     IOCTGO_BULK_DISCHARGE_START_TIME = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "bulk_discharge_start_time", "16:00"),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "bulk_discharge_start_time", value)
+    )
+
+    IOCTGO_BULK_DISCHARGE_END_TIME = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "bulk_discharge_end_time", "19:00"),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "bulk_discharge_end_time", value)
+    )
+
+    IOCTGO_ENABLE_BULK_DISCHARGE = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "enable_bulk_discharge", True),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "enable_bulk_discharge", value)
     )
 
     IOCTGO_MIN_DISCHARGE_CURRENT = property(
@@ -409,7 +447,9 @@ class Config:
                 'password': self.WALLBOX_PASSWORD,
                 'serial': self.WALLBOX_SERIAL,
                 'max_charge_current': self.WALLBOX_MAX_CHARGE_CURRENT,
-                'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT
+                'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT,
+                'min_charge_current': self.WALLBOX_MIN_CHARGE_CURRENT,
+                'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,
@@ -439,9 +479,10 @@ class Config:
             'tariffs': {
                 'ioctgo': {
                     'battery_capacity_kwh': self.IOCTGO_BATTERY_CAPACITY_KWH,
-                    'target_soc_at_cheap_start': self.IOCTGO_TARGET_SOC_AT_CHEAP_START,
+                    'target_soc_at_bulk_discharge_end': self.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
                     'bulk_discharge_start_time': self.IOCTGO_BULK_DISCHARGE_START_TIME,
-                    'min_discharge_current': self.IOCTGO_MIN_DISCHARGE_CURRENT,
+                    'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
+                    'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
