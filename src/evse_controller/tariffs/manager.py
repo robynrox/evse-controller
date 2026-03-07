@@ -39,8 +39,12 @@ class TariffManager:
         return False
     
     def start_tariff(self):
-        """Start the same tariff that was previously set."""
-        return self.set_tariff(self.tariff_name)
+        """Start the tariff configured in config.STARTUP_STATE."""
+        # Always use the current config value, not the cached tariff_name
+        # This allows config changes to take effect when switching to SMART mode
+        if config.STARTUP_STATE in self.tariff_classes:
+            return self.set_tariff(config.STARTUP_STATE)
+        return False
 
     def get_tariff(self) -> Tariff:
         return self.current_tariff
