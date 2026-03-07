@@ -173,14 +173,32 @@ class Tariff:
     
     def cleanup(self):
         """Clean up resources used by the tariff implementation.
-        
+
         This method should be called when the tariff is no longer needed
         to release any resources sych as threads, connections, or other
         managed resources.
-        
+
         Subclasses should override this method to perform any necessary
         cleanup specific to their implementation.
         """
         # Default impl does nothing
         pass
+
+    def get_dashboard_html(self) -> str:
+        """Return HTML for dashboard display area.
+        
+        This method allows tariffs to provide custom HTML content for display
+        on the main dashboard. The HTML is fetched asynchronously and displayed
+        in a dedicated area above the consumption graph.
+        
+        Returns:
+            str: HTML string to display, or empty string if no content.
+                 Empty string causes the dashboard area to collapse.
+        
+        Note:
+            Subclasses should override this method to provide tariff-specific
+            dashboard content. The HTML should be self-contained (inline CSS
+            or reference existing styles).
+        """
+        return ""
 

@@ -3,6 +3,7 @@ from .octopus.octgo import OctopusGoTariff
 from .octopus.flux import OctopusFluxTariff
 from .octopus.cosy import CosyOctopusTariff
 from .octopus.ioctgo import IntelligentOctopusGoTariff
+from .octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from .base import Tariff
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseState
 from evse_controller.utils.logging_config import debug
@@ -13,6 +14,7 @@ class TariffManager:
         self.tariff_classes = {
             "OCTGO": OctopusGoTariff,
             "IOCTGO": IntelligentOctopusGoTariff,
+            "IOCTGO_AGILEOUT": IOctGoWithAgileOutgoingTariff,
             "COSY": CosyOctopusTariff,
             "FLUX": OctopusFluxTariff
         }

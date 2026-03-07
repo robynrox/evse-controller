@@ -29,7 +29,8 @@ from evse_controller.smart_evse_controller import (
     evseController,
     scheduler,
     ScheduledEvent,
-    get_system_state
+    get_system_state,
+    tariffManager
 )
 
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
@@ -38,9 +39,10 @@ VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
     'charge': 'Start charging at maximum rate',
     'discharge': 'Start discharging at maximum rate',
-    'smart': 'Enter smart tariff control mode',
+    'smart': 'Use configured smart tariff',
     'octgo': 'Switch to Octopus Go tariff',
     'ioctgo': 'Switch to Intelligent Octopus Go tariff',
+    'ioctgo_agileout': 'Switch to IOCTGO with Agile Outgoing',
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
@@ -367,6 +369,10 @@ def config_page():
             config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
+            # Update Octopus Agile Outgoing region
+            octopus_region = request.form.get('octopus[region]', 'K')
+            config.OCTOPUS_REGION = octopus_region
+
             # Handle channel configuration for both devices
             devices = ['primary']
             if config.SHELLY_SECONDARY_URL:
@@ -598,6 +604,24 @@ def get_extended_status():
         'measurements': latest_measurements,
         'ocpp_state': ocpp_state
     })
+
+@app.route('/api/tariff/dashboard_html', methods=['GET'])
+def get_tariff_dashboard_html():
+    """Get HTML for tariff dashboard display.
+    
+    Returns HTML from the current tariff's get_dashboard_html() method.
+    If no tariff is active or tariff doesn't implement this method, returns empty string.
+    """
+    try:
+        tariff = tariffManager.get_tariff()
+        
+        if tariff is None:
+            return jsonify({'html': ''})
+        
+        html = tariff.get_dashboard_html()
+        return jsonify({'html': html})
+    except Exception as e:
+        return jsonify({'html': '', 'error': str(e)})
 
 # Run the Flask app in a separate thread
 def run_flask(max_restarts=3):

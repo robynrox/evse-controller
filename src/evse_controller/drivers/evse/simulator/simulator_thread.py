@@ -34,14 +34,14 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
                 from evse_controller.utils.config import config
 
                 # Initialize with default values if not provided
-                kwargs.setdefault('initial_battery_level', 50)
+                kwargs.setdefault('initial_battery_level', 80)
                 kwargs.setdefault('max_battery_level', 100)
                 kwargs.setdefault('min_battery_level', 5)
                 kwargs.setdefault('charge_efficiency', 0.9)  # 90% charging efficiency
                 kwargs.setdefault('discharge_efficiency', 0.9)  # 90% discharging efficiency
-                kwargs.setdefault('battery_capacity_kwh', 50)  # 50 kWh battery
+                kwargs.setdefault('battery_capacity_kwh', 59)  # 50 kWh battery
                 kwargs.setdefault('voltage', 230)  # 230V
-                kwargs.setdefault('simulation_speed', 60)  # 60x speed (1 minute = 1 second)
+                kwargs.setdefault('simulation_speed', 1)  # 60 would be 60x speed (1 minute = 1 second)
 
                 cls._instance = cls(**kwargs)
                 cls._instance.start()
@@ -64,7 +64,7 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self.state = EvseAsyncState(
             evse_state=EvseState.PAUSED,
             current=0,
-            battery_level=kwargs.get('initial_battery_level', 50),
+            battery_level=kwargs.get('initial_battery_level', 80),
             last_update=time.time(),
             consecutive_connection_errors=0,
             power_watts=0.0,

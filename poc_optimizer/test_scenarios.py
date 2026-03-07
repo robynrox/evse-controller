@@ -241,6 +241,61 @@ def test_varying_discharge_rate():
     return True
 
 
+def test_energy_based_optimization():
+    """
+    Test energy-based optimization with realistic parameters.
+    - 59kWh battery
+    - 3.6kW export (1.8kWh per 30min slot)
+    - 55% SoC, 50% min, 0.5kWh buffer
+    """
+    print("\n" + "="*80)
+    print("TEST 7: Energy-Based Optimization (Realistic Parameters)")
+    print("="*80)
+    
+    optimizer = ExportOptimizer(
+        battery_capacity_kwh=59.0,
+        export_power_kw=3.6
+    )
+    
+    slots = [
+        create_time_slot(16, 0, 23),
+        create_time_slot(16, 30, 25),
+        create_time_slot(17, 0, 27),
+        create_time_slot(17, 30, 21),
+        create_time_slot(18, 0, 28),
+        create_time_slot(18, 30, 26),
+    ]
+    
+    # Energy-based optimization
+    result = optimizer.optimize_energy(
+        slots=slots,
+        current_soc_percent=55.0,
+        min_soc_percent=50.0,
+        uncertainty_buffer_kwh=0.5
+    )
+    
+    print(f"\nInput:")
+    print(f"  Battery: 59kWh")
+    print(f"  Export power: 3.6kW (1.8kWh per slot)")
+    print(f"  SoC: 55% → 50% (min)")
+    print(f"  Uncertainty buffer: 0.5kWh")
+    
+    # Calculate expected available energy
+    current_energy = 0.55 * 59.0  # 32.45kWh
+    min_energy = 0.50 * 59.0      # 29.5kWh
+    available = current_energy - min_energy - 0.5  # 2.45kWh
+    
+    print(f"\nEnergy calculation:")
+    print(f"  Current energy: {current_energy:.2f}kWh")
+    print(f"  Min energy: {min_energy:.2f}kWh")
+    print(f"  Available: {available:.2f}kWh ({available/1.8:.2f} slots)")
+    
+    print(f"\n{result}")
+    
+    print(f"\n✓ Energy-based optimization accounts for uncertainty")
+    return True
+
+
 def run_all_tests():
     """Run all test scenarios."""
     print("\n" + "="*80)
@@ -254,6 +309,7 @@ def run_all_tests():
         ("High Capacity", test_high_capacity_scenario),
         ("Low Capacity", test_low_capacity_scenario),
         ("Reduced Discharge Rate", test_varying_discharge_rate),
+        ("Energy-Based Optimization", test_energy_based_optimization),
     ]
     
     passed = 0

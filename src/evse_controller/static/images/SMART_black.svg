@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
+  <defs>
+    <style>
+      .label {font-family: Arial, sans-serif; font-size: 125px; font-weight: bold; text-anchor: middle; alignment-baseline: middle;}
+      .c{fill:none;}
+    </style>
+  </defs>
+  <g id="a">
+    <!-- SMART text -->
+    <text x="250" y="165" class="label" fill="black" transform="scale(1,2)">SMART</text>
+  </g>
+  <g id="b">
+    <rect class="c" width="595.27559" height="595.27559"/>
+  </g>
+</svg>

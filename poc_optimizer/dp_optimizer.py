@@ -56,18 +56,23 @@ class ExportOptimizer:
     """
     Dynamic programming optimizer for export scheduling.
     
-    Discretizes energy into 1% units and uses DP to find optimal allocation
-    across time slots to maximize revenue.
+    Supports both energy-based (kWh) and SoC-based (%) optimization.
+    Uses DP to find optimal allocation across time slots to maximize revenue.
     """
     
-    def __init__(self, energy_unit: float = 1.0):
+    def __init__(self, energy_unit: float = 1.0, battery_capacity_kwh: float = None, export_power_kw: float = 3.6):
         """
         Initialize optimizer.
         
         Args:
             energy_unit: Size of discretization unit in % (default 1%)
+            battery_capacity_kwh: Battery capacity in kWh (for energy-based calc)
+            export_power_kw: Export power in kW (determines slot energy)
         """
         self.energy_unit = energy_unit
+        self.battery_capacity_kwh = battery_capacity_kwh
+        self.export_power_kw = export_power_kw
+        self.slot_energy_kwh = export_power_kw * 0.5  # 30-min slots
     
     def optimize(self, slots: List[ExportSlot], available_capacity: float) -> OptimizationResult:
         """
@@ -75,7 +80,7 @@ class ExportOptimizer:
         
         Args:
             slots: List of export slots with rates
-            available_capacity: Available battery capacity for export (% SoC)
+            available_capacity: Available battery capacity for export (% SoC or kWh)
             
         Returns:
             OptimizationResult with optimal allocation
@@ -152,6 +157,108 @@ class ExportOptimizer:
             available_capacity=available_capacity,
             success=True,
             message="Optimal solution found"
+        )
+    
+    def optimize_energy(self, slots: List[ExportSlot], current_soc_percent: float, 
+                       min_soc_percent: float, uncertainty_buffer_kwh: float = 0.5) -> OptimizationResult:
+        """
+        Optimize export using energy-based calculation.
+        
+        This method converts SoC to kWh, applies uncertainty buffer, and optimizes
+        in energy units. More physically meaningful than SoC percentages.
+        
+        Args:
+            slots: List of export slots with rates
+            current_soc_percent: Current battery SoC (%)
+            min_soc_percent: Minimum SoC threshold (%)
+            uncertainty_buffer_kwh: Buffer for measurement uncertainty (default 0.5 kWh)
+            
+        Returns:
+            OptimizationResult with optimal allocation in kWh
+        """
+        if self.battery_capacity_kwh is None:
+            raise ValueError("battery_capacity_kwh must be set for energy-based optimization")
+        
+        # Convert SoC to energy
+        current_energy_kwh = (current_soc_percent / 100.0) * self.battery_capacity_kwh
+        min_energy_kwh = (min_soc_percent / 100.0) * self.battery_capacity_kwh
+        
+        # Available energy with uncertainty buffer
+        available_energy_kwh = current_energy_kwh - min_energy_kwh - uncertainty_buffer_kwh
+        
+        if available_energy_kwh <= 0:
+            return OptimizationResult(
+                slots=slots,
+                allocation=[0.0] * len(slots),
+                total_revenue=0.0,
+                total_energy=0.0,
+                available_capacity=available_energy_kwh,
+                success=False,
+                message=f"No energy available (buffer: {uncertainty_buffer_kwh:.1f}kWh)"
+            )
+        
+        # Calculate max slots we can fill
+        # Each slot uses slot_energy_kwh (e.g., 1.8kWh for 3.6kW × 30min)
+        max_slots = available_energy_kwh / self.slot_energy_kwh
+        
+        # Set slot max energy based on export power
+        for slot in slots:
+            slot.max_energy = self.slot_energy_kwh
+        
+        # Optimize using energy units
+        return self._optimize_energy_internal(slots, available_energy_kwh)
+    
+    def _optimize_energy_internal(self, slots: List[ExportSlot], available_energy_kwh: float) -> OptimizationResult:
+        """Internal energy-based optimization using DP."""
+        n_slots = len(slots)
+        energy_unit = 0.1  # 0.1kWh units for finer granularity
+        total_units = int(available_energy_kwh / energy_unit)
+        slot_max_units = [int(slot.max_energy / energy_unit) for slot in slots]
+        rates = [slot.rate for slot in slots]
+        
+        # DP table
+        dp = [[0.0] * (total_units + 1) for _ in range(n_slots + 1)]
+        decision = [[0] * (total_units + 1) for _ in range(n_slots + 1)]
+        
+        # Fill DP table
+        for slot_idx in range(1, n_slots + 1):
+            rate = rates[slot_idx - 1]
+            max_take = slot_max_units[slot_idx - 1]
+            
+            for units in range(total_units + 1):
+                # Option 1: Skip this slot
+                dp[slot_idx][units] = dp[slot_idx - 1][units]
+                decision[slot_idx][units] = 0
+                
+                # Option 2: Take k units from this slot
+                for k in range(1, min(max_take, units) + 1):
+                    revenue = dp[slot_idx - 1][units - k] + k * rate * energy_unit
+                    if revenue > dp[slot_idx][units]:
+                        dp[slot_idx][units] = revenue
+                        decision[slot_idx][units] = k
+        
+        # Reconstruct solution
+        allocation_units = [0] * n_slots
+        units_remaining = total_units
+        
+        for slot_idx in range(n_slots, 0, -1):
+            take = decision[slot_idx][units_remaining]
+            allocation_units[slot_idx - 1] = take
+            units_remaining -= take
+        
+        # Convert back to kWh
+        allocation = [units * energy_unit for units in allocation_units]
+        total_energy = sum(allocation)
+        total_revenue = dp[n_slots][total_units]
+        
+        return OptimizationResult(
+            slots=slots,
+            allocation=allocation,
+            total_revenue=total_revenue,
+            total_energy=total_energy,
+            available_capacity=available_energy_kwh,
+            success=True,
+            message="Optimal energy allocation found"
         )
     
     def optimize_with_constraints(
