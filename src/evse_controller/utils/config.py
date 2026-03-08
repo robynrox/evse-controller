@@ -507,6 +507,8 @@ class Config:
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+                    'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,
@@ -515,6 +517,9 @@ class Config:
                     'ocpp_enable_time': self.IOCTGO_OCPP_ENABLE_TIME,
                     'ocpp_disable_time': self.IOCTGO_OCPP_DISABLE_TIME
                 }
+            },
+            'octopus': {
+                'region': self.OCTOPUS_REGION
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

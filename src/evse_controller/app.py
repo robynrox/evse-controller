@@ -292,6 +292,8 @@ def config_page():
     """Handle configuration page display and updates."""
     if request.method == 'POST':
         try:
+            from evse_controller.utils.logging_config import info as log_info
+            log_info(f"DEBUG: Config POST - form keys: {list(request.form.keys())}")
             # Update Wallbox settings
             config.WALLBOX_URL = request.form.get('wallbox[url]')
             if request.form.get('wallbox[username]'):  # Only update if provided
@@ -370,7 +372,11 @@ def config_page():
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
             # Update Octopus Agile Outgoing settings
-            config.MAX_EXPORT_POWER_KW = float(request.form.get('tariffs.ioctgo[max_export_power_kw]', 7.2))
+            max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
+            logging.info(f"DEBUG: max_export_power_kw from form: {max_export_power}")
+            if max_export_power:
+                config.MAX_EXPORT_POWER_KW = float(max_export_power)
+                logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
 
             # Handle channel configuration for both devices
