@@ -398,6 +398,12 @@
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('solar_capture_min_profit_p', 1.0) }}" min="0" max="10" step="0.1">
             <small>Minimum profit for solar capture vs direct export (default 1.0p/kWh).</small>
         </div>
+        <div class="form-group">
+            <label for="soc_drop_per_export_slot">SoC Drop Per Export Slot (%):</label>
+            <input type="number" id="soc_drop_per_export_slot" name="tariffs.ioctgo[soc_drop_per_export_slot]" 
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('soc_drop_per_export_slot', 0.0) }}" min="0" max="10" step="0.1">
+            <small>Override calculated SoC drop per slot (default 0.0 = calculate automatically). Override if you can supply a more accurate figure than the calculation.</small>
+        </div>
     </div>
     <div class="config-section">
         <h2>Octopus Go Tariff Configuration (Shared)</h2>

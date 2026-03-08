@@ -380,6 +380,7 @@ def config_page():
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
             config.MAX_CHARGE_PERCENT_FROM_SOLAR = float(request.form.get('tariffs.ioctgo[max_charge_percent_from_solar]', 95))
             config.SOLAR_CAPTURE_MIN_PROFIT_P = float(request.form.get('tariffs.ioctgo[solar_capture_min_profit_p]', 1.0))
+            config.SOC_DROP_PER_EXPORT_SLOT = float(request.form.get('tariffs.ioctgo[soc_drop_per_export_slot]', 0.0))
 
             # Handle channel configuration for both devices
             devices = ['primary']

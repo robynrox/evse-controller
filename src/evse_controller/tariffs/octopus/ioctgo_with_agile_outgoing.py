@@ -725,10 +725,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 # Calculate expected revenue (£)
                 # Revenue = rate (p/kWh) × power (kW) × time (h) / 100 (to convert p to £)
                 expected_revenue_gbp = (avg_rate * self.EXPORT_POWER_KW * 0.5 * num_slots) / 100
-                
+
                 # Calculate SoC drop per slot
-                # SoC drop = (power_kw / efficiency × hours / battery_kwh) × 100
-                soc_drop_per_slot = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / self.BATTERY_CAPACITY_KWH) * 100
+                # Use configured override if set, otherwise calculate from power/capacity
+                if config.SOC_DROP_PER_EXPORT_SLOT > 0:
+                    soc_drop_per_slot = config.SOC_DROP_PER_EXPORT_SLOT
+                else:
+                    # SoC drop = (power_kw / efficiency × hours / battery_kwh) × 100
+                    soc_drop_per_slot = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / self.BATTERY_CAPACITY_KWH) * 100
             else:
                 expected_revenue_gbp = 0
                 soc_drop_per_slot = 0

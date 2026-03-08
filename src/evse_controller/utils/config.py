@@ -80,6 +80,7 @@ class Config:
                                 'max_export_power_kw': 7.2,
                                 'max_charge_percent_from_solar': 95,
                                 'solar_capture_min_profit_p': 1.0,
+                                'soc_drop_per_export_slot': 0.0,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -375,6 +376,12 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "solar_capture_min_profit_p", value)
     )
 
+    # SoC drop per export slot (%)
+    SOC_DROP_PER_EXPORT_SLOT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "soc_drop_per_export_slot", 0.0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "soc_drop_per_export_slot", value)
+    )
+
     # Wallbox simulator properties
     USE_WALLBOX_SIMULATOR = property(
         lambda self: self._get_config_value("wallbox", "use_simulator", False),
@@ -525,6 +532,7 @@ class Config:
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'max_charge_percent_from_solar': self.MAX_CHARGE_PERCENT_FROM_SOLAR,
                     'solar_capture_min_profit_p': self.SOLAR_CAPTURE_MIN_PROFIT_P,
+                    'soc_drop_per_export_slot': self.SOC_DROP_PER_EXPORT_SLOT,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,
