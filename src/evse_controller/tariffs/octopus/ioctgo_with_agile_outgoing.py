@@ -222,12 +222,38 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             try:
                 rates = self._fetch_rates_from_api()
                 with self._rates_lock:
-                    self.agile_rates = rates
-                    self.agile_rates_fetched_at = datetime.now()
-                info(f"IOCTGO_AGILEOUT: Fetched {len(rates)} Agile Outgoing rates for region {self.region}")
+                    # Check if we're fetching a new day's rates
+                    if rates:
+                        today = datetime.now().date()
+                        last_fetch_date = getattr(self, '_last_fetch_date', None)
+                        
+                        if last_fetch_date != today:
+                            self.agile_rates = rates
+                            self.agile_rates_fetched_at = datetime.now()
+                            self._last_fetch_date = today
+                            info(f"IOCTGO_AGILEOUT: Fetched {len(rates)} Agile Outgoing rates for {today} (region {self.region})")
+                            
+                            # Trigger export plan recalculation with current SoC
+                            # This ensures the plan uses the new rates
+                            try:
+                                from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+                                evse = EvseThreadInterface.get_instance()
+                                state = evse.get_state()
+                                if state and state.battery_level >= 0:
+                                    # Recalculate plan with new rates
+                                    self._planned_export_slots = self.calculate_export_plan(state.battery_level)
+                                    self._last_plan_soc = state.battery_level
+                                    self._last_plan_slot = (datetime.now().hour * 60 + datetime.now().minute) // 30
+                                    self._plan_cache = self._planned_export_slots.copy()
+                                    if self._planned_export_slots:
+                                        info(f"IOCTGO_AGILEOUT: Export plan recalculated with new rates - {len(self._planned_export_slots)} slots planned")
+                            except Exception as e:
+                                debug(f"IOCTGO_AGILEOUT: Could not recalculate export plan after rate fetch: {e}")
+                        else:
+                            debug(f"IOCTGO_AGILEOUT: Rates already fetched for {today}, skipping")
             except Exception as e:
                 error(f"IOCTGO_AGILEOUT: Failed to fetch Agile rates: {e}")
-        
+
         thread = threading.Thread(target=fetch_thread, daemon=True)
         thread.start()
 
@@ -271,9 +297,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Sort by start time and filter to today only
             rates.sort(key=lambda r: r['start'])
+            
+            # Filter to today only and remove duplicates
             day_start = datetime(today.year, today.month, today.day, tzinfo=rates[0]['start'].tzinfo) if rates else datetime.now()
             day_end = day_start + timedelta(days=1)
-            rates = [r for r in rates if day_start <= r['start'] < day_end]
+            
+            # Use dict to remove duplicates (key by start time)
+            unique_rates = {}
+            for r in rates:
+                if day_start <= r['start'] < day_end:
+                    # Create a key from the start time (rounded to minute)
+                    key = r['start'].strftime('%Y-%m-%d %H:%M')
+                    # Keep the first occurrence (or could keep latest if API returns updates)
+                    if key not in unique_rates:
+                        unique_rates[key] = r
+            
+            # Convert back to list and sort
+            rates = sorted(unique_rates.values(), key=lambda r: r['start'])
+            
+            # Verify we have expected number of slots (46 or 48 is normal, depends on GMT/BST in use)
+            if len(rates) != 46 and len(rates) != 48:
+                warning(f"IOCTGO_AGILEOUT: Expected 46 or 48 slots, got {len(rates)}.")
             
             return rates
         except Exception as e:
@@ -405,7 +449,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     </div>
                     ''')
                 else:
-                    # Missing slot - show placeholder (no border to maintain consistent sizing)
+                    # Missing slot - show placeholder with same sizing as rate cells
                     html.append(f'''
                     <div class="agile-rate-cell-placeholder" data-missing="true" style="
                         flex:1;
@@ -421,6 +465,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         justify-content:center;
                         border-radius:1px;
                         cursor:default;
+                        position:relative;
+                        box-sizing:border-box;
+                        padding:0;
+                        margin:0;
+                        border:2px solid #ddd;
                     " title="{hour:02d}:{minute:02d}: Rate not available">
                         <span style="font-size:14px;line-height:1;font-weight:300;">?</span>
                     </div>
