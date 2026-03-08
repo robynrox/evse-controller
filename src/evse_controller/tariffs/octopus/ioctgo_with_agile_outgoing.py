@@ -365,13 +365,34 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Find the slot that may be partially filled (lowest rate, last of ties)
             partial_slot_idx = None
             if planned_slots and rate_dict:
-                # Find minimum rate among planned slots
-                min_rate = min(rate_dict[idx]['rate'] for idx in planned_slots if idx in rate_dict)
-                # Find all slots with minimum rate
-                min_rate_slots = [idx for idx in planned_slots if idx in rate_dict and rate_dict[idx]['rate'] == min_rate]
-                # Take the last one (furthest in future)
-                if min_rate_slots:
-                    partial_slot_idx = min_rate_slots[-1]
+                # Calculate energy needed for all planned slots
+                energy_per_slot_kwh = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR) * 0.5
+                total_energy_needed = len(planned_slots) * energy_per_slot_kwh
+                
+                # Calculate available energy
+                battery_capacity_kwh = self.BATTERY_CAPACITY_KWH
+                min_soc_kwh = (config.MIN_AGILE_DISCHARGE_SOC / 100.0) * battery_capacity_kwh
+                current_soc = 0
+                try:
+                    from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+                    evse = EvseThreadInterface.get_instance()
+                    state = evse.get_state()
+                    if state and state.battery_level >= 0:
+                        current_soc = state.battery_level
+                except:
+                    pass
+                current_energy_kwh = (current_soc / 100.0) * battery_capacity_kwh
+                available_energy_kwh = current_energy_kwh - min_soc_kwh
+                
+                # Only mark a partial slot if we don't have enough energy for all slots
+                if available_energy_kwh < total_energy_needed:
+                    # Find minimum rate among planned slots
+                    min_rate = min(rate_dict[idx]['rate'] for idx in planned_slots if idx in rate_dict)
+                    # Find all slots with minimum rate
+                    min_rate_slots = [idx for idx in planned_slots if idx in rate_dict and rate_dict[idx]['rate'] == min_rate]
+                    # Take the last one (furthest in future)
+                    if min_rate_slots:
+                        partial_slot_idx = min_rate_slots[-1]
 
             # Calculate min/max for color scaling (only for actual rates)
             rate_values = [r['rate'] for r in rates]
