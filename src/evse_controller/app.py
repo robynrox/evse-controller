@@ -378,6 +378,8 @@ def config_page():
                 config.MAX_EXPORT_POWER_KW = float(max_export_power)
                 logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
+            config.MAX_CHARGE_PERCENT_FROM_SOLAR = float(request.form.get('tariffs.ioctgo[max_charge_percent_from_solar]', 95))
+            config.SOLAR_CAPTURE_MIN_PROFIT_P = float(request.form.get('tariffs.ioctgo[solar_capture_min_profit_p]', 1.0))
 
             # Handle channel configuration for both devices
             devices = ['primary']

@@ -9,6 +9,49 @@ import time
 import threading
 import queue
 from typing import Optional
+
+# Charging efficiency curve (measured data)
+# Maps charging current (A) to efficiency (0.0-1.0)
+CHARGING_EFFICIENCY_CURVE = {
+    3: 0.569,
+    4: 0.667,
+    5: 0.734,
+    6: 0.785,
+    7: 0.821,
+    8: 0.846,
+    9: 0.862,
+    10: 0.872,
+    11: 0.878,
+    12: 0.883,
+    13: 0.890,
+    14: 0.901,
+    15: 0.901,
+    16: 0.901,
+}
+# Extend to 32A (assume same as 14A+)
+for i in range(17, 33):
+    CHARGING_EFFICIENCY_CURVE[i] = 0.901
+
+# Discharge efficiency curve (measured data, not used at the time of writing)
+# Maps discharging current (A) to efficiency (0.0-1.0)
+DISCHARGE_EFFICIENCY_CURVE = {
+    3: 0.663,
+    4: 0.720,
+    5: 0.764,
+    6: 0.800,
+    7: 0.829,
+    8: 0.851,
+    9: 0.868,
+    10: 0.881,
+    11: 0.890,
+    12: 0.896,
+    13: 0.900,
+    14: 0.904,
+    15: 0.907,
+}
+
+# Discharge efficiency at maximum rate
+DISCHARGE_EFFICIENCY = 0.907
 import asyncio
 import urllib.request
 import json
@@ -216,6 +259,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         debug(f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} slots: {planned_slots}")
         
         return planned_slots
+    
+    def calculate_solar_capture_threshold(self, current_export_rate_p, min_future_rate_p):
+        """Calculate minimum charging current for solar capture to be worthwhile.
+        
+        Args:
+            current_export_rate_p: Current export rate (p/kWh)
+            min_future_rate_p: Minimum future export rate among unfilled slots (p/kWh)
+            
+        Returns:
+            tuple: (is_worthwhile, min_current, expected_profit_p)
+        """
+        min_profit_p = config.SOLAR_CAPTURE_MIN_PROFIT_P
+        
+        for current, charge_eff in sorted(CHARGING_EFFICIENCY_CURVE.items()):
+            round_trip_eff = charge_eff * DISCHARGE_EFFICIENCY
+            effective_future_rate = min_future_rate_p * round_trip_eff
+            profit_p = effective_future_rate - current_export_rate_p
+            
+            if profit_p >= min_profit_p:
+                return True, current, profit_p
+        
+        # Not worthwhile at any current
+        return False, 0, 0
 
     def _fetch_rates_async(self):
         """Fetch Agile Outgoing rates asynchronously (non-blocking)."""
@@ -573,6 +639,42 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             </div>
             ''')
             
+            # Add solar capture recommendation (only if not in export slot and battery not full)
+            try:
+                from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+                evse = EvseThreadInterface.get_instance()
+                state = evse.get_state()
+                current_soc = state.battery_level if state and state.battery_level >= 0 else -1
+                
+                max_solar_soc = config.MAX_CHARGE_PERCENT_FROM_SOLAR
+                
+                if current_soc >= 0 and current_soc < max_solar_soc and num_slots < 6:
+                    # Find minimum rate among UNFILLED slots (slots after the planned ones)
+                    unfilled_rates = [rate_dict[idx]['rate'] for idx in range(48) if idx not in planned_slots and idx in rate_dict and idx >= current_slot_idx]
+                    
+                    if unfilled_rates:
+                        min_future_rate = min(unfilled_rates)
+                        # Get current rate (or average of planned slots if not currently in one)
+                        current_rate = min_rate  # Use minimum planned rate as proxy
+                        
+                        is_worthwhile, min_current, profit = self.calculate_solar_capture_threshold(current_rate, min_future_rate)
+                        
+                        if is_worthwhile:
+                            solar_power_kw = min_current * 0.240
+                            html.append(f'''
+                            <div style="font-size:10px;color:#2e7d32;margin-top:3px;text-align:center;">
+                                ☀️ Solar Capture: Worthwhile at ≥{min_current}A ({solar_power_kw:.1f}kW) - Profit: {profit:.1f}p/kWh
+                            </div>
+                            ''')
+                        else:
+                            html.append(f'''
+                            <div style="font-size:10px;color:#999;margin-top:3px;text-align:center;">
+                                ☀️ Solar Capture: Not worthwhile (max profit {profit:.1f}p/kWh)
+                            </div>
+                            ''')
+            except Exception as e:
+                debug(f"IOCTGO_AGILEOUT: Could not calculate solar capture: {e}")
+            
             # Add CSS for responsive behavior with progressive degradation
             html.append('''
             <style>
@@ -654,6 +756,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         - Battery depleted: Dormant
         - During planned export slots: Discharge at max rate
         - All other times: Load-follow discharge
+        
+        Returns:
+            For standard states: (ControlState, min_current, max_current, reason)
+            For solar capture: (ControlState.LOAD_FOLLOW_BIDIR_MINIMA, min_charge, min_discharge, reason)
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
@@ -697,6 +803,44 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Export at maximum rate during planned slots
             debug(f"IOCTGO_AGILEOUT: In export slot {current_slot}, commanding DISCHARGE")
             return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
+        
+        # Check if solar capture should be enabled
+        # (Not in export slot, battery not full, and solar capture is worthwhile)
+        max_solar_soc = config.MAX_CHARGE_PERCENT_FROM_SOLAR
+        if battery_level < max_solar_soc and self.agile_rates:
+            # Build rate dict from agile rates
+            rate_dict = {}
+            for r in self.agile_rates:
+                slot_idx = r['start'].hour * 2 + (1 if r['start'].minute == 30 else 0)
+                rate_dict[slot_idx] = r
+            
+            # Find minimum rate among planned slots (our opportunity cost)
+            if self._planned_export_slots:
+                planned_rates = [rate_dict[idx]['rate'] for idx in self._planned_export_slots if idx in rate_dict]
+                if planned_rates:
+                    opportunity_cost_rate = min(planned_rates)
+                    
+                    # Find minimum rate among UNFILLED future slots
+                    unfilled_rates = [rate_dict[idx]['rate'] for idx in range(48) 
+                                     if idx not in self._planned_export_slots 
+                                     and idx in rate_dict 
+                                     and idx >= current_slot]
+                    
+                    if unfilled_rates:
+                        min_future_rate = min(unfilled_rates)
+                        
+                        # Calculate if solar capture is worthwhile
+                        is_worthwhile, min_current, profit = self.calculate_solar_capture_threshold(
+                            opportunity_cost_rate, min_future_rate
+                        )
+                        
+                        if is_worthwhile:
+                            debug(f"IOCTGO_AGILEOUT: Solar capture worthwhile at {min_current}A, profit {profit:.1f}p")
+                            # Return special state with separate min charge/discharge
+                            return (ControlState.LOAD_FOLLOW_BIDIR_MINIMA, 
+                                   min_current,  # min charge current
+                                   config.WALLBOX_MIN_DISCHARGE_CURRENT,  # min discharge current
+                                   f"IOCTGO_AGILEOUT Solar capture at {min_current}A")
         
         # All other times: Load-follow discharge
         # (set_home_demand_levels will configure the strategy based on SoC threshold)

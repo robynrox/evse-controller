@@ -53,10 +53,13 @@ class ControlState(Enum):
     # If the load goes too high in either direction, target current will be set to the maximum.
     # If the load goes too low in either direction, charging will be stopped.
     LOAD_FOLLOW_BIDIRECTIONAL = 5
+    # This is like LOAD_FOLLOW_BIDIRECTIONAL but with separate min charge/discharge currents
+    # Max values are taken from config. Used for solar capture optimization.
+    LOAD_FOLLOW_BIDIR_MINIMA = 6
     # New state for pause-to-remove functionality
-    PAUSE_UNTIL_DISCONNECT = 6
+    PAUSE_UNTIL_DISCONNECT = 7
     # New state for free run operation
-    FREERUN = 7
+    FREERUN = 8
 
 
 class EvseController(PowerMonitorObserver):

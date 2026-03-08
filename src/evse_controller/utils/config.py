@@ -78,6 +78,8 @@ class Config:
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
                                 'max_export_power_kw': 7.2,
+                                'max_charge_percent_from_solar': 95,
+                                'solar_capture_min_profit_p': 1.0,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -361,6 +363,18 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)
     )
 
+    # Maximum SoC for solar charging (%)
+    MAX_CHARGE_PERCENT_FROM_SOLAR = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "max_charge_percent_from_solar", 95),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "max_charge_percent_from_solar", value)
+    )
+
+    # Minimum profit for solar capture (p/kWh)
+    SOLAR_CAPTURE_MIN_PROFIT_P = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "solar_capture_min_profit_p", 1.0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "solar_capture_min_profit_p", value)
+    )
+
     # Wallbox simulator properties
     USE_WALLBOX_SIMULATOR = property(
         lambda self: self._get_config_value("wallbox", "use_simulator", False),
@@ -509,6 +523,8 @@ class Config:
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
+                    'max_charge_percent_from_solar': self.MAX_CHARGE_PERCENT_FROM_SOLAR,
+                    'solar_capture_min_profit_p': self.SOLAR_CAPTURE_MIN_PROFIT_P,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,

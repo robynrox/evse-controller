@@ -423,15 +423,36 @@ def main():
                 # Get the appropriate EVSE instance using the factory method
                 evse = EvseThreadInterface.get_instance()
                 state = evse.get_state()
-                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
+                control_result = tariffManager.get_control_state(dayMinute)
+                
+                # Handle LOAD_FOLLOW_BIDIR_MINIMA (5-tuple) vs standard states (4-tuple)
+                if len(control_result) == 5:
+                    # LOAD_FOLLOW_BIDIR_MINIMA: (state, minCharge, minDischarge, maxCharge, maxDischarge, reason)
+                    # Actually we'll use 4-tuple: (state, minCharge, minDischarge, reason) - max from config
+                    control_state, min_charge, min_discharge, log_message = control_result
+                    max_charge = config.WALLBOX_MAX_CHARGE_CURRENT
+                    max_discharge = config.WALLBOX_MAX_DISCHARGE_CURRENT
+                else:
+                    # Standard: (state, min_current, max_current, reason)
+                    control_state, min_current, max_current, log_message = control_result
+                    min_charge = min_discharge = min_current
+                    max_charge = max_discharge = max_current
+                
                 debug(log_message)
                 evseController.setControlState(control_state)
                 tariffManager.get_tariff().set_home_demand_levels(evseController, state, dayMinute)
-                if min_current is not None and max_current is not None:
-                    if control_state == ControlState.CHARGE:
-                        evseController.setChargeCurrentRange(min_current, max_current)
-                    elif control_state == ControlState.DISCHARGE:
-                        evseController.setDischargeCurrentRange(min_current, max_current)
+                
+                # Apply current ranges based on control state
+                if control_state == ControlState.CHARGE:
+                    evseController.setChargeCurrentRange(min_charge, max_charge)
+                elif control_state == ControlState.DISCHARGE:
+                    evseController.setDischargeCurrentRange(min_discharge, max_discharge)
+                elif control_state == ControlState.LOAD_FOLLOW_BIDIR_MINIMA:
+                    # Set separate min charge/discharge, max from config
+                    evseController.setChargeCurrentRange(min_charge, max_charge)
+                    evseController.setDischargeCurrentRange(min_discharge, max_discharge)
+                    # Change to standard bidirectional state for EvseController
+                    evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
 
             if execState == ExecState.SOLAR:
                 info("CONTROL SOLAR")

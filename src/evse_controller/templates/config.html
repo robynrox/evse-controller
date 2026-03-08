@@ -386,6 +386,18 @@
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('max_export_power_kw', 7.2) }}" min="0.1" max="7.2" step="0.1">
             <small>Maximum export power during Agile slots (default 7.2kW = full Wallbox capacity). Reduce if grid-limited.</small>
         </div>
+        <div class="form-group">
+            <label for="max_charge_percent_from_solar">Max SoC for Solar Charging (%):</label>
+            <input type="number" id="max_charge_percent_from_solar" name="tariffs.ioctgo[max_charge_percent_from_solar]" 
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('max_charge_percent_from_solar', 95) }}" min="50" max="100">
+            <small>Maximum battery level for solar charging (default 95%). Wallbox efficiency drops above this level.</small>
+        </div>
+        <div class="form-group">
+            <label for="solar_capture_min_profit_p">Minimum Solar Capture Profit (p/kWh):</label>
+            <input type="number" id="solar_capture_min_profit_p" name="tariffs.ioctgo[solar_capture_min_profit_p]" 
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('solar_capture_min_profit_p', 1.0) }}" min="0" max="10" step="0.1">
+            <small>Minimum profit for solar capture vs direct export (default 1.0p/kWh).</small>
+        </div>
     </div>
     <div class="config-section">
         <h2>Octopus Go Tariff Configuration (Shared)</h2>
