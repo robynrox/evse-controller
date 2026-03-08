@@ -369,9 +369,9 @@ def config_page():
             config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
-            # Update Octopus Agile Outgoing region
-            octopus_region = request.form.get('octopus[region]', 'K')
-            config.OCTOPUS_REGION = octopus_region
+            # Update Octopus Agile Outgoing settings
+            config.MAX_EXPORT_POWER_KW = float(request.form.get('tariffs.ioctgo[max_export_power_kw]', 7.2))
+            config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
 
             # Handle channel configuration for both devices
             devices = ['primary']
