@@ -77,6 +77,7 @@ class Config:
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
+                                'max_export_power_kw': 7.2,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -352,6 +353,12 @@ class Config:
     MIN_AGILE_DISCHARGE_SOC = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "min_agile_discharge_soc", 60),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
+    )
+
+    # Maximum export power for Agile Outgoing (kW)
+    MAX_EXPORT_POWER_KW = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "max_export_power_kw", 7.2),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)
     )
 
     # Wallbox simulator properties

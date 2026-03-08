@@ -107,7 +107,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.OCPP_DISABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_DISABLE_TIME)
         
         # Export optimization parameters
-        self.EXPORT_POWER_KW = getattr(config, 'WALLBOX_MAX_DISCHARGE_CURRENT', 16) * 240 / 1000  # P = I × V
+        # Use configured max export power (default 7.2kW = full Wallbox capacity)
+        self.EXPORT_POWER_KW = config.MAX_EXPORT_POWER_KW
         self.BATTERY_ROUND_TRIP_EFFICIENCY = 0.80  # 80% round-trip efficiency
         self.DISCHARGE_LOSS_FACTOR = 0.90  # 10% loss when discharging
         

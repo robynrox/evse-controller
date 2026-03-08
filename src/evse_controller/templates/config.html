@@ -380,6 +380,12 @@
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
             <small>Minimum battery level for export (default 60%). System will stop exporting when SoC reaches this level.</small>
         </div>
+        <div class="form-group">
+            <label for="max_export_power_kw">Maximum Export Power (kW):</label>
+            <input type="number" id="max_export_power_kw" name="tariffs.ioctgo[max_export_power_kw]" 
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('max_export_power_kw', 7.2) }}" min="0.1" max="7.2" step="0.1">
+            <small>Maximum export power during Agile slots (default 7.2kW = full Wallbox capacity). Reduce if grid-limited.</small>
+        </div>
     </div>
     <div class="config-section">
         <h2>Octopus Go Tariff Configuration (Shared)</h2>
