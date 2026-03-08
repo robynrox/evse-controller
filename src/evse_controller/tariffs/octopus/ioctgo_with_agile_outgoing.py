@@ -158,6 +158,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
         self._exported_slots = []  # Track slots where export actually occurred
+        self._partially_exported_slots = []  # Track slots that were partially filled
         
         # Cache for export plan calculation
         self._last_plan_soc = -1
@@ -167,6 +168,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Rate fetching schedule
         self._last_rate_fetch_time = 0
         self._rate_fetch_interval = 60  # Check every minute for better API failure recovery
+        
+        # Slot tracking
+        self._last_tracked_slot = -1
+        
+        # Load persisted export history
+        self._load_export_history()
         
         # Event bus subscription
         self._event_bus = EventBus()
@@ -364,6 +371,55 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Log occasionally to confirm check is running (every 10 minutes)
             if int(now.minute) % 10 == 0:
                 debug(f"IOCTGO_AGILEOUT: Rate fetch check - no fetch needed")
+    
+    def _get_export_history_file(self):
+        """Get path to export history file."""
+        from evse_controller.utils.paths import get_data_dir
+        data_dir = get_data_dir()
+        history_dir = data_dir / "state"
+        history_dir.mkdir(exist_ok=True)
+        return history_dir / "export_history.json"
+    
+    def _load_export_history(self):
+        """Load export history from file (if from today)."""
+        import json
+        try:
+            history_file = self._get_export_history_file()
+            if history_file.exists():
+                with open(history_file, 'r') as f:
+                    data = json.load(f)
+                
+                # Only load if from today
+                if data.get('date') == datetime.now().strftime('%Y-%m-%d'):
+                    self._exported_slots = data.get('exported_slots', [])
+                    self._partially_exported_slots = data.get('partially_exported_slots', [])
+                    debug(f"IOCTGO_AGILEOUT: Loaded export history: {len(self._exported_slots)} full, {len(self._partially_exported_slots)} partial")
+                else:
+                    debug(f"IOCTGO_AGILEOUT: Export history from different date, ignoring")
+        except Exception as e:
+            debug(f"IOCTGO_AGILEOUT: Could not load export history: {e}")
+    
+    def _save_export_history(self):
+        """Save export history to file."""
+        import json
+        try:
+            history_file = self._get_export_history_file()
+            data = {
+                'date': datetime.now().strftime('%Y-%m-%d'),
+                'exported_slots': self._exported_slots,
+                'partially_exported_slots': self._partially_exported_slots
+            }
+            with open(history_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            debug(f"IOCTGO_AGILEOUT: Saved export history")
+        except Exception as e:
+            debug(f"IOCTGO_AGILEOUT: Could not save export history: {e}")
+    
+    def _clear_export_history(self):
+        """Clear export history (called at midnight)."""
+        self._exported_slots = []
+        self._partially_exported_slots = []
+        debug(f"IOCTGO_AGILEOUT: Cleared export history for new day")
 
     def _fetch_rates_from_api(self) -> list:
         """Fetch Agile Outgoing rates from Octopus API.
@@ -537,22 +593,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     # Check if this slot is planned for export, already exported, or in the past
                     is_planned = slot_idx in planned_slots
                     is_exported = slot_idx in self._exported_slots
+                    is_partially_exported = slot_idx in self._partially_exported_slots
                     is_past = slot_idx < current_slot_idx
                     
                     # Check if this is the partial slot (lowest rate, last of ties)
                     is_partial = (slot_idx == partial_slot_idx)
                     
                     # Determine visual indication - all cells have same border width for consistent sizing
-                    if is_past and not is_exported:
+                    if is_partially_exported:
+                        # Partially completed export - show one tick
+                        extra_style = "border:2px solid #4caf50;"
+                        tooltip_extra = " - PARTIALLY EXPORTED"
+                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">✓</span>'
+                    elif is_exported:
+                        # Fully completed export - show two ticks
+                        extra_style = "border:2px solid #4caf50;"
+                        tooltip_extra = " - EXPORTED"
+                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">✓✓</span>'
+                    elif is_past and not is_planned:
                         # Past slot that wasn't used - dim it with grey border
                         extra_style = "opacity:0.5;border:2px solid #bbb;"
                         tooltip_extra = " (past)"
                         label = ""
-                    elif is_exported:
-                        # Already exported - show green border, checkmark in text color
-                        extra_style = "border:2px solid #4caf50;"
-                        tooltip_extra = " - EXPORTED"
-                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">✓</span>'
                     elif is_partial:
                         # Partial slot (lowest rate) - show lowercase 'e'
                         extra_style = "border:2px solid #ff9800;"
@@ -892,7 +954,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Configure home demand power levels."""
         # Check if we need to fetch new rates (scheduled fetch)
         self._check_rate_fetch_needed()
-        
+
         if not hasattr(self, 'evseController'):
             self.evseController = evseController
             self.original_calculation_method = evseController.use_new_current_calculation
@@ -901,6 +963,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         battery_level = state.battery_level
         current_slot = dayMinute // 30
         
+        # Check if we just finished a slot (track partial vs full completion)
+        last_slot = getattr(self, '_last_tracked_slot', -1)
+        if current_slot != last_slot and last_slot >= 0:
+            # Slot just ended - check if it was planned
+            if last_slot in self._plan_cache:  # Was in the plan when slot started
+                # Check if it's still in the current plan
+                if last_slot not in self._planned_export_slots:
+                    # Was planned but dropped mid-slot = partial export
+                    if last_slot not in self._partially_exported_slots:
+                        self._partially_exported_slots.append(last_slot)
+                        info(f"IOCTGO_AGILEOUT: Slot {last_slot} partially completed (dropped from plan)")
+                elif last_slot in self._exported_slots:
+                    # Still in plan and exported = full export (already tracked)
+                    pass
+                else:
+                    # Still in plan but didn't export = missed opportunity
+                    pass
+            
+            self._last_tracked_slot = current_slot
+            # Save history after each slot change
+            self._save_export_history()
+
         # If we're in an export slot, don't configure load-following
         # The control state is already set to DISCHARGE at max current
         if current_slot in self._planned_export_slots:
@@ -911,7 +995,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     self._exported_slots.append(current_slot)
                     info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
             return  # Don't configure load-following during export slots
-        
+
         # Outside export slots: Configure load-following based on SoC threshold
         if battery_level >= self.SOC_THRESHOLD_FOR_STRATEGY:
             evseController.setDischargeActivationPower(1)
