@@ -164,6 +164,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_plan_slot = -1
         self._plan_cache = []
         
+        # Rate fetching schedule
+        self._last_rate_fetch_time = 0
+        self._rate_fetch_interval = 60  # Check every minute for better API failure recovery
+        
         # Event bus subscription
         self._event_bus = EventBus()
         self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
@@ -293,13 +297,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     if rates:
                         today = datetime.now().date()
                         last_fetch_date = getattr(self, '_last_fetch_date', None)
-                        
+
                         if last_fetch_date != today:
                             self.agile_rates = rates
                             self.agile_rates_fetched_at = datetime.now()
                             self._last_fetch_date = today
                             info(f"IOCTGO_AGILEOUT: Fetched {len(rates)} Agile Outgoing rates for {today} (region {self.region})")
-                            
+
                             # Trigger export plan recalculation with current SoC
                             # This ensures the plan uses the new rates
                             try:
@@ -323,6 +327,43 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         thread = threading.Thread(target=fetch_thread, daemon=True)
         thread.start()
+    
+    def _check_rate_fetch_needed(self):
+        """Check if rates need to be fetched (new day or after 16:15 for late slots)."""
+        current_time = time.time()
+        
+        # Only check periodically (every minute for better failure recovery)
+        if current_time - self._last_rate_fetch_time < self._rate_fetch_interval:
+            return
+        
+        self._last_rate_fetch_time = current_time
+        now = datetime.now()
+        
+        # Fetch if:
+        # 1. No rates fetched yet, OR
+        # 2. New day (midnight passed), OR
+        # 3. After 16:15 and we don't have all 48 slots (waiting for 23:00/23:30)
+        should_fetch = False
+        
+        if not self.agile_rates:
+            should_fetch = True
+            reason = "initial fetch"
+        elif now.date() > getattr(self, '_last_fetch_date', datetime.now().date()):
+            should_fetch = True
+            reason = "new day"
+        elif now.hour >= 16:
+            # Check if we have all 48 slots
+            if len(self.agile_rates) < 48:
+                should_fetch = True
+                reason = f"waiting for remaining slots (have {len(self.agile_rates)}/48)"
+        
+        if should_fetch:
+            info(f"IOCTGO_AGILEOUT: Scheduled rate fetch triggered ({reason})")
+            self._fetch_rates_async()
+        else:
+            # Log occasionally to confirm check is running (every 10 minutes)
+            if int(now.minute) % 10 == 0:
+                debug(f"IOCTGO_AGILEOUT: Rate fetch check - no fetch needed")
 
     def _fetch_rates_from_api(self) -> list:
         """Fetch Agile Outgoing rates from Octopus API.
@@ -849,6 +890,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels."""
+        # Check if we need to fetch new rates (scheduled fetch)
+        self._check_rate_fetch_needed()
+        
         if not hasattr(self, 'evseController'):
             self.evseController = evseController
             self.original_calculation_method = evseController.use_new_current_calculation
