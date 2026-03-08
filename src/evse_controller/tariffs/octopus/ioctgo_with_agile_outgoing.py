@@ -361,6 +361,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             for r in rates:
                 slot_idx = r['start'].hour * 2 + (1 if r['start'].minute == 30 else 0)
                 rate_dict[slot_idx] = r
+            
+            # Find the slot that may be partially filled (lowest rate, last of ties)
+            partial_slot_idx = None
+            if planned_slots and rate_dict:
+                # Find minimum rate among planned slots
+                min_rate = min(rate_dict[idx]['rate'] for idx in planned_slots if idx in rate_dict)
+                # Find all slots with minimum rate
+                min_rate_slots = [idx for idx in planned_slots if idx in rate_dict and rate_dict[idx]['rate'] == min_rate]
+                # Take the last one (furthest in future)
+                if min_rate_slots:
+                    partial_slot_idx = min_rate_slots[-1]
 
             # Calculate min/max for color scaling (only for actual rates)
             rate_values = [r['rate'] for r in rates]
@@ -400,6 +411,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     is_exported = slot_idx in self._exported_slots
                     is_past = slot_idx < current_slot_idx
                     
+                    # Check if this is the partial slot (lowest rate, last of ties)
+                    is_partial = (slot_idx == partial_slot_idx)
+                    
                     # Determine visual indication - all cells have same border width for consistent sizing
                     if is_past and not is_exported:
                         # Past slot that wasn't used - dim it with grey border
@@ -411,6 +425,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         extra_style = "border:2px solid #4caf50;"
                         tooltip_extra = " - EXPORTED"
                         label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">✓</span>'
+                    elif is_partial:
+                        # Partial slot (lowest rate) - show lowercase 'e'
+                        extra_style = "border:2px solid #ff9800;"
+                        tooltip_extra = " - PLANNED EXPORT (may be partial)"
+                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">e</span>'
                     elif is_planned:
                         # Planned for export - show orange border, EX in text color
                         extra_style = "border:2px solid #ff9800;"
