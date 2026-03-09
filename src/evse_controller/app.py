@@ -379,6 +379,14 @@ def config_page():
                 logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
 
+            # Update Agile Outgoing export planning parameters
+            export_slot_loss = request.form.get('tariffs.ioctgo[export_slot_soc_loss_percent]')
+            if export_slot_loss:
+                config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = float(export_slot_loss)
+            non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
+            if non_export_slot_loss:
+                config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+
             # Handle channel configuration for both devices
             devices = ['primary']
             if config.SHELLY_SECONDARY_URL:

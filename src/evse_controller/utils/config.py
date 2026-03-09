@@ -78,6 +78,8 @@ class Config:
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
                                 'max_export_power_kw': 7.2,
+                                'export_slot_soc_loss_percent': 0,
+                                'non_export_slot_soc_loss_percent': 1.0,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -359,6 +361,18 @@ class Config:
     MAX_EXPORT_POWER_KW = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "max_export_power_kw", 7.2),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)
+    )
+
+    # Agile Outgoing export slot SoC loss percentage (per 30-min slot, 0 = use calculated value)
+    IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "export_slot_soc_loss_percent", 0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "export_slot_soc_loss_percent", value)
+    )
+
+    # Agile Outgoing non-export (load-following) slot SoC loss percentage (per 30-min slot)
+    IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", 1.0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
     )
 
     # Wallbox simulator properties

@@ -111,6 +111,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.EXPORT_POWER_KW = config.MAX_EXPORT_POWER_KW
         self.BATTERY_ROUND_TRIP_EFFICIENCY = 0.80  # 80% round-trip efficiency
         self.DISCHARGE_LOSS_FACTOR = 0.90  # 10% loss when discharging
+
+        # SoC loss percentages per slot (configured by user)
+        # If export_slot_soc_loss_percent is 0, use calculated value from EXPORT_POWER_KW
+        self.EXPORT_SLOT_SOC_LOSS_PERCENT = config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT
+        self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
@@ -138,83 +143,120 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     
     def calculate_export_plan(self, current_soc_percent: float) -> list:
         """Calculate which slots to use for export based on current SoC and rates.
-        
+
+        Uses a two-phase approach:
+        1. Project SoC to 23:30 assuming all slots are non-discharge (load-following)
+        2. Select best export slots based on projected SoC and configured loss rates
+
         Args:
             current_soc_percent: Current battery state of charge (%)
-            
+
         Returns:
             List of slot indices (0-47) planned for export
         """
         if not self.agile_rates or current_soc_percent < 0:
             return []
-        
-        # Calculate energy available for export
+
         battery_capacity_kwh = self.BATTERY_CAPACITY_KWH
-        min_soc_kwh = (config.MIN_AGILE_DISCHARGE_SOC / 100.0) * battery_capacity_kwh
-        current_energy_kwh = (current_soc_percent / 100.0) * battery_capacity_kwh
-        available_energy_kwh = current_energy_kwh - min_soc_kwh
-        
-        debug(f"IOCTGO_AGILEOUT: Export plan - SoC={current_soc_percent}%, min={config.MIN_AGILE_DISCHARGE_SOC}%, available={available_energy_kwh:.2f}kWh")
-        info(f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, min {config.MIN_AGILE_DISCHARGE_SOC}%, {available_energy_kwh:.1f}kWh available")
-        
-        if available_energy_kwh <= 0:
-            debug(f"IOCTGO_AGILEOUT: No energy available for export")
+        min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
+
+        # Calculate export slot SoC loss per slot
+        # If configured to 0, calculate from EXPORT_POWER_KW and battery capacity
+        if self.EXPORT_SLOT_SOC_LOSS_PERCENT > 0:
+            export_slot_soc_loss = self.EXPORT_SLOT_SOC_LOSS_PERCENT
+        else:
+            # Calculate: (power_kw / efficiency × 0.5h / battery_kwh) × 100
+            export_slot_soc_loss = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / battery_capacity_kwh) * 100
+
+        non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+        debug(f"IOCTGO_AGILEOUT: Export slot loss={export_slot_soc_loss:.2f}%, non-export slot loss={non_export_slot_soc_loss:.2f}%")
+        info(f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, min {min_soc_percent}%, export loss {export_slot_soc_loss:.1f}%/slot, load-follow loss {non_export_slot_soc_loss:.1f}%/slot")
+
+        # Get current time to determine slot range
+        now = self.get_current_datetime()
+        current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
+
+        # Calculate slots from now until 23:30 (slot 47)
+        # Slot 47 = 23:30-00:00, which is the last slot of the day
+        slots_until_2330 = list(range(current_slot_idx, 48))
+
+        if not slots_until_2330:
+            debug(f"IOCTGO_AGILEOUT: No slots remaining today")
             return []
-        
-        # Calculate energy per slot (with 10% discharge loss)
-        # To export EXPORT_POWER_KW for 30min, we need more energy from battery
-        energy_per_slot_kwh = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR) * 0.5
-        
-        info(f"IOCTGO_AGILEOUT: Export power {self.EXPORT_POWER_KW:.2f}kW, {energy_per_slot_kwh:.2f}kWh per slot")
-        
+
+        # Phase 1: Project SoC at 23:30 assuming ALL slots are non-discharge (load-following)
+        projected_soc_at_2330 = current_soc_percent - (len(slots_until_2330) * non_export_slot_soc_loss)
+        debug(f"IOCTGO_AGILEOUT: Projected SoC at 23:30 (all load-follow): {projected_soc_at_2330:.1f}%")
+
+        # Calculate available SoC for export (above minimum reserve)
+        available_soc_for_export = projected_soc_at_2330 - min_soc_percent
+        debug(f"IOCTGO_AGILEOUT: Available SoC for export: {available_soc_for_export:.1f}%")
+
+        if available_soc_for_export <= 0:
+            debug(f"IOCTGO_AGILEOUT: No SoC available for export after load-follow projection")
+            return []
+
+        # Calculate SoC cost per export slot
+        # Export slot uses export_slot_soc_loss instead of non_export_slot_soc_loss
+        # The "extra" cost of choosing export vs load-follow is the difference
+        additional_soc_cost_per_export_slot = export_slot_soc_loss - non_export_slot_soc_loss
+
+        if additional_soc_cost_per_export_slot <= 0:
+            # Export slots don't cost extra SoC - can export in all profitable slots
+            debug(f"IOCTGO_AGILEOUT: Export slots don't cost extra SoC")
+            additional_soc_cost_per_export_slot = export_slot_soc_loss  # Use full cost
+
+        debug(f"IOCTGO_AGILEOUT: Additional SoC cost per export slot: {additional_soc_cost_per_export_slot:.2f}%")
+
         # Calculate minimum profitable rate
         # Need: export_rate ≥ import_rate / round_trip_efficiency
         import_rate = self.time_of_use["low"]["import_rate"]  # £/kWh
         min_export_rate = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
         min_export_rate_p = min_export_rate * 100  # Convert to p/kWh
-        
+
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
-        
-        # Get current time to filter out past slots
-        now = self.get_current_datetime()
-        current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
-        
-        # Create list of (slot_index, rate) for all future slots today
+
+        # Create list of (slot_index, rate) for all future slots today that are profitable
         slot_rates = []
         for rate_data in self.agile_rates:
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
-            
+
             # Skip slots that have completely passed (current slot is still valid)
             if slot_idx < current_slot_idx:
                 continue
-            
+
             rate_p = rate_data['rate']  # Already in p/kWh
-            debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} ({hour:02d}:{rate_data['start'].minute:02d}) @ {rate_p:.1f}p, min_rate={min_export_rate_p:.1f}p")
             if rate_p >= min_export_rate_p:  # Only consider profitable slots
                 slot_rates.append((slot_idx, rate_p))
-        
-        debug(f"IOCTGO_AGILEOUT: Found {len(slot_rates)} profitable slots (all day)")
-        
+                debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} ({hour:02d}:{rate_data['start'].minute:02d}) @ {rate_p:.1f}p (profitable)")
+
+        debug(f"IOCTGO_AGILEOUT: Found {len(slot_rates)} profitable slots")
+
         # Sort by rate (highest first)
         slot_rates.sort(key=lambda x: x[1], reverse=True)
-        
-        # Select slots until we run out of energy
+
+        # Phase 2: Select slots until we run out of available SoC
         planned_slots = []
-        remaining_energy = available_energy_kwh
-        
-        debug(f"IOCTGO_AGILEOUT: Considering {len(slot_rates)} slots, selecting up to {int(available_energy_kwh / energy_per_slot_kwh) + 1} slots")
-        
+        remaining_soc = available_soc_for_export
+
+        debug(f"IOCTGO_AGILEOUT: Selecting slots with {remaining_soc:.1f}% SoC available")
+
         for slot_idx, rate in slot_rates:
-            if remaining_energy > 0:  # Take slots while we have any energy left
+            if remaining_soc >= additional_soc_cost_per_export_slot:
                 planned_slots.append(slot_idx)
-                remaining_energy -= energy_per_slot_kwh
-                debug(f"IOCTGO_AGILEOUT: Selected slot {slot_idx} ({16+slot_idx//2-8:02d}:{'00' if slot_idx%2==0 else '30'}) @ {rate:.1f}p, remaining={remaining_energy:.2f}kWh")
+                remaining_soc -= additional_soc_cost_per_export_slot
+                debug(f"IOCTGO_AGILEOUT: Selected slot {slot_idx} @ {rate:.1f}p, remaining SoC={remaining_soc:.1f}%")
             else:
-                break
-        
+                debug(f"IOCTGO_AGILEOUT: Skipping slot {slot_idx} @ {rate:.1f}p (not enough SoC: need {additional_soc_cost_per_export_slot:.1f}%, have {remaining_soc:.1f}%)")
+
+        # Sort planned slots by time for easier processing
+        planned_slots.sort()
+
         debug(f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} slots: {planned_slots}")
-        
+        info(f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} slots planned")
+
         return planned_slots
 
     def _fetch_rates_async(self):
@@ -552,14 +594,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 # Get average rate of planned slots
                 total_revenue_p = sum(rate_dict[idx]['rate'] for idx in planned_slots if idx in rate_dict)
                 avg_rate = total_revenue_p / num_slots
-                
+
                 # Calculate expected revenue (£)
                 # Revenue = rate (p/kWh) × power (kW) × time (h) / 100 (to convert p to £)
                 expected_revenue_gbp = (avg_rate * self.EXPORT_POWER_KW * 0.5 * num_slots) / 100
-                
-                # Calculate SoC drop per slot
-                # SoC drop = (power_kw / efficiency × hours / battery_kwh) × 100
-                soc_drop_per_slot = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / self.BATTERY_CAPACITY_KWH) * 100
+
+                # Calculate SoC drop per export slot
+                # Use configured value if set, otherwise calculate from EXPORT_POWER_KW
+                if self.EXPORT_SLOT_SOC_LOSS_PERCENT > 0:
+                    soc_drop_per_slot = self.EXPORT_SLOT_SOC_LOSS_PERCENT
+                else:
+                    soc_drop_per_slot = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / self.BATTERY_CAPACITY_KWH) * 100
             else:
                 expected_revenue_gbp = 0
                 soc_drop_per_slot = 0
