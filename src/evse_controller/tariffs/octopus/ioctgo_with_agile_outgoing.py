@@ -120,10 +120,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
         self._exported_slots = []  # Track slots where export actually occurred
-        
-        # Cache for export plan calculation
-        self._last_plan_soc = -1
-        self._last_plan_slot = -1
+
+        # Rate fetching state
+        self._rate_fetch_timer = None
+        self._last_fetch_attempt = None
         self._plan_cache = []
         
         # Event bus subscription
@@ -260,45 +260,160 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return planned_slots
 
     def _fetch_rates_async(self):
-        """Fetch Agile Outgoing rates asynchronously (non-blocking)."""
+        """Fetch Agile Outgoing rates asynchronously (non-blocking).
+        
+        Called at startup and then scheduled every minute until complete data
+        is received for the current day. This handles:
+        - Delayed rate releases from Octopus (typically ~16:00 but can be later)
+        - Transient API errors
+        - Partial data availability
+        - DST changes (46/48/50 slots)
+        """
         def fetch_thread():
             try:
-                rates = self._fetch_rates_from_api()
+                now = datetime.now()
+                today = now.date()
+                
+                # Check if we already have complete data for today
                 with self._rates_lock:
-                    # Check if we're fetching a new day's rates
-                    if rates:
-                        today = datetime.now().date()
-                        last_fetch_date = getattr(self, '_last_fetch_date', None)
+                    if self._have_complete_rates_for_date(today):
+                        debug(f"IOCTGO_AGILEOUT: Already have complete rates for {today}, not fetching")
+                        return
+                
+                rates = self._fetch_rates_from_api()
+                
+                with self._rates_lock:
+                    if not rates:
+                        # API returned no data - log and retry
+                        debug(f"IOCTGO_AGILEOUT: No rates returned from API, will retry")
+                        self._last_fetch_attempt = now
+                        self._schedule_next_fetch()
+                        return
+                    
+                    # Check if this is new data (different date or more slots than before)
+                    last_fetch_date = getattr(self, '_last_fetch_date', None)
+                    existing_count = len(self.agile_rates) if self.agile_rates else 0
+                    new_count = len(rates)
+                    
+                    # Only update if: new day, or more slots than before
+                    if last_fetch_date != today or new_count > existing_count:
+                        self.agile_rates = rates
+                        self.agile_rates_fetched_at = now
+                        self._last_fetch_date = today
+                        self._last_fetch_attempt = now
                         
-                        if last_fetch_date != today:
-                            self.agile_rates = rates
-                            self.agile_rates_fetched_at = datetime.now()
-                            self._last_fetch_date = today
-                            info(f"IOCTGO_AGILEOUT: Fetched {len(rates)} Agile Outgoing rates for {today} (region {self.region})")
-                            
-                            # Trigger export plan recalculation with current SoC
-                            # This ensures the plan uses the new rates
-                            try:
-                                from evse_controller.drivers.evse.async_interface import EvseThreadInterface
-                                evse = EvseThreadInterface.get_instance()
-                                state = evse.get_state()
-                                if state and state.battery_level >= 0:
-                                    # Recalculate plan with new rates
-                                    self._planned_export_slots = self.calculate_export_plan(state.battery_level)
-                                    self._last_plan_soc = state.battery_level
-                                    self._last_plan_slot = (datetime.now().hour * 60 + datetime.now().minute) // 30
-                                    self._plan_cache = self._planned_export_slots.copy()
-                                    if self._planned_export_slots:
-                                        info(f"IOCTGO_AGILEOUT: Export plan recalculated with new rates - {len(self._planned_export_slots)} slots planned")
-                            except Exception as e:
-                                debug(f"IOCTGO_AGILEOUT: Could not recalculate export plan after rate fetch: {e}")
+                        info(f"IOCTGO_AGILEOUT: Fetched {new_count} Agile Outgoing rates for {today} (region {self.region})")
+                        
+                        # Check if we have complete data
+                        if self._have_complete_rates_for_date(today):
+                            info(f"IOCTGO_AGILEOUT: Have complete rates for {today} ({new_count} slots)")
+                            # Cancel any scheduled fetches
+                            if self._rate_fetch_timer:
+                                self._rate_fetch_timer.cancel()
+                                self._rate_fetch_timer = None
                         else:
-                            debug(f"IOCTGO_AGILEOUT: Rates already fetched for {today}, skipping")
+                            # Still waiting for more data
+                            debug(f"IOCTGO_AGILEOUT: Incomplete data - have {new_count} slots, will retry")
+                            self._schedule_next_fetch()
+                        
+                        # Trigger export plan recalculation with current SoC
+                        # This ensures the plan uses the new rates
+                        try:
+                            from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+                            evse = EvseThreadInterface.get_instance()
+                            state = evse.get_state()
+                            if state and state.battery_level >= 0:
+                                # Recalculate plan with new rates
+                                self._planned_export_slots = self.calculate_export_plan(state.battery_level)
+                                self._last_plan_soc = state.battery_level
+                                self._last_plan_slot = (now.hour * 60 + now.minute) // 30
+                                self._plan_cache = self._planned_export_slots.copy()
+                                if self._planned_export_slots:
+                                    info(f"IOCTGO_AGILEOUT: Export plan recalculated with new rates - {len(self._planned_export_slots)} slots planned")
+                        except Exception as e:
+                            debug(f"IOCTGO_AGILEOUT: Could not recalculate export plan after rate fetch: {e}")
+                    else:
+                        # Same day, same or fewer slots - keep waiting
+                        debug(f"IOCTGO_AGILEOUT: Rates unchanged for {today} ({new_count} slots), will retry")
+                        self._schedule_next_fetch()
+                        
             except Exception as e:
                 error(f"IOCTGO_AGILEOUT: Failed to fetch Agile rates: {e}")
+                # On error, schedule retry
+                with self._rates_lock:
+                    self._schedule_next_fetch()
 
         thread = threading.Thread(target=fetch_thread, daemon=True)
         thread.start()
+    
+    def _have_complete_rates_for_date(self, date) -> bool:
+        """Check if we have complete rate data for the given date.
+        
+        Only checks slots from 05:30 onwards, which:
+        - Avoids DST ambiguity (transitions at 02:00 don't affect these slots)
+        - Focuses on the export-relevant period (Agile rates 05:30-23:30)
+        - Before 16:00: Need slots 05:30-22:30 (slots 11-45)
+        - After 16:00: Need slots 05:30-23:30 (slots 11-47)
+        
+        Args:
+            date: datetime.date to check
+            
+        Returns:
+            True if we have the required slots for effective export planning
+        """
+        if not self.agile_rates or self._last_fetch_date != date:
+            return False
+        
+        now = datetime.now()
+        current_hour = now.hour
+        
+        # Build a set of available slot start times for quick lookup
+        # Only consider slots from 05:30 onwards (slot 11) to avoid DST issues
+        available_slots = set()
+        for rate_data in self.agile_rates:
+            hour = rate_data['start'].hour
+            # Skip slots before 05:30 (not relevant for export, and DST-ambiguous)
+            if hour < 5:
+                continue
+            slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
+            available_slots.add(slot_idx)
+        
+        # Slot indices (from 05:30 onwards, DST-safe):
+        # 05:30 = slot 11, 22:30 = slot 45, 23:00 = slot 46, 23:30 = slot 47
+        
+        # Before 16:00: Need slots 11-45 (05:30 through 22:30)
+        # After 16:00: Need slots 11-47 (05:30 through 23:30)
+        if current_hour < 16:
+            required_min_slot = 11  # 05:30
+            required_max_slot = 45  # 22:30
+            info_text = "slots 05:30-22:30 (pre-16:00)"
+        else:
+            required_min_slot = 11  # 05:30
+            required_max_slot = 47  # 23:30
+            info_text = "slots 05:30-23:30 (post-16:00)"
+        
+        # Check if we have all required slots
+        has_required = all(slot in available_slots for slot in range(required_min_slot, required_max_slot + 1))
+        
+        if has_required:
+            debug(f"IOCTGO_AGILEOUT: Have {info_text} - {len(available_slots)} slots available (05:30+)")
+        
+        return has_required
+    
+    def _schedule_next_fetch(self):
+        """Schedule the next rate fetch attempt in 60 seconds.
+        
+        Must be called with self._rates_lock held.
+        """
+        # Cancel any existing timer
+        if self._rate_fetch_timer:
+            self._rate_fetch_timer.cancel()
+        
+        # Schedule new fetch in 60 seconds
+        self._rate_fetch_timer = threading.Timer(60.0, self._fetch_rates_async)
+        self._rate_fetch_timer.daemon = True
+        self._rate_fetch_timer.start()
+        debug(f"IOCTGO_AGILEOUT: Scheduled next fetch attempt in 60 seconds")
 
     def _fetch_rates_from_api(self) -> list:
         """Fetch Agile Outgoing rates from Octopus API.
