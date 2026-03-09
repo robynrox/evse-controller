@@ -320,6 +320,23 @@ def config_page():
                 else:
                     raise ValueError("Maximum discharging current must be between 3 and 32A")
 
+            # Update Wallbox minimum currents
+            min_charge_current = request.form.get('wallbox[min_charge_current]')
+            if min_charge_current:
+                charge_current = int(min_charge_current)
+                if 3 <= charge_current <= 32:
+                    config.WALLBOX_MIN_CHARGE_CURRENT = charge_current
+                else:
+                    raise ValueError("Minimum charging current must be between 3 and 32A")
+
+            min_discharge_current = request.form.get('wallbox[min_discharge_current]')
+            if min_discharge_current:
+                discharge_current = int(min_discharge_current)
+                if 3 <= discharge_current <= 32:
+                    config.WALLBOX_MIN_DISCHARGE_CURRENT = discharge_current
+                else:
+                    raise ValueError("Minimum discharging current must be between 3 and 32A")
+
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
             config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')
@@ -386,6 +403,11 @@ def config_page():
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
             if non_export_slot_loss:
                 config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+
+            # Update Minimum SoC for Agile Discharge
+            min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
+            if min_agile_soc:
+                config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
 
             # Handle channel configuration for both devices
             devices = ['primary']
