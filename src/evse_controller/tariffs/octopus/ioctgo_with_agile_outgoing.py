@@ -124,6 +124,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Rate fetching state
         self._rate_fetch_timer = None
         self._last_fetch_attempt = None
+        
+        # Cache for export plan calculation
+        self._last_plan_soc = -1
+        self._last_plan_slot = -1
         self._plan_cache = []
         
         # Event bus subscription
