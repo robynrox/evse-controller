@@ -177,16 +177,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         now = self.get_current_datetime()
         current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
 
-        # Calculate slots from now until 23:30 (slot 47)
-        # Slot 47 = 23:30-00:00, which is the last slot of the day
-        slots_until_2330 = list(range(current_slot_idx, 48))
+        # Calculate slots from now until 23:00 (slot 46)
+        # Slot 46 = 23:00-23:30 is the last export slot
+        # Slot 47 = 23:30-00:00 is when cheap rate import starts / OCPP enables
+        # Export is only valid for slots 0-46
+        slots_until_2300 = list(range(current_slot_idx, 47))  # 0-46 inclusive
 
-        if not slots_until_2330:
+        if not slots_until_2300:
             debug(f"IOCTGO_AGILEOUT: No slots remaining today")
             return []
 
         # Phase 1: Project SoC at 23:30 assuming ALL slots are non-discharge (load-following)
-        projected_soc_at_2330 = current_soc_percent - (len(slots_until_2330) * non_export_slot_soc_loss)
+        # This includes slot 47 (23:30-00:00) which is load-following, not export
+        projected_soc_at_2330 = current_soc_percent - (len(slots_until_2300) + 1) * non_export_slot_soc_loss
         debug(f"IOCTGO_AGILEOUT: Projected SoC at 23:30 (all load-follow): {projected_soc_at_2330:.1f}%")
 
         # Calculate available SoC for export (above minimum reserve)
@@ -218,6 +221,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
 
         # Create list of (slot_index, rate) for all future slots today that are profitable
+        # Only consider slots 0-46 (exclude slot 47 = 23:30-00:00)
+        # Missing slots are treated as unprofitable (not included)
         slot_rates = []
         for rate_data in self.agile_rates:
             hour = rate_data['start'].hour
@@ -225,6 +230,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
             # Skip slots that have completely passed (current slot is still valid)
             if slot_idx < current_slot_idx:
+                continue
+            
+            # Skip slot 47 (23:30-00:00) - not available for export
+            if slot_idx >= 47:
                 continue
 
             rate_p = rate_data['rate']  # Already in p/kWh
