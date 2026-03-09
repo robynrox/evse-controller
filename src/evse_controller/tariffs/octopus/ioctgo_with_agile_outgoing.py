@@ -998,6 +998,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if current_slot not in self._exported_slots:
                     self._exported_slots.append(current_slot)
                     info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
+            
+            # Still manage OCPP even during export slots
+            if self.SMART_OCPP_OPERATION:
+                self._manage_ocpp_state(state, dayMinute)
             return  # Don't configure load-following during export slots
 
         # Outside export slots: Configure load-following based on SoC threshold

@@ -58,12 +58,13 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self._had_config_error = False  # Reset config error state on success
                 r.raise_for_status()
                 reqJson = r.json()
-                self.powerCh0 = reqJson["emeters"][0]["power"]
-                self.pfCh0 = reqJson["emeters"][0]["pf"]
-                self.powerCh1 = reqJson["emeters"][1]["power"]
-                self.pfCh1 = reqJson["emeters"][1]["pf"]
-                self.voltage = reqJson["emeters"][0]["voltage"]
-                self.unixtime = reqJson["unixtime"]
+                # Extract values and ensure they're not None - default to 0 if null
+                self.powerCh0 = reqJson["emeters"][0]["power"] or 0
+                self.pfCh0 = reqJson["emeters"][0]["pf"] or 0
+                self.powerCh1 = reqJson["emeters"][1]["power"] or 0
+                self.pfCh1 = reqJson["emeters"][1]["pf"] or 0
+                self.voltage = reqJson["emeters"][0]["voltage"] or 0
+                self.unixtime = reqJson["unixtime"] or int(time.time())
                 self.lastUpdate = time.time()
                 self._consecutive_failures = 0  # Reset on success
                 break  # Exit the loop if the request is successful
@@ -86,20 +87,25 @@ class PowerMonitorShelly(PowerMonitorInterface):
             self.fetch_data()
             if (lastUnixtime == -1):
                 lastUnixtime = self.unixtime
-            if (self.powerCh0 < 0):
-                self.negEnergyJoulesCh0 -= self.powerCh0 * (self.unixtime - lastUnixtime)
+            
+            # Handle None values gracefully - treat as 0 if fetch failed
+            powerCh0 = self.powerCh0 if self.powerCh0 is not None else 0
+            powerCh1 = self.powerCh1 if self.powerCh1 is not None else 0
+            
+            if (powerCh0 < 0):
+                self.negEnergyJoulesCh0 -= powerCh0 * (self.unixtime - lastUnixtime)
             else:
-                self.posEnergyJoulesCh0 += self.powerCh0 * (self.unixtime - lastUnixtime)
-            if (self.powerCh1 < 0):
-                self.negEnergyJoulesCh1 -= self.powerCh1 * (self.unixtime - lastUnixtime)
+                self.posEnergyJoulesCh0 += powerCh0 * (self.unixtime - lastUnixtime)
+            if (powerCh1 < 0):
+                self.negEnergyJoulesCh1 -= powerCh1 * (self.unixtime - lastUnixtime)
             else:
-                self.posEnergyJoulesCh1 += self.powerCh1 * (self.unixtime - lastUnixtime)
+                self.posEnergyJoulesCh1 += powerCh1 * (self.unixtime - lastUnixtime)
         return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage, self.unixtime,
                      self.posEnergyJoulesCh0, self.negEnergyJoulesCh0, self.posEnergyJoulesCh1, self.negEnergyJoulesCh1)
 
     def getPower(self) -> Power:
         """Get current power readings from the Shelly device.
-        
+
         Returns:
             Power: A Power object containing the current readings
         """
@@ -108,17 +114,18 @@ class PowerMonitorShelly(PowerMonitorInterface):
             if response.status_code == 200:
                 data = response.json()
                 # Create and return a Power object with the Shelly data
+                # Use 'or 0' to handle None values from JSON
                 return Power(
-                    ch1Watts=float(data['emeters'][0]['power']),
-                    ch1Pf=float(data['emeters'][0]['pf']),
-                    ch2Watts=float(data['emeters'][1]['power']) if len(data['emeters']) > 1 else 0,
-                    ch2Pf=float(data['emeters'][1]['pf']) if len(data['emeters']) > 1 else 0,
-                    voltage=float(data['emeters'][0]['voltage']),
+                    ch1Watts=float(data['emeters'][0]['power'] or 0),
+                    ch1Pf=float(data['emeters'][0]['pf'] or 0),
+                    ch2Watts=float(data['emeters'][1]['power'] or 0) if len(data['emeters']) > 1 else 0,
+                    ch2Pf=float(data['emeters'][1]['pf'] or 0) if len(data['emeters']) > 1 else 0,
+                    voltage=float(data['emeters'][0]['voltage'] or 0),
                     unixtime=int(time.time()),
-                    posEnergyJoulesCh0=float(data['emeters'][0]['total'] * 3600000),  # Convert kWh to Joules
-                    negEnergyJoulesCh0=float(data['emeters'][0]['total_returned'] * 3600000),
-                    posEnergyJoulesCh1=float(data['emeters'][1]['total'] * 3600000) if len(data['emeters']) > 1 else 0,
-                    negEnergyJoulesCh1=float(data['emeters'][1]['total_returned'] * 3600000) if len(data['emeters']) > 1 else 0
+                    posEnergyJoulesCh0=float((data['emeters'][0]['total'] or 0) * 3600000),  # Convert kWh to Joules
+                    negEnergyJoulesCh0=float((data['emeters'][0]['total_returned'] or 0) * 3600000),
+                    posEnergyJoulesCh1=float((data['emeters'][1]['total'] or 0) * 3600000) if len(data['emeters']) > 1 else 0,
+                    negEnergyJoulesCh1=float((data['emeters'][1]['total_returned'] or 0) * 3600000) if len(data['emeters']) > 1 else 0
                 )
         except Exception as e:
             error(f"Error getting power from Shelly: {e}")
