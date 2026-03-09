@@ -181,19 +181,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         now = self.get_current_datetime()
         current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
 
-        # Calculate slots from now until 23:00 (slot 46)
-        # Slot 46 = 23:00-23:30 is the last export slot
-        # Slot 47 = 23:30-00:00 is when cheap rate import starts / OCPP enables
-        # Export is only valid for slots 0-46
-        slots_until_2300 = list(range(current_slot_idx, 47))  # 0-46 inclusive
+        # Calculate number of slots from current slot until 23:30
+        # Slot 47 starts at 23:30, so slots remaining = 47 - current_slot
+        # e.g. at 21:33 (slot 43): 47 - 43 = 4 slots (43, 44, 45, 46)
+        slots_remaining = 47 - current_slot_idx
 
-        if not slots_until_2300:
+        if slots_remaining <= 0:
             debug(f"IOCTGO_AGILEOUT: No slots remaining today")
             return []
 
         # Phase 1: Project SoC at 23:30 assuming ALL slots are non-discharge (load-following)
-        # This includes slot 47 (23:30-00:00) which is load-following, not export
-        projected_soc_at_2330 = current_soc_percent - (len(slots_until_2300) + 1) * non_export_slot_soc_loss
+        projected_soc_at_2330 = current_soc_percent - slots_remaining * non_export_slot_soc_loss
         debug(f"IOCTGO_AGILEOUT: Projected SoC at 23:30 (all load-follow): {projected_soc_at_2330:.1f}%")
 
         # Calculate available SoC for export (above minimum reserve)
