@@ -702,20 +702,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
-        
-        # Recalculate export plan if needed (before making control decision)
-        should_recalculate = (
-            battery_level != self._last_plan_soc or
-            current_slot != self._last_plan_slot
-        )
-        
+
+        # Recalculate export plan only at slot boundaries (every 30 minutes)
+        # This prevents mid-slot thrashing where a high-value slot gets partially
+        # completed then dropped due to SoC changes, only to be replaced by a
+        # lower-value slot later. Once committed to a slot, see it through.
+        should_recalculate = (current_slot != self._last_plan_slot)
+
         if should_recalculate:
             self._planned_export_slots = self.calculate_export_plan(battery_level)
             self._last_plan_soc = battery_level
             self._last_plan_slot = current_slot
             self._plan_cache = self._planned_export_slots.copy()
             if self._planned_export_slots:
-                info(f"IOCTGO_AGILEOUT: Export plan updated - {len(self._planned_export_slots)} slots planned")
+                info(f"IOCTGO_AGILEOUT: Export plan updated at slot boundary - {len(self._planned_export_slots)} slots planned")
         else:
             # Use cached plan
             self._planned_export_slots = self._plan_cache
