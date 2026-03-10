@@ -109,6 +109,10 @@ class WallboxEfficiencyModel:
     # Plateau thresholds - currents above these use plateau efficiency
     CHARGING_PLATEAU_CURRENT = 13.0
     DISCHARGING_PLATEAU_CURRENT = 13.0
+    
+    # Optimal currents for best round-trip efficiency
+    OPTIMAL_CHARGING_CURRENT = 14.0  # Peak charging efficiency
+    OPTIMAL_DISCHARGING_CURRENT = 15.0  # Peak discharging efficiency
 
     def __init__(self, use_fitted: bool = True):
         """
@@ -373,6 +377,9 @@ def get_export_threshold_efficiency() -> float:
     for deciding whether to store vs export immediately.
     
     Returns:
-        Best-case round-trip efficiency (~0.80 for plateau currents)
+        Best-case round-trip efficiency (~81.4% at 14A charge / 15A discharge)
     """
-    return get_efficiency_model().get_export_threshold_efficiency()
+    return get_efficiency_model().get_round_trip_efficiency(
+        WallboxEfficiencyModel.OPTIMAL_CHARGING_CURRENT,
+        WallboxEfficiencyModel.OPTIMAL_DISCHARGING_CURRENT
+    )

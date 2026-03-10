@@ -3,7 +3,7 @@ from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
-from evse_controller.drivers.evse.wallbox.efficiency_model import get_solar_storage_efficiency, get_export_threshold_efficiency
+from evse_controller.drivers.evse.wallbox.efficiency_model import get_solar_storage_efficiency, get_export_threshold_efficiency, WallboxEfficiencyModel
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.utils.logging_config import debug, info, warning, error
 import time
@@ -270,13 +270,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 break
 
         # Use Wallbox efficiency model for accurate round-trip efficiency
-        # Best-case efficiency (at plateau currents) is the threshold to beat
+        # Best-case efficiency is at 14A charge / 15A discharge (~81.4%)
         best_case_efficiency = get_export_threshold_efficiency()
         
         # Calculate break-even rate for solar storage at each charging current
         # Break-even: future_rate * efficiency = current_rate
         # So: break_even_future_rate = current_rate / efficiency
-        discharge_current = 13.0  # Optimal discharge current
+        # Export always at maximum efficient current (15A optimal)
+        discharge_current = WallboxEfficiencyModel.OPTIMAL_DISCHARGING_CURRENT  # 15A
         break_even_table = []  # List of (charge_current, efficiency, break_even_rate)
         
         for charge_current in range(3, 15):
