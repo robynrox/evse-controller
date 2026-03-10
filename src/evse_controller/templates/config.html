@@ -461,6 +461,34 @@
     </div>
 
     <div class="config-section">
+        <h2>Tariff Rate Configuration</h2>
+        <p>Configure your electricity tariff rates for solar storage optimization. These rates are used to determine whether it's profitable to store solar energy for later export.</p>
+        <div class="form-group">
+            <label for="tariff_import_rate_low_p">Off-Peak / OCPP Import Rate (p/kWh):</label>
+            <input type="number" id="tariff_import_rate_low_p" name="tariffs[import_rate_low_p]"
+                   value="{{ config.tariffs.import_rate_low_p }}" min="0" max="100" step="0.01">
+            <small>Typically 7.0p/kWh for Octopus Go off-peak rate. Used for OCPP import cost calculations.</small>
+        </div>
+        <div class="form-group">
+            <label for="tariff_import_rate_mid_p">Mid-Rate Import Rate (p/kWh):</label>
+            <input type="number" id="tariff_import_rate_mid_p" name="tariffs[import_rate_mid_p]"
+                   value="{{ config.tariffs.import_rate_mid_p }}" min="0" max="100" step="0.01">
+            <small>For tariffs with three rate tiers (low/mid/high). Set to same as high rate if not used.</small>
+        </div>
+        <div class="form-group">
+            <label for="tariff_import_rate_high_p">Peak Import Rate (p/kWh):</label>
+            <input type="number" id="tariff_import_rate_high_p" name="tariffs[import_rate_high_p]"
+                   value="{{ config.tariffs.import_rate_high_p }}" min="0" max="100" step="0.01">
+            <small>Typically 31.42p/kWh for Octopus Go peak rate. Used for solar storage break-even calculations.</small>
+        </div>
+        <div class="form-group">
+            <div class="notification">
+                <strong>Note:</strong> These rates are used by the solar storage analysis to determine the most economical strategy. Changes take effect immediately for new calculations.
+            </div>
+        </div>
+    </div>
+
+    <div class="config-section">
         <h2>Intelligent Octopus Go Tariff Configuration (IOCTGO-specific)</h2>
         <p>These settings apply only to the Intelligent Octopus Go (IOCTGO) tariff and are not used in standard Octopus Go (OCTGO).</p>
         <div class="form-group">

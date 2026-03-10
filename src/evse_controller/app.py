@@ -417,6 +417,17 @@ def config_page():
             config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
+            # Update Tariff Rate Configuration
+            tariff_low = request.form.get('tariffs[import_rate_low_p]')
+            if tariff_low:
+                config.TARIFF_IMPORT_RATE_LOW_P = float(tariff_low)
+            tariff_mid = request.form.get('tariffs[import_rate_mid_p]')
+            if tariff_mid:
+                config.TARIFF_IMPORT_RATE_MID_P = float(tariff_mid)
+            tariff_high = request.form.get('tariffs[import_rate_high_p]')
+            if tariff_high:
+                config.TARIFF_IMPORT_RATE_HIGH_P = float(tariff_high)
+
             # Update Octopus Agile Outgoing settings
             max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
             logging.info(f"DEBUG: max_export_power_kw from form: {max_export_power}")

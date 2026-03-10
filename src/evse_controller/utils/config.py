@@ -87,7 +87,10 @@ class Config:
                                 'ocpp_disable_soc_threshold': 95,
                                 'ocpp_enable_time': '23:30',
                                 'ocpp_disable_time': '11:00'
-                            }
+                            },
+                            'import_rate_low_p': 7.0,
+                            'import_rate_mid_p': 31.42,
+                            'import_rate_high_p': 31.42
                         },
                         'octopus': {
                             'region': 'K'  # Southern Wales (default)
@@ -345,6 +348,22 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_time", value)
     )
 
+    # Tariff rates for solar storage optimization
+    TARIFF_IMPORT_RATE_LOW_P = property(
+        lambda self: self._get_config_value("tariffs", "import_rate_low_p", 7.0),
+        lambda self, value: self._set_config_value("tariffs", "import_rate_low_p", value)
+    )
+
+    TARIFF_IMPORT_RATE_MID_P = property(
+        lambda self: self._get_config_value("tariffs", "import_rate_mid_p", 31.42),
+        lambda self, value: self._set_config_value("tariffs", "import_rate_mid_p", value)
+    )
+
+    TARIFF_IMPORT_RATE_HIGH_P = property(
+        lambda self: self._get_config_value("tariffs", "import_rate_high_p", 31.42),
+        lambda self, value: self._set_config_value("tariffs", "import_rate_high_p", value)
+    )
+
     # Octopus Agile Outgoing region
     OCTOPUS_REGION = property(
         lambda self: self._get_config_value("octopus", "region", "K"),
@@ -476,7 +495,19 @@ class Config:
             raise e
 
     def as_dict(self) -> dict:
-        """Return the current configuration as a dictionary."""
+        """Return the current configuration as a dictionary.
+        
+        IMPORTANT: When adding new config properties, they MUST be added here
+        to ensure they persist when the config is saved. Check this list:
+        - All wallbox.* properties
+        - All shelly.* properties  
+        - All influxdb.* properties
+        - All charging.* properties
+        - All tariffs.ioctgo.* properties
+        - All tariffs.* properties (tariff rates)
+        - All octopus.* properties
+        - All logging.* properties
+        """
         return {
             'wallbox': {
                 'url': self.WALLBOX_URL,
@@ -516,10 +547,12 @@ class Config:
             'tariffs': {
                 'ioctgo': {
                     'battery_capacity_kwh': self.IOCTGO_BATTERY_CAPACITY_KWH,
+                    'target_soc_at_cheap_start': self.IOCTGO_TARGET_SOC_AT_CHEAP_START,
                     'target_soc_at_bulk_discharge_end': self.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
                     'bulk_discharge_start_time': self.IOCTGO_BULK_DISCHARGE_START_TIME,
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
+                    'min_discharge_current': self.IOCTGO_MIN_DISCHARGE_CURRENT,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
@@ -529,8 +562,13 @@ class Config:
                     'ocpp_enable_soc_threshold': self.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD,
                     'ocpp_disable_soc_threshold': self.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD,
                     'ocpp_enable_time': self.IOCTGO_OCPP_ENABLE_TIME,
-                    'ocpp_disable_time': self.IOCTGO_OCPP_DISABLE_TIME
-                }
+                    'ocpp_disable_time': self.IOCTGO_OCPP_DISABLE_TIME,
+                    'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+                },
+                'import_rate_low_p': self.TARIFF_IMPORT_RATE_LOW_P,
+                'import_rate_mid_p': self.TARIFF_IMPORT_RATE_MID_P,
+                'import_rate_high_p': self.TARIFF_IMPORT_RATE_HIGH_P
             },
             'octopus': {
                 'region': self.OCTOPUS_REGION
