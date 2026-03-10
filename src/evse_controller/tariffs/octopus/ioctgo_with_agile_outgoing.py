@@ -3,6 +3,7 @@ from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
+from evse_controller.drivers.evse.wallbox.efficiency_model import get_solar_storage_efficiency, get_export_threshold_efficiency
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
 from evse_controller.utils.logging_config import debug, info, warning, error
 import time
@@ -240,6 +241,100 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Sort by rate (highest first)
         slot_rates.sort(key=lambda x: x[1], reverse=True)
+
+        # === SOLAR STORAGE ANALYSIS ===
+        # Find the best available slot that won't be filled (first unselected slot)
+        # This represents the opportunity cost - the rate we'd get if we stored solar
+        # now and exported at that later slot instead of exporting now
+        current_rate_p = 0
+        for rate_data in self.agile_rates:
+            hour = rate_data['start'].hour
+            slot_idx = hour * 2 + (1 if rate_data['start'].minute >= 30 else 0)
+            if slot_idx == current_slot_idx and slot_idx < 47:
+                current_rate_p = rate_data['rate']
+                break
+
+        # Find best unfilled slot (the marginal slot that would benefit from stored solar)
+        best_unfilled_slot_idx = None
+        best_unfilled_rate_p = 0
+        temp_soc = available_soc_for_export
+        slots_filled = 0
+        for slot_idx, rate in slot_rates:
+            if temp_soc >= additional_soc_cost_per_export_slot:
+                temp_soc -= additional_soc_cost_per_export_slot
+                slots_filled += 1
+            else:
+                # This is the first slot we can't fill - this is the opportunity
+                best_unfilled_slot_idx = slot_idx
+                best_unfilled_rate_p = rate
+                break
+
+        # Use Wallbox efficiency model for accurate round-trip efficiency
+        # Best-case efficiency (at plateau currents) is the threshold to beat
+        best_case_efficiency = get_export_threshold_efficiency()
+        
+        # Calculate break-even rate for solar storage at each charging current
+        # Break-even: future_rate * efficiency = current_rate
+        # So: break_even_future_rate = current_rate / efficiency
+        discharge_current = 13.0  # Optimal discharge current
+        break_even_table = []  # List of (charge_current, efficiency, break_even_rate)
+        
+        for charge_current in range(3, 15):
+            round_trip_eff = get_solar_storage_efficiency(charge_current, discharge_current)
+            break_even_rate = current_rate_p / round_trip_eff if current_rate_p > 0 and round_trip_eff > 0 else 0
+            break_even_table.append((charge_current, round_trip_eff, break_even_rate))
+
+        # Determine if storing solar would be profitable and at what minimum current
+        solar_storage_profitable = False
+        recommended_charge_current = 0
+        best_efficiency_for_current = 0
+        
+        if best_unfilled_rate_p > 0 and current_rate_p > 0:
+            # Find MINIMUM current at which storage is profitable
+            # Higher currents will be at least as efficient due to plateau behavior
+            for charge_current in range(3, 15):  # Check from 3A up to 14A
+                round_trip_eff = get_solar_storage_efficiency(charge_current, discharge_current)
+                
+                # Calculate effective future rate after efficiency losses
+                effective_future_rate = best_unfilled_rate_p * round_trip_eff
+                
+                if effective_future_rate > current_rate_p:
+                    solar_storage_profitable = True
+                    recommended_charge_current = charge_current
+                    best_efficiency_for_current = round_trip_eff
+                    break  # Found minimum current that's profitable
+            
+            # NOTE: If not profitable at any current, do NOT recommend storage
+            # Even if future_rate > current_rate, efficiency losses mean we'd lose money
+            # The break-even test (future_rate * efficiency > current_rate) must pass
+
+        if solar_storage_profitable and best_unfilled_slot_idx is not None:
+            # Find which hour this slot corresponds to
+            unfilled_hour = best_unfilled_slot_idx // 2
+            unfilled_minute = 30 if best_unfilled_slot_idx % 2 else 0
+            
+            effective_future_rate = best_unfilled_rate_p * best_efficiency_for_current
+            profit_margin = effective_future_rate - current_rate_p
+            
+            info(f"IOCTGO_AGILEOUT: SOLAR STORAGE ANALYSIS - Current export {current_rate_p:.1f}p/kWh, best unfilled slot {best_unfilled_slot_idx} ({unfilled_hour:02d}:{unfilled_minute:02d}) @ {best_unfilled_rate_p:.1f}p/kWh")
+            info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Break-even future rate by charge current:")
+            for charge_curr, eff, break_even in break_even_table:
+                marker = " <-- MIN" if charge_curr == recommended_charge_current else ""
+                info(f"IOCTGO_AGILEOUT:   {charge_curr}A: {break_even:.1f}p/kWh (eff {eff*100:.1f}%){marker}")
+            info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Round-trip efficiency at {recommended_charge_current}A charge / {discharge_current}A discharge: {best_efficiency_for_current*100:.1f}%")
+            info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - PROFITABLE: Minimum charge current {recommended_charge_current}A (use available solar up to max). Export at slot {best_unfilled_slot_idx}. Effective future rate: {effective_future_rate:.1f}p/kWh. Margin: +{profit_margin:.1f}p/kWh after efficiency losses")
+        elif current_rate_p > 0:
+            if best_unfilled_rate_p > 0:
+                # Calculate what we'd actually get at best efficiency
+                best_effective = best_unfilled_rate_p * best_case_efficiency
+                info(f"IOCTGO_AGILEOUT: SOLAR STORAGE ANALYSIS - Current export {current_rate_p:.1f}p/kWh, best unfilled slot {best_unfilled_slot_idx} ({unfilled_hour:02d}:{unfilled_minute:02d}) @ {best_unfilled_rate_p:.1f}p/kWh")
+                info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Break-even future rate by charge current:")
+                for charge_curr, eff, break_even in break_even_table:
+                    info(f"IOCTGO_AGILEOUT:   {charge_curr}A: {break_even:.1f}p/kWh (eff {eff*100:.1f}%)")
+                info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Not profitable: Current {current_rate_p:.1f}p/kWh vs best unfilled {best_unfilled_rate_p:.1f}p/kWh. After {best_case_efficiency*100:.0f}% efficiency losses, would net {best_effective:.1f}p/kWh. Export now recommended.")
+            else:
+                info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Not profitable: Current {current_rate_p:.1f}p/kWh, no profitable unfilled slots. Export now recommended.")
+        # === END SOLAR STORAGE ANALYSIS ===
 
         # Phase 2: Select slots until we run out of available SoC
         planned_slots = []
