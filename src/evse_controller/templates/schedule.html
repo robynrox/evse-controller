@@ -146,13 +146,13 @@
             <label for="scheduleType">Schedule Type:</label>
             <select id="scheduleType" name="scheduleType" onchange="toggleScheduleType()">
                 <option value="AT">AT (specific time)</option>
-                <option value="BETWEEN">BETWEEN (time window with conditions)</option>
+                <option value="BETWEEN">BETWEEN (time window with optional SoC)</option>
             </select>
         </div>
         <div class="form-group" id="timeWindowEndGroup" style="display: none;">
             <label for="time_window_end">Window End Time (HH:MM):</label>
             <input type="time" id="time_window_end" name="time_window_end" step="900">
-            <small>Event will be dropped if not triggered by this time</small>
+            <small>Event will be dropped if not triggered by this time (BETWEEN only)</small>
         </div>
         <div class="form-group">
             <label for="state">State:</label>
@@ -160,7 +160,7 @@
                 <!-- Will be populated by JavaScript -->
             </select>
         </div>
-        <div class="form-group" id="socConditionsGroup" style="display: none;">
+        <div class="form-group" id="socConditionsGroup">
             <label>SoC Conditions (optional):</label>
             <div style="display: flex; gap: 10px; align-items: center;">
                 <div style="flex: 1;">
@@ -172,7 +172,7 @@
                     <input type="number" id="max_soc" name="max_soc" min="0" max="100" step="1" placeholder="0-100">
                 </div>
             </div>
-            <small>Event triggers only when SoC conditions are met</small>
+            <small>Event triggers only when SoC conditions are met (works with AT or BETWEEN)</small>
         </div>
         <button type="submit">Schedule Event</button>
     </form>
@@ -235,7 +235,7 @@
                 <label for="editScheduleType">Schedule Type:</label>
                 <select id="editScheduleType" name="scheduleType" onchange="toggleEditScheduleType()">
                     <option value="AT">AT (specific time)</option>
-                    <option value="BETWEEN">BETWEEN (time window with conditions)</option>
+                    <option value="BETWEEN">BETWEEN (time window with optional SoC)</option>
                 </select>
             </div>
             <div class="form-group" id="editTimeWindowEndGroup" style="display: none;">
@@ -248,7 +248,7 @@
                     <!-- Will be populated by JavaScript -->
                 </select>
             </div>
-            <div class="form-group" id="editSocConditionsGroup" style="display: none;">
+            <div class="form-group">
                 <label>SoC Conditions (optional):</label>
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <div style="flex: 1;">
@@ -260,6 +260,7 @@
                         <input type="number" id="editMaxSoc" name="max_soc" min="0" max="100" step="1" placeholder="0-100">
                     </div>
                 </div>
+                <small>Event triggers only when SoC conditions are met</small>
             </div>
             <input type="hidden" id="originalTimestamp">
             <input type="hidden" id="originalState">
@@ -272,18 +273,16 @@
 </div>
 
 <script>
-    // Toggle schedule type visibility
+    // Toggle schedule type visibility (only affects time window end field)
     function toggleScheduleType() {
         const scheduleType = document.getElementById('scheduleType').value;
         const timeWindowEndGroup = document.getElementById('timeWindowEndGroup');
-        const socConditionsGroup = document.getElementById('socConditionsGroup');
         
+        // Only show time window end for BETWEEN type
         if (scheduleType === 'BETWEEN') {
             timeWindowEndGroup.style.display = 'block';
-            socConditionsGroup.style.display = 'block';
         } else {
             timeWindowEndGroup.style.display = 'none';
-            socConditionsGroup.style.display = 'none';
         }
     }
 
@@ -291,14 +290,12 @@
     function toggleEditScheduleType() {
         const scheduleType = document.getElementById('editScheduleType').value;
         const timeWindowEndGroup = document.getElementById('editTimeWindowEndGroup');
-        const socConditionsGroup = document.getElementById('editSocConditionsGroup');
         
+        // Only show time window end for BETWEEN type
         if (scheduleType === 'BETWEEN') {
             timeWindowEndGroup.style.display = 'block';
-            socConditionsGroup.style.display = 'block';
         } else {
             timeWindowEndGroup.style.display = 'none';
-            socConditionsGroup.style.display = 'none';
         }
     }
 

@@ -20,7 +20,20 @@ The original event type - triggers at a specific datetime:
 AT 2025-03-10 11:00 → ioctgo_agileout
 ```
 
-### 2. Conditional Event with Time Window (BETWEEN)
+### 2. AT Event with SoC Conditions
+
+Triggers at a specific time, but only if SoC conditions are met:
+
+```
+AT 2025-03-10 05:30 → charge IF SoC <= 90%
+```
+
+This event:
+- Waits for both the time (05:30) AND SoC condition
+- Will not trigger until both conditions are satisfied
+- Useful for "start charging at 23:30 only if battery is below 90%"
+
+### 3. Conditional Event with Time Window (BETWEEN)
 
 Triggers any time within a time window when SoC conditions are met:
 
@@ -33,7 +46,9 @@ This event:
 - Can trigger at any point between 05:30 and 11:00 when SoC >= 97%
 - Is automatically dropped if 11:00 is reached without triggering
 
-### 3. Event with SoC Conditions Only
+**Overnight windows** are supported. For example, `BETWEEN 23:00 AND 05:00` means 23:00 today to 05:00 tomorrow.
+
+### 4. Event with SoC Conditions Only (No Time Window)
 
 Triggers at a specific time, but only if SoC conditions are met:
 
@@ -44,6 +59,7 @@ AT 2025-03-10 05:30 → ioctgo_agileout IF SoC >= 97%
 This event:
 - Waits for both the time (05:30) AND SoC >= 97%
 - Will not trigger until both conditions are satisfied
+- Different from BETWEEN - doesn't have an expiry window
 
 ## Usage Examples
 

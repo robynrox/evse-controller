@@ -280,7 +280,7 @@ def schedule_page():
             time_window_end = request.form.get('time_window_end') or None
             min_soc = request.form.get('min_soc')
             max_soc = request.form.get('max_soc')
-            
+
             # Convert SoC values to float if provided
             if min_soc is not None and min_soc.strip() == '':
                 min_soc = None
@@ -296,14 +296,13 @@ def schedule_page():
                 return redirect(url_for('schedule_page'))
 
             event = ScheduledEvent(
-                timestamp, 
+                timestamp,
                 state,
                 time_window_end=time_window_end,
                 min_soc=min_soc,
                 max_soc=max_soc
             )
             scheduler.add_event(event)
-            scheduler.save_events()
             flash('Event scheduled successfully', 'success')
         except ValueError as e:
             flash(f'Invalid datetime format: {str(e)}', 'error')
@@ -313,7 +312,9 @@ def schedule_page():
         return redirect(url_for('schedule_page'))
 
     scheduled_events = scheduler.get_future_events()
-    return render_template('schedule.html', scheduled_events=scheduled_events)
+    return render_template('schedule.html', 
+                          scheduled_events=scheduled_events,
+                          valid_commands=VALID_COMMANDS)
 
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
@@ -511,14 +512,13 @@ class ScheduleResource(Resource):
                 api.abort(400, 'Cannot schedule events in the past')
 
             event = ScheduledEvent(
-                timestamp, 
+                timestamp,
                 data['state'],
                 time_window_end=data.get('time_window_end'),
                 min_soc=data.get('min_soc'),
                 max_soc=data.get('max_soc')
             )
             scheduler.add_event(event)
-            scheduler.save_events()
 
             return {'message': 'Event scheduled successfully'}, 201
         except ValueError as e:

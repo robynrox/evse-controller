@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import threading
 from evse_controller.utils.logging_config import error
 from evse_controller.utils.config import config
 
@@ -93,12 +94,14 @@ class Scheduler:
     def __init__(self):
         self.schedule_file = config.SCHEDULE_FILE
         self.events = []
+        self._lock = threading.Lock()  # Lock for thread-safe operations
         self._load_schedule()
 
     def add_event(self, event):
-        self.events.append(event)
-        self.events.sort(key=lambda x: x.timestamp)  # Sort after adding new event
-        self._save_schedule()
+        with self._lock:
+            self.events.append(event)
+            self.events.sort(key=lambda x: x.timestamp)
+            self._save_schedule()
 
     def get_future_events(self):
         now = datetime.now()
@@ -108,11 +111,14 @@ class Scheduler:
         return future_events
 
     def _parse_time_window_end(self, time_window_end_str, base_date=None):
-        """Parse a HH:MM time window end string into a datetime for today (or base_date).
+        """Parse a HH:MM time window end string into a datetime.
+        
+        Handles overnight windows where end time is "earlier" than start time
+        (e.g., 23:00 to 05:00 means 05:00 the next day).
         
         Args:
             time_window_end_str: Time in HH:MM format
-            base_date: Optional date to use (defaults to today)
+            base_date: Date to use as base (defaults to today)
             
         Returns:
             datetime object for the time window end
@@ -124,25 +130,37 @@ class Scheduler:
             base_date = datetime.now().date()
             
         hours, minutes = map(int, time_window_end_str.split(":"))
-        return datetime(base_date.year, base_date.month, base_date.day, hours, minutes)
+        window_end = datetime(base_date.year, base_date.month, base_date.day, hours, minutes)
+        
+        return window_end
 
     def _is_event_expired(self, event, now):
         """Check if a conditional event has expired (time window end passed).
         
+        Handles overnight windows where end time appears "earlier" than start time
+        (e.g., window from 23:00 to 05:00 means 05:00 the next day).
+
         Args:
             event: ScheduledEvent to check
             now: Current datetime
-            
+
         Returns:
             True if event has expired and should be dropped
         """
         if not event.time_window_end:
             return False
-            
-        window_end = self._parse_time_window_end(event.time_window_end, now.date())
+
+        # Parse window end using event's start date as base
+        window_end = self._parse_time_window_end(event.time_window_end, event.timestamp.date())
         if window_end is None:
             return False
-            
+        
+        # Handle overnight windows: if window_end < event.timestamp, it's next day
+        # e.g., start=23:00, end=05:00 means end is 05:00 next day
+        if window_end < event.timestamp:
+            from datetime import timedelta
+            window_end = window_end + timedelta(days=1)
+
         # Event is expired if we're past the window end time
         return now > window_end
 
@@ -174,80 +192,93 @@ class Scheduler:
 
     def get_due_events(self, current_soc=None):
         """Get all events that are due and remove them from the list.
-        
+
         For conditional events (with time_window_end):
         - Event can trigger any time between timestamp and time_window_end
         - SoC conditions must be met (if specified)
         - Event is dropped if time window expires without triggering
-        
+        - Handles overnight windows (e.g., 23:00 to 05:00 means next day 05:00)
+
         For simple events (no time_window_end):
         - Event triggers at timestamp (if enabled)
         - SoC conditions are evaluated if specified
-        
+
         Args:
             current_soc: Current battery SoC percentage (optional, for conditional events)
         """
-        now = datetime.now()
-        due_events = []
-        remaining_events = []
+        with self._lock:
+            now = datetime.now()
+            due_events = []
+            remaining_events = []
 
-        # Sort events first to ensure chronological processing
-        self.events.sort(key=lambda x: x.timestamp)
+            # Sort events first to ensure chronological processing
+            self.events.sort(key=lambda x: x.timestamp)
 
-        for event in self.events:
-            if not event.enabled:
-                remaining_events.append(event)
-                continue
-                
-            # Check if conditional event has expired
-            if self._is_event_expired(event, now):
-                # Drop expired event (don't add to remaining)
-                continue
-            
-            # Check if event is due
-            is_due = False
-            
-            if event.time_window_end:
-                # Conditional event with time window
-                # Can trigger any time between timestamp and time_window_end
-                window_end = self._parse_time_window_end(event.time_window_end, now.date())
-                
-                # Check if we're within the time window
-                if event.timestamp <= now <= window_end:
-                    # Check SoC conditions
-                    if self._soc_conditions_met(event, current_soc):
-                        is_due = True
-                    else:
-                        # Keep waiting for SoC conditions to be met
-                        remaining_events.append(event)
-                elif now > window_end:
-                    # Window expired - drop the event
-                    pass
-                else:
-                    # Window hasn't started yet
+            for event in self.events:
+                if not event.enabled:
                     remaining_events.append(event)
-            else:
-                # Simple time-based event
-                if event.timestamp <= now:
-                    # Check SoC conditions if specified
-                    if event.min_soc is not None or event.max_soc is not None:
+                    continue
+
+                # Check if conditional event has expired
+                if self._is_event_expired(event, now):
+                    # Drop expired event (don't add to remaining)
+                    continue
+
+                # Check if event is due
+                is_due = False
+
+                if event.time_window_end:
+                    # Conditional event with time window
+                    # Can trigger any time between timestamp and time_window_end
+                    # Parse window end using event's start date as base
+                    window_end = self._parse_time_window_end(event.time_window_end, event.timestamp.date())
+
+                    # Handle overnight windows: if window_end < event.timestamp, it's next day
+                    if window_end < event.timestamp:
+                        from datetime import timedelta
+                        window_end = window_end + timedelta(days=1)
+
+                    # Check if we're within the time window
+                    if event.timestamp <= now <= window_end:
+                        # Check SoC conditions
                         if self._soc_conditions_met(event, current_soc):
                             is_due = True
                         else:
                             # Keep waiting for SoC conditions to be met
                             remaining_events.append(event)
+                    elif now > window_end:
+                        # Window expired - drop the event
+                        pass
                     else:
-                        is_due = True
-            
-            if is_due:
-                due_events.append(event)
+                        # Window hasn't started yet
+                        remaining_events.append(event)
+                else:
+                    # Simple time-based event
+                    if event.timestamp <= now:
+                        # Event time has passed - check if it should trigger
+                        # Check SoC conditions if specified
+                        if event.min_soc is not None or event.max_soc is not None:
+                            if self._soc_conditions_met(event, current_soc):
+                                is_due = True
+                            else:
+                                # Keep waiting for SoC conditions to be met
+                                remaining_events.append(event)
+                        else:
+                            # No SoC conditions - trigger immediately
+                            is_due = True
+                    else:
+                        # Event is in the future - keep it in the schedule
+                        remaining_events.append(event)
 
-        # Only save if we actually found and removed due events
-        if due_events or len(remaining_events) != len(self.events):
-            self.events = remaining_events
-            self._save_schedule()
+                if is_due:
+                    due_events.append(event)
 
-        return due_events
+            # Only save if we actually found and removed due events
+            if due_events or len(remaining_events) != len(self.events):
+                self.events = remaining_events
+                self._save_schedule()
+
+            return due_events
 
     def _load_schedule(self):
         if self.schedule_file.exists():
@@ -262,10 +293,11 @@ class Scheduler:
 
     def save_events(self):
         """Public method to save events to file"""
-        self._save_schedule()
+        with self._lock:
+            self._save_schedule()
 
     def _save_schedule(self):
-        """Save events to file"""
+        """Save events to file (must be called with lock held)"""
         try:
             data = [event.to_dict() for event in self.events]
             # Ensure the parent directory exists
@@ -278,43 +310,51 @@ class Scheduler:
 
     def get_next_event(self, current_soc=None):
         """Get the next scheduled event that is enabled.
-        
+
         For conditional events, returns the event if:
         - It's within the time window (if time_window_end is set)
         - SoC conditions are met (if specified)
-        
+        - Handles overnight windows (e.g., 23:00 to 05:00 means next day 05:00)
+
         Args:
             current_soc: Current battery SoC percentage (optional, for conditional events)
-            
+
         Returns:
             Next enabled ScheduledEvent, or None if no events are scheduled
         """
         now = datetime.now()
-        
+
         # Find the next enabled event that hasn't expired
         for event in sorted(self.events, key=lambda x: x.timestamp):
             if not event.enabled:
                 continue
-                
+
             # Skip expired events
             if self._is_event_expired(event, now):
                 continue
-            
+
             # For conditional events, check if conditions can be met
             if event.time_window_end or event.min_soc is not None or event.max_soc is not None:
                 # Check time window
                 if event.time_window_end:
-                    window_end = self._parse_time_window_end(event.time_window_end, now.date())
+                    # Parse window end using event's start date as base
+                    window_end = self._parse_time_window_end(event.time_window_end, event.timestamp.date())
+                    
+                    # Handle overnight windows
+                    if window_end < event.timestamp:
+                        from datetime import timedelta
+                        window_end = window_end + timedelta(days=1)
+                    
                     if now > window_end:
                         continue  # Expired
                     if now < event.timestamp:
                         continue  # Window hasn't started yet
-                
+
                 # Check SoC conditions
                 if event.min_soc is not None or event.max_soc is not None:
                     if not self._soc_conditions_met(event, current_soc):
                         continue  # Conditions not met yet
-                
+
                 return event
             else:
                 # Simple time-based event
