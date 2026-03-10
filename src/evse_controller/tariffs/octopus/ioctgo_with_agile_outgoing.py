@@ -94,13 +94,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.SMART_OCPP_OPERATION = config.IOCTGO_SMART_OCPP_OPERATION
         self._ocpp_enabled = None
         self._state_lock = threading.Lock()
-        self._last_soc_check = -1
-        self._dynamic_ocpp_disable_time = None
-        self._last_ocpp_request_time = 0
-        self._ocpp_request_cooldown = 300
-        
-        self.OCPP_ENABLE_SOC_THRESHOLD = config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD
-        self.OCPP_DISABLE_SOC_THRESHOLD = config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD
         self.OCPP_ENABLE_TIME_STR = config.IOCTGO_OCPP_ENABLE_TIME
         self.OCPP_DISABLE_TIME_STR = config.IOCTGO_OCPP_DISABLE_TIME
         self.OCPP_ENABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_ENABLE_TIME)
@@ -962,48 +955,98 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         return False
     
-    def _schedule_return_to_ioctgo(self):
-        """Schedule return to IOCTGO mode at 23:30."""
-        pass  # Simplified for now
-    
+    def _schedule_return_to_smart(self):
+        """Schedule events to return to smart tariff when OCPP is enabled.
+        
+        Creates two events:
+        1. Unconditional: AT OCPP_DISABLE_TIME -> switch to "smart"
+        2. Conditional: BETWEEN 05:30 (next day) AND OCPP_DISABLE_TIME, 
+           IF SoC >= OCPP_DISABLE_SOC_THRESHOLD -> switch to "smart"
+        """
+        from datetime import datetime, timedelta
+        from evse_controller.scheduler import ScheduledEvent
+
+        now = self.get_current_datetime()
+        
+        # Calculate OCPP disable time for today/tomorrow
+        disable_hour, disable_minute = map(int, self.OCPP_DISABLE_TIME_STR.split(':'))
+        target_disable_time = now.replace(hour=disable_hour, minute=disable_minute, second=0, microsecond=0)
+        
+        # If disable time is already past today, schedule for tomorrow
+        if target_disable_time <= now:
+            target_disable_time += timedelta(days=1)
+        
+        # Event 1: Unconditional switch to smart at OCPP_DISABLE_TIME
+        event_unconditional = ScheduledEvent(
+            timestamp=target_disable_time,
+            state="smart"
+        )
+        self._add_scheduled_event(event_unconditional)
+        info(f"IOCTGO_AGILEOUT Scheduled unconditional return to smart at {target_disable_time}")
+        
+        # Event 2: Conditional switch to smart if SoC threshold is reached
+        # Window: 05:30 next day to OCPP_DISABLE_TIME
+        # Calculate 05:30 for the day after today (next morning)
+        next_day = now.date() + timedelta(days=1)
+        window_start = datetime(next_day.year, next_day.month, next_day.day, 5, 30, 0, 0)
+        
+        # The window end is the same as the unconditional event time
+        # But we need it in HH:MM format for the scheduler
+        window_end_str = self.OCPP_DISABLE_TIME_STR
+        
+        # Create conditional event
+        # Note: The event timestamp is the window start (05:30), and time_window_end is the disable time
+        event_conditional = ScheduledEvent(
+            timestamp=window_start,
+            state="smart",
+            time_window_end=window_end_str,
+            min_soc=float(self.OCPP_DISABLE_SOC_THRESHOLD)
+        )
+        self._add_scheduled_event(event_conditional)
+        info(f"IOCTGO_AGILEOUT Scheduled conditional return to smart: BETWEEN 05:30 AND {window_end_str}, IF SoC >= {self.OCPP_DISABLE_SOC_THRESHOLD}%")
+
+    def _add_scheduled_event(self, event):
+        """Add a scheduled event using the scheduler from the main controller."""
+        from evse_controller.smart_evse_controller import scheduler
+        scheduler.add_event(event)
+
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
-        """Manage OCPP state."""
+        """Manage OCPP state by scheduling events when OCPP is triggered.
+        
+        When OCPP is triggered (by SoC or time), this method:
+        1. Sends "ocpp" command to switch to OCPP mode
+        2. Creates an unconditional event to switch back at OCPP_DISABLE_TIME
+        3. Creates a conditional event to switch back early if SoC threshold is reached
+           (between 05:30 next day and OCPP_DISABLE_TIME)
+        """
         try:
             with self._state_lock:
                 is_ocpp_currently_enabled = self._ocpp_enabled if self._ocpp_enabled is not None else False
 
             should_enable_due_to_soc = self.should_enable_ocpp_due_to_soc(state)
             should_enable_due_to_time = self.should_enable_ocpp_due_to_time(dayMinute)
-            should_disable = self.should_disable_ocpp(state, dayMinute)
 
-            current_time = self.get_current_time()
-            if current_time - self._last_ocpp_request_time < self._ocpp_request_cooldown:
-                return
-
+            # Handle SoC-based OCPP enable (switch to OCPP state)
             if should_enable_due_to_soc and not is_ocpp_currently_enabled:
                 if self.command_queue:
                     self.command_queue.put("ocpp")
-                    self._last_ocpp_request_time = current_time
-                    self._schedule_return_to_ioctgo()
+                    info("IOCTGO_AGILEOUT OCPP enable command sent to queue (SoC-triggered)")
+                    # Schedule events to return to smart tariff
+                    self._schedule_return_to_smart()
 
+            # Handle time-based OCPP enable (stay in IOCTGO_AGILEOUT)
             elif should_enable_due_to_time and not is_ocpp_currently_enabled:
                 from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
                 try:
                     ocpp_manager.set_state(True)
-                    self._last_ocpp_request_time = current_time
-                    with self._state_lock:
-                        self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
+                    info("IOCTGO_AGILEOUT OCPP enabled via manager (time-triggered)")
+                    # Schedule events to return to smart tariff
+                    self._schedule_return_to_smart()
                 except Exception as e:
                     error(f"IOCTGO_AGILEOUT: Could not enable OCPP: {e}")
 
-            elif should_disable and is_ocpp_currently_enabled:
-                from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-                try:
-                    ocpp_manager.set_state(False)
-                    self._last_ocpp_request_time = current_time
-                    with self._state_lock:
-                        self._dynamic_ocpp_disable_time = None
-                except Exception as e:
-                    error(f"IOCTGO_AGILEOUT: Could not disable OCPP: {e}")
+            # Handle OCPP disable via scheduled events (not here - events handle it)
+            # The scheduled events will trigger "smart" state when conditions are met
+
         except Exception as e:
             error(f"IOCTGO_AGILEOUT: Error in _manage_ocpp_state: {e}")
