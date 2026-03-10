@@ -814,7 +814,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Determine charging strategy based on time, battery level, and export plan.
         
         Simplified logic:
-        - Off-peak (23:30-05:30): Charge at max rate (IOCTGO cheap rate)
+        - Off-peak (23:30-05:30): Charge at max rate (IOCTGO cheap rate) - ABSOLUTE PRIORITY
         - Battery depleted: Dormant
         - During planned export slots: Discharge at max rate
         - All other times: Load-follow discharge
@@ -838,30 +838,31 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         else:
             # Use cached plan
             self._planned_export_slots = self._plan_cache
-        
+
         debug(f"IOCTGO_AGILEOUT: get_control_state - SoC={battery_level}%, dayMinute={dayMinute}, current_slot={current_slot}, planned_slots={self._planned_export_slots}")
-        
-        # Handle unknown SoC
-        if battery_level == -1:
-            return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
-        
-        # Off-peak charging (23:30-05:30) - IOCTGO cheap rate
+
+        # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
+        # Charge at max rate regardless of SoC or other states
         if self.is_off_peak(dayMinute):
             if battery_level < config.MAX_CHARGE_PERCENT:
-                return ControlState.CHARGE, None, None, "IOCTGO_AGILEOUT Cheap rate: charge at max"
+                return ControlState.CHARGE, None, None, "IOCTGO_AGILEOUT Off-peak: CHARGE AT MAX RATE (priority)"
             else:
-                return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Cheap rate: SoC max"
-        
+                return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Off-peak: SoC max, dormant"
+
+        # Handle unknown SoC (outside off-peak hours)
+        if battery_level == -1:
+            return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
+
         # Battery depleted - protect battery
         if battery_level <= 25:
             return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Battery depleted"
-        
+
         # Check if current slot is a planned export slot
         if current_slot in self._planned_export_slots:
             # Export at maximum rate during planned slots
             debug(f"IOCTGO_AGILEOUT: In export slot {current_slot}, commanding DISCHARGE")
             return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
-        
+
         # All other times: Load-follow discharge
         # (set_home_demand_levels will configure the strategy based on SoC threshold)
         debug(f"IOCTGO_AGILEOUT: Not in export slot, commanding LOAD_FOLLOW_DISCHARGE")

@@ -254,17 +254,23 @@ class IntelligentOctopusGoTariff(Tariff):
         return required_amps
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
-        """Determine charging strategy based on time and battery level."""
+        """Determine charging strategy based on time and battery level.
+        
+        During off-peak hours (23:30-05:30), charging at maximum rate has absolute
+        priority to take advantage of cheap electricity, regardless of other settings.
+        """
         battery_level = state.battery_level
 
-        if battery_level == -1:
-            return ControlState.CHARGE, 3, 3, "IOCTGO SoC unknown, charge at 3A until known"
-        elif self.is_off_peak(dayMinute):
+        # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
+        # Charge at max rate regardless of SoC or other states
+        if self.is_off_peak(dayMinute):
             if battery_level < config.MAX_CHARGE_PERCENT:
-                return ControlState.CHARGE, None, None, "IOCTGO Cheap rate: charge at max rate"
+                return ControlState.CHARGE, None, None, "IOCTGO Off-peak: CHARGE AT MAX RATE (priority)"
             else:
-                return ControlState.DORMANT, None, None, "IOCTGO Cheap rate: SoC max, remain dormant"
-        elif battery_level <= 25:
+                return ControlState.DORMANT, None, None, "IOCTGO Off-peak: SoC max, dormant"
+
+        # Outside off-peak hours, use normal logic
+        if battery_level <= 25:
             return ControlState.DORMANT, None, None, "IOCTGO Battery depleted, remain dormant"
         elif 330 <= dayMinute < self.BULK_DISCHARGE_START_TIME:  # 05:30 to bulk discharge start time
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO Day rate before bulk discharge: load follow discharge"
