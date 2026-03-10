@@ -236,8 +236,18 @@ def main():
 
     while not _shutdown_event.is_set():
         try:
+            # Get current SoC for conditional event evaluation
+            current_soc = None
+            try:
+                evse = EvseThreadInterface.get_instance()
+                state = evse.get_state()
+                if state and state.battery_level >= 0:
+                    current_soc = state.battery_level
+            except Exception as e:
+                debug(f"Could not get SoC for scheduler: {e}")
+            
             # Check for scheduled events
-            due_events = scheduler.get_due_events()
+            due_events = scheduler.get_due_events(current_soc=current_soc)
             for event in due_events:
                 info(f"Executing scheduled event: changing to {event.state}")
                 execQueue.put(event.state)

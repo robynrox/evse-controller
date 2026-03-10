@@ -171,7 +171,10 @@ scheduled_event_model = api.model('ScheduledEvent', {
         enum=list(VALID_COMMANDS.keys()),
         description='State to transition to'
     ),
-    'enabled': fields.Boolean(default=True, description='Whether the event is enabled')
+    'enabled': fields.Boolean(default=True, description='Whether the event is enabled'),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 schedule_create_model = api.model('ScheduleCreate', {
@@ -179,7 +182,10 @@ schedule_create_model = api.model('ScheduleCreate', {
     'state': fields.String(
         required=True,
         enum=list(VALID_COMMANDS.keys())
-    )
+    ),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 schedule_edit_model = api.model('ScheduleEdit', {
@@ -189,7 +195,10 @@ schedule_edit_model = api.model('ScheduleEdit', {
     'newState': fields.String(
         required=True,
         enum=list(VALID_COMMANDS.keys())
-    )
+    ),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 # Callback functions to handle measurement and OCPP updates
@@ -268,12 +277,31 @@ def schedule_page():
         try:
             timestamp = datetime.fromisoformat(request.form['datetime'].replace('T', ' '))
             state = request.form['state']
+            time_window_end = request.form.get('time_window_end') or None
+            min_soc = request.form.get('min_soc')
+            max_soc = request.form.get('max_soc')
+            
+            # Convert SoC values to float if provided
+            if min_soc is not None and min_soc.strip() == '':
+                min_soc = None
+            if max_soc is not None and max_soc.strip() == '':
+                max_soc = None
+            if min_soc is not None:
+                min_soc = float(min_soc)
+            if max_soc is not None:
+                max_soc = float(max_soc)
 
             if timestamp < datetime.now():
                 flash('Cannot schedule events in the past', 'error')
                 return redirect(url_for('schedule_page'))
 
-            event = ScheduledEvent(timestamp, state)
+            event = ScheduledEvent(
+                timestamp, 
+                state,
+                time_window_end=time_window_end,
+                min_soc=min_soc,
+                max_soc=max_soc
+            )
             scheduler.add_event(event)
             scheduler.save_events()
             flash('Event scheduled successfully', 'success')
@@ -482,7 +510,13 @@ class ScheduleResource(Resource):
             if timestamp < datetime.now():
                 api.abort(400, 'Cannot schedule events in the past')
 
-            event = ScheduledEvent(timestamp, data['state'])
+            event = ScheduledEvent(
+                timestamp, 
+                data['state'],
+                time_window_end=data.get('time_window_end'),
+                min_soc=data.get('min_soc'),
+                max_soc=data.get('max_soc')
+            )
             scheduler.add_event(event)
             scheduler.save_events()
 
@@ -557,7 +591,13 @@ class ScheduleEditResource(Resource):
                     event.state == original_state):
                     was_enabled = event.enabled
                     scheduler.events.remove(event)
-                    new_event = ScheduledEvent(new_timestamp, new_state)
+                    new_event = ScheduledEvent(
+                        new_timestamp, 
+                        new_state,
+                        time_window_end=data.get('time_window_end'),
+                        min_soc=data.get('min_soc'),
+                        max_soc=data.get('max_soc')
+                    )
                     new_event.enabled = was_enabled
                     scheduler.add_event(new_event)
                     scheduler.save_events()

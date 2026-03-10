@@ -810,7 +810,29 @@
                         dateStyle: 'short',
                         timeStyle: 'short'
                     });
-                    nextEventElement.textContent = `${data.next_event.state} at ${formattedTime}`;
+                    
+                    // Build event description with conditional info
+                    let eventDesc = `${data.next_event.state} at ${formattedTime}`;
+                    
+                    if (data.next_event.time_window_end) {
+                        // BETWEEN event
+                        eventDesc = `BETWEEN ${eventTime.toLocaleTimeString(undefined, {hour: '2-digit', minute:'2-digit'})} AND ${data.next_event.time_window_end}`;
+                        if (data.next_event.min_soc || data.next_event.max_soc) {
+                            eventDesc += ' IF SoC ';
+                            if (data.next_event.min_soc) eventDesc += `≥${data.next_event.min_soc}%`;
+                            if (data.next_event.min_soc && data.next_event.max_soc) eventDesc += ' AND ';
+                            if (data.next_event.max_soc) eventDesc += `≤${data.next_event.max_soc}%`;
+                        }
+                        eventDesc += ` THEN ${data.next_event.state}`;
+                    } else if (data.next_event.min_soc || data.next_event.max_soc) {
+                        // AT event with SoC conditions
+                        eventDesc += ' IF SoC ';
+                        if (data.next_event.min_soc) eventDesc += `≥${data.next_event.min_soc}%`;
+                        if (data.next_event.min_soc && data.next_event.max_soc) eventDesc += ' AND ';
+                        if (data.next_event.max_soc) eventDesc += `≤${data.next_event.max_soc}%`;
+                    }
+                    
+                    nextEventElement.textContent = eventDesc;
                 } else {
                     nextEventElement.textContent = 'No events scheduled';
                 }
