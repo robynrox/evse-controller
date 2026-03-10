@@ -285,13 +285,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             break_even_rate = current_rate_p / round_trip_eff if current_rate_p > 0 and round_trip_eff > 0 else 0
             break_even_table.append((charge_current, round_trip_eff, break_even_rate))
         
-        # === OCPP IMPORT ANALYSIS ===
-        # During OCPP periods, grid import is at a fixed rate (typically 7p/kWh)
+        # === CHEAP RATE IMPORT ANALYSIS ===
+        # During cheap rate periods (e.g., Octopus Go off-peak 23:30-05:30), 
+        # grid import is at a fixed low rate (typically 7p/kWh)
         # Compare three strategies:
         # 1. Store solar now, export later at best unfilled rate
-        # 2. Export solar now, import from grid during OCPP
+        # 2. Export solar now, import from grid during cheap rate
         # 3. Export solar now (no import)
-        # 
+        #
         # Economics:
         # - Store solar: future_rate × round_trip_efficiency - current_rate
         # - Export + import: current_rate - (import_rate / charge_efficiency)
@@ -302,62 +303,62 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         #
         # If export rate is very low (< break-even), storing solar is better
         # (you avoid buying expensive grid power later)
-        
+
         from evse_controller.drivers.evse.wallbox.efficiency_model import get_charging_efficiency
         from evse_controller.utils.config import config
-        
-        ocpp_import_rate_p = config.TARIFF_IMPORT_RATE_LOW_P  # Default 7.0p/kWh
+
+        cheap_rate_import_p = config.TARIFF_IMPORT_RATE_LOW_P  # Default 7.0p/kWh
         charging_eff_table = []  # List of (current, efficiency, break_even_rate)
-        
+
         # Calculate break-even and effective import cost at each charging current
         for charge_current in range(3, 15):
             charge_eff = get_charging_efficiency(charge_current)
-            effective_cost = ocpp_import_rate_p / charge_eff if charge_eff > 0 else 0
+            effective_cost = cheap_rate_import_p / charge_eff if charge_eff > 0 else 0
             charging_eff_table.append((charge_current, charge_eff, effective_cost))
-        
+
         # Best case (14A charging)
         charging_eff_at_14a = get_charging_efficiency(14.0)
-        effective_import_cost_14a = ocpp_import_rate_p / charging_eff_at_14a if charging_eff_at_14a > 0 else 0
-        
+        effective_import_cost_14a = cheap_rate_import_p / charging_eff_at_14a if charging_eff_at_14a > 0 else 0
+
         # Break-even export rate: where storing solar = exporting + importing
         # future_rate × round_trip_eff = break_even_export
         best_storage_eff = get_solar_storage_efficiency(14.0, discharge_current) if best_unfilled_rate_p > 0 else 0
         break_even_export_rate = best_unfilled_rate_p * best_storage_eff if best_unfilled_rate_p > 0 else 0
-        
-        if current_rate_p <= ocpp_import_rate_p and best_unfilled_rate_p > 0:
+
+        if current_rate_p <= cheap_rate_import_p and best_unfilled_rate_p > 0:
             # Export rate is at or below import rate - compare strategies
-            info(f"IOCTGO_AGILEOUT: OCPP IMPORT ANALYSIS - Current export {current_rate_p:.1f}p/kWh vs OCPP import {ocpp_import_rate_p:.1f}p/kWh")
-            info(f"IOCTGO_AGILEOUT: OCPP IMPORT - Effective import cost by charge current:")
+            info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT ANALYSIS - Current export {current_rate_p:.1f}p/kWh vs cheap rate import {cheap_rate_import_p:.1f}p/kWh")
+            info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - Effective import cost by charge current:")
             for curr, eff, eff_cost in charging_eff_table:
                 info(f"IOCTGO_AGILEOUT:   {curr}A: {eff_cost:.1f}p/kWh (charge eff {eff*100:.1f}%)")
-            info(f"IOCTGO_AGILEOUT: OCPP IMPORT - Break-even export rate: {break_even_export_rate:.1f}p/kWh (future {best_unfilled_rate_p:.1f}p × {best_storage_eff*100:.1f}% round-trip)")
-            
+            info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - Break-even export rate: {break_even_export_rate:.1f}p/kWh (future {best_unfilled_rate_p:.1f}p × {best_storage_eff*100:.1f}% round-trip)")
+
             # Calculate net value of each strategy
             # Strategy 1: Store solar at 14A
             storage_net = best_unfilled_rate_p * best_storage_eff - current_rate_p
-            
-            # Strategy 2: Export now + import during OCPP at 14A
+
+            # Strategy 2: Export now + import during cheap rate at 14A
             export_import_net = current_rate_p - effective_import_cost_14a
-            
-            info(f"IOCTGO_AGILEOUT: OCPP IMPORT - Store solar (14A): net {storage_net:+.1f}p/kWh vs export now")
-            info(f"IOCTGO_AGILEOUT: OCPP IMPORT - Export now + import during OCPP (14A): net {export_import_net:+.1f}p/kWh")
-            
+
+            info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - Store solar (14A): net {storage_net:+.1f}p/kWh vs export now")
+            info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - Export now + import during cheap rate (14A): net {export_import_net:+.1f}p/kWh")
+
             if current_rate_p < break_even_export_rate:
                 # Very low export rate - storing solar is better
                 if storage_net > 0:
-                    info(f"IOCTGO_AGILEOUT: OCPP IMPORT - RECOMMENDATION: Store solar for later export (export rate {current_rate_p:.1f}p too low, saves {storage_net - export_import_net:.1f}p/kWh vs import)")
+                    info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - RECOMMENDATION: Store solar for later export (export rate {current_rate_p:.1f}p too low, saves {storage_net - export_import_net:.1f}p/kWh vs import)")
                 else:
-                    info(f"IOCTGO_AGILEOUT: OCPP IMPORT - RECOMMENDATION: Store solar (avoids buying grid power at {ocpp_import_rate_p:.1f}p/kWh)")
+                    info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - RECOMMENDATION: Store solar (avoids buying grid power at {cheap_rate_import_p:.1f}p/kWh)")
             elif export_import_net > storage_net:
-                info(f"IOCTGO_AGILEOUT: OCPP IMPORT - RECOMMENDATION: Export solar now, import during OCPP (saves {export_import_net - storage_net:.1f}p/kWh)")
+                info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - RECOMMENDATION: Export solar now, import during cheap rate (saves {export_import_net - storage_net:.1f}p/kWh)")
             else:
-                info(f"IOCTGO_AGILEOUT: OCPP IMPORT - Storing solar slightly better")
-        
-        # Track OCPP recommendation for combined analysis
-        ocpp_recommends_storage = (current_rate_p <= ocpp_import_rate_p and 
-                                   best_unfilled_rate_p > 0 and 
+                info(f"IOCTGO_AGILEOUT: CHEAP RATE IMPORT - Storing solar slightly better")
+
+        # Track cheap rate import recommendation for combined analysis
+        cheap_rate_recommends_storage = (current_rate_p <= cheap_rate_import_p and
+                                   best_unfilled_rate_p > 0 and
                                    current_rate_p < break_even_export_rate)
-        # === END OCPP IMPORT ANALYSIS ===
+        # === END CHEAP RATE IMPORT ANALYSIS ===
 
         # Determine if storing solar would be profitable and at what minimum current
         solar_storage_profitable = False
@@ -386,20 +387,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # === COMBINED RECOMMENDATION ===
         # Use the lowest recommended current from both analyses
         # - Solar storage: minimum current for profitable arbitrage
-        # - OCPP import: store solar to avoid expensive grid imports
+        # - Cheap rate import: store solar to avoid expensive grid imports
         # Solar is "free" energy, so we want to capture it at any profitable rate
-        combined_recommends_storage = solar_storage_profitable or ocpp_recommends_storage
+        combined_recommends_storage = solar_storage_profitable or cheap_rate_recommends_storage
         combined_recommended_current = 0
-        
+
         if combined_recommends_storage:
-            if solar_storage_profitable and ocpp_recommends_storage:
+            if solar_storage_profitable and cheap_rate_recommends_storage:
                 # Both analyses recommend storage - use lower current
-                # OCPP recommends 14A for best efficiency, solar recommends minimum profitable
+                # Cheap rate recommends 14A for best efficiency, solar recommends minimum profitable
                 combined_recommended_current = min(solar_recommended_current, 14)
             elif solar_storage_profitable:
                 combined_recommended_current = solar_recommended_current
             else:
-                # OCPP only - use 14A for best import efficiency
+                # Cheap rate only - use 14A for best import efficiency
                 combined_recommended_current = 14
         # === END COMBINED RECOMMENDATION ===
 
@@ -421,7 +422,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Log combined recommendation
             if combined_recommends_storage:
-                info(f"IOCTGO_AGILEOUT: COMBINED RECOMMENDATION - Charge at {combined_recommended_current}A (minimum of solar {solar_recommended_current}A and OCPP 14A)")
+                info(f"IOCTGO_AGILEOUT: COMBINED RECOMMENDATION - Charge at {combined_recommended_current}A (minimum of solar {solar_recommended_current}A and cheap rate 14A)")
         elif current_rate_p > 0:
             if best_unfilled_rate_p > 0:
                 # Calculate what we'd actually get at best efficiency
@@ -431,10 +432,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 for charge_curr, eff, break_even in break_even_table:
                     info(f"IOCTGO_AGILEOUT:   {charge_curr}A: {break_even:.1f}p/kWh (eff {eff*100:.1f}%)")
                 info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Not profitable: Current {current_rate_p:.1f}p/kWh vs best unfilled {best_unfilled_rate_p:.1f}p/kWh. After {best_case_efficiency*100:.0f}% efficiency losses, would net {best_effective:.1f}p/kWh. Export now recommended.")
-                
-                # But OCPP might still recommend storage
-                if ocpp_recommends_storage:
-                    info(f"IOCTGO_AGILEOUT: COMBINED RECOMMENDATION - Charge at {combined_recommended_current}A (OCPP: avoid buying grid power at {ocpp_import_rate_p:.1f}p/kWh)")
+
+                # But cheap rate might still recommend storage
+                if cheap_rate_recommends_storage:
+                    info(f"IOCTGO_AGILEOUT: COMBINED RECOMMENDATION - Charge at {combined_recommended_current}A (cheap rate: avoid buying grid power at {cheap_rate_import_p:.1f}p/kWh)")
             else:
                 info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Not profitable: Current {current_rate_p:.1f}p/kWh, no profitable unfilled slots. Export now recommended.")
         # === END SOLAR STORAGE ANALYSIS ===
