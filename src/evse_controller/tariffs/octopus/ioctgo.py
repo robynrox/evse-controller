@@ -269,6 +269,10 @@ class IntelligentOctopusGoTariff(Tariff):
             else:
                 return ControlState.DORMANT, None, None, "IOCTGO Off-peak: SoC max, dormant"
 
+        # Handle unknown SoC (outside off-peak hours)
+        if battery_level == -1:
+            return ControlState.CHARGE, 3, 3, "IOCTGO SoC unknown, charge at 3A until known"
+
         # Outside off-peak hours, use normal logic
         if battery_level <= 25:
             return ControlState.DORMANT, None, None, "IOCTGO Battery depleted, remain dormant"
@@ -384,31 +388,18 @@ class IntelligentOctopusGoTariff(Tariff):
 
             debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable_soc:{should_enable_due_to_soc}, should_enable_time:{should_enable_due_to_time}")
 
-            # Handle SoC-based OCPP enable (switch to OCPP state)
-            if should_enable_due_to_soc and not is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP enable via command queue (SoC-triggered)")
+            # Handle OCPP enable (both SoC and time triggers use the command queue)
+            if (should_enable_due_to_soc or should_enable_due_to_time) and not is_ocpp_currently_enabled:
+                trigger_type = "SoC" if should_enable_due_to_soc else "time"
+                info(f"IOCTGO Requesting OCPP enable via command queue ({trigger_type}-triggered)")
 
                 # Put the 'ocpp' command in the queue to switch to OCPP mode
                 if self.command_queue:
                     self.command_queue.put("ocpp")
-                    info("IOCTGO OCPP enable command sent to queue (SoC-triggered)")
-                    
+                    info(f"IOCTGO OCPP enable command sent to queue ({trigger_type}-triggered)")
+
                     # Schedule events to return to smart tariff
                     self._schedule_return_to_smart()
-
-            # Handle time-based OCPP enable (stay in IOCTGO)
-            elif should_enable_due_to_time and not is_ocpp_currently_enabled:
-                info("IOCTGO Requesting OCPP enable via OCPP Manager (time-triggered)")
-
-                # Use OCPPManager directly to enable OCPP without changing state
-                from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-                try:
-                    ocpp_manager.set_state(True)
-                    info("IOCTGO OCPP enabled via manager (time-triggered)")
-                    # Schedule events to return to smart tariff
-                    self._schedule_return_to_smart()
-                except Exception as e:
-                    error(f"IOCTGO Could not enable OCPP via manager: {e}")
 
             # Handle OCPP disable via scheduled events (not here - events handle it)
             # The scheduled events will trigger "smart" state when conditions are met
@@ -488,35 +479,6 @@ class IntelligentOctopusGoTariff(Tariff):
         # Check if we're in the right time period for enable
         if self._is_time_in_ocpp_operational_window(enable_time_minutes, disable_time_minutes, dayMinute):
             if dayMinute >= enable_time_minutes:
-                return True
-
-        return False
-
-    def should_disable_ocpp(self, state: EvseAsyncState, dayMinute: int) -> bool:
-        """Determine if OCPP should be disabled based on SoC or time.
-
-        Args:
-            state: Current EVSE state including battery level
-            dayMinute: Current time in minutes since midnight
-
-        Returns:
-            bool: True if OCPP should be disabled AND is currently enabled
-        """
-        if not self.SMART_OCPP_OPERATION:
-            return False
-
-        # Don't disable if OCPP is already disabled
-        with self._state_lock:
-            ocpp_enabled = self._ocpp_enabled
-            dynamic_disable_time = self._dynamic_ocpp_disable_time
-
-        if not ocpp_enabled:
-            return False
-
-        # Check if the dynamic disable time has been reached
-        if dynamic_disable_time is not None:
-            # If we've reached the dynamic disable time, return True to disable OCPP
-            if dynamic_disable_time <= dayMinute < self.OCPP_ENABLE_TIME:
                 return True
 
         return False
