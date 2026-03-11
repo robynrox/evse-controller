@@ -419,12 +419,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 info(f"IOCTGO_AGILEOUT:   {charge_curr}A: {break_even:.1f}p/kWh (eff {eff*100:.1f}%){marker}")
             info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - Round-trip efficiency at {solar_recommended_current}A charge / {discharge_current}A discharge: {best_efficiency_for_current*100:.1f}%")
             info(f"IOCTGO_AGILEOUT: SOLAR STORAGE - PROFITABLE: Minimum charge current {solar_recommended_current}A (use available solar up to max). Export at slot {best_unfilled_slot_idx}. Effective future rate: {effective_future_rate:.1f}p/kWh. Margin: +{profit_margin:.1f}p/kWh after efficiency losses")
-            
+
             # Log combined recommendation
             if combined_recommends_storage:
                 info(f"IOCTGO_AGILEOUT: COMBINED RECOMMENDATION - Charge at {combined_recommended_current}A (minimum of solar {solar_recommended_current}A and cheap rate 14A)")
         elif current_rate_p > 0:
-            if best_unfilled_rate_p > 0:
+            if best_unfilled_rate_p > 0 and best_unfilled_slot_idx is not None:
+                # Find which hour this slot corresponds to
+                unfilled_hour = best_unfilled_slot_idx // 2
+                unfilled_minute = 30 if best_unfilled_slot_idx % 2 else 0
+
                 # Calculate what we'd actually get at best efficiency
                 best_effective = best_unfilled_rate_p * best_case_efficiency
                 info(f"IOCTGO_AGILEOUT: SOLAR STORAGE ANALYSIS - Current export {current_rate_p:.1f}p/kWh, best unfilled slot {best_unfilled_slot_idx} ({unfilled_hour:02d}:{unfilled_minute:02d}) @ {best_unfilled_rate_p:.1f}p/kWh")
