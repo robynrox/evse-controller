@@ -41,7 +41,11 @@ class ScheduledEvent:
         self.enabled = enabled
         self.time_window_end = time_window_end  # HH:MM format string
         self.min_soc = min_soc
+        if isinstance(self.min_soc, str):
+            self.min_soc = float(self.min_soc)
         self.max_soc = max_soc
+        if isinstance(self.max_soc, str):
+            self.max_soc = float(self.max_soc)
 
     def to_dict(self):
         return {
@@ -60,8 +64,8 @@ class ScheduledEvent:
             data["state"],
             data.get("enabled", True),  # Default to True for backward compatibility
             data.get("time_window_end"),
-            float(data.get("min_soc")),
-            float(data.get("max_soc"))
+            data.get("min_soc"),
+            data.get("max_soc")
         )
 
     def is_conditional(self):

@@ -118,6 +118,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_plan_soc = -1
         self._last_plan_slot = -1
         self._plan_cache = []
+        self._prev_battery_level = -1
         
         # Ensure OCPP is off
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -813,11 +814,25 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         battery_level = state.battery_level
         current_slot = dayMinute // 30
 
+        # If we have just reached the 00:00 slot or the 16:00 slot then we should schedule fetching
+        # the rates again.
+        should_fetch_rates = (current_slot != self._last_plan_slot) and (current_slot == 0 or current_slot == 32)
+
+        if should_fetch_rates:
+            self._fetch_rates_async()
+
         # Recalculate export plan only at slot boundaries (every 30 minutes)
+        # unless we triggered fetching the rates again (which should trigger a
+        # recalculation by itself).
         # This prevents mid-slot thrashing where a high-value slot gets partially
         # completed then dropped due to SoC changes, only to be replaced by a
         # lower-value slot later. Once committed to a slot, see it through.
         should_recalculate = (current_slot != self._last_plan_slot)
+        # We should also recalculate if the SoC has changed significantly
+        # (by more than 3%). This will cover SoC unknown cases and cases where the
+        # the EV has been plugged in after being disconnected and driven.
+        should_recalculate = should_recalculate or abs(self._prev_battery_level - battery_level) > 3
+        should_recalculate = should_recalculate and not should_fetch_rates
 
         if should_recalculate:
             self._planned_export_slots = self.calculate_export_plan(battery_level)
@@ -831,6 +846,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._planned_export_slots = self._plan_cache
 
         debug(f"IOCTGO_AGILEOUT: get_control_state - SoC={battery_level}%, dayMinute={dayMinute}, current_slot={current_slot}, planned_slots={self._planned_export_slots}")
+
+        self._prev_battery_level = battery_level
 
         # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
         # Charge at max rate regardless of SoC or other states
