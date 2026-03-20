@@ -60,8 +60,8 @@ class ScheduledEvent:
             data["state"],
             data.get("enabled", True),  # Default to True for backward compatibility
             data.get("time_window_end"),
-            data.get("min_soc"),
-            data.get("max_soc")
+            float(data.get("min_soc")),
+            float(data.get("max_soc"))
         )
 
     def is_conditional(self):
@@ -102,7 +102,7 @@ class Scheduler:
             self.events.append(event)
             self.events.sort(key=lambda x: x.timestamp)
             self._save_schedule()
-
+    
     def get_future_events(self):
         now = datetime.now()
         # Return sorted list of future events
