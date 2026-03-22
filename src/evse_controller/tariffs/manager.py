@@ -22,7 +22,7 @@ class TariffManager:
         # Check if startup state is a tariff that exists in our tariffs dictionary
         if config.STARTUP_STATE in self.tariff_classes:
             # Instantiate the tariff for the startup state
-            self.current_tariff = self.tariff_classes[config.STARTUP_STATE](command_queue=self.command_queue)
+            self.current_tariff = self.tariff_classes[config.STARTUP_STATE](command_queue=self._command_queue)
             self.tariff_name = config.STARTUP_STATE
         else:
             # For non-tariff startup states (like FREERUN), set to None
@@ -33,7 +33,7 @@ class TariffManager:
         if tariff_name in self.tariff_classes:
             self.stop_tariff()
             # Create a new instance of the requested tariff with the command queue
-            self.current_tariff = self.tariff_classes[tariff_name](command_queue=self.command_queue)
+            self.current_tariff = self.tariff_classes[tariff_name](command_queue=self._command_queue)
             # The initialization now happens in the tariff's constructor
             self.tariff_name = tariff_name
             return True
