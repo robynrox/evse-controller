@@ -88,9 +88,9 @@ def enter_freerun_mode():
 
 
 # Initialize core components at module level
-tariffManager = TariffManager()
-evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
+tariffManager = TariffManager(execQueue)
+evseController = EvseController(tariffManager)
 
 # Initialize the OCPP manager to start worker threads
 from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
