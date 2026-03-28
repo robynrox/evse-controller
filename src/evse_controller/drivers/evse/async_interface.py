@@ -43,6 +43,13 @@ class EvseAsyncState:
     power_factor: float = 1.0
     # Field to store actual Modbus state when in FREERUN mode
     _actual_modbus_state: EvseState = EvseState.UNKNOWN
+    # Efficiency monitoring fields (AC/DC power measurements)
+    ac_power: float = 0.0       # Watts (signed: + importing/charging, - exporting/discharging)
+    ac_voltage: float = 0.0     # Volts
+    ac_current: float = 0.0     # Amps (signed)
+    dc_voltage: float = 0.0     # Volts
+    dc_current: float = 0.0     # Amps (signed)
+    efficiency: float = 0.0     # Percentage (0-100), 0 when idle
 
 
 # Define a TypeVar for the EvseThreadInterface

@@ -102,6 +102,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._STOP_CHARGING = 2
         self._READ_STATE_REG = 0x0219
         self._READ_BATTERY_REG = 0x021a
+        # Efficiency monitoring registers
+        self._READ_AC_POWER_REG = 0x020E
+        self._READ_AC_VOLTAGE_REG = 0x020A
+        self._READ_AC_CURRENT_REG = 0x0207
+        self._READ_DC_VOLTAGE_REG = 0x0223
+        self._READ_DC_CURRENT_REG = 0x0224
 
         # State change timing configuration
         self._time_scale = time_scale
@@ -279,10 +285,44 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _battery_percentage_valid(self, value: int) -> bool:
         return 5 <= value <= 100
 
+    def _calculate_efficiency(self, ac_power: float, dc_power: float) -> float:
+        """Calculate efficiency based on power flow direction.
+        
+        Args:
+            ac_power: AC power in Watts (positive = charging/importing, negative = discharging/exporting)
+            dc_power: DC power in Watts (positive = charging, negative = discharging)
+        
+        Returns:
+            Efficiency as a percentage (0-100), or 0.0 when idle
+        """
+        # Idle threshold - if AC power is very low, consider it idle
+        if abs(ac_power) < 10:
+            return 0.0
+        
+        if ac_power > 0:
+            # Charging: AC → DC conversion
+            # Efficiency = DC power / AC power
+            return (dc_power / ac_power) * 100 if ac_power != 0 else 0.0
+        else:
+            # Discharging: DC → AC conversion
+            # Efficiency = |AC power| / |DC power|
+            return (abs(ac_power) / abs(dc_power)) * 100 if dc_power != 0 else 0.0
+
     def _update_state(self):
         try:
+            # Read all registers including efficiency monitoring
             reg_contents = []
-            for reg in [self._READ_STATE_REG, self._READ_BATTERY_REG, self._CONTROL_CURRENT_REG]:
+            regs_to_read = [
+                self._READ_STATE_REG,
+                self._READ_BATTERY_REG,
+                self._CONTROL_CURRENT_REG,
+                self._READ_AC_POWER_REG,
+                self._READ_AC_VOLTAGE_REG,
+                self._READ_AC_CURRENT_REG,
+                self._READ_DC_VOLTAGE_REG,
+                self._READ_DC_CURRENT_REG
+            ]
+            for reg in regs_to_read:
                 output = self._client.read_holding_registers(reg)
                 if output is None:
                     error(f"Failed to read register {hex(reg)}")
@@ -292,9 +332,20 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             state_reg = reg_contents[0][0]
             battery_reg = reg_contents[1][0]
             current_reg = reg_contents[2][0]
-
+            
             # Convert the current from unsigned to signed when reading from Wallbox
             current = self._convert_to_signed(current_reg)
+            
+            # Read and convert efficiency monitoring registers
+            ac_power = float(self._convert_to_signed(reg_contents[3][0]))  # Signed Watts
+            ac_voltage = float(reg_contents[4][0])  # Volts (1V resolution)
+            ac_current = float(self._convert_to_signed(reg_contents[5][0]))  # Signed Amps (1A resolution)
+            dc_voltage = float(reg_contents[6][0]) * 0.1  # 0.1V resolution
+            dc_current = float(self._convert_to_signed(reg_contents[7][0])) * 0.1  # 0.1A resolution, signed
+            
+            # Calculate DC power and efficiency
+            dc_power = dc_voltage * dc_current
+            efficiency = self._calculate_efficiency(ac_power, dc_power)
 
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
@@ -312,9 +363,9 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     # Update power model with new current
                     if new_state != self._state.evse_state or current != self._state.current:
                         self._power_model.set_current(float(current))
-                    
+
                     self._state.evse_state = new_state
-                
+
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg
                 if self._state.evse_state == EvseState.PAUSED:
@@ -322,6 +373,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     self._power_model.set_current(0.0)
                 else:
                     self._state.current = current
+                
+                # Update efficiency monitoring data
+                self._state.ac_power = ac_power
+                self._state.ac_voltage = ac_voltage
+                self._state.ac_current = ac_current
+                self._state.dc_voltage = dc_voltage
+                self._state.dc_current = dc_current
+                self._state.efficiency = efficiency
+                
                 self._state.last_update = time.time()
                 self._state.consecutive_connection_errors = 0
 
