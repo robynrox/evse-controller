@@ -1155,6 +1155,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setDischargeActivationPower(1)
             evseController.setDischargeCurrentBias(0.5)
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
+            evseController.setChargeActivationPower(720)
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
             debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation=1W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
             # Standard load-follow discharge: Configure based on SoC threshold
