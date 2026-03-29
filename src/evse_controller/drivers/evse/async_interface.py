@@ -86,7 +86,6 @@ class EvseThreadInterface(ABC):
             return SimulatedWallboxThread.get_instance(**simulator_config)
         else:
             from evse_controller.utils.logging_config import info
-            info(f"Using real Wallbox at {config.WALLBOX_URL}")
             return WallboxThread.get_instance()
 
     @abstractmethod

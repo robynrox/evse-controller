@@ -352,6 +352,7 @@ def main():
 
             # Command handling
             command = execQueue.get(True, 1)
+            info(f"Executing command {command} from queue")
             match command.lower():
                 case "p" | "pause":
                     ensure_ocpp_disabled()

@@ -644,36 +644,42 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 valid_from = result.get('valid_from')
                 valid_to = result.get('valid_to')
                 rate_inc = result.get('value_inc_vat')
-                
+
                 if not all([valid_from, valid_to, rate_inc is not None]):
                     continue
-                
+
                 start_dt = datetime.fromisoformat(valid_from.replace('Z', '+00:00'))
                 end_dt = datetime.fromisoformat(valid_to.replace('Z', '+00:00'))
-                
+
+                # Convert UTC times to local time for correct slot index calculation
+                # This is critical on DST transition days when UTC hour != local hour
+                start_dt = start_dt.astimezone()
+                end_dt = end_dt.astimezone()
+
                 rates.append({
                     'start': start_dt,
                     'end': end_dt,
                     'rate': round(rate_inc, 2)
                 })
             
-            # Sort by start time and filter to today only
+            # Sort by start time
             rates.sort(key=lambda r: r['start'])
-            
-            # Filter to today only and remove duplicates
-            day_start = datetime(today.year, today.month, today.day, tzinfo=rates[0]['start'].tzinfo) if rates else datetime.now()
-            day_end = day_start + timedelta(days=1)
+
+            # Filter to today only (using local date after timezone conversion)
+            # On DST transition days, this correctly handles the missing hour
+            today_date = datetime.now().date()
             
             # Use dict to remove duplicates (key by start time)
             unique_rates = {}
             for r in rates:
-                if day_start <= r['start'] < day_end:
+                # Check if this rate's start date matches today (in local time)
+                if r['start'].date() == today_date:
                     # Create a key from the start time (rounded to minute)
                     key = r['start'].strftime('%Y-%m-%d %H:%M')
                     # Keep the first occurrence (or could keep latest if API returns updates)
                     if key not in unique_rates:
                         unique_rates[key] = r
-            
+
             # Convert back to list and sort
             rates = sorted(unique_rates.values(), key=lambda r: r['start'])
             
