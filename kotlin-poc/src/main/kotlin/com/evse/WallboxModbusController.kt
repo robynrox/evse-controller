@@ -337,13 +337,13 @@ class WallboxModbusController(
 
     /**
      * Read DC voltage
-     * 
+     *
      * @return Voltage in Volts, or -1.0 if unavailable
      */
     fun readVoltage(): Float {
         ensureConnected()
         return try {
-            val value = readRegister(0x020C)  // VOLTAGE_DC register
+            val value = readRegister(0x0223)  // DC_VOLTAGE register (0.1V resolution)
             value / 10.0f  // Convert from 0.1V resolution
         } catch (e: Exception) {
             println("Warning: Could not read voltage: ${e.message}")
@@ -353,13 +353,13 @@ class WallboxModbusController(
 
     /**
      * Read DC current
-     * 
+     *
      * @return Current in Amps, or -1.0 if unavailable
      */
     fun readCurrent(): Float {
         ensureConnected()
         return try {
-            val value = readRegister(0x020E)  // CURRENT_DC register
+            val value = readRegister(0x0224)  // DC_CURRENT register (0.1A resolution, signed)
             fromSigned16Bit(value) / 10.0f  // Convert from 0.1A resolution and signed
         } catch (e: Exception) {
             println("Warning: Could not read current: ${e.message}")

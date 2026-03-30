@@ -449,10 +449,12 @@ class WallboxController : CliktCommand(
         val acCurrent = controller.fromSigned16Bit(acCurrentRaw)
         val acPowerRaw = controller.readRegister(0x020E)  // RMS active power
         val acPower = controller.fromSigned16Bit(acPowerRaw)
-        
-        // Also try DC values as fallback
-        val dcVoltage = controller.readVoltage()
-        val dcCurrent = controller.readCurrent()
+
+        // Read DC values
+        val dcVoltageRaw = controller.readRegister(0x0223)  // DC voltage (0.1V resolution)
+        val dcCurrentRaw = controller.readRegister(0x0224)  // DC current (0.1A resolution, signed)
+        val dcVoltage = dcVoltageRaw * 0.1f
+        val dcCurrent = controller.fromSigned16Bit(dcCurrentRaw) * 0.1f
 
         println("EVSE State:")
         println("  Status: ${evseStatus.description}")
@@ -481,12 +483,12 @@ class WallboxController : CliktCommand(
         println()
 
         // Show DC values if available
-        if (dcVoltage >= 0 || dcCurrent >= 0) {
+        if (dcVoltageRaw > 0 || dcCurrentRaw != 0) {
             println("DC Electrical Measurements:")
-            if (dcVoltage >= 0) {
+            if (dcVoltageRaw > 0) {
                 println("  DC Voltage: %.1fV".format(dcVoltage))
             }
-            if (dcCurrent >= 0) {
+            if (dcCurrentRaw != 0) {
                 println("  DC Current: %.1fA".format(dcCurrent))
             }
             println()
@@ -514,10 +516,7 @@ class WallboxController : CliktCommand(
 
         // Show efficiency if we have both AC and DC power data
         try {
-            val dcVoltageRaw = controller.readRegister(0x0223)
-            val dcCurrentRaw = controller.readRegister(0x0224)
-            val dcCurrent = controller.fromSigned16Bit(dcCurrentRaw)
-            val dcPower = (dcVoltageRaw * 0.1f) * (dcCurrent * 0.1f)
+            val dcPower = dcVoltage * dcCurrent
 
             if (acPower != 0 && dcPower.let { abs(it) } > 0.1f) {
                 val efficiency = if (acPower > 0) {
