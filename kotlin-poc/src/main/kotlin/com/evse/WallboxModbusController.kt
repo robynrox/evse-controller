@@ -121,13 +121,35 @@ class WallboxModbusController(
     }
     
     /**
+     * Read current control lockout state
+     *
+     * @return true if Modbus control is enabled, false if user control
+     */
+    fun readControlLockout(): Boolean {
+        ensureConnected()
+        val value = readRegister(Registers.CONTROL_LOCKOUT)
+        return value == 1
+    }
+
+    /**
      * Enable Modbus control mode
-     * 
+     *
      * This must be called before sending charge/discharge commands.
      */
     private fun enableModbusControl() {
         writeRegister(Registers.CONTROL_LOCKOUT, 1)
         println("Modbus control enabled")
+    }
+
+    /**
+     * Restore control lockout to previous state
+     *
+     * @param wasModbusControl true to restore Modbus control, false for user control
+     */
+    fun restoreControlLockout(wasModbusControl: Boolean) {
+        val lockoutValue = if (wasModbusControl) 1 else 0
+        writeRegister(Registers.CONTROL_LOCKOUT, lockoutValue)
+        println("Control lockout restored to ${if (wasModbusControl) "Modbus" else "User"} mode")
     }
     
     /**
@@ -240,18 +262,28 @@ class WallboxModbusController(
 
     /**
      * Set power-based control mode
-     * 
+     *
      * Wallbox supports two setpoint types:
      * - 0: Current control (Amps) - default
      * - 1: Power control (Watts)
-     * 
+     *
+     * Note: On some firmware versions, register 0x0053 is read-only.
+     * The Wallbox may auto-detect power control mode when writing to 0x0104.
+     *
      * @param enablePowerControl true for power control, false for current control
      */
     fun setSetpointType(enablePowerControl: Boolean): Result<Unit> = runCatching {
         ensureConnected()
-        val setpointType = if (enablePowerControl) 1 else 0
-        writeRegister(0x0053, setpointType)  // SET_SETPOINT_TYPE register
-        println("Setpoint type: ${if (enablePowerControl) "Power (Watts)" else "Current (Amps)"}")
+        if (!enablePowerControl) {
+            // Only write when switching to current mode (safer)
+            val setpointType = 0
+            writeRegister(0x0053, setpointType)  // SET_SETPOINT_TYPE register
+            println("Setpoint type: Current (Amps)")
+        } else {
+            // For power mode, we just write the power register directly
+            // The Wallbox should auto-detect the mode
+            println("Setpoint type: Power (Watts) [auto-detect]")
+        }
     }
     
     /**

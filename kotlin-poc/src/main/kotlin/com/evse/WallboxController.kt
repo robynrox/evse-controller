@@ -16,25 +16,21 @@ import kotlin.math.abs
 /**
  * Minimal Wallbox Controller - Command Line Tool
  *
- * Sets the Wallbox Quasar to a specific current or power level:
+ * Sets the Wallbox Quasar to a specific current level:
  * - Positive values (e.g., 16) = Charging
  * - Negative values (e.g., -7) = Discharging (V2G)
  * - Zero (0) = Paused
  *
- * Supports both current control (Amps) and power control (Watts).
- *
  * Usage:
- *   ./gradlew run --args="16"           # Charge at 16A
- *   ./gradlew run --args="-7"           # Discharge at 7A
- *   ./gradlew run --args="0"            # Pause
- *   ./gradlew run --args="--power 1500" # Charge at 1500W
- *   ./gradlew run --args="--power -2000"# Discharge at 2000W
- *   ./gradlew run --args="--status"     # Read-only status report
- *   ./gradlew run --args="--dump"       # Raw register dump
+ *   ./gradlew run --args="--amps 16"           # Charge at 16A
+ *   ./gradlew run --args="--amps -7"           # Discharge at 7A
+ *   ./gradlew run --args="--amps 0"            # Pause
+ *   ./gradlew run --args="--status"            # Read-only status report
+ *   ./gradlew run --args="--dump"              # Raw register dump
  */
 class WallboxController : CliktCommand(
     name = "wallbox-controller",
-    help = "Set Wallbox Quasar charge/discharge current or power"
+    help = "Set Wallbox Quasar charge/discharge current (Amps only)"
 ) {
     // Command-line options with defaults
     private val host by option(
@@ -52,9 +48,11 @@ class WallboxController : CliktCommand(
         help = "Connection timeout in milliseconds"
     ).int().default(5000)
 
-    private val power by option(
-        "--power",
-        help = "Use power control mode (Watts instead of Amps)"
+    private val amps by option(
+        "--amps",
+        help = "Use current control mode (Amps). " +
+               "Negative values discharge (V2G), positive charge, zero pauses. " +
+               "Range: -32 to +32."
     ).int()
 
     private val status by option(
@@ -77,22 +75,9 @@ class WallboxController : CliktCommand(
         help = "Output CSV column headers only"
     ).flag()
 
-    // Current argument (optional if --power not specified)
-    private val currentArg by argument(
-        name = "current-amps",
-        help = "Current in Amps (-32 to +32, where negative = discharge, 0 = pause). " +
-               "Not needed if --power is specified."
-    ).convert { value ->
-        val amps = value.toFloat()
-        require(amps in -32f..32f) {
-            "Current must be between -32A and +32A, got $amps"
-        }
-        amps
-    }.optional()
-
     override fun run() {
         // Check if no arguments provided - show help
-        if (power == null && !status && !dump && !csv && !csvHeader && currentArg == null) {
+        if (amps == null && !status && !dump && !csv && !csvHeader) {
             println("Error: No command specified")
             println()
             echoHelp()
@@ -111,6 +96,10 @@ class WallboxController : CliktCommand(
             timeout = timeout
         )
 
+        // Track previous control state for restoration (only when changing power)
+        var previousModbusControl: Boolean? = null
+        var commandExecuted: Boolean = false
+
         try {
             // Connect to Wallbox (quiet for CSV mode)
             controller.connect(quiet = csv)
@@ -124,7 +113,7 @@ class WallboxController : CliktCommand(
                 return
             }
 
-            // Handle read-only diagnostic modes first
+            // Handle read-only diagnostic modes first (no state changes)
             if (dump) {
                 dumpRegisters(controller)
                 return
@@ -136,35 +125,39 @@ class WallboxController : CliktCommand(
             }
 
             // Execute command based on mode
-            val powerValue = power
-            val currentNullable = currentArg
+            val ampsValue = amps
 
-            if (powerValue != null) {
-                // Power control mode
-                println("Setting power setpoint to ${powerValue}W...")
-                controller.setSetpointType(true).getOrThrow()
-                controller.setPowerSetpoint(powerValue).getOrThrow()
-            } else {
-                // Current control mode
-                val amps = currentNullable ?: run {
-                    System.err.println("Error: Either current argument, --power, --status, or --dump is required")
-                    throw IllegalArgumentException("Missing command argument")
+            if (ampsValue != null) {
+                // Current control mode - validate range
+                require(ampsValue in -32..32) {
+                    "Current must be between -32A and +32A, got $ampsValue"
+                }
+
+                // Save state before changing power level
+                previousModbusControl = controller.readControlLockout()
+                if (!csv) {
+                    println("Current control mode: ${if (previousModbusControl == true) "Modbus" else "User"}")
                 }
 
                 when {
-                    amps > 0f -> {
-                        println("Setting charge current to ${amps}A...")
-                        controller.startCharging(amps.toInt()).getOrThrow()
+                    ampsValue > 0 -> {
+                        println("Setting charge current to ${ampsValue}A...")
+                        controller.startCharging(ampsValue).getOrThrow()
                     }
-                    amps < 0f -> {
-                        println("Setting discharge current to ${-amps}A...")
-                        controller.startDischarging((-amps).toInt()).getOrThrow()
+                    ampsValue < 0 -> {
+                        println("Setting discharge current to ${-ampsValue}A...")
+                        controller.startDischarging(-ampsValue).getOrThrow()
                     }
                     else -> {
                         println("Pausing Wallbox...")
                         controller.pause().getOrThrow()
                     }
                 }
+
+                commandExecuted = true
+            } else {
+                System.err.println("Error: Either --amps, --status, or --dump is required")
+                throw IllegalArgumentException("Missing command argument")
             }
 
             // Read and display status after command
@@ -182,6 +175,15 @@ class WallboxController : CliktCommand(
             System.err.println("  ${e.javaClass.simpleName}")
             throw e
         } finally {
+            // Restore previous control state only if we made changes
+            if (commandExecuted && previousModbusControl != null) {
+                try {
+                    controller.restoreControlLockout(previousModbusControl)
+                } catch (e: Exception) {
+                    if (!csv) System.err.println("Warning: Failed to restore control state: ${e.message}")
+                }
+            }
+
             // Always disconnect (quiet for CSV mode)
             try {
                 controller.disconnect(quiet = csv)
@@ -544,22 +546,27 @@ class WallboxController : CliktCommand(
      */
     private fun echoHelp() {
         // Manually construct help message
-        println("Usage: wallbox-controller [<options>] [<current-amps>]")
+        println("Usage: wallbox-controller [<options>]")
         println()
-        println("Set Wallbox Quasar charge/discharge current or power")
+        println("Set Wallbox Quasar charge/discharge current (Amps only)")
         println()
         println("Options:")
-        println("  --host=<text>    Wallbox hostname or IP address")
-        println("  --port=<int>     Modbus TCP port")
-        println("  --timeout=<int>  Connection timeout in milliseconds")
-        println("  --power=<int>    Use power control mode (Watts instead of Amps)")
-        println("  --status         Read-only: Display Wallbox status and configuration")
-        println("  --dump           Read-only: Dump raw register values")
-        println("  -h, --help       Show this message and exit")
+        println("  --host=<text>     Wallbox hostname or IP address (default: wb123456.ultrahub)")
+        println("  --port=<int>      Modbus TCP port (default: 502)")
+        println("  --timeout=<int>   Connection timeout in milliseconds (default: 5000)")
+        println("  --amps=<int>      Current in Amps (-32 to +32)")
+        println("                    Positive = charge, Negative = discharge, 0 = pause")
+        println("  --status          Read-only: Display Wallbox status and configuration")
+        println("  --dump            Read-only: Dump raw register values")
+        println("  --csv             Read-only: Output status as CSV line (for logging)")
+        println("  --csvheader       Output CSV column headers only")
+        println("  -h, --help        Show this message and exit")
         println()
-        println("Arguments:")
-        println("  <current-amps>  Current in Amps (-32 to +32, where negative = discharge, 0 =")
-        println("                  pause). Not needed if --power is specified.")
+        println("Examples:")
+        println("  --amps 16         Charge at 16A")
+        println("  --amps -7         Discharge at 7A")
+        println("  --amps 0          Pause charging/discharging")
+        println("  --status          Show status report")
     }
 }
 
