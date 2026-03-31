@@ -85,8 +85,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         super().__init__(command_queue=command_queue)
         
         # Import rates (p/kWh) - TODO: move to config.yaml
-        self.IMPORT_RATE_OFF_PEAK_P = 7.0  # 7p/kWh during off-peak (23:30-05:30)
-        self.IMPORT_RATE_PEAK_P = 31.42    # 31.42p/kWh at all other times
+        self.IMPORT_RATE_OFF_PEAK_P = 3.49  #  3.49p/kWh during off-peak (23:30-05:30)
+        self.IMPORT_RATE_PEAK_P = 27.91     # 27.91p/kWh at all other times
         
         # Round-trip efficiency for bidirectional decision making
         # Conservative 50% estimate accounts for efficiency loss + battery wear
@@ -96,7 +96,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
         # This prevents exporting at trivial rates when energy may be needed later
-        self.STORAGE_FLOOR_THRESHOLD_P = 5.0
+        self.STORAGE_FLOOR_THRESHOLD_P = 3.49
         
         # Self-use value threshold: effective value of stored energy when used
         # for self-consumption instead of importing at peak rates.
@@ -376,13 +376,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Uses a three-tier decision process based on export rate and battery SoC:
         
         **Tier 1: Storage Floor (always store)**
-        When export rate is below STORAGE_FLOOR_THRESHOLD_P (5p/kWh), the rate
+        When export rate is below STORAGE_FLOOR_THRESHOLD_P, the rate
         is too trivial to justify exporting. Always store for future use.
         
         **Tier 2: Self-Use Value (store if SoC is low)**
-        When export rate is below SELF_USE_VALUE_THRESHOLD_P (15.71p/kWh):
+        When export rate is below SELF_USE_VALUE_THRESHOLD_P:
         - If SoC < SOC_THRESHOLD: Store energy for self-consumption
-          (avoids importing at 31.42p/kWh later, effective value = 15.71p)
+          (avoids importing at peak rate later)
         - If SoC >= SOC_THRESHOLD: Continue to Tier 3
         
         **Tier 3: Future Export Optimization (store for better rate)**
@@ -393,7 +393,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         Decision summary:
         ```
-        if current_rate < 5p:
+        if current_rate < 3.49p:
             STORE (rate too trivial)
         elif current_rate < 15.71p:
             if SoC < threshold:
