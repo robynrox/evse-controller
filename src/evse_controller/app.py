@@ -649,7 +649,7 @@ def get_status():
 @app.route('/api/ext_status', methods=['GET'])
 def get_extended_status():
     """Get current system status and real-time measurements.
-    
+
     Returns:
         JSON object containing:
         - current_state: String representing the current system state
@@ -657,8 +657,11 @@ def get_extended_status():
         - next_event: Object containing next scheduled event details, or null if none exists
             - timestamp: ISO format timestamp
             - state: String representing the scheduled state
+            - time_window_end: End time for conditional window (HH:MM format), optional
+            - min_soc: Minimum SoC required to trigger (>=), optional
+            - max_soc: Maximum SoC required to trigger (<=), optional
         - measurements: Object containing real-time measurements from the EVSE
-            (timestamp, home_power, evse_power, grid_power, channel_powers, 
+            (timestamp, home_power, evse_power, grid_power, channel_powers,
             voltage, evse_current, target_current, soc, charger_state)
         - ocpp_state: String representing the current OCPP state ("On", "Off", or "Unknown")
     """
@@ -675,7 +678,10 @@ def get_extended_status():
         'battery_soc': battery_soc,
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),
-            'state': next_event.state
+            'state': next_event.state,
+            'time_window_end': next_event.time_window_end,
+            'min_soc': next_event.min_soc,
+            'max_soc': next_event.max_soc
         } if next_event else None,
         'measurements': latest_measurements,
         'ocpp_state': ocpp_state
