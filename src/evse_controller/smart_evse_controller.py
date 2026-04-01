@@ -13,7 +13,7 @@ import threading
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface
 from evse_controller.utils.memory_monitor import MemoryMonitor
@@ -207,6 +207,33 @@ else:
 
 scheduler = Scheduler()
 
+
+def handle_pause_until_disconnect(previous_state: Optional[ExecState], 
+                                   evse_state: EvseState) -> tuple[ExecState, Optional[ExecState]]:
+    """
+    Handle PAUSE_UNTIL_DISCONNECT state logic.
+    
+    This function determines the appropriate state transition when in PAUSE_UNTIL_DISCONNECT mode.
+    When the vehicle disconnects, it returns to the previous state (or PAUSE if no previous state).
+    
+    Args:
+        previous_state: The state to return to after disconnection (e.g., SMART, CHARGE, etc.)
+        evse_state: Current EVSE state (connected/disconnected/etc.)
+    
+    Returns:
+        Tuple of (new_exec_state, new_previous_state):
+        - If disconnected: Returns (previous_state, None) or (PAUSE, None) if no previous state
+        - If still connected: Returns (PAUSE_UNTIL_DISCONNECT, previous_state) to maintain current state
+    """
+    if evse_state == EvseState.DISCONNECTED:
+        if previous_state is not None:
+            return previous_state, None
+        else:
+            return ExecState.PAUSE, None
+    # Still connected, stay in PAUSE_UNTIL_DISCONNECT
+    return ExecState.PAUSE_UNTIL_DISCONNECT, previous_state
+
+
 def get_system_state():
     """
     Returns the current system state information including active mode and tariff if applicable.
@@ -319,7 +346,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Main loop for EVSE controller without web interface"""
-    global execState  # Add this line to allow modification of execState
+    global execState, previous_state  # Add this line to allow modification of execState and previous_state
     nextStateCheck = 0
     previous_state = None
     tariff = None
@@ -492,16 +519,19 @@ def main():
                 info("CONTROL PAUSE_UNTIL_DISCONNECT")
                 evseController.setControlState(ControlState.DORMANT)
 
-                # Check if vehicle is disconnected
-                evse_state = evseController.getEvseState()  # Use controller instead of direct access
-                if evse_state == EvseState.DISCONNECTED:
-                    if previous_state is not None:
+                # Check if vehicle is disconnected and transition to previous state
+                evse_state = evseController.getEvseState()
+                new_exec_state, new_previous_state = handle_pause_until_disconnect(
+                    previous_state, evse_state
+                )
+                
+                # Apply state transition if needed
+                if new_exec_state != execState:
+                    if new_previous_state is None and previous_state is not None:
                         info(f"Vehicle disconnected, reverting to {previous_state}")
-                        _set_exec_state(previous_state)
-                    else:
+                    elif new_previous_state is None and previous_state is None:
                         warning("Internal error: No previous state found, falling back to PAUSE mode")
-                        _set_exec_state(ExecState.PAUSE)
-                    previous_state = None
+                    _set_exec_state(new_exec_state, new_previous_state)
 
             elif execState == ExecState.FREERUN:
                 # In FREERUN state, we don't send any control commands to the EVSE
