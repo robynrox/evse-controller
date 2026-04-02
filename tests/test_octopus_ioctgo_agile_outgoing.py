@@ -112,39 +112,47 @@ class TestStorageFloorThreshold:
 
 
 class TestSelfUseValueThreshold:
-    """Test Tier 2: Self-Use Value (5p-15.71p/kWh with low SoC)."""
-    
+    """Test Tier 2: Self-Use Value (5p-15.71p/kWh with dynamic SoC threshold)."""
+
     def test_rate_below_self_use_with_low_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC low, should store for self-use."""
+        """When 5p < rate < 15.71p and SoC below dynamic threshold, should store for self-use."""
         # Rate of 10p, low SoC (30%)
+        # At slot 20 (10:00), remaining slots = 47 - 20 = 27
+        # Dynamic threshold = 60% + (27 × 1.0%) = 87%
+        # SoC 30% < 87%, should store
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=20,  # 10:00-10:30, rate ~10p
             current_export_rate_p=10.0,
-            soc_percent=30  # Low SoC (below SOC_THRESHOLD_FOR_STRATEGY)
+            soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "Should store when rate < self-use value (15.71p) and SoC low"
-    
+        assert result is True, "Should store when rate < self-use value (15.71p) and SoC below dynamic threshold"
+
     def test_rate_below_self_use_with_high_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC high, fall through to Tier 3."""
-        # Rate of 10p, high SoC (80%)
+        """When 5p < rate < 15.71p and SoC above dynamic threshold, fall through to Tier 3."""
+        # Rate of 10p at slot 20 (10:00)
+        # Dynamic threshold = 60% + (27 × 1.0%) = 87%
+        # SoC 90% > 87%, should fall through to Tier 3
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=20,
             current_export_rate_p=10.0,
-            soc_percent=80  # High SoC
+            soc_percent=90  # High SoC (above dynamic threshold)
         )
         # Falls to Tier 3: best_future (35p) × 0.5 = 17.5p > 10p, so store
         assert result is True, "Should store when future rate justifies (Tier 3)"
-    
+
     def test_rate_at_self_use_boundary_low_soc(self, agile_tariff):
         """Test behavior at 15.71p boundary with low SoC."""
         # Rate of 15.5p (just below self-use threshold), low SoC
+        # At slot 32 (16:00), remaining slots = 47 - 32 = 15
+        # Dynamic threshold = 60% + (15 × 1.0%) = 75%
+        # SoC 30% < 75%, should store
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=32,  # 16:00-16:30
             current_export_rate_p=15.5,
             soc_percent=30
         )
-        assert result is True, "Should store when rate < 15.71p and SoC low"
-    
+        assert result is True, "Should store when rate < 15.71p and SoC below dynamic threshold"
+
     def test_rate_above_self_use_threshold(self, agile_tariff):
         """When rate > 15.71p, only Tier 3 applies."""
         # Rate of 20p (above self-use threshold)
@@ -157,6 +165,31 @@ class TestSelfUseValueThreshold:
         # Best might be 35p at slot 36 (18:00), 35 × 0.5 = 17.5p < 20p
         # So should export
         assert result is False, "Should export when current rate > adjusted future rate"
+
+    def test_dynamic_threshold_early_day(self, agile_tariff):
+        """Test dynamic threshold is higher early in the day."""
+        # At slot 10 (05:00), remaining slots = 47 - 10 = 37
+        # Dynamic threshold = 60% + (37 × 1.0%) = 97%
+        # SoC 80% < 97%, should store
+        result = agile_tariff._should_use_bidirectional_mode(
+            current_slot=10,
+            current_export_rate_p=10.0,  # Below self-use threshold
+            soc_percent=80
+        )
+        assert result is True, "Should store early in day when dynamic threshold is high"
+
+    def test_dynamic_threshold_late_day(self, agile_tariff):
+        """Test dynamic threshold approaches minimum late in the day."""
+        # At slot 43 (21:30), remaining slots = 47 - 43 = 4
+        # Dynamic threshold = 60% + (4 × 1.0%) = 64%
+        # SoC 50% < 64%, should store via Tier 2
+        result = agile_tariff._should_use_bidirectional_mode(
+            current_slot=43,
+            current_export_rate_p=10.0,  # Below self-use threshold
+            soc_percent=50
+        )
+        # SoC 50% < 64% dynamic threshold, so Tier 2 applies
+        assert result is True, "Late day: SoC below dynamic threshold (50% < 64%), Tier 2 applies"
 
 
 class TestFutureExportOptimization:
@@ -197,7 +230,7 @@ class TestFutureExportOptimization:
 
 class TestExampleScenarios:
     """Test the example scenarios from the docstring."""
-    
+
     def test_scenario_1_trivial_rate(self, agile_tariff):
         """Example 1: 3p/kWh current, 10p/kWh future → STORE (Tier 1)."""
         result = agile_tariff._should_use_bidirectional_mode(
@@ -206,27 +239,32 @@ class TestExampleScenarios:
             soc_percent=50
         )
         assert result is True, "STORE: rate too trivial (3p < 5p floor)"
-    
+
     def test_scenario_2_low_rate_low_soc(self, agile_tariff):
         """Example 2: 6p/kWh current, 8p/kWh future, low SoC → STORE (Tier 2)."""
+        # At slot 12 (06:00), remaining slots = 47 - 12 = 35
+        # Dynamic threshold = 60% + (35 × 1.0%) = 95%
+        # SoC 30% < 95%, should store via Tier 2
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=12,  # 06:00-06:30, ~8p
             current_export_rate_p=6.0,
-            soc_percent=30  # Low SoC
+            soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "STORE: self-use value (6p < 15.71p, low SoC)"
-    
+        assert result is True, "STORE: self-use value (6p < 15.71p, SoC below dynamic threshold)"
+
     def test_scenario_3_low_rate_high_soc(self, agile_tariff):
-        """Example 3: 6p/kWh current, 8p/kWh future, high SoC → EXPORT (Tier 3)."""
+        """Example 3: 6p/kWh current, 8p/kWh future, high SoC → Tier 3 evaluation."""
+        # At slot 12 (06:00), remaining slots = 35
+        # Dynamic threshold = 60% + 35 = 95%
+        # SoC 80% < 95%, still below dynamic threshold, so Tier 2 applies
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=12,
             current_export_rate_p=6.0,
-            soc_percent=80  # High SoC
+            soc_percent=80  # High SoC but still below dynamic threshold
         )
-        # Tier 3: best future (35p) × 0.5 = 17.5p > 6p, so actually STORE
-        # This is correct - with high SoC and good future rates, still store
-        assert result is True, "STORE: future justifies (35×0.5=17.5 > 6)"
-    
+        # Actually stores via Tier 2 since 80% < 95%
+        assert result is True, "STORE: SoC below dynamic threshold (Tier 2)"
+
     def test_scenario_4_high_rate_good_future(self, agile_tariff):
         """Example 4: 20p/kWh current, 45p/kWh future → STORE (Tier 3)."""
         # Note: Our mock rates max at 35p, so adjust test
@@ -239,7 +277,7 @@ class TestExampleScenarios:
         # Best remaining future after 19:00 is ~15p at 20:00
         # 15 × 0.5 = 7.5p < 20p, EXPORT
         assert result is False, "EXPORT: current (20p) > adjusted future"
-    
+
     def test_scenario_5_high_rate_poor_future(self, agile_tariff):
         """Example 5: 20p/kWh current, 30p/kWh future → EXPORT (Tier 3)."""
         result = agile_tariff._should_use_bidirectional_mode(
@@ -328,17 +366,17 @@ class TestSetHomeDemandLevels:
 
 class TestConstants:
     """Test that constants are correctly defined."""
-    
+
     def test_import_rates(self, agile_tariff):
         """Test import rate constants."""
-        assert agile_tariff.IMPORT_RATE_OFF_PEAK_P == 7.0
-        assert agile_tariff.IMPORT_RATE_PEAK_P == 31.42
-    
+        assert agile_tariff.IMPORT_RATE_OFF_PEAK_P == 3.49
+        assert agile_tariff.IMPORT_RATE_PEAK_P == 27.91
+
     def test_storage_thresholds(self, agile_tariff):
         """Test storage decision thresholds."""
-        assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == 5.0
-        # Self-use value = peak import × efficiency = 31.42 × 0.50
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == 31.42 * 0.50
+        assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == 3.49
+        # Self-use value = peak import × efficiency = 27.91 × 0.50
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == 27.91 * 0.50
         assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == 0.50
 
 
@@ -361,15 +399,19 @@ class TestEdgeCases:
         """Test when all future slots are already planned for export."""
         # Mark all slots 0-46 as export slots
         agile_tariff._planned_export_slots = list(range(47))
-        
+
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=20,
             current_export_rate_p=10.0,
             soc_percent=50
         )
-        
-        # No unused slots available, should export now
-        assert result is False
+
+        # At slot 20, remaining slots = 47 - 20 = 27
+        # Dynamic threshold = 60% + (27 × 1.0%) = 87%
+        # SoC 50% < 87%, and rate 10p < 15.71p (self-use threshold)
+        # So Tier 2 applies - should store even if all slots are exporting
+        # (the plan should be recalculated)
+        assert result is True, "Should store via Tier 2 when SoC below dynamic threshold"
     
     def test_current_slot_is_best_rate(self, agile_tariff):
         """Test when current slot has the best rate of the day."""

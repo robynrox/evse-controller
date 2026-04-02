@@ -28,10 +28,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     **Three-Tier Storage Decision:**
 
-    Tier 1 - Storage Floor (< 5p/kWh):
+    Tier 1 - Storage Floor (< STORAGE_FLOOR_THRESHOLD_P p/kWh):
       Always store - rate is too trivial to justify exporting
 
-    Tier 2 - Self-Use Value (5p-15.71p/kWh, low SoC):
+    Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-15.71p/kWh, low SoC):
       Store for self-consumption when SoC is below threshold
       (avoids importing at 31.42p/kWh later, effective value = 15.71p after efficiency)
 
@@ -381,9 +381,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         **Tier 2: Self-Use Value (store if SoC is low)**
         When export rate is below SELF_USE_VALUE_THRESHOLD_P:
-        - If SoC < SOC_THRESHOLD: Store energy for self-consumption
-          (avoids importing at peak rate later)
-        - If SoC >= SOC_THRESHOLD: Continue to Tier 3
+        - Dynamic SoC threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
+        - If SoC < dynamic_threshold: Store energy for self-consumption
+          (avoids importing at peak rate later, and attempts to reach desired SoC target at 23:30)
+        - If SoC >= dynamic_threshold: Continue to Tier 3
+
+        This dynamic threshold approach pushes the system to "get back on the curve" by accounting
+        for expected SoC loss in remaining slots, avoiding the need for grid import later.
         
         **Tier 3: Future Export Optimization (store for better rate)**
         When export rate is above self-use threshold, compare against best
@@ -396,8 +400,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if current_rate < 3.49p:
             STORE (rate too trivial)
         elif current_rate < 15.71p:
-            if SoC < threshold:
-                STORE (self-use value)
+            dynamic_threshold = min_agile_soc + (remaining_slots × non_export_slot_loss)
+            if SoC < dynamic_threshold:
+                STORE (self-use value + curve correction)
             else:
                 evaluate Tier 3
         else:
@@ -414,7 +419,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         if not self.agile_rates:
             return False
-        
+
+        # Calculate remaining slots until 23:30 (slot 47)
+        # This is used for dynamic SoC threshold calculation in Tier 2
+        slots_remaining = max(0, 47 - current_slot)
+
         # Unknown SoC - fall back to export optimization only
         if soc_percent < 0:
             best_unused_rate = self._get_best_unused_export_rate(current_slot)
@@ -422,7 +431,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 return False
             adjusted_future_rate = best_unused_rate * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
             return adjusted_future_rate > current_export_rate_p
-        
+
         # === TIER 1: Storage Floor ===
         # Below this rate, always store - rate is too trivial to export
         if current_export_rate_p < self.STORAGE_FLOOR_THRESHOLD_P:
@@ -432,10 +441,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # === TIER 2: Self-Use Value ===
         # When rate is below self-use threshold and SoC is low, store for self-consumption
         if current_export_rate_p < self.SELF_USE_VALUE_THRESHOLD_P:
-            if soc_percent < self.SOC_THRESHOLD_FOR_STRATEGY:
+            # Calculate dynamic SoC threshold based on remaining slots until 23:30
+            # This attempts to "get back on the curve" without needing grid import
+            # Dynamic threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
+            min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
+            dynamic_soc_threshold = min_soc_percent + (slots_remaining * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
+            
+            if soc_percent < dynamic_soc_threshold:
                 debug(f"IOCTGO_AGILEOUT: STORE (Tier 2): rate {current_export_rate_p:.1f}p < self-use value "
-                      f"{self.SELF_USE_VALUE_THRESHOLD_P:.1f}p, SoC {soc_percent}% < threshold "
-                      f"{self.SOC_THRESHOLD_FOR_STRATEGY}%")
+                      f"{self.SELF_USE_VALUE_THRESHOLD_P:.1f}p, SoC {soc_percent}% < dynamic threshold "
+                      f"{dynamic_soc_threshold:.1f}% (min {min_soc_percent}% + {slots_remaining} slots × {self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT:.1f}%)")
                 return True
             # SoC is adequate, fall through to Tier 3
         
