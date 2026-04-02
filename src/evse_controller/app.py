@@ -419,23 +419,22 @@ def config_page():
 
             # Update Octopus Agile Outgoing settings
             max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
-            logging.info(f"DEBUG: max_export_power_kw from form: {max_export_power}")
-            if max_export_power:
+            if max_export_power is not None:
                 config.MAX_EXPORT_POWER_KW = float(max_export_power)
                 logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
 
             # Update Agile Outgoing export planning parameters
             export_slot_loss = request.form.get('tariffs.ioctgo[export_slot_soc_loss_percent]')
-            if export_slot_loss:
+            if export_slot_loss is not None:
                 config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = float(export_slot_loss)
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
-            if non_export_slot_loss:
+            if non_export_slot_loss is not None:
                 config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
 
             # Update Minimum SoC for Agile Discharge
             min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
-            if min_agile_soc:
+            if min_agile_soc is not None:
                 config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
 
             # Handle channel configuration for both devices

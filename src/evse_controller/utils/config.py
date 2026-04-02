@@ -523,6 +523,8 @@ class Config:
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
+                    'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,
