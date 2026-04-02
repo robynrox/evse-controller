@@ -16,12 +16,16 @@ import java.net.InetAddress
  * @param port Modbus TCP port (default: 502)
  * @param slaveId Modbus slave ID (default: 1)
  * @param timeout Connection timeout in milliseconds
+ * @param maxReconnectAttempts Maximum number of reconnection attempts (default: 3)
+ * @param reconnectDelayMs Base delay between reconnection attempts in milliseconds (default: 1000)
  */
 class WallboxModbusController(
     private val host: String,
     private val port: Int = 502,
     private val slaveId: Int = 1,
-    private val timeout: Int = 5000
+    private val timeout: Int = 5000,
+    private val maxReconnectAttempts: Int = 3,
+    private val reconnectDelayMs: Long = 1000
 ) {
     private var master: ModbusMaster? = null
     private var connected: Boolean = false
@@ -105,6 +109,61 @@ class WallboxModbusController(
         } catch (e: Exception) {
             if (!quiet) println("Warning: Error during disconnect: ${e.message}")
         }
+    }
+
+    /**
+     * Reconnect to Wallbox with exponential backoff
+     * 
+     * @return true if reconnection successful, false otherwise
+     */
+    private fun reconnect(): Boolean {
+        // Clean up existing connection
+        try {
+            master?.disconnect()
+        } catch (e: Exception) {
+            // Ignore disconnect errors
+        }
+        master = null
+        connected = false
+
+        var lastException: Exception? = null
+        for (attempt in 1..maxReconnectAttempts) {
+            try {
+                if (attempt > 1) {
+                    val delay = reconnectDelayMs * (1L shl (attempt - 1)) // Exponential backoff
+                    println("  Waiting ${delay}ms before reconnect attempt $attempt...")
+                    Thread.sleep(delay)
+                }
+                
+                connect(quiet = true)
+                println("  ✓ Reconnected successfully")
+                return true
+            } catch (e: Exception) {
+                lastException = e
+                connected = false
+            }
+        }
+        
+        println("  ✗ Reconnection failed after $maxReconnectAttempts attempts: ${lastException?.message}")
+        return false
+    }
+
+    /**
+     * Check if an exception indicates a connection error that may be recoverable
+     */
+    private fun isConnectionError(e: Exception): Boolean {
+        val message = e.message?.lowercase() ?: ""
+        return message.contains("connection") || 
+               message.contains("reset") || 
+               message.contains("refused") ||
+               message.contains("timeout") ||
+               message.contains("closed") ||
+               message.contains("not connected") ||
+               message.contains("bytes expected") ||
+               message.contains("expected, but 0 received") ||
+               e is java.net.SocketException ||
+               e is java.net.SocketTimeoutException ||
+               e is java.io.IOException
     }
     
     /**
@@ -325,14 +384,37 @@ class WallboxModbusController(
 
     /**
      * Read a single holding register (public for diagnostic use)
+     *
+     * Automatically attempts to reconnect if the connection is lost.
      */
     fun readRegister(address: Int): Int {
-        ensureConnected()
-        return try {
-            master?.readHoldingRegisters(slaveId, address, 1)?.get(0) ?: 0
-        } catch (e: Exception) {
-            throw Exception("Failed to read register 0x${address.toString(16).uppercase()}: ${e.message}", e)
+        var lastException: Exception? = null
+        var attempt = 0
+
+        while (attempt < maxReconnectAttempts) {
+            attempt++
+            try {
+                ensureConnected()
+                return master?.readHoldingRegisters(slaveId, address, 1)?.get(0) ?: 0
+            } catch (e: Exception) {
+                lastException = e
+                val isConnectionError = isConnectionError(e)
+
+                if (isConnectionError && attempt < maxReconnectAttempts) {
+                    println("  [Read 0x${address.toString(16).uppercase()}] Connection lost, attempting reconnect ($attempt/$maxReconnectAttempts)...")
+                    if (reconnect()) {
+                        // Reconnection successful, retry the same register
+                        continue
+                    }
+                    // Reconnection failed, will retry after delay in next loop iteration
+                } else if (!isConnectionError) {
+                    // Non-connection error, don't retry
+                    throw Exception("Failed to read register 0x${address.toString(16).uppercase()}: ${e.message}", e)
+                }
+            }
         }
+
+        throw Exception("Failed to read register 0x${address.toString(16).uppercase()} after $maxReconnectAttempts attempts: ${lastException?.message}", lastException)
     }
 
     /**
@@ -379,14 +461,38 @@ class WallboxModbusController(
     
     /**
      * Write a single register value
+     * 
+     * Automatically attempts to reconnect if the connection is lost.
      */
     private fun writeRegister(address: Int, value: Int) {
-        ensureConnected()
-        try {
-            master?.writeSingleRegister(slaveId, address, value)
-        } catch (e: Exception) {
-            throw Exception("Failed to write register 0x${address.toString(16).uppercase()}: ${e.message}", e)
+        var lastException: Exception? = null
+        var attempt = 0
+
+        while (attempt < maxReconnectAttempts) {
+            attempt++
+            try {
+                ensureConnected()
+                master?.writeSingleRegister(slaveId, address, value)
+                return
+            } catch (e: Exception) {
+                lastException = e
+                val isConnectionError = isConnectionError(e)
+
+                if (isConnectionError && attempt < maxReconnectAttempts) {
+                    println("  [Write 0x${address.toString(16).uppercase()}] Connection lost, attempting reconnect ($attempt/$maxReconnectAttempts)...")
+                    if (reconnect()) {
+                        // Reconnection successful, retry the same register
+                        continue
+                    }
+                    // Reconnection failed, will retry after delay in next loop iteration
+                } else if (!isConnectionError) {
+                    // Non-connection error, don't retry
+                    throw Exception("Failed to write register 0x${address.toString(16).uppercase()}: ${e.message}", e)
+                }
+            }
         }
+
+        throw Exception("Failed to write register 0x${address.toString(16).uppercase()} after $maxReconnectAttempts attempts: ${lastException?.message}", lastException)
     }
 
     /**
@@ -413,7 +519,7 @@ enum class EvseStatus(val code: Int, val description: String) {
     CONNECTED_NOT_CHARGING(4, "Connected, not charging"),
     CONNECTED_END_OF_SCHEDULE(5, "Connected, end of schedule"),
     NO_CAR_CONNECTED_AND_CHARGER_LOCKED(6, "No car connected and charger locked"),
-    ERROR(7, "Error"),
+    ERROR(7, "Error (OCPP?)"),
     CONNECTED_IN_QUEUE_BY_POWER_SHARING(8, "Connected, in queue by power sharing"),
     ERROR_UNCONFIGURED_POWER_SHARING_SYSTEM(9, "Error: unconfigured power sharing system"),
     CONNECTED_IN_QUEUE_BY_POWER_BOOST(10, "Connected, in queue by power boost (home uses all available power)"),

@@ -270,15 +270,15 @@ class WallboxController : CliktCommand(
         
         val registersToRead = listOf(
             // Info registers
-            // RegisterInfo(0x0001, "FIRMWARE_VERSION", "Firmware version code"),
-            // RegisterInfo(0x0002, "SERIAL_HIGH", "Serial most significant word"),
-            // RegisterInfo(0x0003, "SERIAL_LOW", "Serial least significant word"),
-            // RegisterInfo(0x0004, "PART_NUMBER_1", "Part number 1"),
-            // RegisterInfo(0x0005, "PART_NUMBER_2", "Part number 2"),
-            // RegisterInfo(0x0006, "PART_NUMBER_3", "Part number 3"),
-            // RegisterInfo(0x0007, "PART_NUMBER_4", "Part number 4"),
-            // RegisterInfo(0x0008, "PART_NUMBER_5", "Part number 5"),
-            // RegisterInfo(0x0009, "PART_NUMBER_6", "Part number 6"),
+            RegisterInfo(0x0001, "FIRMWARE_VERSION", "Firmware version code"),
+            RegisterInfo(0x0002, "SERIAL_HIGH", "Serial most significant word"),
+            RegisterInfo(0x0003, "SERIAL_LOW", "Serial least significant word"),
+            RegisterInfo(0x0004, "PART_NUMBER_1", "Part number 1"),
+            RegisterInfo(0x0005, "PART_NUMBER_2", "Part number 2"),
+            RegisterInfo(0x0006, "PART_NUMBER_3", "Part number 3"),
+            RegisterInfo(0x0007, "PART_NUMBER_4", "Part number 4"),
+            RegisterInfo(0x0008, "PART_NUMBER_5", "Part number 5"),
+            RegisterInfo(0x0009, "PART_NUMBER_6", "Part number 6"),
 
             // Control registers
             RegisterInfo(0x0051, "CONTROL_LOCKOUT", "Control lockout (0=User, 1=Modbus)"),
@@ -291,40 +291,40 @@ class WallboxController : CliktCommand(
             
             // Status registers
             RegisterInfo(0x0200, "MAX_AVAILABLE_CURRENT", "Maximum available current (Amps)"),
-            //RegisterInfo(0x0201, "", ""),
+            RegisterInfo(0x0201, "", ""),
             RegisterInfo(0x0202, "MAX_AVAILABLE_POWER", "Maximum available power (Watts)"),
-            //RegisterInfo(0x0203, "", ""),
-            //RegisterInfo(0x0204, "", ""),
-            //RegisterInfo(0x0205, "", ""),
-            //RegisterInfo(0x0206, "", ""),
+            RegisterInfo(0x0203, "", ""),
+            RegisterInfo(0x0204, "", ""),
+            RegisterInfo(0x0205, "", ""),
+            RegisterInfo(0x0206, "", ""),
             RegisterInfo(0x0207, "RMS_AC_CURRENT", "RMS AC current (Amps)"),
-            //RegisterInfo(0x0208, "", ""),
-            //RegisterInfo(0x0209, "", ""),
+            RegisterInfo(0x0208, "", ""),
+            RegisterInfo(0x0209, "", ""),
             RegisterInfo(0x020A, "RMS_AC_VOLTAGE", "RMS AC voltage (Volts)"),
-            //RegisterInfo(0x020B, "", ""),
-            //RegisterInfo(0x020C, "", ""),
-            //RegisterInfo(0x020D, "", ""),
+            RegisterInfo(0x020B, "", ""),
+            RegisterInfo(0x020C, "", ""),
+            RegisterInfo(0x020D, "", ""),
             RegisterInfo(0x020E, "RMS_ACTIVE_POWER", "RMS active power (Watts)"),
-            //RegisterInfo(0x020F, "", ""),
-            //RegisterInfo(0x0210, "", ""),
-            //RegisterInfo(0x0211, "", ""),
-            //RegisterInfo(0x0212, "", ""),
-            //RegisterInfo(0x0213, "", ""),
-            //RegisterInfo(0x0214, "", ""),
-            //RegisterInfo(0x0215, "", ""),
-            //RegisterInfo(0x0216, "", ""),
-            //RegisterInfo(0x0217, "", ""),
-            //RegisterInfo(0x0218, "", ""),
+            RegisterInfo(0x020F, "", ""),
+            RegisterInfo(0x0210, "", ""),
+            RegisterInfo(0x0211, "", ""),
+            RegisterInfo(0x0212, "", ""),
+            RegisterInfo(0x0213, "", ""),
+            RegisterInfo(0x0214, "", ""),
+            RegisterInfo(0x0215, "", ""),
+            RegisterInfo(0x0216, "", ""),
+            RegisterInfo(0x0217, "", ""),
+            RegisterInfo(0x0218, "", ""),
             RegisterInfo(0x0219, "CHARGER_STATE", "Charger state (see status report)"),
             RegisterInfo(0x021A, "BATTERY_SOC", "Battery state of charge (%)"),
-            //RegisterInfo(0x021B, "", ""),
-            //RegisterInfo(0x021C, "", ""),
-            //RegisterInfo(0x021D, "", ""),
-            //RegisterInfo(0x021E, "", ""),
-            //RegisterInfo(0x021F, "", ""),
-            //RegisterInfo(0x0220, "", ""),
-            //RegisterInfo(0x0221, "", ""),
-            //RegisterInfo(0x0222, "", ""),
+            RegisterInfo(0x021B, "", ""),
+            RegisterInfo(0x021C, "", ""),
+            RegisterInfo(0x021D, "", ""),
+            RegisterInfo(0x021E, "", ""),
+            RegisterInfo(0x021F, "", ""),
+            RegisterInfo(0x0220, "", ""),
+            RegisterInfo(0x0221, "", ""),
+            RegisterInfo(0x0222, "", ""),
             RegisterInfo(0x0223, "DC_VOLTAGE", "DC voltage (0.1V resolution)"),
             RegisterInfo(0x0224, "DC_CURRENT", "DC current (0.1A resolution, signed)"),
             RegisterInfo(0x0225, "DC_UNKNOWN", "Unknown (often shows 100)")
@@ -391,38 +391,38 @@ class WallboxController : CliktCommand(
         println()
         
         // Calculate and display efficiency
-        try {
-            val acPower = controller.fromSigned16Bit(controller.readRegister(0x020E))
-            val dcVoltageRaw = controller.readRegister(0x0223)
-            val dcCurrentRaw = controller.readRegister(0x0224)
-            val dcCurrent = controller.fromSigned16Bit(dcCurrentRaw)
+        // try {
+        //     val acPower = controller.fromSigned16Bit(controller.readRegister(0x020E))
+        //     val dcVoltageRaw = controller.readRegister(0x0223)
+        //     val dcCurrentRaw = controller.readRegister(0x0224)
+        //     val dcCurrent = controller.fromSigned16Bit(dcCurrentRaw)
             
-            val dcPower = (dcVoltageRaw * 0.1f) * (dcCurrent * 0.1f)  // V × A = W
+        //     val dcPower = (dcVoltageRaw * 0.1f) * (dcCurrent * 0.1f)  // V × A = W
             
-            if (acPower != 0 && dcPower.let { abs(it) } > 0.1f) {
-                val efficiency = if (acPower > 0) {
-                    // Charging: AC → DC, efficiency = DC/AC
-                    (dcPower / acPower) * 100f
-                } else {
-                    // Discharging: DC → AC, efficiency = AC/DC
-                    (acPower.let { abs(it) } / dcPower.let { abs(it) }) * 100f
-                }
+        //     if (acPower != 0 && dcPower.let { abs(it) } > 0.1f) {
+        //         val efficiency = if (acPower > 0) {
+        //             // Charging: AC → DC, efficiency = DC/AC
+        //             (dcPower / acPower) * 100f
+        //         } else {
+        //             // Discharging: DC → AC, efficiency = AC/DC
+        //             (acPower.let { abs(it) } / dcPower.let { abs(it) }) * 100f
+        //         }
                 
-                println("Inverter Efficiency:")
-                println("  AC Power: %dW".format(acPower))
-                println("  DC Power: %.1fW".format(dcPower))
-                println("  Efficiency: %.1f%%".format(efficiency))
-                println("  Mode: ${if (acPower > 0) "Charging (AC→DC)" else "Discharging (DC→AC)"}")
-            } else {
-                println("Inverter Efficiency:")
-                println("  AC Power: %dW".format(acPower))
-                println("  DC Power: %.1fW".format(dcPower))
-                println("  Efficiency: N/A (no power flow)")
-            }
-        } catch (e: Exception) {
-            println("Inverter Efficiency:")
-            println("  Unable to calculate (${e.message})")
-        }
+        //         println("Inverter Efficiency:")
+        //         println("  AC Power: %dW".format(acPower))
+        //         println("  DC Power: %.1fW".format(dcPower))
+        //         println("  Efficiency: %.1f%%".format(efficiency))
+        //         println("  Mode: ${if (acPower > 0) "Charging (AC→DC)" else "Discharging (DC→AC)"}")
+        //     } else {
+        //         println("Inverter Efficiency:")
+        //         println("  AC Power: %dW".format(acPower))
+        //         println("  DC Power: %.1fW".format(dcPower))
+        //         println("  Efficiency: N/A (no power flow)")
+        //     }
+        // } catch (e: Exception) {
+        //     println("Inverter Efficiency:")
+        //     println("  Unable to calculate (${e.message})")
+        // }
         
         println()
         println("=".repeat(70))
