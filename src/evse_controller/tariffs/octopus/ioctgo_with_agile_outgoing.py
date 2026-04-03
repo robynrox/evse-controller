@@ -1142,6 +1142,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         battery_level = state.battery_level
         current_slot = dayMinute // 30
 
+        # During off-peak hours (23:30-05:30), don't configure load-following
+        # The control state is already set to CHARGE at max current by get_control_state()
+        if self.is_off_peak(dayMinute):
+            debug(f"IOCTGO_AGILEOUT: Off-peak hours - skipping load-following configuration")
+            return  # Don't configure load-following during off-peak charging
+
         # If we're in an export slot, don't configure load-following
         # The control state is already set to DISCHARGE at max current
         if current_slot in self._planned_export_slots:

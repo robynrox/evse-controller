@@ -354,14 +354,66 @@ class TestSetHomeDemandLevels:
         mock_controller = Mock()
         mock_controller.use_new_current_calculation = False
         state = create_test_state(50)
-        
+
         # Mark slot 4 (02:00-02:30) as export slot
         agile_tariff._planned_export_slots = [4]
-        
+
         agile_tariff.set_home_demand_levels(mock_controller, state, 120)  # 02:00
-        
+
         # Should return early without configuring discharge parameters
         assert not mock_controller.setDischargeActivationPower.called
+
+    def test_off_peak_skips_load_following_configuration(self, agile_tariff):
+        """Test that off-peak hours (23:30-05:30) skip load-following configuration.
+        
+        This prevents the load-following configuration from overriding the 
+        off-peak charging behavior (which should charge at max current).
+        
+        Regression test for issue where charging dropped to 3A after midnight
+        during off-peak hours.
+        """
+        mock_controller = Mock()
+        mock_controller.use_new_current_calculation = False
+        state = create_test_state(50)
+        
+        # Clear any planned export slots
+        agile_tariff._planned_export_slots = []
+        
+        # Test at 00:00 (midnight, during off-peak)
+        agile_tariff.set_home_demand_levels(mock_controller, state, 0)  # 00:00
+        
+        # Should return early without configuring discharge/charge parameters
+        assert not mock_controller.setDischargeActivationPower.called
+        assert not mock_controller.setChargeActivationPower.called
+        assert not mock_controller.setChargeCurrentRange.called
+        
+        # Test at 03:00 (during off-peak)
+        mock_controller.reset_mock()
+        agile_tariff.set_home_demand_levels(mock_controller, state, 180)  # 03:00 = 3*60
+        
+        # Should return early
+        assert not mock_controller.setDischargeActivationPower.called
+        assert not mock_controller.setChargeActivationPower.called
+        assert not mock_controller.setChargeCurrentRange.called
+        
+        # Test at 23:45 (during off-peak, before midnight)
+        mock_controller.reset_mock()
+        agile_tariff.set_home_demand_levels(mock_controller, state, 1425)  # 23:45 = 23*60+45
+        
+        # Should return early
+        assert not mock_controller.setDischargeActivationPower.called
+        assert not mock_controller.setChargeActivationPower.called
+        assert not mock_controller.setChargeCurrentRange.called
+        
+        # Test at 06:00 (outside off-peak, should configure load-following)
+        mock_controller.reset_mock()
+        agile_tariff.set_home_demand_levels(mock_controller, state, 360)  # 06:00 = 6*60
+        
+        # Should configure load-following parameters (not in export slot, not off-peak)
+        # Either discharge or charge parameters should be set
+        assert (mock_controller.setDischargeActivationPower.called or 
+                mock_controller.setChargeActivationPower.called), \
+               "Should configure load-following outside off-peak hours"
 
 
 class TestConstants:
