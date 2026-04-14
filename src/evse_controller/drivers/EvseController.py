@@ -1040,7 +1040,7 @@ class EvseController(PowerMonitorObserver):
         # Log efficiency data with raw register values
         if efficiency > 0:
             mode = "CHARGE" if ac_power > 0 else "DISCHARGE"
-            info(f"EFFICIENCY {mode} AC:{ac_power:.0f}W({ac_voltage:.0f}V,{ac_current:.1f}A) DC:{dc_power:.1f}W({dc_voltage:.1f}V,{dc_current:.2f}A) η:{efficiency:.1f}%")
+            info(f"EFFICIENCY {mode} AC:{ac_power:.0f}W({ac_voltage:.0f}V,{ac_current:.0f}A) DC:{dc_power:.0f}W({dc_voltage:.1f}V,{dc_current:.1f}A) η:{efficiency:.0f}%")
         
         if self.write_api:
             try:

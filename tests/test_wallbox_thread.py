@@ -486,7 +486,7 @@ class TestWallboxThread(TestCase):
                 (2, EvseState.WAITING_FOR_CAR_DEMAND, "Waiting for car demand"),
                 (3, EvseState.WAITING_FOR_SCHEDULE, "Waiting for schedule"),
                 (4, EvseState.PAUSED, "Paused state"),
-                (7, EvseState.ERROR, "Error state"),
+                (12, EvseState.ERROR, "Error state"),
                 (11, EvseState.DISCHARGING, "Discharging state")
             ]
             
