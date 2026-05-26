@@ -375,10 +375,10 @@
             <small>Select your UK region for accurate Agile Outgoing export rates</small>
         </div>
         <div class="form-group">
-            <label for="min_agile_discharge_soc">Minimum SoC for Agile Discharge (%):</label>
+            <label for="min_agile_discharge_soc">Minimum SoC for Bulk Agile Discharge (%):</label>
             <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
-            <small>Minimum battery level for export (default 60%). System will stop exporting when SoC reaches this level.</small>
+            <small>Reserved SoC floor for bulk Agile export (default 60%). The system will not schedule export slots below this level, but load-follow discharge for home consumption can still occur.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
