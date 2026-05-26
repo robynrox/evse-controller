@@ -559,7 +559,10 @@ def main():
                     dayMinute = now.tm_hour * 60 + now.tm_min
                     evse = EvseThreadInterface.get_instance()
                     state = evse.get_state()
-                    control_state, min_current, max_current, log_message = strategyManager.get_control_state(dayMinute)
+                    if state.battery_level < 0:
+                        control_state, min_current, max_current, log_message = ControlState.CHARGE, 3, 3, "SoC unknown - 3A charge"
+                    else:
+                        control_state, min_current, max_current, log_message = strategyManager.get_control_state(dayMinute)
                     debug(log_message)
                     evseController.setControlState(control_state)
                     strategy.set_home_demand_levels(evseController, state, dayMinute)

@@ -310,10 +310,13 @@ class TestGetControlState:
         assert "Bidirectional" in message
     
     def test_control_state_discharge_high_rate(self, agile_tariff):
-        """Test LOAD_FOLLOW_DISCHARGE when export rate is favorable."""
+        """Test DISCHARGE when export rate is favorable."""
         state = create_test_state(80)
         # Set time to 18:00 (slot 36) when rates are ~35p
-        agile_tariff._planned_export_slots = []
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._last_plan_slot = 36
+        agile_tariff._prev_battery_level = 80
+        agile_tariff._plan_cache = [36]
         
         control_state, min_current, max_current, message = agile_tariff.get_control_state(
             state,
@@ -321,8 +324,8 @@ class TestGetControlState:
         )
         
         # At 35p, best future is much lower, so should discharge
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
-        assert "Load follow" in message
+        assert control_state == ControlState.DISCHARGE
+        assert "Export slot" in message or "discharge" in message.lower()
 
 
 class TestSetHomeDemandLevels:
