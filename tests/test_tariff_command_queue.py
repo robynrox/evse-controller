@@ -12,36 +12,36 @@ from unittest.mock import Mock, patch, MagicMock
 import queue
 from datetime import datetime, timedelta
 
-from evse_controller.tariffs.base import Tariff
-from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
-from evse_controller.tariffs.octopus.flux import OctopusFluxTariff
-from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
-from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
-from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
+from evse_controller.strategies.base import ControlStrategy
+from evse_controller.strategies.octopus.octgo import OctopusGoStrategy
+from evse_controller.strategies.octopus.flux import OctopusFluxStrategy
+from evse_controller.strategies.octopus.cosy import CosyOctopusStrategy
+from evse_controller.strategies.octopus.ioctgo import IntelligentOctopusGoStrategy
+from evse_controller.strategies.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingStrategy
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
 
-class TestTariffBaseClass:
-    """Test the base Tariff class command_queue handling."""
+class TestControlStrategyBaseClass:
+    """Test the base ControlStrategy class command_queue handling."""
 
-    def test_base_tariff_accepts_command_queue(self):
-        """Test that base Tariff class accepts command_queue parameter."""
+    def test_base_control_strategy_accepts_command_queue(self):
+        """Test that base ControlStrategy class accepts command_queue parameter."""
         test_queue = queue.Queue()
-        tariff = Tariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = ControlStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
-    def test_base_tariff_command_queue_defaults_to_none(self):
+    def test_base_control_strategy_command_queue_defaults_to_none(self):
         """Test that command_queue defaults to None when not provided."""
-        tariff = Tariff()
-        assert tariff.command_queue is None
+        strategy = ControlStrategy()
+        assert strategy.command_queue is None
 
 
-class TestAllTariffsReceiveCommandQueue:
-    """Test that all tariff subclasses properly receive and store command_queue."""
+class TestAllStrategiesReceiveCommandQueue:
+    """Test that all strategy subclasses properly receive and store command_queue."""
 
     @pytest.fixture
     def mock_wallbox(self):
-        """Mock WallboxThread for tariffs that require it."""
+        """Mock WallboxThread for strategies that require it."""
         mock_thread = Mock()
         mock_thread.getBatteryChargeLevel = Mock(return_value=75)
         mock_thread.get_state = Mock(return_value={})
@@ -51,67 +51,67 @@ class TestAllTariffsReceiveCommandQueue:
             yield mock_thread
 
     def test_octgo_receives_command_queue(self, mock_wallbox):
-        """Test OctopusGoTariff properly stores command_queue."""
+        """Test OctopusGoStrategy properly stores command_queue."""
         test_queue = queue.Queue()
-        tariff = OctopusGoTariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = OctopusGoStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
     def test_octgo_command_queue_defaults_to_none(self, mock_wallbox):
-        """Test OctopusGoTariff command_queue defaults to None."""
-        tariff = OctopusGoTariff()
-        assert tariff.command_queue is None
+        """Test OctopusGoStrategy command_queue defaults to None."""
+        strategy = OctopusGoStrategy()
+        assert strategy.command_queue is None
 
     def test_flux_receives_command_queue(self):
-        """Test OctopusFluxTariff properly stores command_queue."""
+        """Test OctopusFluxStrategy properly stores command_queue."""
         test_queue = queue.Queue()
-        tariff = OctopusFluxTariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = OctopusFluxStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
     def test_flux_command_queue_defaults_to_none(self):
-        """Test OctopusFluxTariff command_queue defaults to None."""
-        tariff = OctopusFluxTariff()
-        assert tariff.command_queue is None
+        """Test OctopusFluxStrategy command_queue defaults to None."""
+        strategy = OctopusFluxStrategy()
+        assert strategy.command_queue is None
 
     def test_cosy_receives_command_queue(self, mock_wallbox):
-        """Test CosyOctopusTariff properly stores command_queue."""
+        """Test CosyOctopusStrategy properly stores command_queue."""
         test_queue = queue.Queue()
-        tariff = CosyOctopusTariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = CosyOctopusStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
     def test_cosy_command_queue_defaults_to_none(self, mock_wallbox):
-        """Test CosyOctopusTariff command_queue defaults to None."""
-        tariff = CosyOctopusTariff()
-        assert tariff.command_queue is None
+        """Test CosyOctopusStrategy command_queue defaults to None."""
+        strategy = CosyOctopusStrategy()
+        assert strategy.command_queue is None
 
     def test_ioctgo_receives_command_queue(self, mock_wallbox):
-        """Test IntelligentOctopusGoTariff properly stores command_queue."""
+        """Test IntelligentOctopusGoStrategy properly stores command_queue."""
         test_queue = queue.Queue()
-        tariff = IntelligentOctopusGoTariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = IntelligentOctopusGoStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
     def test_ioctgo_command_queue_defaults_to_none(self, mock_wallbox):
-        """Test IntelligentOctopusGoTariff command_queue defaults to None."""
-        tariff = IntelligentOctopusGoTariff()
-        assert tariff.command_queue is None
+        """Test IntelligentOctopusGoStrategy command_queue defaults to None."""
+        strategy = IntelligentOctopusGoStrategy()
+        assert strategy.command_queue is None
 
     def test_ioctgo_with_agile_outgoing_receives_command_queue(self, mock_wallbox):
-        """Test IOctGoWithAgileOutgoingTariff properly stores command_queue."""
+        """Test IOctGoWithAgileOutgoingStrategy properly stores command_queue."""
         test_queue = queue.Queue()
-        tariff = IOctGoWithAgileOutgoingTariff(command_queue=test_queue)
-        assert tariff.command_queue is test_queue
+        strategy = IOctGoWithAgileOutgoingStrategy(command_queue=test_queue)
+        assert strategy.command_queue is test_queue
 
     def test_ioctgo_with_agile_outgoing_command_queue_defaults_to_none(self, mock_wallbox):
-        """Test IOctGoWithAgileOutgoingTariff command_queue defaults to None."""
-        tariff = IOctGoWithAgileOutgoingTariff()
-        assert tariff.command_queue is None
+        """Test IOctGoWithAgileOutgoingStrategy command_queue defaults to None."""
+        strategy = IOctGoWithAgileOutgoingStrategy()
+        assert strategy.command_queue is None
 
 
 class TestIOctGoWithAgileOutgoingOCPPCommands:
-    """Test that IOctGoWithAgileOutgoingTariff sends OCPP commands correctly."""
+    """Test that IOctGoWithAgileOutgoingStrategy sends OCPP commands correctly."""
 
     @pytest.fixture
     def mock_wallbox(self):
-        """Mock WallboxThread for tariff."""
+        """Mock WallboxThread for strategy."""
         mock_thread = Mock()
         mock_thread.getBatteryChargeLevel = Mock(return_value=75)
         mock_thread.get_state = Mock(return_value={})
@@ -122,20 +122,18 @@ class TestIOctGoWithAgileOutgoingOCPPCommands:
 
     @pytest.fixture
     def tariff_with_queue(self, mock_wallbox):
-        """Create tariff with a mock command queue."""
+        """Create strategy with a mock command queue."""
         test_queue = queue.Queue()
-        tariff = IOctGoWithAgileOutgoingTariff(command_queue=test_queue)
-        # Mock _add_scheduled_event to avoid scheduler import issues in tests
-        tariff._add_scheduled_event = Mock()
-        return tariff
+        strategy = IOctGoWithAgileOutgoingStrategy(command_queue=test_queue)
+        strategy._add_scheduled_event = Mock()
+        return strategy
 
     @pytest.fixture
     def tariff_without_queue(self, mock_wallbox):
-        """Create tariff without command queue."""
-        tariff = IOctGoWithAgileOutgoingTariff()
-        # Mock _add_scheduled_event to avoid scheduler import issues in tests
-        tariff._add_scheduled_event = Mock()
-        return tariff
+        """Create strategy without command queue."""
+        strategy = IOctGoWithAgileOutgoingStrategy()
+        strategy._add_scheduled_event = Mock()
+        return strategy
 
     def create_test_state(self, battery_level: int, soc_valid: bool = True) -> EvseAsyncState:
         """Helper to create test state."""
@@ -219,8 +217,8 @@ class TestIOctGoWithAgileOutgoingOCPPCommands:
         assert tariff_without_queue.command_queue is None
 
 
-class TestTariffManagerCommandQueuePropagation:
-    """Test that TariffManager properly passes command_queue to tariffs."""
+class TestStrategyManagerCommandQueuePropagation:
+    """Test that StrategyManager properly passes command_queue to strategies."""
 
     @pytest.fixture
     def mock_command_queue(self):
@@ -239,52 +237,52 @@ class TestTariffManagerCommandQueuePropagation:
             yield mock_thread
 
     def test_manager_passes_queue_to_octgo(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager passes queue to OctopusGoTariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+        """Test StrategyManager passes queue to OctopusGoStrategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'OCTGO'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
-            assert manager.current_tariff.command_queue is mock_command_queue
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
+            assert manager.current_strategy.command_queue is mock_command_queue
 
     def test_manager_passes_queue_to_flux(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager passes queue to OctopusFluxTariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+        """Test StrategyManager passes queue to OctopusFluxStrategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'FLUX'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
-            assert manager.current_tariff.command_queue is mock_command_queue
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
+            assert manager.current_strategy.command_queue is mock_command_queue
 
     def test_manager_passes_queue_to_cosy(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager passes queue to CosyOctopusTariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+        """Test StrategyManager passes queue to CosyOctopusStrategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'COSY'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
-            assert manager.current_tariff.command_queue is mock_command_queue
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
+            assert manager.current_strategy.command_queue is mock_command_queue
 
     def test_manager_passes_queue_to_ioctgo(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager passes queue to IntelligentOctopusGoTariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+        """Test StrategyManager passes queue to IntelligentOctopusGoStrategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'IOCTGO'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
-            assert manager.current_tariff.command_queue is mock_command_queue
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
+            assert manager.current_strategy.command_queue is mock_command_queue
 
     def test_manager_passes_queue_to_ioctgo_agile_out(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager passes queue to IOctGoWithAgileOutgoingTariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+        """Test StrategyManager passes queue to IOctGoWithAgileOutgoingStrategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'IOCTGO_AGILEOUT'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
-            assert manager.current_tariff.command_queue is mock_command_queue
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
+            assert manager.current_strategy.command_queue is mock_command_queue
 
-    def test_manager_set_tariff_passes_queue(self, mock_command_queue, mock_wallbox):
-        """Test TariffManager.set_tariff passes queue to new tariff."""
-        with patch('evse_controller.tariffs.manager.config') as mock_config:
+    def test_manager_set_strategy_passes_queue(self, mock_command_queue, mock_wallbox):
+        """Test StrategyManager.set_strategy passes queue to new strategy."""
+        with patch('evse_controller.strategies.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'FLUX'
-            from evse_controller.tariffs.manager import TariffManager
-            manager = TariffManager(mock_command_queue)
+            from evse_controller.strategies.manager import StrategyManager
+            manager = StrategyManager(mock_command_queue)
             
-            # Switch to a different tariff
-            manager.set_tariff('OCTGO')
-            assert manager.current_tariff.command_queue is mock_command_queue
+            # Switch to a different strategy
+            manager.set_strategy('OCTGO')
+            assert manager.current_strategy.command_queue is mock_command_queue

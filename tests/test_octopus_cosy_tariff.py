@@ -1,5 +1,5 @@
 import pytest
-from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
+from evse_controller.strategies.octopus.cosy import CosyOctopusStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from unittest.mock import Mock
@@ -13,7 +13,7 @@ def create_test_state(battery_level: int) -> EvseAsyncState:
 
 @pytest.fixture
 def cosy_tariff():
-    return CosyOctopusTariff()
+    return CosyOctopusStrategy()
 
 def test_off_peak_periods(cosy_tariff):
     """Test identification of off-peak periods (04:00-07:00, 13:00-16:00, 22:00-24:00)"""

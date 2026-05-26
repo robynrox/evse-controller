@@ -5,7 +5,7 @@ import threading
 from enum import Enum
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
 from evse_controller.drivers.Shelly import PowerMonitorShelly
-from evse_controller.tariffs.manager import TariffManager
+from evse_controller.strategies.manager import StrategyManager
 import time
 import math
 import queue
@@ -36,13 +36,9 @@ info(f"Using config file: {config.CONFIG_FILE}")
 # Main application
 class ExecState(Enum):
     SMART = 1
-    CHARGE = 2
-    DISCHARGE = 3
-    PAUSE = 4
+    # CHARGE, DISCHARGE, PAUSE, SOLAR, BALANCE and POWER_HOME removed —
+    # now implemented as ControlStrategies
     FIXED = 5
-    SOLAR = 6
-    POWER_HOME = 7
-    BALANCE = 8
     PAUSE_UNTIL_DISCONNECT = 9
     FREERUN = 10
     OCPP = 11
@@ -89,8 +85,8 @@ def enter_freerun_mode():
 
 # Initialize core components at module level
 execQueue = queue.SimpleQueue()
-tariffManager = TariffManager(execQueue)
-evseController = EvseController(tariffManager)
+strategyManager = StrategyManager(execQueue)
+evseController = EvseController(strategyManager)
 
 # Initialize the OCPP manager to start worker threads
 from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -130,6 +126,14 @@ def _load_exec_state():
         previous_state_name = state_data.get("previous_state")
         fixed_current = state_data.get("fixed_current_amps")
         
+        # Legacy states migrated from ExecState to ControlStrategy (now under SMART)
+        LEGACY_EXEC_STATES = {"CHARGE", "DISCHARGE", "PAUSE", "SOLAR", "BALANCE", "POWER_HOME"}
+        if exec_state_name in LEGACY_EXEC_STATES:
+            strategyManager.set_strategy(exec_state_name)
+            exec_state_name = "SMART"
+        if previous_state_name in LEGACY_EXEC_STATES:
+            previous_state_name = "SMART"
+
         exec_state = ExecState[exec_state_name] if exec_state_name else None
         previous_state = ExecState[previous_state_name] if previous_state_name else None
         
@@ -173,7 +177,7 @@ def _apply_exec_state(state, fixed_current=None):
             else:
                 evseController.setControlState(ControlState.DORMANT)
             info(f"Restored FIXED state with current: {fixed_current}A")
-    elif state in [ExecState.CHARGE, ExecState.DISCHARGE, ExecState.PAUSE, ExecState.SMART, ExecState.SOLAR, ExecState.POWER_HOME, ExecState.BALANCE]:
+    elif state == ExecState.SMART:
         # Ensure OCPP is disabled for non-OCPP states
         try:
             ocpp_manager.set_state(False)
@@ -212,37 +216,38 @@ def handle_pause_until_disconnect(previous_state: Optional[ExecState],
                                    evse_state: EvseState) -> tuple[ExecState, Optional[ExecState]]:
     """
     Handle PAUSE_UNTIL_DISCONNECT state logic.
-    
+
     This function determines the appropriate state transition when in PAUSE_UNTIL_DISCONNECT mode.
-    When the vehicle disconnects, it returns to the previous state (or PAUSE if no previous state).
-    
+    When the vehicle disconnects, it returns to the previous state (or SMART if no previous state).
+
     Args:
-        previous_state: The state to return to after disconnection (e.g., SMART, CHARGE, etc.)
+        previous_state: The state to return to after disconnection
         evse_state: Current EVSE state (connected/disconnected/etc.)
-    
+
     Returns:
         Tuple of (new_exec_state, new_previous_state):
-        - If disconnected: Returns (previous_state, None) or (PAUSE, None) if no previous state
+        - If disconnected: Returns (previous_state, None) or (SMART, None) if no previous state
         - If still connected: Returns (PAUSE_UNTIL_DISCONNECT, previous_state) to maintain current state
     """
     if evse_state == EvseState.DISCONNECTED:
         if previous_state is not None:
             return previous_state, None
         else:
-            return ExecState.PAUSE, None
+            return ExecState.SMART, None
     # Still connected, stay in PAUSE_UNTIL_DISCONNECT
     return ExecState.PAUSE_UNTIL_DISCONNECT, previous_state
 
 
 def get_system_state():
-    """
-    Returns the current system state information including active mode and tariff if applicable.
-    """
-    current_state = execState.name
-    if execState == ExecState.SMART:
-        current_tariff = tariffManager.get_tariff().__class__.__name__.replace('Tariff', '')
-        current_state = f"SMART ({current_tariff})"
-    return current_state
+    try:
+        if execState == ExecState.SMART:
+            strategy = strategyManager.get_strategy()
+            if strategy is not None:
+                return strategy.__class__.__name__.replace('Strategy', '')
+            return config.STARTUP_STATE
+        return execState.name
+    except Exception:
+        return "Unknown"
 
 class InputParser(threading.Thread):
     def __init__(self):
@@ -383,49 +388,49 @@ def main():
             match command.lower():
                 case "p" | "pause":
                     ensure_ocpp_disabled()
-                    info("Entering pause state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.PAUSE)
+                    info("Entering pause strategy")
+                    strategyManager.set_strategy("PAUSE")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "c" | "charge":
                     ensure_ocpp_disabled()
-                    info("Entering charge state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.CHARGE)
+                    info("Entering charge strategy")
+                    strategyManager.set_strategy("CHARGE")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "d" | "discharge":
                     ensure_ocpp_disabled()
-                    info("Entering discharge state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.DISCHARGE)
+                    info("Entering discharge strategy")
+                    strategyManager.set_strategy("DISCHARGE")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     ensure_ocpp_disabled()
                     info("Entering smart tariff controller state")
-                    tariffManager.start_tariff()
+                    strategyManager.start_strategy()
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
                     ensure_ocpp_disabled()
                     info("Switching to Octopus Go tariff")
-                    tariffManager.set_tariff("OCTGO")
+                    strategyManager.set_strategy("OCTGO")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "ioctgo":
                     info("Switching to Intelligent Octopus Go tariff")
-                    tariffManager.set_tariff("IOCTGO", command_queue=execQueue)
+                    strategyManager.set_strategy("IOCTGO", command_queue=execQueue)
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "f" | "flux":
                     ensure_ocpp_disabled()
                     info("Switching to Octopus Flux tariff")
-                    tariffManager.set_tariff("FLUX")
+                    strategyManager.set_strategy("FLUX")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "cosy":
                     ensure_ocpp_disabled()
                     info("Switching to Cosy Octopus tariff")
-                    tariffManager.set_tariff("COSY")
+                    strategyManager.set_strategy("COSY")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "schedule":
@@ -442,12 +447,12 @@ def main():
                         debug("Already in pause-until-disconnect state, ignoring command")
                 case "z" | "freerun" | "disable-ocpp":
                     success = enter_freerun_mode()
-                    tariffManager.stop_tariff()
+                    strategyManager.stop_strategy()
                     nextStateCheck = time.time()
                 case "enable-ocpp" | "ocpp":
                     info("Enabling OCPP mode for the Wallbox")
                     # Go to FREERUN first to match OCPP operational mode
-                    tariffManager.stop_tariff()
+                    strategyManager.stop_strategy()
                     evseController.setFreeRun()
                     _set_exec_state(ExecState.FREERUN)
                     # Use OCPPManager to enable OCPP
@@ -467,23 +472,22 @@ def main():
                     else:
                         print("Failed to send OCPP enable request")
                 case "solar":
-                    # If we're in OCPP state, disable OCPP first
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering solar charging state")
-                    _set_exec_state(ExecState.SOLAR)
+                    info("Entering solar charging strategy")
+                    strategyManager.set_strategy("SOLAR")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "power-home" | "ph":
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering power home state")
-                    _set_exec_state(ExecState.POWER_HOME)
+                    info("Entering power home strategy")
+                    strategyManager.set_strategy("POWER_HOME")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "balance" | "b":
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering power balance state")
-                    _set_exec_state(ExecState.BALANCE)
+                    info("Entering power balance strategy")
+                    strategyManager.set_strategy("BALANCE")
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "help" | "h" | "?":
                     print_usage_instructions()
@@ -492,16 +496,16 @@ def main():
                         currentAmps = int(command)
                         info(f"Setting current to {currentAmps}")
                         if currentAmps > 0:
-                            tariffManager.stop_tariff()
+                            strategyManager.stop_strategy()
                             evseController.setControlState(ControlState.CHARGE)
                             evseController.setChargeCurrentRange(currentAmps, currentAmps)
                         elif currentAmps < 0:
-                            tariffManager.stop_tariff()
+                            strategyManager.stop_strategy()
                             evseController.setControlState(ControlState.DISCHARGE)
                             # setDischargeCurrentRange takes positive current values
                             evseController.setDischargeCurrentRange(-currentAmps, -currentAmps)
                         else:
-                            tariffManager.stop_tariff()
+                            strategyManager.stop_strategy()
                             evseController.setControlState(ControlState.DORMANT)
                         _fixed_current_amps = currentAmps
                         _set_exec_state(ExecState.FIXED)
@@ -546,47 +550,24 @@ def main():
                 info("CONTROL OCPP - EVSE operating via OCPP protocol")
                 # No action needed - the EVSE is operating via OCPP
 
-            elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
-                info(f"CONTROL {execState}")
-                if execState == ExecState.PAUSE:
+            elif execState == ExecState.SMART:
+                strategy = strategyManager.get_strategy()
+                if strategy is None:
+                    info("CONTROL SMART - no strategy active")
                     evseController.setControlState(ControlState.DORMANT)
-                elif execState == ExecState.CHARGE:
-                    evseController.setControlState(ControlState.CHARGE)
-                    evseController.setChargeCurrentRange(config.WALLBOX_MAX_CHARGE_CURRENT, config.WALLBOX_MAX_CHARGE_CURRENT)
-                elif execState == ExecState.DISCHARGE:
-                    evseController.setControlState(ControlState.DISCHARGE)
-                    evseController.setDischargeCurrentRange(config.WALLBOX_MAX_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-
-            if execState == ExecState.SMART:
-                dayMinute = now.tm_hour * 60 + now.tm_min
-                # Get the appropriate EVSE instance using the factory method
-                evse = EvseThreadInterface.get_instance()
-                state = evse.get_state()
-                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
-                debug(log_message)
-                evseController.setControlState(control_state)
-                tariffManager.get_tariff().set_home_demand_levels(evseController, state, dayMinute)
-                if min_current is not None and max_current is not None:
-                    if control_state == ControlState.CHARGE:
-                        evseController.setChargeCurrentRange(min_current, max_current)
-                    elif control_state == ControlState.DISCHARGE:
-                        evseController.setDischargeCurrentRange(min_current, max_current)
-
-            if execState == ExecState.SOLAR:
-                info("CONTROL SOLAR")
-                evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
-                evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
-
-            if execState == ExecState.POWER_HOME:
-                info("CONTROL POWER_HOME")
-                evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
-                evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-
-            if execState == ExecState.BALANCE:
-                info("CONTROL BALANCE")
-                evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
-                evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
-                evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
+                else:
+                    dayMinute = now.tm_hour * 60 + now.tm_min
+                    evse = EvseThreadInterface.get_instance()
+                    state = evse.get_state()
+                    control_state, min_current, max_current, log_message = strategyManager.get_control_state(dayMinute)
+                    debug(log_message)
+                    evseController.setControlState(control_state)
+                    strategy.set_home_demand_levels(evseController, state, dayMinute)
+                    if min_current is not None and max_current is not None:
+                        if control_state == ControlState.CHARGE:
+                            evseController.setChargeCurrentRange(min_current, max_current)
+                        elif control_state == ControlState.DISCHARGE:
+                            evseController.setDischargeCurrentRange(min_current, max_current)
 
 if __name__ == '__main__':
     main()

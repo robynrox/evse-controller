@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
-from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
+from evse_controller.strategies.octopus.ioctgo import IntelligentOctopusGoStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
@@ -22,7 +22,7 @@ def intgo_tariff():
     # Updated patch path to use wallbox_thread instead of thread
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance', 
                return_value=mock_thread):
-        yield IntelligentOctopusGoTariff()
+        yield IntelligentOctopusGoStrategy()
 
 def test_off_peak_periods(intgo_tariff):
     """Test identification of off-peak periods (23:30-05:30)"""
@@ -145,7 +145,7 @@ def test_get_rates(intgo_tariff):
 def test_calculate_target_discharge_current(intgo_tariff):
     """Test calculation of target discharge current"""
     # Create a tariff with bulk discharge enabled for the test, with specific times
-    tariff_with_bulk_discharge = IntelligentOctopusGoTariff(enable_bulk_discharge=True,
+    tariff_with_bulk_discharge = IntelligentOctopusGoStrategy(enable_bulk_discharge=True,
                                                            bulk_discharge_start_time="17:00",
                                                            bulk_discharge_end_time="20:00")
 
@@ -180,7 +180,7 @@ def test_calculate_target_discharge_current(intgo_tariff):
     assert current == 0
 
     # Test case: Bulk discharge disabled - should return 0
-    tariff_disabled = IntelligentOctopusGoTariff(enable_bulk_discharge=False)
+    tariff_disabled = IntelligentOctopusGoStrategy(enable_bulk_discharge=False)
     current = tariff_disabled.calculate_target_discharge_current(90, 1020)  # 17:00
     assert current == 0  # Should return 0 because bulk discharge is disabled
 
@@ -190,10 +190,10 @@ def test_discharge_rate_calculation_for_different_batteries():
     pytest.skip("Skipping due to pre-existing bug in discharge rate calculation where battery capacity is not properly factored into the calculation")
 
     # Original test code:
-    # from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
+    # from evse_controller.strategies.octopus.ioctgo import IntelligentOctopusGoStrategy
     #
     # # Test with 59kWh battery (default) - with bulk discharge enabled and specific times
-    # tariff_59kwh = IntelligentOctopusGoTariff(59, enable_bulk_discharge=True,
+    # tariff_59kwh = IntelligentOctopusGoStrategy(59, enable_bulk_discharge=True,
     #                                          bulk_discharge_start_time="17:00",
     #                                          bulk_discharge_end_time="20:00")
     # # At 17:00 with 90% SoC, 3 hours to end at 20:00, target SoC 60%, discharge 30% in 3 hours = 10%/hr
@@ -201,7 +201,7 @@ def test_discharge_rate_calculation_for_different_batteries():
     # current_59 = tariff_59kwh.calculate_target_discharge_current(90, 1020)  # 17:00
     #
     # # Test with 30kWh battery (smaller) - with bulk discharge enabled and specific times
-    # tariff_30kwh = IntelligentOctopusGoTariff(30, enable_bulk_discharge=True,
+    # tariff_30kwh = IntelligentOctopusGoStrategy(30, enable_bulk_discharge=True,
     #                                          bulk_discharge_start_time="17:00",
     #                                          bulk_discharge_end_time="20:00")
     # # At 17:00 with 90% SoC, 3 hours to end at 20:00, target SoC 60%, discharge 30% in 3 hours = 10%/hr
@@ -213,10 +213,10 @@ def test_discharge_rate_calculation_for_different_batteries():
 
 def test_bulk_discharge_start_time_conversion():
     """Test that bulk discharge start time is correctly converted from string to minutes"""
-    from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
+    from evse_controller.strategies.octopus.ioctgo import IntelligentOctopusGoStrategy
     
     # Test custom time (16:45) - use all parameters to avoid issues
-    tariff_custom = IntelligentOctopusGoTariff(bulk_discharge_start_time="16:45", bulk_discharge_end_time="19:00")
+    tariff_custom = IntelligentOctopusGoStrategy(bulk_discharge_start_time="16:45", bulk_discharge_end_time="19:00")
     assert tariff_custom.BULK_DISCHARGE_START_TIME_STR == "16:45"
     assert tariff_custom.BULK_DISCHARGE_START_TIME == 16 * 60 + 45  # 1005 minutes
     
@@ -227,17 +227,17 @@ def test_bulk_discharge_start_time_conversion():
 
 def test_bulk_discharge_end_time_conversion():
     """Test that bulk discharge end time is correctly converted from string to minutes"""
-    from evse_controller.tariffs.octopus.ioctgo import IntelligentOctopusGoTariff
+    from evse_controller.strategies.octopus.ioctgo import IntelligentOctopusGoStrategy
     
     # Test custom time (20:30) - use all parameters to avoid issues
-    tariff_custom = IntelligentOctopusGoTariff(bulk_discharge_end_time="20:30", bulk_discharge_start_time="17:00")
+    tariff_custom = IntelligentOctopusGoStrategy(bulk_discharge_end_time="20:30", bulk_discharge_start_time="17:00")
     assert tariff_custom.BULK_DISCHARGE_END_TIME_STR == "20:30"
     assert tariff_custom.BULK_DISCHARGE_END_TIME == 20 * 60 + 30  # 1230 minutes
 
 def test_control_state_smart_discharge(intgo_tariff):
     """Test smart discharge behavior"""
     # Create a tariff with bulk discharge enabled for testing
-    tariff_with_bulk_discharge = IntelligentOctopusGoTariff(enable_bulk_discharge=True, 
+    tariff_with_bulk_discharge = IntelligentOctopusGoStrategy(enable_bulk_discharge=True, 
                                                             bulk_discharge_start_time="17:00", 
                                                             bulk_discharge_end_time="19:00")
     
@@ -270,7 +270,7 @@ def test_control_state_smart_discharge(intgo_tariff):
 def test_control_state_smart_discharge_with_disabled_bulk():
     """Test smart discharge behavior when bulk discharge is disabled"""
     # Create a tariff with bulk discharge disabled
-    tariff_no_bulk = IntelligentOctopusGoTariff(enable_bulk_discharge=False,
+    tariff_no_bulk = IntelligentOctopusGoStrategy(enable_bulk_discharge=False,
                                                bulk_discharge_start_time="17:00", 
                                                bulk_discharge_end_time="19:00")
     

@@ -1,4 +1,4 @@
-from ..base import Tariff
+from ..base import ControlStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
@@ -10,7 +10,7 @@ import threading
 import queue
 from typing import Optional
 
-class IntelligentOctopusGoTariff(Tariff):
+class IntelligentOctopusGoStrategy(ControlStrategy):
     """Implementation of Intelligent Octopus Go tariff logic with OCPP management.
 
     Intelligent Octopus Go provides a cheap rate between 23:30 and 05:30,

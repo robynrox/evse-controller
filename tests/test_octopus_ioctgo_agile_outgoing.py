@@ -1,9 +1,9 @@
-"""Tests for IOctGoWithAgileOutgoingTariff bidirectional storage decision logic."""
+"""Tests for IOctGoWithAgileOutgoingStrategy bidirectional storage decision logic."""
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
-from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
+from evse_controller.strategies.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
@@ -69,7 +69,7 @@ def agile_tariff():
     
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
                return_value=mock_thread):
-        tariff = IOctGoWithAgileOutgoingTariff()
+        tariff = IOctGoWithAgileOutgoingStrategy()
         # Inject mock rates
         tariff.agile_rates = create_mock_agile_rates()
         tariff._planned_export_slots = []  # No planned exports for these tests

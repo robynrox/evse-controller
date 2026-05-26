@@ -1,5 +1,5 @@
 import pytest
-from evse_controller.tariffs.octopus.flux import OctopusFluxTariff
+from evse_controller.strategies.octopus.flux import OctopusFluxStrategy
 from evse_controller.drivers.EvseController import ControlState
 from unittest.mock import Mock, patch
 from evse_controller.utils.config import config
@@ -22,7 +22,7 @@ def flux_tariff():
     # Updated patch path to use wallbox_thread instead of thread
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance', 
                return_value=mock_thread):
-        yield OctopusFluxTariff()
+        yield OctopusFluxStrategy()
 
 def test_off_peak_periods(flux_tariff):
     """Test identification of off-peak periods (02:00-05:00)"""

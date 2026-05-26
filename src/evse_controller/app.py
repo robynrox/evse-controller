@@ -30,7 +30,7 @@ from evse_controller.smart_evse_controller import (
     scheduler,
     ScheduledEvent,
     get_system_state,
-    tariffManager
+    strategyManager
 )
 
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
@@ -670,7 +670,10 @@ def get_extended_status():
         (event for event in future_events if event.enabled),
         None
     )
-    battery_soc = evseController.getBatteryChargeLevel()
+    try:
+        battery_soc = evseController.getBatteryChargeLevel()
+    except Exception:
+        battery_soc = -1
 
     return jsonify({
         'current_state': current_state,
@@ -694,7 +697,7 @@ def get_tariff_dashboard_html():
     If no tariff is active or tariff doesn't implement this method, returns empty string.
     """
     try:
-        tariff = tariffManager.get_tariff()
+        tariff = strategyManager.get_strategy()
         
         if tariff is None:
             return jsonify({'html': ''})

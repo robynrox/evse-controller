@@ -1,10 +1,10 @@
-from ..base import Tariff
+from ..base import ControlStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.logging_config import debug, info, warning, error
 
-class CosyOctopusTariff(Tariff):
+class CosyOctopusStrategy(ControlStrategy):
     """Implementation of Cosy Octopus tariff logic."""
 
     def __init__(self, command_queue=None):

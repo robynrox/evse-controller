@@ -71,7 +71,7 @@ class EvseController(PowerMonitorObserver):
     interfering with external control systems.
 
     Args:
-        tariffManager: Manager for electricity tariff rules and scheduling
+        strategyManager: Manager for control strategies and scheduling
 
     Attributes:
         pmon (PowerMonitorInterface): Primary power monitor for grid consumption
@@ -80,17 +80,17 @@ class EvseController(PowerMonitorObserver):
         state (ControlState): Current operational state of the controller
         homeDemandLevels (list): List of (min_power, max_power, target_current) tuples
         hysteresisWindow (int): Power window in Watts to prevent oscillation
-        tariffManager: Manager for electricity tariff rules and scheduling
+        strategyManager: Manager for control strategies and scheduling
         batteryChargeLevel (int): Current battery charge level percentage
         evseCurrent (float): Current EVSE charging/discharging rate
         _ocpp_mode_active (bool): Whether the Wallbox is currently in OCPP mode (tracked via EventBus events)
     """
 
-    def __init__(self, tariffManager):
+    def __init__(self, strategyManager):
         """Initialize the EVSE controller.
 
         Args:
-            tariffManager: Manager for electricity tariff rules and scheduling
+            strategyManager: Manager for control strategies and scheduling
         """
         # Add MAX_HISTORY_POINTS constant
         self.MAX_HISTORY_POINTS = 300
@@ -184,7 +184,7 @@ class EvseController(PowerMonitorObserver):
             "channel_metadata": {}
         }
         self._update_channel_metadata()
-        self.tariffManager = tariffManager
+        self.strategyManager = strategyManager
         self.history_file = config.HISTORY_FILE
         self._load_history()
         self.state_file = config.EVSE_STATE_FILE

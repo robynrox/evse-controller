@@ -1,4 +1,4 @@
-from ..base import Tariff
+from ..base import ControlStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timedelta
 
 
-class IOctGoWithAgileOutgoingTariff(Tariff):
+class IOctGoWithAgileOutgoingStrategy(ControlStrategy):
     """Intelligent Octopus Go tariff with Agile Outgoing export display.
 
     This tariff combines:
@@ -168,6 +168,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
         self._exported_slots = []  # Track slots where export actually occurred
+        self._current_date = None  # Track current date for daily reset of _exported_slots
 
         # Rate fetching state
         self._rate_fetch_timer = None
@@ -1045,6 +1046,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
+
+        # Clear exported slots tracking at midnight when we cross into a new day
+        now = self.get_current_datetime()
+        today = now.date()
+        if self._current_date is None or self._current_date != today:
+            self._current_date = today
+            self._exported_slots = []
 
         # If we have just reached the 00:00 slot or the 16:00 slot then we should schedule fetching
         # the rates again.

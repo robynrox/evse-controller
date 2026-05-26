@@ -1,10 +1,10 @@
 import math
-from ..base import Tariff
+from ..base import ControlStrategy
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 
-class OctopusFluxTariff(Tariff):
+class OctopusFluxStrategy(ControlStrategy):
     """Implementation of Octopus Flux tariff logic.
     
     Octopus Flux provides:

@@ -384,7 +384,7 @@
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
             <input type="number" id="max_export_power_kw" name="tariffs.ioctgo[max_export_power_kw]"
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('max_export_power_kw', 7.2) }}" min="0.1" max="7.2" step="0.1">
-            <small>Maximum export power during Agile slots (default 7.2kW = full Wallbox capacity). Reduce if grid-limited.</small>
+            <small>Planned export power for SoC projection and revenue estimates (default 7.2kW = full Wallbox capacity). Not a hard limiter — reduce to match grid-limited capacity for accurate planning.</small>
         </div>
         <div class="form-group">
             <label for="export_slot_soc_loss_percent">Export Slot SoC Loss (% per 30-min slot):</label>
@@ -406,7 +406,7 @@
             <label for="ioctgo_battery_capacity_kwh">Vehicle Battery Capacity (kWh):</label>
             <input type="number" id="ioctgo_battery_capacity_kwh" name="tariffs.ioctgo[battery_capacity_kwh]" 
                    value="{{ config.tariffs.ioctgo.battery_capacity_kwh }}" min="10" max="200" step="0.1">
-            <small>Set to 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles</small>
+            <small>Your vehicle's usable battery capacity in kWh (e.g., 59 for a Nissan Leaf 62kWh, 40 for a Leaf 40kWh). Used for SoC planning calculations.</small>
         </div>
         <div class="form-group">
             <label class="checkbox-label">
@@ -414,7 +414,7 @@
                     {% if config.tariffs.ioctgo.enable_bulk_discharge %}checked{% endif %}>
                 Enable Bulk Discharge Operation
             </label>
-            <small>Enable or disable bulk discharge operation</small>
+            <small>Enable or disable targeted bulk discharge. When enabled, the system calculates a discharge rate to reach the target SoC by the end time. When disabled, standard load-following is used during the bulk discharge window.</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_bulk_discharge_start_time">Bulk Discharge Start Time (HH:MM):</label>
@@ -445,13 +445,13 @@
             <label for="ioctgo_grid_import_threshold_high_soc">Grid Import Threshold - High SoC (W):</label>
             <input type="number" id="ioctgo_grid_import_threshold_high_soc" name="tariffs.ioctgo[grid_import_threshold_high_soc]" 
                    value="{{ config.tariffs.ioctgo.grid_import_threshold_high_soc }}" min="0" max="5000">
-            <small>When SoC >= threshold, grid import level greater than this amount starts load following. The system aims to cover the house load completely.</small>
+            <small>When SoC >= strategy threshold, grid import above this level triggers load-follow discharge (OCTGO only). In IOCTGO tariffs, a fixed value of 1W is always used.</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_grid_import_threshold_low_soc">Grid Import Threshold - Low SoC (W):</label>
             <input type="number" id="ioctgo_grid_import_threshold_low_soc" name="tariffs.ioctgo[grid_import_threshold_low_soc]" 
                    value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000">
-            <small>When SoC < threshold, grid import level greater than this amount starts load following. The system aims to cover most of the house load with a small amount coming from the grid.</small>
+            <small>When SoC < strategy threshold, grid import above this level triggers load-follow discharge (OCTGO only). In IOCTGO tariffs, a fixed value of 720W is always used.</small>
         </div>
         <div class="form-group">
             <div class="notification">
@@ -475,19 +475,19 @@
             <label for="ioctgo_ocpp_enable_soc_threshold">OCPP Enable SoC Threshold (%):</label>
             <input type="number" id="ioctgo_ocpp_enable_soc_threshold" name="tariffs.ioctgo[ocpp_enable_soc_threshold]" 
                    value="{{ config.tariffs.ioctgo.ocpp_enable_soc_threshold }}" min="0" max="100">
-            <small>Enable OCPP when SoC drops below this level</small>
+            <small>Enable OCPP when SoC drops to or below this level</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_ocpp_disable_soc_threshold">OCPP Disable SoC Threshold (%):</label>
             <input type="number" id="ioctgo_ocpp_disable_soc_threshold" name="tariffs.ioctgo[ocpp_disable_soc_threshold]" 
                    value="{{ config.tariffs.ioctgo.ocpp_disable_soc_threshold }}" min="0" max="100">
-            <small>Disable OCPP in the next half hour slot when SoC rises to this level</small>
+            <small>Disable OCPP when SoC rises to this level (checked continuously between 05:30 and the OCPP Disable Time)</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_ocpp_enable_time">OCPP Enable Time (HH:MM):</label>
             <input type="text" id="ioctgo_ocpp_enable_time" name="tariffs.ioctgo[ocpp_enable_time]" 
                    value="{{ config.tariffs.ioctgo.ocpp_enable_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to enable OCPP if SoC does not fall to the lower limit. Default is 23:30</small>
+            <small>Time to enable OCPP if SoC does not drop to the enable threshold. Default is 23:30. OCPP remains enabled until the OCPP Disable Time.</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_ocpp_disable_time">OCPP Disable Time (HH:MM):</label>
