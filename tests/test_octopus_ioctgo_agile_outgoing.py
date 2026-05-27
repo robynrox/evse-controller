@@ -328,6 +328,49 @@ class TestGetControlState:
         assert "Export slot" in message or "discharge" in message.lower()
 
 
+class TestGetControlStateOffPeak:
+    """Test get_control_state returns CHARGE during off-peak hours."""
+
+    def test_off_peak_charge_at_2330(self, agile_tariff):
+        """At 23:30 during off-peak, get_control_state should return CHARGE."""
+        with patch.object(agile_tariff, '_fetch_rates_async'):
+            control_state, min_c, max_c, reason = agile_tariff.get_control_state(
+                Mock(battery_level=75), 1410  # 23:30
+            )
+        assert control_state == ControlState.CHARGE
+        assert min_c is None
+        assert max_c is None
+        assert "Off-peak" in reason
+
+    def test_off_peak_charge_at_midnight(self, agile_tariff):
+        """At 00:00 during off-peak, get_control_state should return CHARGE."""
+        with patch.object(agile_tariff, '_fetch_rates_async'):
+            control_state, min_c, max_c, reason = agile_tariff.get_control_state(
+                Mock(battery_level=75), 0  # 00:00
+            )
+        assert control_state == ControlState.CHARGE
+        assert "Off-peak" in reason
+
+    def test_off_peak_dormant_when_full(self, agile_tariff):
+        """During off-peak with SoC at max, should return DORMANT."""
+        with patch.object(agile_tariff, '_fetch_rates_async'):
+            control_state, min_c, max_c, reason = agile_tariff.get_control_state(
+                Mock(battery_level=90), 0
+            )
+        assert control_state == ControlState.DORMANT
+        assert "SoC max" in reason
+
+    def test_off_peak_overrides_export_slot(self, agile_tariff):
+        """Off-peak takes priority even when in a planned export slot."""
+        agile_tariff._planned_export_slots = [47]
+        with patch.object(agile_tariff, '_fetch_rates_async'):
+            control_state, min_c, max_c, reason = agile_tariff.get_control_state(
+                Mock(battery_level=75), 1410
+            )
+        assert control_state == ControlState.CHARGE
+        assert "Off-peak" in reason
+
+
 class TestSetHomeDemandLevels:
     """Test set_home_demand_levels() configures correctly for bidirectional."""
     

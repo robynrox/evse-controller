@@ -197,12 +197,23 @@ if loaded_exec_state is not None:
     previous_state = loaded_previous_state
     _fixed_current_amps = loaded_fixed_current
     _apply_exec_state(execState, loaded_fixed_current)
+    # If resuming SMART but no strategy is active, try STARTUP_STATE
+    if execState == ExecState.SMART and strategyManager.get_strategy() is None:
+        if config.STARTUP_STATE in strategyManager.strategy_classes:
+            strategyManager.start_strategy()
+            info(f"SMART state with no strategy - started {config.STARTUP_STATE} from config")
+elif config.STARTUP_STATE in strategyManager.strategy_classes:
+    # STARTUP_STATE is a strategy name - enter SMART with that strategy
+    execState = ExecState.SMART
+    previous_state = None
+    info(f"Starting in SMART state with {config.STARTUP_STATE} strategy")
+    _apply_exec_state(execState)
 elif config.STARTUP_STATE == "FREERUN":
     execState = ExecState.FREERUN
     previous_state = None
     _apply_exec_state(execState)
 else:
-    # No persisted state and not configured for FREERUN - start in FREERUN for safety
+    # No persisted state and not configured for a known state or strategy
     # FREERUN doesn't interfere with anything and is OCPP-independent
     info("No persisted state found, starting in FREERUN state for safety")
     execState = ExecState.FREERUN
@@ -407,7 +418,8 @@ def main():
                 case "s" | "smart":
                     ensure_ocpp_disabled()
                     info("Entering smart tariff controller state")
-                    strategyManager.start_strategy()
+                    if strategyManager.get_strategy() is None:
+                        strategyManager.start_strategy()
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
