@@ -829,6 +829,18 @@ class EvseController(PowerMonitorObserver):
             measurements_data["evse_power"] = evse_power_value
             measurements_data["channel_powers"][evse_abbr] = evse_power_value
 
+        # Add Wallbox efficiency monitoring data
+        evse_state = self.evse.get_state()
+        measurements_data["wallbox"] = {
+            "ac_power": evse_state.ac_power,
+            "ac_voltage": evse_state.ac_voltage,
+            "ac_current": evse_state.ac_current,
+            "dc_voltage": evse_state.dc_voltage,
+            "dc_current": evse_state.dc_current,
+            "dc_power": evse_state.dc_voltage * evse_state.dc_current,
+            "efficiency": evse_state.efficiency
+        }
+
         return measurements_data
 
     def _format_influxdb_field_name(self, channel_name: str) -> str:
@@ -1014,6 +1026,22 @@ class EvseController(PowerMonitorObserver):
                 info(f"CHANGE_SoC {power.getEnergyDelta(self.powerAtBatteryChargeLevel)}; OldC%:{self.powerAtBatteryChargeLevel.soc}; NewC%:{power.soc}; Time:{power.unixtime - self.powerAtBatteryChargeLevel.unixtime}s")
             self.batteryChargeLevel = power.soc
             self.powerAtBatteryChargeLevel = power
+        
+        # Get Wallbox efficiency data for logging
+        evse_state = self.evse.get_state()
+        ac_power = evse_state.ac_power
+        ac_voltage = evse_state.ac_voltage
+        ac_current = evse_state.ac_current
+        dc_voltage = evse_state.dc_voltage
+        dc_current = evse_state.dc_current
+        dc_power = dc_voltage * dc_current
+        efficiency = evse_state.efficiency
+        
+        # Log efficiency data with raw register values
+        if efficiency > 0:
+            mode = "CHARGE" if ac_power > 0 else "DISCHARGE"
+            info(f"EFFICIENCY {mode} AC:{ac_power:.0f}W({ac_voltage:.0f}V,{ac_current:.0f}A) DC:{dc_power:.0f}W({dc_voltage:.1f}V,{dc_current:.1f}A) η:{efficiency:.0f}%")
+        
         if self.write_api:
             try:
                 point = influxdb_client.Point("measurement")
@@ -1023,6 +1051,15 @@ class EvseController(PowerMonitorObserver):
                 point = point.field("evseTargetCurrent", self.evseCurrent)
                 point = point.field("evseDesiredCurrent", desiredEvseCurrent)
                 point = point.field("batteryChargeLevel", self.evse.get_state().battery_level)
+
+                # Add Wallbox efficiency monitoring data
+                point = point.field("ac_power", float(ac_power))
+                point = point.field("ac_voltage", float(ac_voltage))
+                point = point.field("ac_current", float(ac_current))
+                point = point.field("dc_voltage", float(dc_voltage))
+                point = point.field("dc_current", float(dc_current))
+                point = point.field("dc_power", float(dc_power))
+                point = point.field("efficiency", float(efficiency))
 
                 # Add primary device channels if they exist and are enabled
                 if primary_power:

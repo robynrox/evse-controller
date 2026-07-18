@@ -3,42 +3,49 @@ from .octopus.octgo import OctopusGoTariff
 from .octopus.flux import OctopusFluxTariff
 from .octopus.cosy import CosyOctopusTariff
 from .octopus.ioctgo import IntelligentOctopusGoTariff
+from .octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from .base import Tariff
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseState
 from evse_controller.utils.logging_config import debug
 
 class TariffManager:
-    def __init__(self):
+    def __init__(self, command_queue):
+        self._command_queue = command_queue
         # Store tariff classes instead of instances to instantiate only when needed
         self.tariff_classes = {
             "OCTGO": OctopusGoTariff,
             "IOCTGO": IntelligentOctopusGoTariff,
+            "IOCTGO_AGILEOUT": IOctGoWithAgileOutgoingTariff,
             "COSY": CosyOctopusTariff,
             "FLUX": OctopusFluxTariff
         }
         # Check if startup state is a tariff that exists in our tariffs dictionary
         if config.STARTUP_STATE in self.tariff_classes:
             # Instantiate the tariff for the startup state
-            self.current_tariff = self.tariff_classes[config.STARTUP_STATE]()
+            self.current_tariff = self.tariff_classes[config.STARTUP_STATE](command_queue=self._command_queue)
             self.tariff_name = config.STARTUP_STATE
         else:
             # For non-tariff startup states (like FREERUN), set to None
             self.current_tariff = None
             self.tariff_name = None
 
-    def set_tariff(self, tariff_name, command_queue=None):
+    def set_tariff(self, tariff_name):
         if tariff_name in self.tariff_classes:
             self.stop_tariff()
             # Create a new instance of the requested tariff with the command queue
-            self.current_tariff = self.tariff_classes[tariff_name](command_queue=command_queue)
+            self.current_tariff = self.tariff_classes[tariff_name](command_queue=self._command_queue)
             # The initialization now happens in the tariff's constructor
             self.tariff_name = tariff_name
             return True
         return False
     
     def start_tariff(self):
-        """Start the same tariff that was previously set."""
-        return self.set_tariff(self.tariff_name)
+        """Start the tariff configured in config.STARTUP_STATE."""
+        # Always use the current config value, not the cached tariff_name
+        # This allows config changes to take effect when switching to SMART mode
+        if config.STARTUP_STATE in self.tariff_classes:
+            return self.set_tariff(config.STARTUP_STATE)
+        return False
 
     def get_tariff(self) -> Tariff:
         return self.current_tariff

@@ -13,10 +13,7 @@
             POWER_HOME: "/static/images/V2H_-_Battery_to_House_black.svg",
             BALANCE: "/static/images/S2V_V2H_-_Solar_to_Battery_and_House_black.svg",
             PAUSE: "/static/images/On-Off_black.svg",
-            OCTGO: "/static/images/Go_black.svg",
-            IOCTGO: "/static/images/IOctGo_black.svg",
-            FLUX: "/static/images/Flux_black.svg",
-            COSY: "/static/images/Cosy_black.svg",
+            SMART: "/static/images/SMART_black.svg",
             FREERUN: "/static/images/Freerun_black.svg",
             OCPP: "/static/images/OCPP_ON_black.svg"
         };
@@ -291,17 +288,8 @@
     <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
         <img src="" id="pause-icon" alt="Pause">
     </button>
-    <button class="svg-button" onclick="sendCommand('octgo')" title="Select the Octopus Go tariff controller">
-        <img src="" id="octgo-icon" alt="Octopus Go">
-    </button>
-    <button class="svg-button" onclick="sendCommand('ioctgo')" title="Select the Intelligent Octopus Go tariff controller">
-        <img src="" id="ioctgo-icon" alt="Intelligent Octopus Go">
-    </button>
-    <button class="svg-button" onclick="sendCommand('flux')" title="Select the Octopus Flux tariff controller">
-        <img src="" id="flux-icon" alt="Octopus Flux">
-    </button>
-    <button class="svg-button" onclick="sendCommand('cosy')" title="Select the Cosy Octopus tariff controller">
-        <img src="" id="cosy-icon" alt="Cosy Octopus">
+    <button class="svg-button" onclick="sendCommand('smart')" title="Use configured smart tariff (set in Configuration)">
+        <img src="" id="smart-icon" alt="Smart Tariff">
     </button>
     <button class="svg-button" onclick="sendCommand('freerun')" title="Allow EVSE to operate independently without Modbus control">
         <img src="" id="free-run-icon" alt="Free Run Mode">
@@ -360,27 +348,9 @@
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-octgo-icon" alt="Octopus Go icon">
+                <img src="" id="legend-smart-icon" alt="Smart Tariff icon">
                 <div class="legend-text">
-                    <strong>Octopus Go:</strong> Select the Octopus Go tariff controller
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-ioctgo-icon" alt="Intelligent Octopus Go icon">
-                <div class="legend-text">
-                    <strong>Intelligent Octopus Go:</strong> Select the Intelligent Octopus Go tariff controller
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-flux-icon" alt="Octopus Flux icon">
-                <div class="legend-text">
-                    <strong>Octopus Flux:</strong> Select the Octopus Flux tariff controller
-                </div>
-            </div>
-            <div class="legend-item">
-                <img src="" id="legend-cosy-icon" alt="Cosy Octopus icon">
-                <div class="legend-text">
-                    <strong>Cosy Octopus:</strong> Select the Cosy Octopus tariff controller
+                    <strong>Smart Tariff:</strong> Use configured smart tariff (set in Configuration page)
                 </div>
             </div>
             <div class="legend-item">
@@ -399,7 +369,10 @@
     </div>
 </div>
 
-<div id="chart" style="width:100%;height:600px;"></div>
+<!-- Tariff dashboard display area -->
+<div id="tariff-dashboard-area" style="min-height:50px;margin:10px 0;"></div>
+
+<div id="chart" style="width:100%;height:550px;"></div>
 
 <!-- Mobile measurements panel (appears after the graph on mobile) -->
 <div id="mobile-measurements-panel" class="measurements-panel mobile-measurements">
@@ -607,10 +580,7 @@
         document.getElementById('power-home-icon').src = ICONS.POWER_HOME;
         document.getElementById('balance-icon').src = ICONS.BALANCE;
         document.getElementById('pause-icon').src = ICONS.PAUSE;
-        document.getElementById('octgo-icon').src = ICONS.OCTGO;
-        document.getElementById('ioctgo-icon').src = ICONS.IOCTGO;
-        document.getElementById('flux-icon').src = ICONS.FLUX;
-        document.getElementById('cosy-icon').src = ICONS.COSY;
+        document.getElementById('smart-icon').src = ICONS.SMART;
         document.getElementById('free-run-icon').src = ICONS.FREERUN;
         document.getElementById('ocpp-icon').src = ICONS.OCPP;
 
@@ -622,10 +592,7 @@
         document.getElementById('legend-power-home-icon').src = ICONS.POWER_HOME;
         document.getElementById('legend-balance-icon').src = ICONS.BALANCE;
         document.getElementById('legend-pause-icon').src = ICONS.PAUSE;
-        document.getElementById('legend-octgo-icon').src = ICONS.OCTGO;
-        document.getElementById('legend-ioctgo-icon').src = ICONS.IOCTGO;
-        document.getElementById('legend-flux-icon').src = ICONS.FLUX;
-        document.getElementById('legend-cosy-icon').src = ICONS.COSY;
+        document.getElementById('legend-smart-icon').src = ICONS.SMART;
         document.getElementById('legend-free-run-icon').src = ICONS.FREERUN;
         document.getElementById('legend-ocpp-icon').src = ICONS.OCPP;
     });
@@ -843,7 +810,29 @@
                         dateStyle: 'short',
                         timeStyle: 'short'
                     });
-                    nextEventElement.textContent = `${data.next_event.state} at ${formattedTime}`;
+                    
+                    // Build event description with conditional info
+                    let eventDesc = `${data.next_event.state} at ${formattedTime}`;
+                    
+                    if (data.next_event.time_window_end) {
+                        // BETWEEN event
+                        eventDesc = `BETWEEN ${eventTime.toLocaleTimeString(undefined, {hour: '2-digit', minute:'2-digit'})} AND ${data.next_event.time_window_end}`;
+                        if (data.next_event.min_soc || data.next_event.max_soc) {
+                            eventDesc += ' IF SoC ';
+                            if (data.next_event.min_soc) eventDesc += `≥${data.next_event.min_soc}%`;
+                            if (data.next_event.min_soc && data.next_event.max_soc) eventDesc += ' AND ';
+                            if (data.next_event.max_soc) eventDesc += `≤${data.next_event.max_soc}%`;
+                        }
+                        eventDesc += ` THEN ${data.next_event.state}`;
+                    } else if (data.next_event.min_soc || data.next_event.max_soc) {
+                        // AT event with SoC conditions
+                        eventDesc += ' IF SoC ';
+                        if (data.next_event.min_soc) eventDesc += `≥${data.next_event.min_soc}%`;
+                        if (data.next_event.min_soc && data.next_event.max_soc) eventDesc += ' AND ';
+                        if (data.next_event.max_soc) eventDesc += `≤${data.next_event.max_soc}%`;
+                    }
+                    
+                    nextEventElement.textContent = eventDesc;
                 } else {
                     nextEventElement.textContent = 'No events scheduled';
                 }
@@ -862,14 +851,36 @@
             }
         }
 
+        async function updateTariffDisplay() {
+            try {
+                const response = await fetch('/api/tariff/dashboard_html');
+                const data = await response.json();
+                
+                const container = document.getElementById('tariff-dashboard-area');
+                if (data.html && data.html.trim() !== '') {
+                    container.innerHTML = data.html;
+                    container.style.display = 'block';
+                } else {
+                    // No HTML - collapse the area
+                    container.innerHTML = '';
+                    container.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error fetching tariff display:', error);
+                // Silently fail - tariff display is optional
+            }
+        }
+
         // Set up update intervals
         setInterval(updateChart, 2000);  // Every 2 seconds
         setInterval(updateStatus, 1000); // Every 1 second to match measurement updates
+        setInterval(updateTariffDisplay, 5000); // Every 5 seconds for tariff display
 
         // Initial calls
         loadChannelMetadata(); // Load metadata first
         updateChart();
         updateStatus();
+        updateTariffDisplay();
 
         // Add resize handler
         window.addEventListener('resize', () => {

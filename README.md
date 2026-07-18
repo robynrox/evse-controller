@@ -288,6 +288,8 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `ocpp_disable_soc_threshold`: Disable OCPP in the next half hour slot when SoC rises to this level (0-100)
 - `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")
 - `ocpp_disable_time`: Time to disable OCPP even if the SoC does not rise to the desired level in "HH:MM" format (default "11:00")
+- `export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during bulk export (0 = use calculated value based on export power). Set this to your measured value for more accurate export planning
+- `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

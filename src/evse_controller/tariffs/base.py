@@ -21,20 +21,21 @@ class Tariff:
                     "export_rate": float
                 }
             }
+        command_queue (queue.Queue): Queue for sending control commands to the EVSE controller
     """
 
     def __init__(self, command_queue: Optional[queue.Queue] = None):
-        """Initialize base tariff with default time-of-use rates."""
+        """Initialize base tariff with default time-of-use rates.
+        
+        Args:
+            command_queue: Queue for sending control commands to the EVSE controller
+        """
         self.time_of_use = {
             "rate": {"start": "00:00", "end": "24:00", "import_rate": 0.2483, "export_rate": 0.15}
         }
         self.command_queue = command_queue
         self._time_function = lambda: __import__('time').time()  # Default to real time
         self._datetime_function = lambda: __import__('datetime').datetime.now()  # Default to real datetime
-
-    def set_command_queue(self, command_queue: queue.Queue):
-        """Set the command queue for this tariff."""
-        self.command_queue = command_queue
 
     def set_time_functions(self, time_func=None, datetime_func=None):
         """Set custom time functions for testing purposes."""
@@ -173,14 +174,32 @@ class Tariff:
     
     def cleanup(self):
         """Clean up resources used by the tariff implementation.
-        
+
         This method should be called when the tariff is no longer needed
         to release any resources sych as threads, connections, or other
         managed resources.
-        
+
         Subclasses should override this method to perform any necessary
         cleanup specific to their implementation.
         """
         # Default impl does nothing
         pass
+
+    def get_dashboard_html(self) -> str:
+        """Return HTML for dashboard display area.
+        
+        This method allows tariffs to provide custom HTML content for display
+        on the main dashboard. The HTML is fetched asynchronously and displayed
+        in a dedicated area above the consumption graph.
+        
+        Returns:
+            str: HTML string to display, or empty string if no content.
+                 Empty string causes the dashboard area to collapse.
+        
+        Note:
+            Subclasses should override this method to provide tariff-specific
+            dashboard content. The HTML should be self-contained (inline CSS
+            or reference existing styles).
+        """
+        return ""
 

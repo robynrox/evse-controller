@@ -14,7 +14,13 @@ class MockModbusClient(ModbusClientInterface):
             0x021a: [80],                  # Battery level
             0x102: [16],                   # Current
             0x101: [1],                    # Control state (1=START_CHARGING, 2=STOP_CHARGING)
-            0x51: [0]                      # Control lockout (0=USER_CONTROL, 1=MODBUS_CONTROL)
+            0x51: [0],                     # Control lockout (0=USER_CONTROL, 1=MODBUS_CONTROL)
+            # Efficiency monitoring registers
+            0x020E: [1000],                # AC Power (Watts)
+            0x020A: [230],                 # AC Voltage (Volts)
+            0x0207: [5],                   # AC Current (Amps)
+            0x0223: [400],                 # DC Voltage (0.1V resolution = 40.0V)
+            0x0224: [250]                  # DC Current (0.1A resolution = 25.0A, signed)
         }
         self._communication_fails = False
         self._recovering = False
@@ -480,7 +486,7 @@ class TestWallboxThread(TestCase):
                 (2, EvseState.WAITING_FOR_CAR_DEMAND, "Waiting for car demand"),
                 (3, EvseState.WAITING_FOR_SCHEDULE, "Waiting for schedule"),
                 (4, EvseState.PAUSED, "Paused state"),
-                (7, EvseState.ERROR, "Error state"),
+                (12, EvseState.ERROR, "Error state"),
                 (11, EvseState.DISCHARGING, "Discharging state")
             ]
             

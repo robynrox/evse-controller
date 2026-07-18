@@ -8,7 +8,12 @@ class CosyOctopusTariff(Tariff):
     """Implementation of Cosy Octopus tariff logic."""
 
     def __init__(self, command_queue=None):
-        super().__init__()
+        """Initialize Cosy Octopus tariff.
+        
+        Args:
+            command_queue: Queue for sending commands to the main loop
+        """
+        super().__init__(command_queue=command_queue)
         low = 0.1286
         med = 0.2622
         high = 0.3932

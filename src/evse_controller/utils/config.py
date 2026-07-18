@@ -76,6 +76,10 @@ class Config:
                                 'bulk_discharge_end_time': '19:00',
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
+                                'min_agile_discharge_soc': 60,
+                                'max_export_power_kw': 7.2,
+                                'export_slot_soc_loss_percent': 0,
+                                'non_export_slot_soc_loss_percent': 1.0,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -84,6 +88,9 @@ class Config:
                                 'ocpp_enable_time': '23:30',
                                 'ocpp_disable_time': '11:00'
                             }
+                        },
+                        'octopus': {
+                            'region': 'K'  # Southern Wales (default)
                         }
                     }
             else:
@@ -338,6 +345,36 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_time", value)
     )
 
+    # Octopus Agile Outgoing region
+    OCTOPUS_REGION = property(
+        lambda self: self._get_config_value("octopus", "region", "K"),
+        lambda self, value: self._set_config_value("octopus", "region", value)
+    )
+
+    # Minimum SoC for Agile Outgoing discharge
+    MIN_AGILE_DISCHARGE_SOC = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "min_agile_discharge_soc", 60),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
+    )
+
+    # Maximum export power for Agile Outgoing (kW)
+    MAX_EXPORT_POWER_KW = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "max_export_power_kw", 7.2),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)
+    )
+
+    # Agile Outgoing export slot SoC loss percentage (per 30-min slot, 0 = use calculated value)
+    IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "export_slot_soc_loss_percent", 0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "export_slot_soc_loss_percent", value)
+    )
+
+    # Agile Outgoing non-export (load-following) slot SoC loss percentage (per 30-min slot)
+    IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", 1.0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
+    )
+
     # Wallbox simulator properties
     USE_WALLBOX_SIMULATOR = property(
         lambda self: self._get_config_value("wallbox", "use_simulator", False),
@@ -345,7 +382,7 @@ class Config:
     )
 
     SIMULATOR_INITIAL_BATTERY_LEVEL = property(
-        lambda self: self._get_config_value("wallbox.simulator", "initial_battery_level", 50),
+        lambda self: self._get_config_value("wallbox.simulator", "initial_battery_level", 80),
         lambda self, value: self._set_config_value("wallbox.simulator", "initial_battery_level", value)
     )
 
@@ -484,6 +521,10 @@ class Config:
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+                    'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
+                    'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,
@@ -492,6 +533,9 @@ class Config:
                     'ocpp_enable_time': self.IOCTGO_OCPP_ENABLE_TIME,
                     'ocpp_disable_time': self.IOCTGO_OCPP_DISABLE_TIME
                 }
+            },
+            'octopus': {
+                'region': self.OCTOPUS_REGION
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

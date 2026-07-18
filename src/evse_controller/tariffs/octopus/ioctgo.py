@@ -57,13 +57,7 @@ class IntelligentOctopusGoTariff(Tariff):
 
         # OCPP state tracking
         self._ocpp_enabled = None  # Will be initialized to current state
-        self._last_soc_check = -1  # Track last SoC to detect changes
-        self._dynamic_ocpp_disable_time = None  # Track dynamic OCPP disable time (minutes since midnight)
-        self._last_ocpp_request_time = 0  # Track time of last OCPP request (to prevent spam)
-        self._ocpp_request_cooldown = 300  # 5 minutes cooldown in seconds
-
-        # Threading lock for safe access to _ocpp_enabled state
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.Lock()  # Threading lock for safe access to _ocpp_enabled state
 
         # === CONFIGURABLE PARAMETERS ===
         # These parameters can be adjusted based on your specific setup
@@ -260,17 +254,27 @@ class IntelligentOctopusGoTariff(Tariff):
         return required_amps
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
-        """Determine charging strategy based on time and battery level."""
+        """Determine charging strategy based on time and battery level.
+        
+        During off-peak hours (23:30-05:30), charging at maximum rate has absolute
+        priority to take advantage of cheap electricity, regardless of other settings.
+        """
         battery_level = state.battery_level
 
+        # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
+        # Charge at max rate regardless of SoC or other states
+        if self.is_off_peak(dayMinute):
+            if battery_level < config.MAX_CHARGE_PERCENT:
+                return ControlState.CHARGE, None, None, "IOCTGO Off-peak: CHARGE AT MAX RATE (priority)"
+            else:
+                return ControlState.DORMANT, None, None, "IOCTGO Off-peak: SoC max, dormant"
+
+        # Handle unknown SoC (outside off-peak hours)
         if battery_level == -1:
             return ControlState.CHARGE, 3, 3, "IOCTGO SoC unknown, charge at 3A until known"
-        elif self.is_off_peak(dayMinute):
-            if battery_level < config.MAX_CHARGE_PERCENT:
-                return ControlState.CHARGE, None, None, "IOCTGO Cheap rate: charge at max rate"
-            else:
-                return ControlState.DORMANT, None, None, "IOCTGO Cheap rate: SoC max, remain dormant"
-        elif battery_level <= 25:
+
+        # Outside off-peak hours, use normal logic
+        if battery_level <= 25:
             return ControlState.DORMANT, None, None, "IOCTGO Battery depleted, remain dormant"
         elif 330 <= dayMinute < self.BULK_DISCHARGE_START_TIME:  # 05:30 to bulk discharge start time
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO Day rate before bulk discharge: load follow discharge"
@@ -363,7 +367,14 @@ class IntelligentOctopusGoTariff(Tariff):
             return False
 
     def _manage_ocpp_state(self, state: EvseAsyncState, dayMinute: int):
-        """Manage OCPP state by using different approaches for different triggers."""
+        """Manage OCPP state by scheduling events when OCPP is triggered.
+        
+        When OCPP is triggered (by SoC or time), this method:
+        1. Sends "ocpp" command to switch to OCPP mode
+        2. Creates an unconditional event to switch back at OCPP_DISABLE_TIME
+        3. Creates a conditional event to switch back early if SoC threshold is reached
+           (between 05:30 next day and OCPP_DISABLE_TIME)
+        """
         try:
             # Use thread-safe access to OCPP state
             with self._state_lock:
@@ -371,115 +382,27 @@ class IntelligentOctopusGoTariff(Tariff):
 
             # Check if we should enable OCPP due to low SoC
             should_enable_due_to_soc = self.should_enable_ocpp_due_to_soc(state)
-            
+
             # Check if we should enable OCPP due to time (23:30)
             should_enable_due_to_time = self.should_enable_ocpp_due_to_time(dayMinute)
 
-            # Check if we should disable OCPP
-            should_disable = self.should_disable_ocpp(state, dayMinute)
+            debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable_soc:{should_enable_due_to_soc}, should_enable_time:{should_enable_due_to_time}")
 
-            debug(f"IOCTGO OCPP:{is_ocpp_currently_enabled}, should_enable_soc:{should_enable_due_to_soc}, should_enable_time:{should_enable_due_to_time}, should_disable:{should_disable}")
+            # Handle OCPP enable (both SoC and time triggers use the command queue)
+            if (should_enable_due_to_soc or should_enable_due_to_time) and not is_ocpp_currently_enabled:
+                trigger_type = "SoC" if should_enable_due_to_soc else "time"
+                info(f"IOCTGO Requesting OCPP enable via command queue ({trigger_type}-triggered)")
 
-            # Check if we're still in cooldown period after last OCPP request
-            current_time = self.get_current_time()
-            if current_time - self._last_ocpp_request_time < self._ocpp_request_cooldown:
-                debug(f"IOCTGO OCPP request cooldown active - {int(self._ocpp_request_cooldown - (current_time - self._last_ocpp_request_time))} seconds remaining")
-            else:
-                # Handle SoC-based OCPP enable (switch to OCPP state)
-                if should_enable_due_to_soc and not is_ocpp_currently_enabled:
-                    info("IOCTGO Requesting OCPP enable via command queue (SoC-triggered)")
-                    
-                    # Put the 'ocpp' command in the queue to switch to OCPP mode
-                    if self.command_queue:
-                        self.command_queue.put("ocpp")
-                        info("IOCTGO OCPP enable command sent to queue (SoC-triggered)")
-                        # Update the last request time to start cooldown period
-                        self._last_ocpp_request_time = current_time
-                        
-                        # Create a scheduled event to return to IOCTGO at 23:30 today
-                        self._schedule_return_to_ioctgo()
-                    
-                # Handle time-based OCPP enable (stay in IOCTGO)
-                elif should_enable_due_to_time and not is_ocpp_currently_enabled:
-                    info("IOCTGO Requesting OCPP enable via OCPP Manager (time-triggered)")
-                    
-                    # Use OCPPManager directly to enable OCPP without changing state
-                    from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-                    try:
-                        ocpp_manager.set_state(True)
-                        info("IOCTGO OCPP enabled via manager (time-triggered)")
-                        # Update the last request time to start cooldown period
-                        self._last_ocpp_request_time = current_time
-                        # When OCPP is enabled, set the initial dynamic disable time to default
-                        with self._state_lock:
-                            self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
-                    except Exception as e:
-                        error(f"IOCTGO Could not enable OCPP via manager: {e}")
-                
-                # Handle OCPP disable (for both scenarios)
-                elif should_disable and is_ocpp_currently_enabled:
-                    info("IOCTGO Requesting OCPP disable")
-                    
-                    # Use OCPPManager to disable OCPP
-                    from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-                    try:
-                        ocpp_manager.set_state(False)
-                        info("IOCTGO OCPP disabled")
-                        # Update the last request time to start cooldown period
-                        self._last_ocpp_request_time = current_time
-                        # Clear the dynamic disable time since we've executed it
-                        with self._state_lock:
-                            self._dynamic_ocpp_disable_time = None
-                    except Exception as e:
-                        error(f"IOCTGO Could not disable OCPP: {e}")
+                # Put the 'ocpp' command in the queue to switch to OCPP mode
+                if self.command_queue:
+                    self.command_queue.put("ocpp")
+                    info(f"IOCTGO OCPP enable command sent to queue ({trigger_type}-triggered)")
 
-            # If OCPP is enabled, check SoC at specific times to potentially update dynamic disable time
-            if is_ocpp_currently_enabled:
-                # Check if we're at the right times to evaluate SoC for dynamic disable time
-                current_minute = dayMinute % 60
+                    # Schedule events to return to smart tariff
+                    self._schedule_return_to_smart()
 
-                # Check for xx:29 and xx:59 times (29 and 59 minutes past the hour)
-                is_check_time = (current_minute == 29 or current_minute == 59)
-
-                # Do not check if not yet at 05:29
-                if dayMinute < self._time_to_minutes("05:29"):
-                    is_check_time = False
-
-                debug(f"IOCTGO OCPP disable check, is_check_time:{is_check_time}")
-                if is_check_time:
-                    info("IOCTGO Checking whether to disable OCPP state")
-
-                    # If SoC has dropped below disable threshold, clear any dynamic disable time
-                    if (state.battery_level != -1 and
-                        state.battery_level < self.OCPP_DISABLE_SOC_THRESHOLD):
-                        with self._state_lock:
-                            if (self._dynamic_ocpp_disable_time is not None and
-                                self._dynamic_ocpp_disable_time != self.OCPP_DISABLE_TIME):
-                                self._dynamic_ocpp_disable_time = self.OCPP_DISABLE_TIME
-                                info(f"IOCTGO Cleared dynamic OCPP disable time because SoC ({state.battery_level}%) dropped below threshold ({self.OCPP_DISABLE_SOC_THRESHOLD}%)")
-
-                    # If SoC has reached disable threshold and no dynamic time is set, schedule one
-                    elif (state.battery_level != -1 and
-                          state.battery_level >= self.OCPP_DISABLE_SOC_THRESHOLD):
-                        # If SoC has reached threshold and dynamic disable time needs updating
-                        with self._state_lock:
-                            dynamic_time_check = self._dynamic_ocpp_disable_time
-                        if ((dynamic_time_check is None or
-                             dynamic_time_check == self.OCPP_DISABLE_TIME)):
-                            # Calculate the appropriate disable time based on current period
-                            if self.is_off_peak(dayMinute):
-                                # During cheap rate period (23:30 to 05:30), schedule disable at 05:30
-                                new_disable_time = self._time_to_minutes("05:30")
-                            else:
-                                # Outside cheap rate period, schedule at next half-hour boundary
-                                new_disable_time = self._get_next_half_hour(dayMinute)
-
-                            # Only update if the calculated time is valid (not in the past relative to now)
-                            if new_disable_time > dayMinute:
-                                with self._state_lock:
-                                    self._dynamic_ocpp_disable_time = new_disable_time
-                                info(f"IOCTGO Updated dynamic OCPP disable time to {self._minutes_to_time_str(self._dynamic_ocpp_disable_time)} "
-                                     f"based on SoC threshold reached ({state.battery_level}%)")
+            # Handle OCPP disable via scheduled events (not here - events handle it)
+            # The scheduled events will trigger "smart" state when conditions are met
 
         except Exception as e:
             error(f"IOCTGO Failed to manage OCPP state: {e}")
@@ -560,56 +483,55 @@ class IntelligentOctopusGoTariff(Tariff):
 
         return False
 
-    def should_disable_ocpp(self, state: EvseAsyncState, dayMinute: int) -> bool:
-        """Determine if OCPP should be disabled based on SoC or time.
-
-        Args:
-            state: Current EVSE state including battery level
-            dayMinute: Current time in minutes since midnight
-
-        Returns:
-            bool: True if OCPP should be disabled AND is currently enabled
+    def _schedule_return_to_smart(self):
+        """Schedule events to return to smart tariff when OCPP is enabled.
+        
+        Creates two events:
+        1. Unconditional: AT OCPP_DISABLE_TIME -> switch to "smart"
+        2. Conditional: BETWEEN 05:30 (next day) AND OCPP_DISABLE_TIME, 
+           IF SoC >= OCPP_DISABLE_SOC_THRESHOLD -> switch to "smart"
         """
-        if not self.SMART_OCPP_OPERATION:
-            return False
-
-        # Don't disable if OCPP is already disabled
-        with self._state_lock:
-            ocpp_enabled = self._ocpp_enabled
-            dynamic_disable_time = self._dynamic_ocpp_disable_time
-
-        if not ocpp_enabled:
-            return False
-
-        # Check if the dynamic disable time has been reached
-        if dynamic_disable_time is not None:
-            # If we've reached the dynamic disable time, return True to disable OCPP
-            if dynamic_disable_time <= dayMinute < self.OCPP_ENABLE_TIME:
-                return True
-
-        return False
-
-    def _schedule_return_to_ioctgo(self):
-        """Helper method to schedule return to IOCTGO state."""
         from datetime import datetime, timedelta
         from evse_controller.scheduler import ScheduledEvent
 
-        # Calculate the time for 23:30 today using the tariff's datetime function
         now = self.get_current_datetime()
-        target_time = now.replace(hour=23, minute=30, second=0, microsecond=0)
-
-        # Since this method is only called when OCPP is triggered by SoC during the day,
-        # we want to schedule for today's 23:30. However, if the current time is already
-        # past 23:30 today (edge case), we shouldn't schedule anything
-        if target_time <= now:
-            # Don't schedule anything if we're already past 23:30 today
-            info("IOCTGO Not scheduling return to IOCTGO as 23:30 is already past today")
-            return
-
-        # Create a scheduled event to return to IOCTGO
-        event = ScheduledEvent(target_time, "ioctgo")
-        self._add_scheduled_event(event)
-        info(f"IOCTGO Scheduled return to IOCTGO state at {target_time}")
+        
+        # Calculate OCPP disable time for today/tomorrow
+        disable_hour, disable_minute = map(int, self.OCPP_DISABLE_TIME_STR.split(':'))
+        target_disable_time = now.replace(hour=disable_hour, minute=disable_minute, second=0, microsecond=0)
+        
+        # If disable time is already past today, schedule for tomorrow
+        if target_disable_time <= now:
+            target_disable_time += timedelta(days=1)
+        
+        # Event 1: Unconditional switch to smart at OCPP_DISABLE_TIME
+        event_unconditional = ScheduledEvent(
+            timestamp=target_disable_time,
+            state="smart"
+        )
+        self._add_scheduled_event(event_unconditional)
+        info(f"IOCTGO Scheduled unconditional return to smart at {target_disable_time}")
+        
+        # Event 2: Conditional switch to smart if SoC threshold is reached
+        # Window: 05:30 next day to OCPP_DISABLE_TIME
+        # Calculate 05:30 for the day after today (next morning)
+        next_day = now.date() + timedelta(days=1)
+        window_start = datetime(next_day.year, next_day.month, next_day.day, 5, 30, 0, 0)
+        
+        # The window end is the same as the unconditional event time
+        # But we need it in HH:MM format for the scheduler
+        window_end_str = self.OCPP_DISABLE_TIME_STR
+        
+        # Create conditional event
+        # Note: The event timestamp is the window start (05:30), and time_window_end is the disable time
+        event_conditional = ScheduledEvent(
+            timestamp=window_start,
+            state="smart",
+            time_window_end=window_end_str,
+            min_soc=float(self.OCPP_DISABLE_SOC_THRESHOLD)
+        )
+        self._add_scheduled_event(event_conditional)
+        info(f"IOCTGO Scheduled conditional return to smart: BETWEEN 05:30 AND {window_end_str}, IF SoC >= {self.OCPP_DISABLE_SOC_THRESHOLD}%")
 
     def _add_scheduled_event(self, event):
         """Add a scheduled event using the scheduler from the main controller.

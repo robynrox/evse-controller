@@ -310,18 +310,14 @@
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
         </div>
         <div class="form-group">
-            <label for="startup_state">Startup State:</label>
+            <label for="startup_state">Smart Tariff In Use:</label>
             <select id="startup_state" name="charging[startup_state]" required>
-                <option value="FREERUN" {% if config.charging.startup_state=='FREERUN' %}selected{% endif %}>FREERUN
-                </option>
-                <option value="COSY" {% if config.charging.startup_state=='COSY' %}selected{% endif %}>COSY
-                </option>
-                <option value="OCTGO" {% if config.charging.startup_state=='OCTGO' %}selected{% endif %}>OCTGO
-                </option>
-                <option value="IOCTGO" {% if config.charging.startup_state=='IOCTGO' %}selected{% endif %}>IOCTGO
-                </option>
-                <option value="FLUX" {% if config.charging.startup_state=='FLUX' %}selected{% endif %}>FLUX
-                </option>
+                <option value="FREERUN" {% if config.charging.startup_state=='FREERUN' %}selected{% endif %}>FREE RUN</option>
+                <option value="COSY" {% if config.charging.startup_state=='COSY' %}selected{% endif %}>COSY</option>
+                <option value="OCTGO" {% if config.charging.startup_state=='OCTGO' %}selected{% endif %}>OCTGO</option>
+                <option value="IOCTGO" {% if config.charging.startup_state=='IOCTGO' %}selected{% endif %}>IOCTGO</option>
+                <option value="IOCTGO_AGILEOUT" {% if config.charging.startup_state=='IOCTGO_AGILEOUT' %}selected{% endif %}>IOCTGO with Agile Outgoing</option>
+                <option value="FLUX" {% if config.charging.startup_state=='FLUX' %}selected{% endif %}>FLUX</option>
             </select>
         </div>
     </div>
@@ -353,6 +349,54 @@
                 <option value="CRITICAL" {% if config.logging.console_level=='CRITICAL' %}selected{% endif %}>
                     CRITICAL</option>
             </select>
+        </div>
+    </div>
+    <div class="config-section">
+        <h2>Octopus Agile Outgoing Configuration</h2>
+        <p>Configure your region for Agile Outgoing export rate display.</p>
+        <div class="form-group">
+            <label for="octopus_region">Region:</label>
+            <select id="octopus_region" name="octopus[region]" required>
+                <option value="A" {% if config.get('octopus', {}).get('region', 'K')=='A' %}selected{% endif %}>Eastern England (A)</option>
+                <option value="B" {% if config.get('octopus', {}).get('region', 'K')=='B' %}selected{% endif %}>East Midlands (B)</option>
+                <option value="C" {% if config.get('octopus', {}).get('region', 'K')=='C' %}selected{% endif %}>London (C)</option>
+                <option value="D" {% if config.get('octopus', {}).get('region', 'K')=='D' %}selected{% endif %}>Merseyside & Northern Wales (D)</option>
+                <option value="E" {% if config.get('octopus', {}).get('region', 'K')=='E' %}selected{% endif %}>West Midlands (E)</option>
+                <option value="F" {% if config.get('octopus', {}).get('region', 'K')=='F' %}selected{% endif %}>North Eastern England (F)</option>
+                <option value="G" {% if config.get('octopus', {}).get('region', 'K')=='G' %}selected{% endif %}>North Western England (G)</option>
+                <option value="H" {% if config.get('octopus', {}).get('region', 'K')=='H' %}selected{% endif %}>Southern England (H)</option>
+                <option value="J" {% if config.get('octopus', {}).get('region', 'K')=='J' %}selected{% endif %}>South Eastern England (J)</option>
+                <option value="K" {% if config.get('octopus', {}).get('region', 'K')=='K' %}selected{% endif %}>Southern Wales (K)</option>
+                <option value="L" {% if config.get('octopus', {}).get('region', 'K')=='L' %}selected{% endif %}>Southern Scotland (L)</option>
+                <option value="M" {% if config.get('octopus', {}).get('region', 'K')=='M' %}selected{% endif %}>South Western England (M)</option>
+                <option value="N" {% if config.get('octopus', {}).get('region', 'K')=='N' %}selected{% endif %}>North Wales (part) (N)</option>
+                <option value="P" {% if config.get('octopus', {}).get('region', 'K')=='P' %}selected{% endif %}>Northern Ireland (P)</option>
+            </select>
+            <small>Select your UK region for accurate Agile Outgoing export rates</small>
+        </div>
+        <div class="form-group">
+            <label for="min_agile_discharge_soc">Minimum SoC for Agile Discharge (%):</label>
+            <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
+            <small>Minimum battery level for export (default 60%). System will stop exporting when SoC reaches this level.</small>
+        </div>
+        <div class="form-group">
+            <label for="max_export_power_kw">Maximum Export Power (kW):</label>
+            <input type="number" id="max_export_power_kw" name="tariffs.ioctgo[max_export_power_kw]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('max_export_power_kw', 7.2) }}" min="0.1" max="7.2" step="0.1">
+            <small>Maximum export power during Agile slots (default 7.2kW = full Wallbox capacity). Reduce if grid-limited.</small>
+        </div>
+        <div class="form-group">
+            <label for="export_slot_soc_loss_percent">Export Slot SoC Loss (% per 30-min slot):</label>
+            <input type="number" id="export_slot_soc_loss_percent" name="tariffs.ioctgo[export_slot_soc_loss_percent]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('export_slot_soc_loss_percent', 0) }}" min="0" max="10" step="0.1">
+            <small>State of charge loss percentage during bulk export slots. Set to 0 to use calculated value based on export power, or enter your measured value for more accurate planning.</small>
+        </div>
+        <div class="form-group">
+            <label for="non_export_slot_soc_loss_percent">Non-Export Slot SoC Loss (% per 30-min slot):</label>
+            <input type="number" id="non_export_slot_soc_loss_percent" name="tariffs.ioctgo[non_export_slot_soc_loss_percent]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('non_export_slot_soc_loss_percent', 1.0) }}" min="0" max="10" step="0.1">
+            <small>State of charge loss percentage during load-following (non-export) slots. Used to project available SoC for export planning.</small>
         </div>
     </div>
     <div class="config-section">

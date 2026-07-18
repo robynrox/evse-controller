@@ -14,8 +14,12 @@ class OctopusFluxTariff(Tariff):
     """
 
     def __init__(self, command_queue=None):
-        """Initialize Flux tariff with specific time periods and rates. Rates provided are for South Wales March 2025."""
-        super().__init__()
+        """Initialize Flux tariff with specific time periods and rates. Rates provided are for South Wales March 2025.
+        
+        Args:
+            command_queue: Queue for sending commands to the main loop
+        """
+        super().__init__(command_queue=command_queue)
         self.time_of_use = {
             "night": {"start": "02:00", "end": "05:00", "import_rate": 0.1491, "export_rate": 0.0469},
             "peak":  {"start": "16:00", "end": "19:00", "import_rate": 0.3479, "export_rate": 0.2642},

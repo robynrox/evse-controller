@@ -11,9 +11,10 @@ class EvseState(Enum):
     WAITING_FOR_CAR_DEMAND = 2
     WAITING_FOR_SCHEDULE = 3
     PAUSED = 4
-    ERROR = 7
+    OCPP_WAITING = 7
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
+    ERROR = 12
     FREERUN = 997
     COMMS_FAILURE = 998
     UNKNOWN = 999
@@ -43,6 +44,13 @@ class EvseAsyncState:
     power_factor: float = 1.0
     # Field to store actual Modbus state when in FREERUN mode
     _actual_modbus_state: EvseState = EvseState.UNKNOWN
+    # Efficiency monitoring fields (AC/DC power measurements)
+    ac_power: float = 0.0       # Watts (signed: + importing/charging, - exporting/discharging)
+    ac_voltage: float = 0.0     # Volts
+    ac_current: float = 0.0     # Amps (signed)
+    dc_voltage: float = 0.0     # Volts
+    dc_current: float = 0.0     # Amps (signed)
+    efficiency: float = 0.0     # Percentage (0-100), 0 when idle
 
 
 # Define a TypeVar for the EvseThreadInterface
@@ -79,7 +87,6 @@ class EvseThreadInterface(ABC):
             return SimulatedWallboxThread.get_instance(**simulator_config)
         else:
             from evse_controller.utils.logging_config import info
-            info(f"Using real Wallbox at {config.WALLBOX_URL}")
             return WallboxThread.get_instance()
 
     @abstractmethod

@@ -34,14 +34,14 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
                 from evse_controller.utils.config import config
 
                 # Initialize with default values if not provided
-                kwargs.setdefault('initial_battery_level', 50)
+                kwargs.setdefault('initial_battery_level', 80)
                 kwargs.setdefault('max_battery_level', 100)
                 kwargs.setdefault('min_battery_level', 5)
                 kwargs.setdefault('charge_efficiency', 0.9)  # 90% charging efficiency
                 kwargs.setdefault('discharge_efficiency', 0.9)  # 90% discharging efficiency
-                kwargs.setdefault('battery_capacity_kwh', 50)  # 50 kWh battery
+                kwargs.setdefault('battery_capacity_kwh', 59)  # 50 kWh battery
                 kwargs.setdefault('voltage', 230)  # 230V
-                kwargs.setdefault('simulation_speed', 60)  # 60x speed (1 minute = 1 second)
+                kwargs.setdefault('simulation_speed', 1)  # 60 would be 60x speed (1 minute = 1 second)
 
                 cls._instance = cls(**kwargs)
                 cls._instance.start()
@@ -64,11 +64,18 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self.state = EvseAsyncState(
             evse_state=EvseState.PAUSED,
             current=0,
-            battery_level=kwargs.get('initial_battery_level', 50),
+            battery_level=kwargs.get('initial_battery_level', 80),
             last_update=time.time(),
             consecutive_connection_errors=0,
             power_watts=0.0,
-            power_factor=1.0
+            power_factor=1.0,
+            # Efficiency monitoring fields
+            ac_power=0.0,
+            ac_voltage=kwargs.get('ac_voltage', 240),
+            ac_current=0.0,
+            dc_voltage=kwargs.get('dc_voltage', 350),
+            dc_current=0.0,
+            efficiency=0.0
         )
 
         # Configuration
@@ -79,6 +86,10 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self.battery_capacity_wh = kwargs.get('battery_capacity_kwh', 50) * 1000  # Convert kWh to Wh
         self.voltage = kwargs.get('voltage', 230)
         self.simulation_speed = kwargs.get('simulation_speed', 60)
+        
+        # Efficiency monitoring configuration
+        self.ac_voltage = kwargs.get('ac_voltage', 240)  # 240V AC
+        self.dc_voltage = kwargs.get('dc_voltage', 350)  # 350V DC (typical EV battery)
 
         # Full/empty thresholds (similar to real Wallbox)
         self.full_threshold = 97  # Consider battery full at 97%
@@ -176,6 +187,46 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         # Calculate power in watts (P = V * I)
         power = abs(self.voltage * current)
         self.state.power_watts = power
+        
+        # Calculate and set efficiency monitoring data
+        if current > 0:
+            # Charging: AC → DC with efficiency loss
+            # AC power is input, DC power is output (AC * efficiency = DC)
+            ac_current = abs(current)
+            ac_power = self.ac_voltage * ac_current
+            dc_power = ac_power * self.charge_efficiency
+            dc_current = dc_power / self.dc_voltage
+            efficiency = self.charge_efficiency * 100
+            
+            self.state.ac_power = ac_power
+            self.state.ac_voltage = self.ac_voltage
+            self.state.ac_current = ac_current
+            self.state.dc_voltage = self.dc_voltage
+            self.state.dc_current = dc_current
+            self.state.efficiency = efficiency
+            
+        elif current < 0:
+            # Discharging: DC → AC with efficiency loss
+            # DC power is input, AC power is output (DC * efficiency = AC)
+            dc_current = abs(current)
+            dc_power = self.dc_voltage * dc_current
+            ac_power = dc_power * self.discharge_efficiency
+            ac_current = ac_power / self.ac_voltage
+            efficiency = self.discharge_efficiency * 100
+            
+            # AC power is negative (exporting to grid)
+            self.state.ac_power = -ac_power
+            self.state.ac_voltage = self.ac_voltage
+            self.state.ac_current = -ac_current
+            self.state.dc_voltage = self.dc_voltage
+            self.state.dc_current = dc_current
+            self.state.efficiency = efficiency
+        else:
+            # Idle/paused - no power flow
+            self.state.ac_power = 0.0
+            self.state.ac_current = 0.0
+            self.state.dc_current = 0.0
+            self.state.efficiency = 0.0
 
         # Update EVSE state based on current
         if current > 0:
@@ -184,14 +235,14 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
                 info(f"SIMULATOR: Battery full, pausing charge")
             else:
                 self.state.evse_state = EvseState.CHARGING
-                info(f"SIMULATOR: Charging at {current:.1f}A ({power:.0f}W)")
+                info(f"SIMULATOR: Charging at {current:.1f}A ({power:.0f}W), η={self.state.efficiency:.0f}%")
         elif current < 0:
             if self.is_empty():
                 self.state.evse_state = EvseState.PAUSED
                 info(f"SIMULATOR: Battery empty, pausing discharge")
             else:
                 self.state.evse_state = EvseState.DISCHARGING
-                info(f"SIMULATOR: Discharging at {abs(current):.1f}A ({power:.0f}W)")
+                info(f"SIMULATOR: Discharging at {abs(current):.1f}A ({power:.0f}W), η={self.state.efficiency:.0f}%")
         else:
             self.state.evse_state = EvseState.PAUSED
             info(f"SIMULATOR: Paused")

@@ -13,7 +13,7 @@ import threading
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface
 from evse_controller.utils.memory_monitor import MemoryMonitor
@@ -88,26 +88,151 @@ def enter_freerun_mode():
 
 
 # Initialize core components at module level
-tariffManager = TariffManager()
-evseController = EvseController(tariffManager)
 execQueue = queue.SimpleQueue()
+tariffManager = TariffManager(execQueue)
+evseController = EvseController(tariffManager)
 
 # Initialize the OCPP manager to start worker threads
 from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
 ocpp_manager.initialize()
 
-# Set initial state based on startup configuration
+# State persistence file
+STATE_FILE = config.SCHEDULE_FILE.parent / "exec_state.json"
+
+# Global variable to track fixed current value (for FIXED state)
+_fixed_current_amps = None
+
+def _save_exec_state():
+    """Save current execution state to file for persistence across restarts."""
+    try:
+        state_data = {
+            "exec_state": execState.name,
+            "previous_state": previous_state.name if previous_state else None,
+            "fixed_current_amps": _fixed_current_amps,  # Persist fixed current for FIXED state
+            "timestamp": datetime.now().isoformat()
+        }
+        with STATE_FILE.open('w') as f:
+            json.dump(state_data, f, indent=2)
+        debug(f"Saved execution state: {execState.name}")
+    except Exception as e:
+        error(f"Failed to save execution state: {e}")
+
+def _load_exec_state():
+    """Load execution state from file (for recovery after restart)."""
+    if not STATE_FILE.exists():
+        return None, None, None
+    
+    try:
+        with STATE_FILE.open('r') as f:
+            state_data = json.load(f)
+        
+        exec_state_name = state_data.get("exec_state")
+        previous_state_name = state_data.get("previous_state")
+        fixed_current = state_data.get("fixed_current_amps")
+        
+        exec_state = ExecState[exec_state_name] if exec_state_name else None
+        previous_state = ExecState[previous_state_name] if previous_state_name else None
+        
+        info(f"Loaded execution state: {exec_state.name} (previous: {previous_state.name if previous_state else 'None'}, fixed_current: {fixed_current})")
+        return exec_state, previous_state, fixed_current
+    except Exception as e:
+        error(f"Failed to load execution state: {e}")
+        return None, None, None
+
+def _set_exec_state(new_state, new_previous_state=None):
+    """Set execution state and persist it to disk."""
+    global execState, previous_state
+    execState = new_state
+    if new_previous_state is not None:
+        previous_state = new_previous_state
+    _save_exec_state()
+    info(f"Execution state changed to: {new_state.name}")
+
+def _apply_exec_state(state, fixed_current=None):
+    """Apply hardware/settings for a given execution state."""
+    global _fixed_current_amps
+    if state == ExecState.FREERUN:
+        evseController.setFreeRun()
+    elif state == ExecState.OCPP:
+        # Ensure OCPP is enabled
+        try:
+            ocpp_manager.set_state(True)
+            info("OCPP enabled during state restoration")
+        except Exception as e:
+            error(f"Failed to restore OCPP state: {e}")
+    elif state == ExecState.FIXED:
+        # Restore fixed current setting
+        if fixed_current is not None:
+            _fixed_current_amps = fixed_current
+            if fixed_current > 0:
+                evseController.setControlState(ControlState.CHARGE)
+                evseController.setChargeCurrentRange(fixed_current, fixed_current)
+            elif fixed_current < 0:
+                evseController.setControlState(ControlState.DISCHARGE)
+                evseController.setDischargeCurrentRange(-fixed_current, -fixed_current)
+            else:
+                evseController.setControlState(ControlState.DORMANT)
+            info(f"Restored FIXED state with current: {fixed_current}A")
+    elif state in [ExecState.CHARGE, ExecState.DISCHARGE, ExecState.PAUSE, ExecState.SMART, ExecState.SOLAR, ExecState.POWER_HOME, ExecState.BALANCE]:
+        # Ensure OCPP is disabled for non-OCPP states
+        try:
+            ocpp_manager.set_state(False)
+        except Exception as e:
+            error(f"Failed to disable OCPP for non-OCPP state: {e}")
+
+# Set initial state based on startup configuration or persisted state
 from evse_controller.utils.config import config
-if config.STARTUP_STATE == "FREERUN":
+
+# Try to load persisted state first
+loaded_exec_state, loaded_previous_state, loaded_fixed_current = _load_exec_state()
+
+if loaded_exec_state is not None:
+    # Use persisted state
+    info(f"Resuming from persisted state: {loaded_exec_state.name}")
+    execState = loaded_exec_state
+    previous_state = loaded_previous_state
+    _fixed_current_amps = loaded_fixed_current
+    _apply_exec_state(execState, loaded_fixed_current)
+elif config.STARTUP_STATE == "FREERUN":
     execState = ExecState.FREERUN
-    evseController.setFreeRun()  # Set the EVSE to freerun mode
+    previous_state = None
+    _apply_exec_state(execState)
 else:
-    # For tariff-based startup states
-    execState = ExecState.SMART
-    # Set the appropriate tariff based on startup state if it's a valid tariff
-    if config.STARTUP_STATE in tariffManager.tariff_classes:
-        tariffManager.set_tariff(config.STARTUP_STATE, command_queue=execQueue)
+    # No persisted state and not configured for FREERUN - start in FREERUN for safety
+    # FREERUN doesn't interfere with anything and is OCPP-independent
+    info("No persisted state found, starting in FREERUN state for safety")
+    execState = ExecState.FREERUN
+    previous_state = None
+    _apply_exec_state(execState)
+
 scheduler = Scheduler()
+
+
+def handle_pause_until_disconnect(previous_state: Optional[ExecState], 
+                                   evse_state: EvseState) -> tuple[ExecState, Optional[ExecState]]:
+    """
+    Handle PAUSE_UNTIL_DISCONNECT state logic.
+    
+    This function determines the appropriate state transition when in PAUSE_UNTIL_DISCONNECT mode.
+    When the vehicle disconnects, it returns to the previous state (or PAUSE if no previous state).
+    
+    Args:
+        previous_state: The state to return to after disconnection (e.g., SMART, CHARGE, etc.)
+        evse_state: Current EVSE state (connected/disconnected/etc.)
+    
+    Returns:
+        Tuple of (new_exec_state, new_previous_state):
+        - If disconnected: Returns (previous_state, None) or (PAUSE, None) if no previous state
+        - If still connected: Returns (PAUSE_UNTIL_DISCONNECT, previous_state) to maintain current state
+    """
+    if evse_state == EvseState.DISCONNECTED:
+        if previous_state is not None:
+            return previous_state, None
+        else:
+            return ExecState.PAUSE, None
+    # Still connected, stay in PAUSE_UNTIL_DISCONNECT
+    return ExecState.PAUSE_UNTIL_DISCONNECT, previous_state
+
 
 def get_system_state():
     """
@@ -221,7 +346,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Main loop for EVSE controller without web interface"""
-    global execState  # Add this line to allow modification of execState
+    global execState, previous_state  # Add this line to allow modification of execState and previous_state
     nextStateCheck = 0
     previous_state = None
     tariff = None
@@ -236,61 +361,72 @@ def main():
 
     while not _shutdown_event.is_set():
         try:
+            # Get current SoC for conditional event evaluation
+            current_soc = None
+            try:
+                evse = EvseThreadInterface.get_instance()
+                state = evse.get_state()
+                if state and state.battery_level >= 0:
+                    current_soc = state.battery_level
+            except Exception as e:
+                debug(f"Could not get SoC for scheduler: {e}")
+            
             # Check for scheduled events
-            due_events = scheduler.get_due_events()
+            due_events = scheduler.get_due_events(current_soc=current_soc)
             for event in due_events:
                 info(f"Executing scheduled event: changing to {event.state}")
                 execQueue.put(event.state)
 
             # Command handling
             command = execQueue.get(True, 1)
+            info(f"Executing command {command} from queue")
             match command.lower():
                 case "p" | "pause":
                     ensure_ocpp_disabled()
                     info("Entering pause state")
                     tariffManager.stop_tariff()
-                    execState = ExecState.PAUSE
+                    _set_exec_state(ExecState.PAUSE)
                     nextStateCheck = time.time()
                 case "c" | "charge":
                     ensure_ocpp_disabled()
                     info("Entering charge state")
                     tariffManager.stop_tariff()
-                    execState = ExecState.CHARGE
+                    _set_exec_state(ExecState.CHARGE)
                     nextStateCheck = time.time()
                 case "d" | "discharge":
                     ensure_ocpp_disabled()
                     info("Entering discharge state")
                     tariffManager.stop_tariff()
-                    execState = ExecState.DISCHARGE
+                    _set_exec_state(ExecState.DISCHARGE)
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     ensure_ocpp_disabled()
                     info("Entering smart tariff controller state")
                     tariffManager.start_tariff()
-                    execState = ExecState.SMART
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
                     ensure_ocpp_disabled()
                     info("Switching to Octopus Go tariff")
                     tariffManager.set_tariff("OCTGO")
-                    execState = ExecState.SMART
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "ioctgo":
                     info("Switching to Intelligent Octopus Go tariff")
                     tariffManager.set_tariff("IOCTGO", command_queue=execQueue)
-                    execState = ExecState.SMART
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "f" | "flux":
                     ensure_ocpp_disabled()
                     info("Switching to Octopus Flux tariff")
                     tariffManager.set_tariff("FLUX")
-                    execState = ExecState.SMART
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "cosy":
                     ensure_ocpp_disabled()
                     info("Switching to Cosy Octopus tariff")
                     tariffManager.set_tariff("COSY")
-                    execState = ExecState.SMART
+                    _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "schedule":
                     handle_schedule_command(command.split())
@@ -300,8 +436,7 @@ def main():
                     ensure_ocpp_disabled()
                     if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
                         info("Entering pause-until-disconnect state")
-                        previous_state = execState
-                        execState = ExecState.PAUSE_UNTIL_DISCONNECT
+                        _set_exec_state(ExecState.PAUSE_UNTIL_DISCONNECT, execState)
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
@@ -314,7 +449,7 @@ def main():
                     # Go to FREERUN first to match OCPP operational mode
                     tariffManager.stop_tariff()
                     evseController.setFreeRun()
-                    execState = ExecState.FREERUN
+                    _set_exec_state(ExecState.FREERUN)
                     # Use OCPPManager to enable OCPP
                     try:
                         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -325,9 +460,9 @@ def main():
                         error(f"Failed to send OCPP enable request: {e}")
                         print("Failed to send OCPP enable request")
                         success = False
-                    
+
                     if success:
-                        execState = ExecState.OCPP
+                        _set_exec_state(ExecState.OCPP)
                         print("OCPP enable request sent successfully and OCPP state entered")
                     else:
                         print("Failed to send OCPP enable request")
@@ -336,19 +471,19 @@ def main():
                     tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering solar charging state")
-                    execState = ExecState.SOLAR
+                    _set_exec_state(ExecState.SOLAR)
                     nextStateCheck = time.time()
                 case "power-home" | "ph":
                     tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering power home state")
-                    execState = ExecState.POWER_HOME
+                    _set_exec_state(ExecState.POWER_HOME)
                     nextStateCheck = time.time()
                 case "balance" | "b":
                     tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
                     info("Entering power balance state")
-                    execState = ExecState.BALANCE
+                    _set_exec_state(ExecState.BALANCE)
                     nextStateCheck = time.time()
                 case "help" | "h" | "?":
                     print_usage_instructions()
@@ -368,7 +503,8 @@ def main():
                         else:
                             tariffManager.stop_tariff()
                             evseController.setControlState(ControlState.DORMANT)
-                        execState = ExecState.FIXED
+                        _fixed_current_amps = currentAmps
+                        _set_exec_state(ExecState.FIXED)
                     except ValueError:
                         print_usage_instructions()
         except queue.Empty:
@@ -383,16 +519,19 @@ def main():
                 info("CONTROL PAUSE_UNTIL_DISCONNECT")
                 evseController.setControlState(ControlState.DORMANT)
 
-                # Check if vehicle is disconnected
-                evse_state = evseController.getEvseState()  # Use controller instead of direct access
-                if evse_state == EvseState.DISCONNECTED:
-                    if previous_state is not None:
+                # Check if vehicle is disconnected and transition to previous state
+                evse_state = evseController.getEvseState()
+                new_exec_state, new_previous_state = handle_pause_until_disconnect(
+                    previous_state, evse_state
+                )
+                
+                # Apply state transition if needed
+                if new_exec_state != execState:
+                    if new_previous_state is None and previous_state is not None:
                         info(f"Vehicle disconnected, reverting to {previous_state}")
-                        execState = previous_state
-                    else:
+                    elif new_previous_state is None and previous_state is None:
                         warning("Internal error: No previous state found, falling back to PAUSE mode")
-                        execState = ExecState.PAUSE
-                    previous_state = None
+                    _set_exec_state(new_exec_state, new_previous_state)
 
             elif execState == ExecState.FREERUN:
                 # In FREERUN state, we don't send any control commands to the EVSE

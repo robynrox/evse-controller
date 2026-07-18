@@ -34,14 +34,15 @@ class OctopusGoTariff(Tariff):
 
     def __init__(self, command_queue=None, battery_capacity_kwh=None, bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
         """Initialize Octopus Go tariff with specific time periods and rates.
-        
+
         Args:
+            command_queue: Queue for sending commands to the main loop
             battery_capacity_kwh (int): Battery capacity in kWh (typically 30, 40, or 59) - if None, uses config value
             bulk_discharge_start_time (str): Time to start bulk discharge in "HH:MM" format - if None, uses config value
             bulk_discharge_end_time (str): Time to end bulk discharge in "HH:MM" format - if None, uses config value
             enable_bulk_discharge (bool): Whether to enable bulk discharge - if None, uses config value
         """
-        super().__init__()
+        super().__init__(command_queue=command_queue)
         self.time_of_use = {
             "low":  {"start": "00:30", "end": "05:30", "import_rate": 0.0850, "export_rate": 0.15},
             "high": {"start": "05:30", "end": "00:30", "import_rate": 0.3142, "export_rate": 0.15}

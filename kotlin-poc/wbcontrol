@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# Wallbox Controller - Standalone Launcher
+#
+# Usage:
+#   ./wbcontrol --csvheader
+#   ./wbcontrol --csv
+#   ./wbcontrol --status
+#   ./wbcontrol --dump
+#   ./wbcontrol 16          # Charge at 16A
+#   ./wbcontrol --power 1500  # Charge at 1500W
+#
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Path to the JAR file
+JAR_FILE="$SCRIPT_DIR/build/libs/wallbox-controller-0.1.0.jar"
+
+# Check if JAR exists
+if [ ! -f "$JAR_FILE" ]; then
+    echo "Error: JAR file not found at $JAR_FILE" >&2
+    echo "Please run: ./gradlew build" >&2
+    exit 1
+fi
+
+# Find Java executable
+if [ -n "$JAVA_HOME" ]; then
+    JAVA="$JAVA_HOME/bin/java"
+elif command -v java &> /dev/null; then
+    JAVA="java"
+else
+    echo "Error: Java not found. Please install Java 17+ or set JAVA_HOME" >&2
+    exit 1
+fi
+
+# Run the application with all arguments passed through
+exec "$JAVA" -jar "$JAR_FILE" "$@"

@@ -29,7 +29,8 @@ from evse_controller.smart_evse_controller import (
     evseController,
     scheduler,
     ScheduledEvent,
-    get_system_state
+    get_system_state,
+    tariffManager
 )
 
 from evse_controller.drivers.evse.event_bus import EventBus, EventType
@@ -38,9 +39,10 @@ VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
     'charge': 'Start charging at maximum rate',
     'discharge': 'Start discharging at maximum rate',
-    'smart': 'Enter smart tariff control mode',
+    'smart': 'Use configured smart tariff',
     'octgo': 'Switch to Octopus Go tariff',
     'ioctgo': 'Switch to Intelligent Octopus Go tariff',
+    'ioctgo_agileout': 'Switch to IOCTGO with Agile Outgoing',
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
@@ -169,7 +171,10 @@ scheduled_event_model = api.model('ScheduledEvent', {
         enum=list(VALID_COMMANDS.keys()),
         description='State to transition to'
     ),
-    'enabled': fields.Boolean(default=True, description='Whether the event is enabled')
+    'enabled': fields.Boolean(default=True, description='Whether the event is enabled'),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 schedule_create_model = api.model('ScheduleCreate', {
@@ -177,7 +182,10 @@ schedule_create_model = api.model('ScheduleCreate', {
     'state': fields.String(
         required=True,
         enum=list(VALID_COMMANDS.keys())
-    )
+    ),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 schedule_edit_model = api.model('ScheduleEdit', {
@@ -187,7 +195,10 @@ schedule_edit_model = api.model('ScheduleEdit', {
     'newState': fields.String(
         required=True,
         enum=list(VALID_COMMANDS.keys())
-    )
+    ),
+    'time_window_end': fields.String(description='End time for conditional window (HH:MM format)'),
+    'min_soc': fields.Float(description='Minimum SoC required to trigger (>=)'),
+    'max_soc': fields.Float(description='Maximum SoC required to trigger (<=)')
 })
 
 # Callback functions to handle measurement and OCPP updates
@@ -266,14 +277,32 @@ def schedule_page():
         try:
             timestamp = datetime.fromisoformat(request.form['datetime'].replace('T', ' '))
             state = request.form['state']
+            time_window_end = request.form.get('time_window_end') or None
+            min_soc = request.form.get('min_soc')
+            max_soc = request.form.get('max_soc')
+
+            # Convert SoC values to float if provided
+            if min_soc is not None and min_soc.strip() == '':
+                min_soc = None
+            if max_soc is not None and max_soc.strip() == '':
+                max_soc = None
+            if min_soc is not None:
+                min_soc = float(min_soc)
+            if max_soc is not None:
+                max_soc = float(max_soc)
 
             if timestamp < datetime.now():
                 flash('Cannot schedule events in the past', 'error')
                 return redirect(url_for('schedule_page'))
 
-            event = ScheduledEvent(timestamp, state)
+            event = ScheduledEvent(
+                timestamp,
+                state,
+                time_window_end=time_window_end,
+                min_soc=min_soc,
+                max_soc=max_soc
+            )
             scheduler.add_event(event)
-            scheduler.save_events()
             flash('Event scheduled successfully', 'success')
         except ValueError as e:
             flash(f'Invalid datetime format: {str(e)}', 'error')
@@ -283,13 +312,17 @@ def schedule_page():
         return redirect(url_for('schedule_page'))
 
     scheduled_events = scheduler.get_future_events()
-    return render_template('schedule.html', scheduled_events=scheduled_events)
+    return render_template('schedule.html', 
+                          scheduled_events=scheduled_events,
+                          valid_commands=VALID_COMMANDS)
 
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
     """Handle configuration page display and updates."""
     if request.method == 'POST':
         try:
+            from evse_controller.utils.logging_config import info as log_info
+            log_info(f"DEBUG: Config POST - form keys: {list(request.form.keys())}")
             # Update Wallbox settings
             config.WALLBOX_URL = request.form.get('wallbox[url]')
             if request.form.get('wallbox[username]'):  # Only update if provided
@@ -315,6 +348,23 @@ def config_page():
                     config.WALLBOX_MAX_DISCHARGE_CURRENT = discharge_current
                 else:
                     raise ValueError("Maximum discharging current must be between 3 and 32A")
+
+            # Update Wallbox minimum currents
+            min_charge_current = request.form.get('wallbox[min_charge_current]')
+            if min_charge_current:
+                charge_current = int(min_charge_current)
+                if 3 <= charge_current <= 32:
+                    config.WALLBOX_MIN_CHARGE_CURRENT = charge_current
+                else:
+                    raise ValueError("Minimum charging current must be between 3 and 32A")
+
+            min_discharge_current = request.form.get('wallbox[min_discharge_current]')
+            if min_discharge_current:
+                discharge_current = int(min_discharge_current)
+                if 3 <= discharge_current <= 32:
+                    config.WALLBOX_MIN_DISCHARGE_CURRENT = discharge_current
+                else:
+                    raise ValueError("Minimum discharging current must be between 3 and 32A")
 
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
@@ -366,6 +416,26 @@ def config_page():
             config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = int(request.form.get('tariffs.ioctgo[ocpp_disable_soc_threshold]', 95))
             config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
+
+            # Update Octopus Agile Outgoing settings
+            max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
+            if max_export_power is not None:
+                config.MAX_EXPORT_POWER_KW = float(max_export_power)
+                logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
+            config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
+
+            # Update Agile Outgoing export planning parameters
+            export_slot_loss = request.form.get('tariffs.ioctgo[export_slot_soc_loss_percent]')
+            if export_slot_loss is not None:
+                config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = float(export_slot_loss)
+            non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
+            if non_export_slot_loss is not None:
+                config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+
+            # Update Minimum SoC for Agile Discharge
+            min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
+            if min_agile_soc is not None:
+                config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
 
             # Handle channel configuration for both devices
             devices = ['primary']
@@ -440,9 +510,14 @@ class ScheduleResource(Resource):
             if timestamp < datetime.now():
                 api.abort(400, 'Cannot schedule events in the past')
 
-            event = ScheduledEvent(timestamp, data['state'])
+            event = ScheduledEvent(
+                timestamp,
+                data['state'],
+                time_window_end=data.get('time_window_end'),
+                min_soc=data.get('min_soc'),
+                max_soc=data.get('max_soc')
+            )
             scheduler.add_event(event)
-            scheduler.save_events()
 
             return {'message': 'Event scheduled successfully'}, 201
         except ValueError as e:
@@ -515,7 +590,13 @@ class ScheduleEditResource(Resource):
                     event.state == original_state):
                     was_enabled = event.enabled
                     scheduler.events.remove(event)
-                    new_event = ScheduledEvent(new_timestamp, new_state)
+                    new_event = ScheduledEvent(
+                        new_timestamp, 
+                        new_state,
+                        time_window_end=data.get('time_window_end'),
+                        min_soc=data.get('min_soc'),
+                        max_soc=data.get('max_soc')
+                    )
                     new_event.enabled = was_enabled
                     scheduler.add_event(new_event)
                     scheduler.save_events()
@@ -567,7 +648,7 @@ def get_status():
 @app.route('/api/ext_status', methods=['GET'])
 def get_extended_status():
     """Get current system status and real-time measurements.
-    
+
     Returns:
         JSON object containing:
         - current_state: String representing the current system state
@@ -575,8 +656,11 @@ def get_extended_status():
         - next_event: Object containing next scheduled event details, or null if none exists
             - timestamp: ISO format timestamp
             - state: String representing the scheduled state
+            - time_window_end: End time for conditional window (HH:MM format), optional
+            - min_soc: Minimum SoC required to trigger (>=), optional
+            - max_soc: Maximum SoC required to trigger (<=), optional
         - measurements: Object containing real-time measurements from the EVSE
-            (timestamp, home_power, evse_power, grid_power, channel_powers, 
+            (timestamp, home_power, evse_power, grid_power, channel_powers,
             voltage, evse_current, target_current, soc, charger_state)
         - ocpp_state: String representing the current OCPP state ("On", "Off", or "Unknown")
     """
@@ -593,11 +677,32 @@ def get_extended_status():
         'battery_soc': battery_soc,
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),
-            'state': next_event.state
+            'state': next_event.state,
+            'time_window_end': next_event.time_window_end,
+            'min_soc': next_event.min_soc,
+            'max_soc': next_event.max_soc
         } if next_event else None,
         'measurements': latest_measurements,
         'ocpp_state': ocpp_state
     })
+
+@app.route('/api/tariff/dashboard_html', methods=['GET'])
+def get_tariff_dashboard_html():
+    """Get HTML for tariff dashboard display.
+    
+    Returns HTML from the current tariff's get_dashboard_html() method.
+    If no tariff is active or tariff doesn't implement this method, returns empty string.
+    """
+    try:
+        tariff = tariffManager.get_tariff()
+        
+        if tariff is None:
+            return jsonify({'html': ''})
+        
+        html = tariff.get_dashboard_html()
+        return jsonify({'html': html})
+    except Exception as e:
+        return jsonify({'html': '', 'error': str(e)})
 
 # Run the Flask app in a separate thread
 def run_flask(max_restarts=3):
