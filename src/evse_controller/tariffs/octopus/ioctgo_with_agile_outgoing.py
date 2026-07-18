@@ -520,7 +520,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         self.agile_rates_fetched_at = now
                         self._last_fetch_date = today
                         self._last_fetch_attempt = now
-                        
+
+                        # Clear exported slots when a new day begins
+                        if last_fetch_date != today:
+                            self._exported_slots = []
+                            debug(f"IOCTGO_AGILEOUT: New day detected ({today}), cleared exported slots")
+
                         info(f"IOCTGO_AGILEOUT: Fetched {new_count} Agile Outgoing rates for {today} (region {self.region})")
                         
                         # Check if we have complete data
