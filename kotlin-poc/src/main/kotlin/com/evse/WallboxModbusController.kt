@@ -519,7 +519,7 @@ enum class EvseStatus(val code: Int, val description: String) {
     CONNECTED_NOT_CHARGING(4, "Connected, not charging"),
     CONNECTED_END_OF_SCHEDULE(5, "Connected, end of schedule"),
     NO_CAR_CONNECTED_AND_CHARGER_LOCKED(6, "No car connected and charger locked"),
-    OCPP_WAITING(7, "OCPP Waiting"),
+    STANDBY(7, "Standby (may be rebooting or in a fault condition)"),
     CONNECTED_IN_QUEUE_BY_POWER_SHARING(8, "Connected, in queue by power sharing"),
     ERROR_UNCONFIGURED_POWER_SHARING_SYSTEM(9, "Error: unconfigured power sharing system"),
     CONNECTED_IN_QUEUE_BY_POWER_BOOST(10, "Connected, in queue by power boost (home uses all available power)"),
