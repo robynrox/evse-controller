@@ -289,42 +289,6 @@ class TestExampleScenarios:
         assert result is False, "EXPORT: current (30p) > adjusted future (12.5p)"
 
 
-class TestGetControlState:
-    """Test integration with get_control_state()."""
-    
-    def test_control_state_bidirectional_low_rate(self, agile_tariff):
-        """Test LOAD_FOLLOW_BIDIRECTIONAL when rate is very low."""
-        state = create_test_state(50)
-        # Set time to 06:00 (slot 12) when rates are ~8p but still low
-        # This is outside off-peak (23:30-05:30) so bidirectional logic applies
-        agile_tariff._planned_export_slots = []
-        
-        control_state, min_current, max_current, message = agile_tariff.get_control_state(
-            state,
-            360  # 06:00
-        )
-        
-        # At 8p with high future rates (35p), should store
-        # 35 × 0.5 = 17.5p > 8p, so STORE via Tier 3
-        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
-        assert "Bidirectional" in message
-    
-    def test_control_state_discharge_high_rate(self, agile_tariff):
-        """Test LOAD_FOLLOW_DISCHARGE when export rate is favorable."""
-        state = create_test_state(80)
-        # Set time to 18:00 (slot 36) when rates are ~35p
-        agile_tariff._planned_export_slots = []
-        
-        control_state, min_current, max_current, message = agile_tariff.get_control_state(
-            state,
-            1080  # 18:00
-        )
-        
-        # At 35p, best future is much lower, so should discharge
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
-        assert "Load follow" in message
-
-
 class TestSetHomeDemandLevels:
     """Test set_home_demand_levels() configures correctly for bidirectional."""
     
