@@ -9,7 +9,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import EvseState
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 

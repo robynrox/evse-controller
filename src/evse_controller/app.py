@@ -33,7 +33,7 @@ from evse_controller.smart_evse_controller import (
     tariffManager
 )
 
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',

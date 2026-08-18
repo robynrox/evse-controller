@@ -3,7 +3,7 @@ from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 from evse_controller.utils.logging_config import debug, info, warning, error
 import time
 import threading

@@ -7,7 +7,7 @@ from evse_controller.drivers.evse.async_interface import (
     EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData, EvseState
 )
 from evse_controller.utils.logging_config import debug, info, warning, error
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 
 class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     """

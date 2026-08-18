@@ -10,7 +10,7 @@ import traceback
 from enum import Enum
 from typing import Dict, Any, Optional
 
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
 from evse_controller.utils.logging_config import debug, info, warning, error
