@@ -88,9 +88,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._ocpp_delay_duration = 120  # 2 minutes in seconds
         
         # Subscribe to OCPP state change events
-        self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
-        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51

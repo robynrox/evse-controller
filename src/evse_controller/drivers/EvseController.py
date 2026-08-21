@@ -215,9 +215,8 @@ class EvseController(PowerMonitorObserver):
         self._use_new_current_calculation = False
 
         # Subscribe to OCPP state change events to keep internal state synchronized
-        self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
-        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+        EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+        EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
 
     @property
     def use_new_current_calculation(self) -> bool:
@@ -1006,7 +1005,7 @@ class EvseController(PowerMonitorObserver):
         
         # Build structured measurements data and publish via event bus
         measurements_data = self._build_measurements_data(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
-        self._event_bus.publish(EventType.MEASUREMENTS_UPDATE, measurements_data)
+        EventBus().publish(EventType.MEASUREMENTS_UPDATE, measurements_data)
 
         # Get grid power for InfluxDB (needed later)
         grid_device = config.SHELLY_GRID_DEVICE
@@ -1379,9 +1378,8 @@ class EvseController(PowerMonitorObserver):
     def _cleanup(self):
         """Cleanup event bus subscriptions when the controller is destroyed."""
         try:
-            if hasattr(self, '_event_bus'):
-                self._event_bus.unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
-                self._event_bus.unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+            EventBus().unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+            EventBus().unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
         except Exception as e:
             # Ignore errors during cleanup
             pass

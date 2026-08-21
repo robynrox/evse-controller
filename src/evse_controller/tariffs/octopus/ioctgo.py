@@ -113,9 +113,8 @@ class IntelligentOctopusGoTariff(Tariff):
         self.OCPP_DISABLE_TIME = self._time_to_minutes(config.IOCTGO_OCPP_DISABLE_TIME)
 
         # Subscribe to OCPP enable/disable events to keep internal state synchronized
-        self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
-        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+        EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+        EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
 
         # Initialize OCPP state when tariff is first instantiated
         # The OCPPManager will handle asynchronous state discovery
@@ -571,9 +570,8 @@ class IntelligentOctopusGoTariff(Tariff):
 
     def _cleanup(self):
         """Clean up event bus subscriptions when the tariff is destroyed."""
-        if hasattr(self, '_event_bus'):
-            try:
-                self._event_bus.unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
-                self._event_bus.unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
-            except:
-                pass  # Ignore errors during cleanup
+        try:
+            EventBus().unsubscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
+            EventBus().unsubscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+        except:
+            pass  # Ignore errors during cleanup

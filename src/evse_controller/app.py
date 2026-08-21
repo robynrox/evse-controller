@@ -205,10 +205,9 @@ def on_ocpp_disabled(data):
     ocpp_state = "Off"
 
 # Subscribe to the measurements and OCPP events when the module loads
-event_bus = EventBus()
-event_bus.subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
-event_bus.subscribe(EventType.OCPP_ENABLED, on_ocpp_enabled)
-event_bus.subscribe(EventType.OCPP_DISABLED, on_ocpp_disabled)
+EventBus().subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
+EventBus().subscribe(EventType.OCPP_ENABLED, on_ocpp_enabled)
+EventBus().subscribe(EventType.OCPP_DISABLED, on_ocpp_disabled)
 
 @control_ns.route('/command')
 class ControlResource(Resource):
@@ -376,6 +375,14 @@ def config_page():
                 config.INFLUXDB_TOKEN = request.form.get('influxdb[token]')
             config.INFLUXDB_ORG = request.form.get('influxdb[org]')
             config.INFLUXDB_BUCKET = request.form.get('influxdb[bucket]', 'powerlog')  # Default to 'powerlog' if not provided
+
+            # Update MQTT settings
+            config.MQTT_BROKER = request.form.get('mqtt[broker]', '')
+            config.MQTT_PORT = request.form.get('mqtt[port]', 1883)
+            config.MQTT_USER = request.form.get('mqtt[username]', '')
+            config.MQTT_PASS = request.form.get('mqtt[password]', '')
+            config.MQTT_CLIENT_ID = request.form.get('mqtt[client_id]', 'wbquasar')
+            config.MQTT_TLS_ENABLED = request.form.get('mqtt[tls_enabled]') == "true"
 
             # Update charging settings
             config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))

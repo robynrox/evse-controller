@@ -46,7 +46,6 @@ class OCPPManager:
             return
             
         self.state = None  # Current known OCPP state (True=enabled, False=disabled, None=unknown)
-        self.event_bus = EventBus()
         self.request_queue = queue.Queue()
         self.retry_queue = queue.PriorityQueue()  # (retry_time, job)
         self._stop_event = threading.Event()
@@ -286,7 +285,7 @@ class OCPPManager:
             
             # Publish appropriate state event
             event_type = EventType.OCPP_ENABLED if new_state else EventType.OCPP_DISABLED
-            self.event_bus.publish(event_type, time.time())
+            EventBus().publish(event_type, time.time())
             debug(f"OCPP Manager: State discovery - OCPP is {'enabled' if new_state else 'disabled'}")
 
         elif job['command'] in [OCPPCommand.SET_ENABLED, OCPPCommand.SET_DISABLED]:
@@ -296,7 +295,7 @@ class OCPPManager:
             
             # Publish state change event
             event_type = EventType.OCPP_ENABLED if target_state else EventType.OCPP_DISABLED
-            self.event_bus.publish(event_type, time.time())
+            EventBus().publish(event_type, time.time())
             info(f"OCPP Manager: State changed - OCPP is now {'enabled' if target_state else 'disabled'}")
 
     def _handle_persistent_error(self, job: Dict[str, Any]):
@@ -307,7 +306,7 @@ class OCPPManager:
         else:
             # For enable/disable commands, we can't confirm the state change
             event_type = EventType.OCPP_ENABLED if self.state else EventType.OCPP_DISABLED
-            self.event_bus.publish(event_type, time.time())
+            EventBus().publish(event_type, time.time())
             warning(f"OCPP Manager: Could not {job['command'].value.replace('set_', '')} OCPP after retries")
             
     def initialize(self):
@@ -319,7 +318,7 @@ class OCPPManager:
         else:
             # If no credentials, assume OCPP is off
             self.state = False
-            self.event_bus.publish(EventType.OCPP_DISABLED, time.time())
+            EventBus().publish(EventType.OCPP_DISABLED, time.time())
             warning("OCPP Manager: Missing credentials, assuming OCPP is disabled")
 
 
