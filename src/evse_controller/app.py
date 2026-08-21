@@ -1,24 +1,14 @@
 import os
-import signal
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_from_directory
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.middleware.proxy_fix import ProxyFix
 from evse_controller.utils.paths import ensure_data_dirs
-from evse_controller.utils.config import config  # Import the config object
+from evse_controller.utils.config import config
 import logging
 import threading
 from datetime import datetime
 from evse_controller.utils.logging_config import info, error, debug
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    info("Shutting down Flask server...")
-    os._exit(0)
-
-# Register signal handlers
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
