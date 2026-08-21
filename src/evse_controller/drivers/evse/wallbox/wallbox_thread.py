@@ -341,6 +341,19 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             ac_current = float(self._convert_to_signed(reg_contents[5][0]))  # Signed Amps (1A resolution)
             dc_voltage = float(reg_contents[6][0]) * 0.1  # 0.1V resolution
             dc_current = float(self._convert_to_signed(reg_contents[7][0])) * 0.1  # 0.1A resolution, signed
+
+            state = {}
+            state["inverter_state_reg"] = state_reg
+            state["inverter_battery_reg"] = battery_reg
+            state["inverter_current_reg"] = current_reg
+            # TODO Omit these if the values are wrong (check state_reg)
+            state["inverter_ac_power_W"] = ac_power
+            state["inverter_ac_voltage_V"] = ac_voltage
+            state["inverter_ac_current_A"] = ac_current
+            state["inverter_dc_voltage_V"] = dc_voltage
+            state["inverter_dc_current_A"] = dc_current
+            state["inverter_model"] = "Wallbox Quasar"
+            EventBus().publish(EventType.INVERTER_STATE, state)
             
             # Calculate DC power and efficiency
             dc_power = dc_voltage * dc_current

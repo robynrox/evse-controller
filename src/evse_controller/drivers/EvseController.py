@@ -653,8 +653,9 @@ class EvseController(PowerMonitorObserver):
         else:
             evse_power_value = round(evse_power)
 
-        # Collect all channel powers and abbreviations for logging
+        # Collect all channel powers, abbreviations and names for logging
         channel_powers = {}
+        channel_names = {}
         total_non_grid_power = 0
 
         # Process all channels
@@ -681,9 +682,11 @@ class EvseController(PowerMonitorObserver):
                 if channel_power is not None:
                     # Get the channel abbreviation
                     abbr = config.get_channel_abbreviation(device, ch_num)
+                    name = config.get_channel_name(device. ch_num)
 
                     # Store for logging
                     channel_powers[abbr] = channel_power
+                    channel_names[abbr] = name
 
                     # Add to total non-grid power
                     total_non_grid_power += channel_power
@@ -693,15 +696,21 @@ class EvseController(PowerMonitorObserver):
 
         # Add grid power to channel_powers
         grid_abbr = config.get_channel_abbreviation(grid_device, grid_channel)
+        grid_name = config.get_channel_name(grid_device, grid_channel)
         channel_powers[grid_abbr] = grid_power
+        channel_names[grid_abbr] = grid_name
 
         # Build the log message
         log_msg = f"STATE Home:{home_power}"
+        log_state = {}
+        log_state["home_power_W"] = home_power
 
         # Add EVSE power if configured
         if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
             evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
             log_msg += f" {evse_abbr}:{evse_power_value}"
+            evse_name = config.get_channel_name(config.SHELLY_EVSE_DEVICE, config.SHELLY_GRID_CHANNEL)
+            log_state[f"{evse_name}_power_W"] = evse_power_value
 
         # Add all other channels
         for abbr, power_value in channel_powers.items():
@@ -712,13 +721,20 @@ class EvseController(PowerMonitorObserver):
                     continue
 
             log_msg += f" {abbr}:{power_value}"
+            name = channel_names[abbr]
+            log_state[f"{name}_power_W"] = power_value
 
         # Add the rest of the log message
         # Round the SoC to the nearest integer
         rounded_soc = round(power.soc)
+        if (rounded_soc >= 5):
+            log_state["soc_pct"] = rounded_soc
+        log_state["ac_voltage_V"] = power.voltage
+        log_state["target_A"] = desired_evse_current
+        log_state["setpoint_A"] = self.evseCurrent
         log_msg += f" V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desired_evse_current} C%:{rounded_soc} "
 
-        return log_msg
+        return log_msg, log_state
 
     def _build_measurements_data(self, power, evse_power=0, desired_evse_current=0, primary_power=None, secondary_power=None):
         """
@@ -1001,7 +1017,7 @@ class EvseController(PowerMonitorObserver):
             primary_power = self.auxpower if hasattr(self, 'auxpower') else None
 
         # Build the log message with power values
-        logMsg = self._build_power_log_message(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
+        log_msg, log_state = self._build_power_log_message(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
         
         # Build structured measurements data and publish via event bus
         measurements_data = self._build_measurements_data(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
@@ -1092,16 +1108,19 @@ class EvseController(PowerMonitorObserver):
         if new_state != self.chargerState:
             info(f"EVSE state changed from {self.chargerState} to {new_state}")
         self.chargerState = new_state
-        logMsg += f"CS:{self.chargerState} "
+        log_msg += f"CS:{self.chargerState.name} "
+        log_state["evse_state"] = self.chargerState.name
 
         nextWriteAllowed = math.ceil(self.evse.get_time_until_current_change_allowed())
+        log_state["guard_time_remaining_s"] = nextWriteAllowed
+        EventBus().publish(EventType.SYSTEM_STATE, log_state)
         if nextWriteAllowed > 0:
-            logMsg += f"NextChgIn:{nextWriteAllowed}s "
-            debug(logMsg)
+            log_msg += f"NextChgIn:{nextWriteAllowed}s "
+            debug(log_msg)
             return
 
         # Always log the power state information
-        debug(logMsg)
+        debug(log_msg)
         
         resetState = False
         if self.evseCurrent != desiredEvseCurrent:

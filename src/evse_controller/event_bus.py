@@ -10,6 +10,8 @@ class EventType(Enum):
     OCPP_ENABLED = "ocpp_enabled"
     OCPP_DISABLED = "ocpp_disabled"
     MEASUREMENTS_UPDATE = "measurements_update"
+    SYSTEM_STATE = "system_state"
+    INVERTER_STATE = "inverter_state"
     # Other event types can be added here
 
 

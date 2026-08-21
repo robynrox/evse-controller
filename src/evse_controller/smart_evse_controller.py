@@ -17,6 +17,7 @@ from typing import List, Dict, Optional
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface
 from evse_controller.utils.memory_monitor import MemoryMonitor
+from evse_controller.mqtt import MQTTManager
 
 # Ensure data directories exist before anything else
 print("Ensuring data directories exist...", file=sys.stderr)
@@ -89,6 +90,7 @@ def enter_freerun_mode():
 
 # Initialize core components at module level
 execQueue = queue.SimpleQueue()
+mqttManager = MQTTManager(execQueue)
 tariffManager = TariffManager(execQueue)
 evseController = EvseController(tariffManager)
 
@@ -314,7 +316,7 @@ _shutdown_event = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
-    global inputThread, memory_monitor  # Add memory_monitor to globals
+    global inputThread, memory_monitor, mqttManager
 
     if _shutdown_event.is_set():
         return  # Already shutting down
@@ -324,6 +326,7 @@ def signal_handler(signum, frame):
 
     try:
         evseController.stop()  # Stop the controller first
+        mqttManager.shutdown() # Stop the MQTT manager
 
         # Give threads time to clean up
         if 'inputThread' in globals() and inputThread.is_alive():

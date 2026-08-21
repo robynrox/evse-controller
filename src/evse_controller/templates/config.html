@@ -298,6 +298,35 @@
     </div>
 
     <div class="config-section">
+        <h2>MQTT Configuration</h2>
+        <div class="form-group">
+            <label for="mqtt_broker">MQTT Broker URL (leave blank if not used):</label>
+            <input type="text" id="mqtt_broker" name="mqtt[broker]" value="{{ config.mqtt.broker }}">
+        </div>
+        <div class="form-group">
+            <label for="mqtt_port">Port:</label>
+            <input type="text" id="mqtt_port" name="mqtt[port]" value="{{ config.mqtt.port }}">
+        </div>
+        <div class="form-group">
+            <label for="mqtt_username">Username:</label>
+            <input type="text" id="mqtt_username" name="mqtt[username]" value="{{ config.mqtt.username }}">
+        </div>
+        <div class="form-group">
+            <label for="mqtt_password">Password:</label>
+            <input type="password" id="mqtt_password" name="mqtt[password]" value="{{ config.mqtt.password }}">
+        </div>
+        <div class="form-group">
+            <label for="mqtt_client_id">Client ID:</label>
+            <input type="text" id="mqtt_client_id" name="mqtt[client_id]" value="{{ config.mqtt.client_id }}">
+        </div>
+        <div class="form-group">
+            <label for="mqtt_tls_enabled">Enable TLS:</label>
+            <input type="checkbox" id="mqtt_tls_enabled" name="mqtt[tls_enabled]" value="true" {% if config.mqtt.tls_enabled %}checked{% endif %}>
+            <small>Uses system default CA certificates. Set port to 8883 if enabled.</small>
+        </div>
+    </div>
+
+    <div class="config-section">
         <h2>Charging Configuration</h2>
         <div class="form-group">
             <label for="max_charge_percent">Maximum Charge Percentage:</label>
