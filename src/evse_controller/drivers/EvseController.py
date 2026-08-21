@@ -841,7 +841,7 @@ class EvseController(PowerMonitorObserver):
         # Add EVSE power separately if configured
         if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
             evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
-            measurements_data["evse_power"] = evse_power_value
+            measurements_data["inverter_power"] = evse_power_value
             measurements_data["channel_powers"][evse_abbr] = evse_power_value
 
         # Add Wallbox efficiency monitoring data
@@ -1109,7 +1109,7 @@ class EvseController(PowerMonitorObserver):
             info(f"EVSE state changed from {self.chargerState} to {new_state}")
         self.chargerState = new_state
         log_msg += f"CS:{self.chargerState.name} "
-        log_state["evse_state"] = self.chargerState.name
+        log_state["inverter_state"] = self.chargerState.name
 
         nextWriteAllowed = math.ceil(self.evse.get_time_until_current_change_allowed())
         log_state["guard_time_remaining_s"] = nextWriteAllowed
