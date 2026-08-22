@@ -18,6 +18,7 @@ class MQTTManager:
     def __init__(self, execQueue: queue.SimpleQueue):
         self.execQueue = execQueue
         self._cached_inverter_data = {}
+        self._cached_system_data = {}
         self._setup_client()
 
     
@@ -59,25 +60,37 @@ class MQTTManager:
 
 
     def _on_inverter_state(self, data):
-        """Cache inverter data to include in the next system state update"""
+        """Cache inverter data to include in the next system state update. Publish if all data collated.
+        
+        Args:
+            data: Dictionary containing inverter state
+        """
         self._cached_inverter_data = data
+        self._attempt_publish()
 
 
     def _on_system_state(self, data):
-        """Publish Wallbox state to wallbox/state topic.
+        """Cache system data to include in the next system state update. Publish if all data collated.
         
         Args:
-            wallbox_data: Dictionary containing state data.
+            data: Dictionary containing system state
         """
-        if self.mqttclient:
+        self._cached_system_data = data
+        self._attempt_publish()
+
+
+    def _attempt_publish(self):
+        """Publish inverter and system state to wbquasar/state topic if both are available, otherwise wait."""
+        if self.mqttclient and self._cached_inverter_data and self._cached_system_data:
             timestamp = {}
             timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds').replace('+00.00', 'Z')
             data_json = json.dumps(data | self._cached_inverter_data | timestamp)
             logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
             self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
             self._cached_inverter_data = {}
+            self._cached_system_data = {}
 
-    
+
     def _on_message(self, client, userdata, msg):
         """Handle incoming messages on command topics."""
         # Log the command rather than printing it
