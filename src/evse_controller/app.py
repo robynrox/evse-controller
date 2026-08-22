@@ -378,7 +378,7 @@ def config_page():
 
             # Update MQTT settings
             config.MQTT_BROKER = request.form.get('mqtt[broker]', '')
-            config.MQTT_PORT = request.form.get('mqtt[port]', 1883)
+            config.MQTT_PORT = int(request.form.get('mqtt[port]', 1883))
             config.MQTT_USER = request.form.get('mqtt[username]', '')
             config.MQTT_PASS = request.form.get('mqtt[password]', '')
             config.MQTT_CLIENT_ID = request.form.get('mqtt[client_id]', 'wbquasar')
