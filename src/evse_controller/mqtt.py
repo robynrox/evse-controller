@@ -25,24 +25,28 @@ class MQTTManager:
         self.mqttclient = None
         if config.MQTT_BROKER == "":
             logger.info("MQTT not in use")
-            return        
-        self.mqttclient = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION1, config.MQTT_CLIENT_ID)
-        self.mqttclient.on_connect = self._on_connect
-        self.mqttclient.on_message = self._on_message
-        if config.MQTT_USER and config.MQTT_PASS:
-            self.mqttclient.username_pw_set(config.MQTT_USER, config.MQTT_PASS)
-        if config.MQTT_TLS_ENABLED:
-            try:
-                self.mqttclient.tls_set(cert_reqs=ssl.CERT_REQUIRED,
-                                tls_version=ssl.PROTOCOL_TLSv1_2)
-            except Exception as e:
-                logger.error(f"MQTT: Failed to configure TLS: {e}")
-                return
-        self.mqttclient.connect(config.MQTT_BROKER, config.MQTT_PORT)
-        self.mqttclient.subscribe(f"{config.MQTT_CLIENT_ID}/request")
-        self.mqttclient.loop_start()
-        EventBus().subscribe(EventType.SYSTEM_STATE, self._on_system_state)
-        EventBus().subscribe(EventType.INVERTER_STATE, self._on_inverter_state)
+            return
+        try:
+            self.mqttclient = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION1, config.MQTT_CLIENT_ID)
+            self.mqttclient.on_connect = self._on_connect
+            self.mqttclient.on_message = self._on_message
+            if config.MQTT_USER and config.MQTT_PASS:
+                self.mqttclient.username_pw_set(config.MQTT_USER, config.MQTT_PASS)
+            if config.MQTT_TLS_ENABLED:
+                try:
+                    self.mqttclient.tls_set(cert_reqs=ssl.CERT_REQUIRED,
+                                    tls_version=ssl.PROTOCOL_TLSv1_2)
+                except Exception as e:
+                    logger.error(f"MQTT: Failed to configure TLS: {e}")
+                    return
+            self.mqttclient.connect_async(config.MQTT_BROKER, config.MQTT_PORT)
+            self.mqttclient.subscribe(f"{config.MQTT_CLIENT_ID}/request"))
+            self.mqttclient.loop_start()
+            EventBus().subscribe(EventType.SYSTEM_STATE, self._on_system_state)
+            EventBus().subscribe(EventType.INVERTER_STATE, self._on_inverter_state)
+        except Exception as e:
+            logger.exception(f"Failed to initialise MQTT connection: {e}")
+            self.mqttclient = None
 
     
     def _on_connect(self, client, userdata, flags, rc):
