@@ -351,8 +351,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 state["inverter_ac_power_W"] = int(ac_power)
                 state["inverter_ac_voltage_V"] = int(ac_voltage)
                 state["inverter_ac_current_A"] = int(ac_current)
-                state["inverter_dc_voltage_V"] = dc_voltage
-                state["inverter_dc_current_A"] = dc_current
+                state["inverter_dc_voltage_mV"] = round(dc_voltage * 1000)
+                state["inverter_dc_current_mA"] = round(dc_current * 1000)
             state["inverter_model"] = "Wallbox Quasar"
             EventBus().publish(EventType.INVERTER_STATE, state)
             

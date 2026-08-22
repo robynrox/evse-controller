@@ -729,7 +729,7 @@ class EvseController(PowerMonitorObserver):
         rounded_soc = round(power.soc)
         if (rounded_soc >= 5):
             log_state["soc_pct"] = rounded_soc
-        log_state["ac_voltage_V"] = power.voltage
+        log_state["ac_voltage_V"] = round(power.voltage)
         log_state["target_A"] = desired_evse_current
         log_state["setpoint_A"] = self.evseCurrent
         log_msg += f" V:{power.voltage}; I(evse):{self.evseCurrent} I(target):{desired_evse_current} C%:{rounded_soc} "

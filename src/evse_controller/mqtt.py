@@ -14,14 +14,6 @@ from evse_controller.event_bus import EventBus, EventType
 logger = logging.getLogger('mqtt')
 
 
-class CustomJSONEncoder(json.JSONEncoder):
-    def encode(self, o):
-        if isinstance(o, float):
-            # Format with one decimal place
-            return f"{o:.1f}"
-        return super().encode(o)
-
-
 class MQTTManager:
     """Manages MQTT connection, publishing state, and receiving commands."""
     
@@ -110,7 +102,7 @@ class MQTTManager:
             return
         timestamp = {}
         timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-        data_json = json.dumps(self._cached_system_data | self._cached_inverter_data | timestamp, cls=CustomJSONEncoder)
+        data_json = json.dumps(self._cached_system_data | self._cached_inverter_data | timestamp)
         logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
         self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
         self._cached_inverter_data = {}
