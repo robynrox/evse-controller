@@ -71,7 +71,7 @@ class MQTTManager:
         """
         if self.mqttclient:
             timestamp = {}
-            timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds') + 'Z'
+            timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds').replace('+00.00', 'Z')
             data_json = json.dumps(data | self._cached_inverter_data | timestamp)
             logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
             self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
