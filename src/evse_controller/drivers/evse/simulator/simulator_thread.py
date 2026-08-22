@@ -7,7 +7,7 @@ from evse_controller.drivers.evse.async_interface import (
     EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData, EvseState
 )
 from evse_controller.utils.logging_config import debug, info, warning, error
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 
 class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     """
@@ -107,9 +107,8 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
         self._last_ocpp_change_time = 0
         
         # Subscribe to OCPP state change events
-        self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
-        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         info(f"SIMULATOR: Initialized with battery level {self.state.battery_level}%, "
              f"capacity {self.battery_capacity_wh/1000} kWh, simulation speed {self.simulation_speed}x")

@@ -250,8 +250,16 @@ class TestWallboxThread(TestCase):
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
             
-            # Wait for enough cycles to trigger reset (10 errors + buffer)
-            time.sleep(self.thread._poll_interval * 12)
+            # Wait for reset to be attempted (with timeout)
+            timeout = time.time() + 3  # 3 seconds max wait
+            reset_attempted = False
+            while time.time() < timeout:
+                if mock_api.reset_called:
+                    reset_attempted = True
+                    break
+                time.sleep(0.05)
+            
+            self.assertTrue(reset_attempted, "Reset was not called within timeout")
             
             # Verify reset was attempted
             self.assertTrue(mock_api.reset_called)

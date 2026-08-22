@@ -9,7 +9,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error, cr
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import EvseState
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
 
@@ -88,9 +88,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._ocpp_delay_duration = 120  # 2 minutes in seconds
         
         # Subscribe to OCPP state change events
-        self._event_bus = EventBus()
-        self._event_bus.subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
-        self._event_bus.subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_state_change)
+        EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_state_change)
 
         # Internal Modbus register addresses and values
         self._CONTROL_LOCKOUT_REG = 0x51
@@ -342,6 +341,20 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             ac_current = float(self._convert_to_signed(reg_contents[5][0]))  # Signed Amps (1A resolution)
             dc_voltage = float(reg_contents[6][0]) * 0.1  # 0.1V resolution
             dc_current = float(self._convert_to_signed(reg_contents[7][0])) * 0.1  # 0.1A resolution, signed
+
+            state = {}
+            state["inverter_state_reg"] = state_reg
+            state["inverter_battery_reg"] = battery_reg
+            state["inverter_current_reg"] = current
+            # TODO Omit these if the values are wrong (check state_reg)
+            if state_reg == EvseState.CHARGING.value or state_reg == EvseState.DISCHARGING.value:
+                state["inverter_ac_power_W"] = int(ac_power)
+                state["inverter_ac_voltage_V"] = int(ac_voltage)
+                state["inverter_ac_current_A"] = int(ac_current)
+                state["inverter_dc_voltage_mV"] = round(dc_voltage * 1000)
+                state["inverter_dc_current_mA"] = round(dc_current * 1000)
+            state["inverter_model"] = "Wallbox Quasar"
+            EventBus().publish(EventType.INVERTER_STATE, state)
             
             # Calculate DC power and efficiency
             dc_power = dc_voltage * dc_current

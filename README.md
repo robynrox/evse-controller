@@ -2,9 +2,8 @@
 
 This is a system whose purpose is to control "smart" EVSEs such as the Wallbox Quasar. I have referred to
 the source code of the [v2g-liberty](https://github.com/SeitaBV/v2g-liberty/) project to create it, but none of the code
-is shared; this is intended to be simpler and more of a standalone project. In particular, this project is not intended
-to use Home Assistant; if your needs include using Home Assistant then the above project may well be more suited to your
-needs.
+is shared; this is intended to be simpler and more of a standalone project. Having said that, it is capable of being
+integrated into other systems such as Home Assistant via the use of MQTT brokers.
 
 I have completed some library routines declaring the interfaces used for controlling EVSEs and reading from power
 monitors and I have implemented these for the following devices:
@@ -23,8 +22,8 @@ This code may look more Javaesque than Pythonesque - I have more expertise in Ja
 learn a little bit more.
 
 This uses code from a library that can use a Web API to control the Wallbox Quasar, but that code is only used to
-restart the wallbox in the case of modbus failure, a condition that happens once every few days to myself. The library
-used for this can be found here:
+restart the wallbox in the case of modbus failure, a condition that used to happen to me once every few days but now
+rarely happens as this system has been iterated upon. The library can be found here:
 
 * https://github.com/cliviu74/wallbox
 
@@ -64,18 +63,11 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
 
 ### Prerequisites
 - A computer! Possibly a Raspberry Pi. An old laptop also works well.
-- Ideally Linux. Instructions are given for Windows and macOS but the platforms are not recommended.
-  In particular, it is known that there are issues with the Windows installation instructions as they
-  were recently tried out and we were unsuccessful in getting it to work. It is developed on a machine 
-  that runs Ubuntu 24.04. Other Linux distributions are likely to work well; "immutable" ones such as 
-  Fedora Silverblue might be more difficult to get to work. If you insist on running on Windows or 
-  macOS, expect installation to be difficult, and consider running within a container (Docker etc) 
-  using an Ubuntu image.
-- Python 3.11.7 or 3.12.3
+- Ideally Linux. If using macOS or Windows, I would recommend using a container, or WSL2 if using Windows. I assume the use of Linux in these instructions.
+- Python 3.12.3
 - An EVSE device (currently supports Wallbox Quasar)
 - A power monitor (currently supports Shelly EM)
 - Optional: InfluxDB OSS v2 for logging
-- Optional: poetry (an alternative installation method to pip)
 
 ### Installation Steps
 
@@ -97,49 +89,19 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
    - Container will automatically install dependencies
    
    Note: Container support is currently experimental and hasn't been thoroughly tested. 
-   For production use, I recommend using either the pip or Poetry installation methods.
+   For production use, I recommend using the Poetry installation method.
 
-   B. Using pip:
-   ```bash
-   # Navigate to your project directory
-   cd path/to/evse-controller
-   
-   # Create virtual environment in a .venv subdirectory
-   python3 -m venv .venv
-   
-   # Activate the virtual environment
-   # On Linux/macOS:
-   source .venv/bin/activate
-   # On Windows:
-   .\.venv\Activate.ps1
-   
-   # Install in development mode
-   pip install -e .
-   ```
-
-   C. Using Poetry (Alternative):
+   B. Using Poetry:
    ```bash
    # Install Poetry if you haven't already
    # On Linux/macOS/WSL:
    curl -sSL https://install.python-poetry.org | python3 -
-
-   # On Windows (PowerShell):
-   (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
 
    # Navigate to project directory
    cd path/to/evse-controller
 
    # Install dependencies using Poetry
    poetry install
-
-   # Install development dependencies (includes pytest for testing)
-   poetry install --with dev
-
-   # Activate the virtual environment
-   poetry shell
-
-   # Run unit tests as desired
-   pytest
    ```
 
    Note: The virtual environment will be created in your project directory, regardless of which installation method you choose. You can clone or download this repository to any location on your system.
@@ -153,13 +115,14 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
 
   A. Interactive Configuration:
   ```bash
-  python -m evse_controller.configure
+  poetry run python -m evse_controller.configure
   ```
   This will guide you through setting up:
   - Wallbox connection details
   - Shelly EM configuration
   - InfluxDB settings (optional)
   - Charging preferences
+  Some configurations are not supported but it will be possible to use a web interface to complete those.
 
   B. Manual Configuration:
   - Edit or create `data/config/config.yaml` directly
@@ -231,13 +194,20 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
         ocpp_disable_soc_threshold: 95 # Disable OCPP when SoC reaches this level (%)
         ocpp_enable_time: "23:30"      # Time to enable OCPP if SoC threshold not reached
         ocpp_disable_time: "11:00"     # Time to disable OCPP if SoC threshold not reached
+    mqtt:
+      client_id: wbquasar
+      url: ''
+      port: 1083
+      tls_enabled: false
+      username: ''
+      password: ''
     ```
 
   Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
 
 4. **Start the Application**
    ```bash
-   python -m evse_controller.app
+   poetry run python -m evse_controller.app
    ```
    Access the web interface at http://localhost:5000
 
@@ -372,17 +342,7 @@ If using VS Code (recommended):
 
 ## Roadmap
 
-* Creation of abstract APIs to control EV charging and discharging and to use current-monitoring CT clamps other than
-  the Shelly (the APIs are complete)
-* Add a user interface allowing for rapid termination of any current EV charging or discharging session (HTML seems to
-  be the obvious way to go - this is now in progress and a working prototype is available)
-* Add V2G and S2V capabilities that may be independently specified during a scheduled slot (this capability is now part
-  of the library routines and is being added to the user interface)
-* Add scheduling functionality based on a user-selected desired schedule including percentage-of-charge targets
-  (basic scheduling is now available)
-* I'm trying to attach greater importance to bug-fixing; it's more important for it to be solid than look pretty.
-
-The above is an ideal and some of it is sure to be done out of order!
+* Work on a general smart tariff driver that would minimise costs for any tariff.
 
 ## Explanatory video
 
@@ -429,3 +389,4 @@ This project includes several documentation files:
 - [TESTING_CHECKLIST.md](TESTING_CHECKLIST.md) - Checklist for testing features and functionality
 - [TODO.md](TODO.md) - Current development tasks and roadmap items
 - [CONTRIBUTORS.md](CONTRIBUTORS.md) - List of project contributors
+- [MQTT.md](MQTT.md) - Primer on how to use this system with an MQTT broker.

@@ -65,3 +65,9 @@ Thumbs.db
 influxdata-archive_compat.key
 state/schedule.json
 config.yaml.bak
+
+# Kotlin artefacts
+kotlin-poc/bin/
+kotlin-poc/build/
+kotlin-poc/.gradle/
+kotlin-poc/.kotlin/

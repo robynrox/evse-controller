@@ -1,24 +1,14 @@
 import os
-import signal
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_from_directory
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.middleware.proxy_fix import ProxyFix
 from evse_controller.utils.paths import ensure_data_dirs
-from evse_controller.utils.config import config  # Import the config object
+from evse_controller.utils.config import config
 import logging
 import threading
 from datetime import datetime
 from evse_controller.utils.logging_config import info, error, debug
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    info("Shutting down Flask server...")
-    os._exit(0)
-
-# Register signal handlers
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -33,7 +23,7 @@ from evse_controller.smart_evse_controller import (
     tariffManager
 )
 
-from evse_controller.drivers.evse.event_bus import EventBus, EventType
+from evse_controller.event_bus import EventBus, EventType
 
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
@@ -215,10 +205,9 @@ def on_ocpp_disabled(data):
     ocpp_state = "Off"
 
 # Subscribe to the measurements and OCPP events when the module loads
-event_bus = EventBus()
-event_bus.subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
-event_bus.subscribe(EventType.OCPP_ENABLED, on_ocpp_enabled)
-event_bus.subscribe(EventType.OCPP_DISABLED, on_ocpp_disabled)
+EventBus().subscribe(EventType.MEASUREMENTS_UPDATE, on_measurements_update)
+EventBus().subscribe(EventType.OCPP_ENABLED, on_ocpp_enabled)
+EventBus().subscribe(EventType.OCPP_DISABLED, on_ocpp_disabled)
 
 @control_ns.route('/command')
 class ControlResource(Resource):
@@ -386,6 +375,14 @@ def config_page():
                 config.INFLUXDB_TOKEN = request.form.get('influxdb[token]')
             config.INFLUXDB_ORG = request.form.get('influxdb[org]')
             config.INFLUXDB_BUCKET = request.form.get('influxdb[bucket]', 'powerlog')  # Default to 'powerlog' if not provided
+
+            # Update MQTT settings
+            config.MQTT_BROKER = request.form.get('mqtt[broker]', '')
+            config.MQTT_PORT = request.form.get('mqtt[port]', 1883)
+            config.MQTT_USER = request.form.get('mqtt[username]', '')
+            config.MQTT_PASS = request.form.get('mqtt[password]', '')
+            config.MQTT_CLIENT_ID = request.form.get('mqtt[client_id]', 'wbquasar')
+            config.MQTT_TLS_ENABLED = request.form.get('mqtt[tls_enabled]') == "true"
 
             # Update charging settings
             config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))

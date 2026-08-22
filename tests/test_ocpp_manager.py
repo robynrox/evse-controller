@@ -9,7 +9,7 @@ import threading
 from queue import Queue, Empty
 
 from evse_controller.drivers.evse.ocpp_manager import OCPPManager
-from evse_controller.drivers.evse.event_bus import EventType
+from evse_controller.event_bus import EventType
 
 
 class TestOCPPManager(TestCase):

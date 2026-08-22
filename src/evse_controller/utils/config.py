@@ -453,6 +453,37 @@ class Config:
         lambda self, value: self._set_config_value("influxdb", "bucket", value)
     )
 
+    # MQTT section
+    MQTT_BROKER = property(
+        lambda self: self._get_config_value("mqtt", "url", ""),
+        lambda self, value: self._set_config_value("mqtt", "url", value)
+    )
+
+    MQTT_PORT = property(
+        lambda self: self._get_config_value("mqtt", "port", 1883),
+        lambda self, value: self._set_config_value("mqtt", "port", value)
+    )
+
+    MQTT_USER = property(
+        lambda self: self._get_config_value("mqtt", "username", ""),
+        lambda self, value: self._set_config_value("mqtt", "username", value)
+    )
+
+    MQTT_PASS = property(
+        lambda self: self._get_config_value("mqtt", "password", ""),
+        lambda self, value: self._set_config_value("mqtt", "password", value)
+    )
+
+    MQTT_CLIENT_ID = property(
+        lambda self: self._get_config_value("mqtt", "client_id", "wbquasar"),
+        lambda self, value: self._set_config_value("mqtt", "client_id", value)
+    )
+
+    MQTT_TLS_ENABLED = property(
+        lambda self: self._get_config_value("mqtt", "tls_enabled", False),
+        lambda self, value: self._set_config_value("mqtt", "tls_enabled", value)
+    )
+
     def save(self):
         """Save configuration to YAML file with backup."""
         config_path = get_config_file()
@@ -507,6 +538,14 @@ class Config:
                 'token': self.INFLUXDB_TOKEN,
                 'org': self.INFLUXDB_ORG,
                 'bucket': self.INFLUXDB_BUCKET
+            },
+            'mqtt': {
+                'broker': self.MQTT_BROKER,
+                'port': self.MQTT_PORT,
+                'username': self.MQTT_USER,
+                'password': self.MQTT_PASS,
+                'client_id': self.MQTT_CLIENT_ID,
+                'tls_enabled': self.MQTT_TLS_ENABLED
             },
             'charging': {
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
