@@ -34,6 +34,7 @@ class MQTTManager:
         try:
             self.mqttclient = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION1, config.MQTT_CLIENT_ID)
             self.mqttclient.on_connect = self._on_connect
+            self.mqttclient.on_disconnect = self._on_disconnect
             self.mqttclient.on_message = self._on_message
             if config.MQTT_USER and config.MQTT_PASS:
                 self.mqttclient.username_pw_set(config.MQTT_USER, config.MQTT_PASS)
@@ -60,6 +61,13 @@ class MQTTManager:
             client.subscribe(f"{config.MQTT_CLIENT_ID}/request")
         else:
             logger.error(f"Failed to connect, return code {rc}")
+
+
+    def _on_disconnect(self, client, userdata, rc):
+        if rc != 0:
+            logger.warning(f"Unexpected disconnect from MQTT broker (rc={rc}), automatic reconnection possible")
+        else:
+            logger.info("MQTT disconnected cleanly")
 
 
     def _on_inverter_state(self, data):
