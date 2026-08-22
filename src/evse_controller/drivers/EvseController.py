@@ -682,7 +682,7 @@ class EvseController(PowerMonitorObserver):
                 if channel_power is not None:
                     # Get the channel abbreviation
                     abbr = config.get_channel_abbreviation(device, ch_num)
-                    name = config.get_channel_name(device. ch_num)
+                    name = config.get_channel_name(device, ch_num)
 
                     # Store for logging
                     channel_powers[abbr] = channel_power
