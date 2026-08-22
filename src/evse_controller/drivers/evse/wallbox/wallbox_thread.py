@@ -345,12 +345,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             state = {}
             state["inverter_state_reg"] = state_reg
             state["inverter_battery_reg"] = battery_reg
-            state["inverter_current_reg"] = current_reg
+            state["inverter_current_reg"] = current
             # TODO Omit these if the values are wrong (check state_reg)
             if state_reg == EvseState.CHARGING.value or state_reg == EvseState.DISCHARGING.value:
-                state["inverter_ac_power_W"] = ac_power
-                state["inverter_ac_voltage_V"] = ac_voltage
-                state["inverter_ac_current_A"] = ac_current
+                state["inverter_ac_power_W"] = int(ac_power)
+                state["inverter_ac_voltage_V"] = int(ac_voltage)
+                state["inverter_ac_current_A"] = int(ac_current)
                 state["inverter_dc_voltage_V"] = dc_voltage
                 state["inverter_dc_current_A"] = dc_current
             state["inverter_model"] = "Wallbox Quasar"
