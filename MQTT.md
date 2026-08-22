@@ -39,24 +39,24 @@ Example payload:
 ```json
 {
     "home_power_W": 407,                    // This value is calculated as grid minus all other Shellys and assumed wallbox current
-    "evse_power_W": -3630,                  // Provided by a Shelly EM
+    "evse_power_W": -3630,                  // Provided by a Shelly EM, rounded to nearest W
     "heatpump_power_W": 10,                 // Provided by a Shelly EM
     "solar_power_W": -1065,                 // Provided by a Shelly EM
     "grid_power_W": -4278,                  // Provided by a Shelly EM
     "soc_pct": 89,                          // State of Charge as a percentage
-    "ac_voltage_V": 244.86,                 // Provided by a Shelly EM
+    "ac_voltage_V": 244,                    // Provided by a Shelly EM, rounded to nearest V
     "target_A": -16,                        // Current requested by system
     "setpoint_A": -16,                      // Current setpoint in Wallbox
     "inverter_state": "DISCHARGING",        // Various states possible, see below
-    "guard_time_remaining_s": 0,            // Time before a change of setpoint will be actioned
+    "guard_time_remaining_s": 0,            // Time before a change of setpoint will be actioned (the inverter needs time to settle)
     "inverter_state_reg": 11,               // Numeric value corresponding to inverter state
-    "inverter_battery_reg": 89,             // Equivalent to state of charge
+    "inverter_battery_reg": 89,             // Usually equivalent to state of charge
     "inverter_current_reg": -16,            // Equivalent to setpoint
     "inverter_ac_power_W": -3618,           // ac power measured by the wallbox itself
     "inverter_ac_voltage_V": 243,           // ac voltage measured by the wallbox (precision 1V)
     "inverter_ac_current_A": 14,            // ac current measured by the wallbox (precision 1A so not very useful)
-    "inverter_dc_voltage_V": 389.3,         // dc voltage measured by the wallbox (precision 0.1V)
-    "inverter_dc_current_A": -9.4,          // dc current measured by the wallbox (precision 0.1A)
+    "inverter_dc_voltage_mV": 389300,       // dc voltage measured by the wallbox (precision 100mV)
+    "inverter_dc_current_mA": -9400,        // dc current measured by the wallbox (precision 100mA)
     "inverter_model": "Wallbox Quasar",     // Make and model of inverter hardware
     "timestamp": "2026-08-22T15:25:13.068Z" // Date and time of report
 }
