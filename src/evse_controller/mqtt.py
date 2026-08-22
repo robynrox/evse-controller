@@ -26,7 +26,7 @@ class MQTTManager:
         if config.MQTT_BROKER == "":
             logger.info("MQTT not in use")
             return        
-        self.mqttclient = mqtt_client.Client(config.MQTT_CLIENT_ID)
+        self.mqttclient = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION1, config.MQTT_CLIENT_ID)
         self.mqttclient.on_connect = self._on_connect
         self.mqttclient.on_message = self._on_message
         if config.MQTT_USER and config.MQTT_PASS:
