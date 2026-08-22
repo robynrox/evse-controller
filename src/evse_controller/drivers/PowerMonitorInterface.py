@@ -1,5 +1,5 @@
 from evse_controller.drivers.Power import Power
-from evse_controller.utils.logging_config import debug, info, warning, error, critical
+from evse_controller.utils.logging_config import debug, info, warning, error, critical, exception
 
 from abc import ABC, abstractmethod
 import threading
@@ -63,7 +63,7 @@ class PowerMonitorPollingThread(threading.Thread):
                     
                 time.sleep(sleep_time)
             except Exception as e:
-                error(f"Error in PowerMonitor thread {self.name}: {e}")
+                exception(f"Error in PowerMonitor thread {self.name}: {e}")
                 time.sleep(1)  # Prevent tight error loop
 
     def stop(self):
