@@ -7,6 +7,7 @@ import ssl
 import json
 import queue
 import logging
+import datetime
 from evse_controller.event_bus import EventBus, EventType
 
 logger = logging.getLogger('mqtt')
@@ -69,7 +70,9 @@ class MQTTManager:
             wallbox_data: Dictionary containing state data.
         """
         if self.mqttclient:
-            data_json = json.dumps(data | self._cached_inverter_data)
+            timestamp = {}
+            timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds') + 'Z'
+            data_json = json.dumps(data | self._cached_inverter_data | timestamp)
             logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
             self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
             self._cached_inverter_data = {}

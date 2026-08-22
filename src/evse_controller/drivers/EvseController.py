@@ -709,7 +709,7 @@ class EvseController(PowerMonitorObserver):
         if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
             evse_abbr = config.get_channel_abbreviation(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL)
             log_msg += f" {evse_abbr}:{evse_power_value}"
-            evse_name = config.get_channel_name(config.SHELLY_EVSE_DEVICE, config.SHELLY_GRID_CHANNEL)
+            evse_name = config.get_channel_name(config.SHELLY_EVSE_DEVICE, config.SHELLY_EVSE_CHANNEL).lower()
             log_state[f"{evse_name}_power_W"] = evse_power_value
 
         # Add all other channels
@@ -721,7 +721,7 @@ class EvseController(PowerMonitorObserver):
                     continue
 
             log_msg += f" {abbr}:{power_value}"
-            name = channel_names[abbr]
+            name = channel_names[abbr].lower()
             log_state[f"{name}_power_W"] = power_value
 
         # Add the rest of the log message
