@@ -40,7 +40,7 @@ class MQTTManager:
                     logger.error(f"MQTT: Failed to configure TLS: {e}")
                     return
             self.mqttclient.connect_async(config.MQTT_BROKER, config.MQTT_PORT)
-            self.mqttclient.subscribe(f"{config.MQTT_CLIENT_ID}/request"))
+            self.mqttclient.subscribe(f"{config.MQTT_CLIENT_ID}/request")
             self.mqttclient.loop_start()
             EventBus().subscribe(EventType.SYSTEM_STATE, self._on_system_state)
             EventBus().subscribe(EventType.INVERTER_STATE, self._on_inverter_state)
