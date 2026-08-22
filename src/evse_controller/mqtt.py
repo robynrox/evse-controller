@@ -8,6 +8,7 @@ import json
 import queue
 import logging
 import datetime
+import time
 from evse_controller.event_bus import EventBus, EventType
 
 logger = logging.getLogger('mqtt')
@@ -18,6 +19,8 @@ class MQTTManager:
     def __init__(self, execQueue: queue.SimpleQueue):
         self.execQueue = execQueue
         self._cached_inverter_data = {}
+        self._cached_inverter_timestamp = time.time()
+        self.INVERTER_TIMEOUT_SECONDS = 2
         self._cached_system_data = {}
         self._setup_client()
 
@@ -66,6 +69,7 @@ class MQTTManager:
             data: Dictionary containing inverter state
         """
         self._cached_inverter_data = data
+        self._cached_inverter_timestamp = time.time()
         self._attempt_publish()
 
 
@@ -81,14 +85,19 @@ class MQTTManager:
 
     def _attempt_publish(self):
         """Publish inverter and system state to wbquasar/state topic if both are available, otherwise wait."""
-        if self.mqttclient and self._cached_inverter_data and self._cached_system_data:
-            timestamp = {}
-            timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-            data_json = json.dumps(self._cached_system_data | self._cached_inverter_data | timestamp)
-            logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
-            self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
-            self._cached_inverter_data = {}
-            self._cached_system_data = {}
+        if not self.mqttclient:
+            return
+        if not self._cached_system_data:
+            return
+        if (not self._cached_inverter_data) and time.time() - self._cached_inverter_timestamp < self.INVERTER_TIMEOUT_SECONDS:
+            return
+        timestamp = {}
+        timestamp["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        data_json = json.dumps(self._cached_system_data | self._cached_inverter_data | timestamp)
+        logger.debug(f"{config.MQTT_CLIENT_ID}/state -> {data_json}")
+        self.mqttclient.publish(f"{config.MQTT_CLIENT_ID}/state", data_json)
+        self._cached_inverter_data = {}
+        self._cached_system_data = {}
 
 
     def _on_message(self, client, userdata, msg):
