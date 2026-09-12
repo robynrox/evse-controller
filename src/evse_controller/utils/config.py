@@ -484,6 +484,36 @@ class Config:
         lambda self, value: self._set_config_value("mqtt", "tls_enabled", value)
     )
 
+    IMPORT_HIGH = property(
+        lambda self: self._get_config_value("import", "high", 30),
+        lambda self, value: self._set_config_value("import", "high", value)
+    )
+
+    IMPORT_MID = property(
+        lambda self: self._get_config_value("import", "mid", 20),
+        lambda self, value: self._set_config_value("import", "mid", value)
+    )
+
+    IMPORT_LOW = property(
+        lambda self: self._get_config_value("import", "low", 10),
+        lambda self, value: self._set_config_value("import", "low", value)
+    )
+
+    EXPORT_HIGH = property(
+        lambda self: self._get_config_value("export", "high", 12),
+        lambda self, value: self._set_config_value("export", "high", value)
+    )
+
+    EXPORT_MID = property(
+        lambda self: self._get_config_value("export", "mid", 8),
+        lambda self, value: self._set_config_value("export", "mid", value)
+    )
+
+    EXPORT_LOW = property(
+        lambda self: self._get_config_value("export", "low", 4),
+        lambda self, value: self._set_config_value("export", "low", value)
+    )
+
     def save(self):
         """Save configuration to YAML file with backup."""
         config_path = get_config_file()
@@ -579,6 +609,16 @@ class Config:
             'logging': {
                 'file_level': self.FILE_LOGGING,
                 'console_level': self.CONSOLE_LOGGING
+            },
+            'import': {
+                'high': self.IMPORT_HIGH,
+                'mid': self.IMPORT_MID,
+                'low': self.IMPORT_LOW
+            },
+            'export': {
+                'high': self.EXPORT_HIGH,
+                'mid': self.EXPORT_MID,
+                'low': self.EXPORT_LOW
             }
         }
 
