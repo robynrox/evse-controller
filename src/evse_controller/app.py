@@ -451,6 +451,27 @@ def config_page():
                         config.set_channel_name(device, channel, name)
                         config.set_channel_abbreviation(device, channel, abbr)
 
+            # Get tariff prices
+            import_high = request.form.get('import[high]')
+            if import_high is not None:
+                config.IMPORT_HIGH = import_high
+            import_mid = request.form.get('import[mid]')
+            if import_mid is not None:
+                config.IMPORT_MID = import_mid
+            import_low = request.form.get('import[low]')
+            if import_low is not None:
+                config.IMPORT_LOW = import_low
+
+            export_high = request.form.get('export[high]')
+            if export_high is not None:
+                config.EXPORT_HIGH = export_high
+            export_mid = request.form.get('export[mid]')
+            if export_mid is not None:
+                config.EXPORT_MID = export_mid
+            export_low = request.form.get('export[low]')
+            if export_low is not None:
+                config.EXPORT_LOW = export_low
+
             # Save the updated configuration
             config.save()
 
