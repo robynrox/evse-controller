@@ -53,10 +53,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         time_of_use (dict): IOCTGO time periods and rates
         agile_rates (list): Today's Agile Outgoing rates (p/kWh)
         agile_rates_fetched_at (datetime): When rates were last fetched
-        IMPORT_RATE_OFF_PEAK_P (float): Off-peak import rate (7p/kWh)
-        IMPORT_RATE_PEAK_P (float): Peak import rate (31.42p/kWh)
-        STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (5p/kWh)
-        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (15.71p/kWh)
+        STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (=off peak import price)
+        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (=50% of peak import price)
         BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL (float): Conservative
             efficiency estimate (50%) for bidirectional decisions
     """
@@ -84,10 +82,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
         
-        # Import rates (p/kWh) - TODO: move to config.yaml
-        self.IMPORT_RATE_OFF_PEAK_P = 3.49  #  3.49p/kWh during off-peak (23:30-05:30)
-        self.IMPORT_RATE_PEAK_P = 27.91     # 27.91p/kWh at all other times
-        
         # Round-trip efficiency for bidirectional decision making
         # Conservative 50% estimate accounts for efficiency loss + battery wear
         # TODO: move to config.yaml
@@ -96,7 +90,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
         # This prevents exporting at trivial rates when energy may be needed later
-        self.STORAGE_FLOOR_THRESHOLD_P = 3.49
+        self.STORAGE_FLOOR_THRESHOLD_P = config.IMPORT_LOW
         
         # Self-use value threshold: effective value of stored energy when used
         # for self-consumption instead of importing at peak rates.
@@ -104,12 +98,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # When SoC is low and export rate < this threshold, storing for self-use
         # is preferable to exporting (avoids peak import later)
         self.SELF_USE_VALUE_THRESHOLD_P = (
-            self.IMPORT_RATE_PEAK_P * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
-        )  # = 15.71p/kWh
+            config.IMPORT_HIGH * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
+        )
         
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": self.IMPORT_RATE_OFF_PEAK_P / 100, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": self.IMPORT_RATE_PEAK_P / 100, "export_rate": 0.15}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": 0.15},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH / 100, "export_rate": 0.15}
         }
         
         # Agile Outgoing rate storage
@@ -260,7 +254,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Calculate minimum profitable rate
         # Need: export_rate ≥ import_rate / round_trip_efficiency
-        import_rate = self.time_of_use["low"]["import_rate"]  # £/kWh
+        import_rate = config.IMPORT_LOW
         min_export_rate = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
         min_export_rate_p = min_export_rate * 100  # Convert to p/kWh
 

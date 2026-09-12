@@ -51,8 +51,8 @@ class IntelligentOctopusGoTariff(Tariff):
         """
         super().__init__(command_queue=command_queue)
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": 0.0700, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": 0.3142, "export_rate": 0.15}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW, "export_rate": config.EXPORT_MID},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH, "export_rate": config.EXPORT_MID}
         }
 
         # OCPP state tracking

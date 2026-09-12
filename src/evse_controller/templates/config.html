@@ -405,10 +405,10 @@
             <small>Select your UK region for accurate Agile Outgoing export rates</small>
         </div>
         <div class="form-group">
-            <label for="min_agile_discharge_soc">Minimum SoC for Agile Discharge (%):</label>
+            <label for="min_agile_discharge_soc">Target SoC for Agile Discharge (%):</label>
             <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
-            <small>Minimum battery level for export (default 60%). System will stop exporting when SoC reaches this level.</small>
+            <small>SoC to target at end of charging period. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
@@ -534,37 +534,37 @@
     </div>
 
     <div class="config-section">
-        <h2>Tariff prices for smart tariff drivers</h2>
+        <h2>Tariff prices for smart tariff drivers - ONLY IN USE WITH INTELLIGENT GO WITH AGILE EXPORT AT THIS TIME</h2>
         <div class="form-group">
-            <label for="import_high">Import high price in p/kWh</label>
+            <label for="import_high">Import highest price in p/kWh</label>
             <input type="number" step="0.01" name="import[high]" value="{{ config.import.high }}">
-            <small>Day unit rate, peak unit rate, etc. The highest rate being used by your tariff.</small>
+            <small>Day unit rate, peak unit rate, etc. The highest rate being used by your tariff. Not used if only one unit rate exists.</small>
         </div>
         <div class="form-group">
-            <label for="import_mid">Import mid price in p/kWh</label>
+            <label for="import_mid">Import middle price in p/kWh</label>
             <input type="number" step="0.01" name="import[mid]" value="{{ config.import.mid }}">
-            <small>Usually called day rate for tariffs with three different prices.</small>
+            <small>Usually called day rate for tariffs with three different prices. Not used if two unit rates exist.</small>
         </div>
         <div class="form-group">
-            <label for="import_low">Import high price in p/kWh</label>
+            <label for="import_low">Import lowest price in p/kWh</label>
             <input type="number" step="0.01" name="import[low]" value="{{ config.import.low }}">
-            <small>Night unit rate, off peak unit rate, cosy rate, etc. The lowest rate being used by your tariff.</small>
+            <small>Night unit rate, off peak unit rate, cosy rate, etc. The lowest rate being used by your tariff. Not used if only one unit rate exists</small>
         </div>
         <hr>
         <div class="form-group">
-            <label for="export_high">Export high price in p/kWh</label>
+            <label for="export_high">Export highest price in p/kWh</label>
             <input type="number" step="0.01" name="export[high]" value="{{ config.export.high }}">
-            <small>Peak rate (e.g. Octopus Flux).</small>
+            <small>Peak rate (e.g. Octopus Flux). Not used if only one unit rate exists</small>
         </div>
         <div class="form-group">
-            <label for="import_mid">Export mid price in p/kWh</label>
+            <label for="import_mid">Export middle price in p/kWh</label>
             <input type="number" step="0.01" name="export[mid]" value="{{ config.export.mid }}">
-            <small>Flat rate (e.g. Outgoing Octopus flat rate export); Day rate (e.g. Octopus Flux).</small>
+            <small>Flat rate (e.g. Outgoing Octopus flat rate export); Day rate (e.g. Octopus Flux). Not used if two unit rates exist.</small>
         </div>
         <div class="form-group">
-            <label for="import_low">Export high price in p/kWh</label>
+            <label for="import_low">Export lowest price in p/kWh</label>
             <input type="number" step="0.01" name="export[low]" value="{{ config.export.low }}">
-            <small>Flux rate (e.g. Octopus Flux).</small>
+            <small>Flux rate (e.g. Octopus Flux). Not used if only one unit rate exists</small>
         </div>
     </div>
 
