@@ -102,8 +102,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH / 100, "export_rate": 0.15}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": config.EXPORT_MID},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH / 100, "export_rate": config.EXPORT_MID}
         }
         
         # Agile Outgoing rate storage
