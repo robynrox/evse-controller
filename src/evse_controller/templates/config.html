@@ -408,7 +408,7 @@
             <label for="min_agile_discharge_soc">Target SoC for Agile Discharge (%):</label>
             <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
-            <small>SoC to target at end of charging period. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
+            <small>SoC to target near the end of the day. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
