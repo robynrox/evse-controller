@@ -255,8 +255,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Calculate minimum profitable rate
         # Need: export_rate ≥ import_rate / round_trip_efficiency
         import_rate = config.IMPORT_LOW
-        min_export_rate = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
-        min_export_rate_p = min_export_rate * 100  # Convert to p/kWh
+        min_export_rate_p = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
 
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
 
