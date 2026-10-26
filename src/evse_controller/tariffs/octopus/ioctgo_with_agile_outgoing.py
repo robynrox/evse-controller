@@ -26,6 +26,25 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     - LOAD_FOLLOW_DISCHARGE: Export when current rates are favorable
     - LOAD_FOLLOW_BIDIRECTIONAL: Store solar energy based on three-tier logic:
 
+    **Energy Shortfall Mode:**
+
+    Before applying the storage/export logic, the tariff projects the SoC at
+    23:30 assuming every remaining slot loses NON_EXPORT_SLOT_SOC_LOSS_PERCENT.
+    If that projection is below MIN_AGILE_DISCHARGE_SOC, the day is treated as
+    an energy shortfall and the system switches to a conservative bidirectional
+    mode:
+
+    - No export slots are planned (there is no spare SoC above the target).
+    - The car still absorbs surplus solar, since that improves the chance of
+      reaching the target.
+    - Discharge covers most of the house load but deliberately leaves a small
+      import (720 W activation, -0.5 A bias) so it does not intentionally
+      export. This replaces the fixed SOC_THRESHOLD_FOR_STRATEGY approach in
+      the standard IOCTGO tariff.
+    - The shortfall state is recalculated whenever the export plan is
+      recalculated (slot boundaries, significant SoC changes, and rate
+      refreshes), keeping the plan and discharge mode consistent.
+
     **Three-Tier Storage Decision:**
 
     Tier 1 - Storage Floor (< STORAGE_FLOOR_THRESHOLD_P p/kWh):
@@ -53,10 +72,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         time_of_use (dict): IOCTGO time periods and rates
         agile_rates (list): Today's Agile Outgoing rates (p/kWh)
         agile_rates_fetched_at (datetime): When rates were last fetched
-        IMPORT_RATE_OFF_PEAK_P (float): Off-peak import rate (7p/kWh)
-        IMPORT_RATE_PEAK_P (float): Peak import rate (31.42p/kWh)
-        STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (5p/kWh)
-        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (15.71p/kWh)
+        STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (=off peak import price)
+        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (=50% of peak import price)
         BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL (float): Conservative
             efficiency estimate (50%) for bidirectional decisions
     """
@@ -84,10 +101,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
         
-        # Import rates (p/kWh) - TODO: move to config.yaml
-        self.IMPORT_RATE_OFF_PEAK_P = 3.49  #  3.49p/kWh during off-peak (23:30-05:30)
-        self.IMPORT_RATE_PEAK_P = 27.91     # 27.91p/kWh at all other times
-        
         # Round-trip efficiency for bidirectional decision making
         # Conservative 50% estimate accounts for efficiency loss + battery wear
         # TODO: move to config.yaml
@@ -96,7 +109,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
         # This prevents exporting at trivial rates when energy may be needed later
-        self.STORAGE_FLOOR_THRESHOLD_P = 3.49
+        self.STORAGE_FLOOR_THRESHOLD_P = config.IMPORT_LOW
         
         # Self-use value threshold: effective value of stored energy when used
         # for self-consumption instead of importing at peak rates.
@@ -104,12 +117,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # When SoC is low and export rate < this threshold, storing for self-use
         # is preferable to exporting (avoids peak import later)
         self.SELF_USE_VALUE_THRESHOLD_P = (
-            self.IMPORT_RATE_PEAK_P * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
-        )  # = 15.71p/kWh
+            config.IMPORT_HIGH * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
+        )
         
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": self.IMPORT_RATE_OFF_PEAK_P / 100, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": self.IMPORT_RATE_PEAK_P / 100, "export_rate": 0.15}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": config.EXPORT_MID},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH / 100, "export_rate": config.EXPORT_MID}
         }
         
         # Agile Outgoing rate storage
@@ -120,9 +133,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Get region from config
         self.region = getattr(config, 'OCTOPUS_REGION', 'K')
         self.tariff_code = self.AGILE_TARIFF_CODES.get(self.region, 'AGILE-OUTGOING-19-05-13')
-        
-        # Fetch rates at startup (async)
-        self._fetch_rates_async()
         
         # === IOCTGO CONFIGURABLE PARAMETERS ===
         self.BATTERY_CAPACITY_KWH = battery_capacity_kwh if battery_capacity_kwh is not None else config.IOCTGO_BATTERY_CAPACITY_KWH
@@ -140,7 +150,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         self.TARGET_SOC_AT_BULK_DISCHARGE_END = config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END
         self.MIN_DISCHARGE_CURRENT = config.WALLBOX_MIN_DISCHARGE_CURRENT
-        self.SOC_THRESHOLD_FOR_STRATEGY = config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY
         self.GRID_IMPORT_THRESHOLD_HIGH_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC
         self.GRID_IMPORT_THRESHOLD_LOW_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC
         
@@ -178,17 +187,66 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_plan_slot = -1
         self._plan_cache = []
         self._prev_battery_level = -1
-        
+
+        # True when the projected SoC at 23:30 is below the target, meaning
+        # energy should be conserved rather than exported. Updated whenever
+        # the export plan is recalculated so the two stay in step.
+        self._energy_shortfall = False
+
         # Ensure OCPP is off
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
         ocpp_manager.initialize()
         ocpp_manager.set_state(False)
 
+        # Fetch rates at startup (async). Keep this last so the fetch thread
+        # cannot run before the instance attributes it needs are initialised.
+        self._fetch_rates_async()
+
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight."""
         hours, minutes = map(int, time_str.split(":"))
         return hours * 60 + minutes
-    
+
+    def _update_energy_shortfall(self, current_soc_percent: float) -> bool:
+        """Update and return whether the day is projected to end in shortfall.
+
+        A shortfall means the SoC projected at 23:30 is below
+        MIN_AGILE_DISCHARGE_SOC. The projection uses the same assumption as
+        calculate_export_plan(): every remaining slot loses
+        NON_EXPORT_SLOT_SOC_LOSS_PERCENT.
+
+        Called from calculate_export_plan(), so this state is refreshed at
+        exactly the same times as the export plan: at slot boundaries, on
+        significant SoC changes, and after a rate refresh.
+
+        Args:
+            current_soc_percent: Current battery state of charge (%), or -1
+                if unknown.
+
+        Returns:
+            True if the projected SoC at 23:30 is below the target.
+        """
+        if current_soc_percent < 0:
+            self._energy_shortfall = False
+            return False
+
+        now = self.get_current_datetime()
+        current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        slots_remaining = max(0, 47 - current_slot_idx)
+        projected_soc_at_2330 = (
+            current_soc_percent
+            - slots_remaining * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        )
+
+        target_soc = config.MIN_AGILE_DISCHARGE_SOC
+        self._energy_shortfall = projected_soc_at_2330 < target_soc
+
+        debug(
+            f"IOCTGO_AGILEOUT: Projected SoC at 23:30={projected_soc_at_2330:.1f}% "
+            f"(target {target_soc}%), shortfall={self._energy_shortfall}"
+        )
+        return self._energy_shortfall
+
     def calculate_export_plan(self, current_soc_percent: float) -> list:
         """Calculate which slots to use for export based on current SoC and rates.
 
@@ -202,6 +260,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Returns:
             List of slot indices (0-47) planned for export
         """
+        # Keep the shortfall decision in step with the export plan. This is
+        # called whenever the plan is recalculated, including the significant
+        # SoC change resync and the post-fetch recalculation.
+        self._update_energy_shortfall(current_soc_percent)
+
         if not self.agile_rates or current_soc_percent < 0:
             return []
 
@@ -260,9 +323,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Calculate minimum profitable rate
         # Need: export_rate ≥ import_rate / round_trip_efficiency
-        import_rate = self.time_of_use["low"]["import_rate"]  # £/kWh
-        min_export_rate = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
-        min_export_rate_p = min_export_rate * 100  # Convert to p/kWh
+        import_rate = config.IMPORT_LOW
+        min_export_rate_p = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
 
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
 
@@ -1043,6 +1105,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         - Off-peak (23:30-05:30): Charge at max rate (IOCTGO cheap rate) - ABSOLUTE PRIORITY
         - Battery depleted: Dormant
         - During planned export slots: Discharge at max rate
+        - Energy shortfall: Bidirectional mode with conservative discharge
+          (cover most of the house load, no planned export)
         - Other times: Three-tier decision for bidirectional vs export:
           1. Rate < 5p: STORE (too trivial to export)
           2. Rate < 15.71p + low SoC: STORE (self-use value)
@@ -1108,6 +1172,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(f"IOCTGO_AGILEOUT: In export slot {current_slot}, commanding DISCHARGE")
             return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
 
+        # Energy shortfall: conserve energy for the house rather than exporting.
+        # Stay bidirectional so surplus solar can still be absorbed, but use
+        # the conservative discharge configuration in set_home_demand_levels().
+        if self._energy_shortfall:
+            debug(
+                f"IOCTGO_AGILEOUT: Energy shortfall (SoC {battery_level}%), "
+                f"using conservative bidirectional mode"
+            )
+            return (
+                ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
+                3,
+                self.MAX_DISCHARGE_CURRENT,
+                "IOCTGO_AGILEOUT Shortfall: conserve energy for house load",
+            )
+
         # All other times: Decide between load-follow discharge and bidirectional mode
         # Get current slot's export rate for comparison
         current_export_rate_p = 0.0
@@ -1135,7 +1214,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Load follow"
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
-        """Configure home demand power levels."""
+        """Configure home demand power levels.
+
+        In normal operation the existing tier logic chooses between
+        bidirectional and load-follow discharge. When the day is projected to
+        end in an energy shortfall, the system instead stays bidirectional (so
+        surplus solar is absorbed) but discharges conservatively: activation
+        720 W and bias -0.5 A, which covers most of the house load while
+        leaving a small import rather than intentionally exporting.
+        """
         if self.SMART_OCPP_OPERATION:
             self._ocpp_check_turn_on(state, dayMinute)
 
@@ -1164,7 +1251,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
             return  # Don't configure load-following during export slots
 
-        # Check if we should be in bidirectional mode (uses SoC-aware logic)
+        # Energy shortfall: conserve energy. Stay bidirectional so surplus
+        # solar is still absorbed, but discharge conservatively - cover most
+        # of the house load and leave a small import rather than intentionally
+        # exporting. This replaces the fixed SOC_THRESHOLD_FOR_STRATEGY test.
+        if self._energy_shortfall:
+            # 720 W is 3 A at the ~240 V UK supply, so the Wallbox's minimum
+            # discharge current is reached at the activation threshold.
+            evseController.setDischargeActivationPower(720)
+            evseController.setDischargeCurrentBias(-0.5)
+            evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
+            evseController.setChargeActivationPower(720)
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            debug(
+                f"IOCTGO_AGILEOUT: Shortfall mode configured - conservative "
+                f"discharge (activation=720W, bias=-0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)"
+            )
+            return
+
+        # Not shortfall: use the existing tier logic to decide between storing
+        # (bidirectional) and exporting (load-follow discharge).
         # Get current export rate for comparison
         current_export_rate_p = 0.0
         for rate_data in self.agile_rates:
@@ -1192,27 +1299,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
             debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation=1W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
-            # Standard load-follow discharge: Configure based on SoC threshold
-            if battery_level >= self.SOC_THRESHOLD_FOR_STRATEGY:
-                # High SoC: aggressive discharge
-                evseController.setDischargeActivationPower(1)
-                evseController.setDischargeCurrentBias(0.5)
-                evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-            else:
-                # Low SoC: conservative discharge
-                evseController.setDischargeActivationPower(720)
-                evseController.setDischargeCurrentBias(-0.5)
-                evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-
-        # Track which slots we actually export in
-        current_slot_idx = dayMinute // 30
-        # Check if we're in discharge mode during a planned export slot
-        if current_slot_idx in self._planned_export_slots:
-            # Check if actually discharging (negative current means discharge)
-            if state.current < -1:  # More than 1A discharge
-                if current_slot_idx not in self._exported_slots:
-                    self._exported_slots.append(current_slot_idx)
-                    info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot_idx} ({dayMinute//60:02d}:{dayMinute%60:02d})")
+            # Standard load-follow discharge. With no shortfall we can afford
+            # to cover the house load rather than conserve energy.
+            evseController.setDischargeActivationPower(1)
+            evseController.setDischargeCurrentBias(0.5)
+            evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
 
     def cleanup(self):
         """Restore original calculation mode."""

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.utils.config import config
 
 
 def create_test_state(battery_level: int, current: float = 0.0) -> EvseAsyncState:
@@ -383,17 +384,96 @@ class TestSetHomeDemandLevels:
 class TestConstants:
     """Test that constants are correctly defined."""
 
-    def test_import_rates(self, agile_tariff):
-        """Test import rate constants."""
-        assert agile_tariff.IMPORT_RATE_OFF_PEAK_P == 3.49
-        assert agile_tariff.IMPORT_RATE_PEAK_P == 27.91
-
     def test_storage_thresholds(self, agile_tariff):
         """Test storage decision thresholds."""
-        assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == 3.49
-        # Self-use value = peak import × efficiency = 27.91 × 0.50
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == 27.91 * 0.50
+        assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == config.IMPORT_LOW
+        # Self-use value = peak import × bidirectional efficiency
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == config.IMPORT_HIGH * 0.50
         assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == 0.50
+
+
+class TestEnergyShortfall:
+    """Test the shortfall projection and conservative discharge mode."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+
+    def test_shortfall_true_when_projection_below_target(self, agile_tariff):
+        """At 12:00, 23 slots remain, so 23% is lost at 1%/slot."""
+        self._set_time(agile_tariff, 12, 0)
+        # 80% - 23% = 57%, below the 60% target
+        assert agile_tariff._update_energy_shortfall(80) is True
+        assert agile_tariff._energy_shortfall is True
+
+    def test_no_shortfall_when_projection_meets_target(self, agile_tariff):
+        """At 22:00 only 3 slots remain, so 3% is lost."""
+        self._set_time(agile_tariff, 22, 0)
+        # 70% - 3% = 67%, above the 60% target
+        assert agile_tariff._update_energy_shortfall(70) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_unknown_soc_clears_shortfall(self, agile_tariff):
+        """An unknown SoC should not leave a stale shortfall flag."""
+        agile_tariff._energy_shortfall = True
+        assert agile_tariff._update_energy_shortfall(-1) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_plan_recalculation_updates_shortfall(self, agile_tariff):
+        """The flag is refreshed whenever the export plan is calculated."""
+        self._set_time(agile_tariff, 12, 0)
+        agile_tariff.calculate_export_plan(80)
+        assert agile_tariff._energy_shortfall is True
+
+    def test_get_control_state_bidirectional_in_shortfall(self, agile_tariff):
+        """Shortfall should force bidirectional mode, even if export is otherwise better."""
+        self._set_time(agile_tariff, 12, 0)
+        state = create_test_state(30)
+
+        control_state, _, _, reason = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "Shortfall" in reason
+
+    def test_get_control_state_uses_tier_logic_when_not_shortfall(self, agile_tariff):
+        """Outside shortfall, the existing tier logic still applies."""
+        self._set_time(agile_tariff, 22, 0)
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
+
+        # At 22:00 with 11p current and 10p best future, 10p × 0.5 < 11p,
+        # so the tier logic chooses load-follow discharge.
+        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+
+    def test_shortfall_configures_conservative_discharge(self, agile_tariff):
+        """Shortfall must use 720W activation and -0.5A bias."""
+        mock_controller = Mock()
+        mock_controller.use_new_current_calculation = False
+        state = create_test_state(50)
+
+        agile_tariff._energy_shortfall = True
+        agile_tariff.set_home_demand_levels(mock_controller, state, 12 * 60)
+
+        mock_controller.setDischargeActivationPower.assert_called_with(720)
+        mock_controller.setDischargeCurrentBias.assert_called_with(-0.5)
+        mock_controller.setChargeActivationPower.assert_called_with(720)
+        mock_controller.setChargeCurrentBias.assert_called_with(-0.5)
+
+    def test_no_shortfall_configures_aggressive_discharge(self, agile_tariff):
+        """Outside shortfall the aggressive discharge settings are used."""
+        mock_controller = Mock()
+        mock_controller.use_new_current_calculation = False
+        state = create_test_state(80)
+
+        agile_tariff._energy_shortfall = False
+        agile_tariff.set_home_demand_levels(mock_controller, state, 12 * 60)
+
+        mock_controller.setDischargeActivationPower.assert_called_with(1)
+        mock_controller.setDischargeCurrentBias.assert_called_with(0.5)
 
 
 class TestEdgeCases:

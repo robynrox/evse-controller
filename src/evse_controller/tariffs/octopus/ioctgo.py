@@ -50,9 +50,21 @@ class IntelligentOctopusGoTariff(Tariff):
             enable_bulk_discharge (bool): Whether to enable bulk discharge - if None, uses config value
         """
         super().__init__(command_queue=command_queue)
+        # Config stores prices in p/kWh, but time_of_use uses £/kWh to match
+        # the Tariff base class (and the Agile Outgoing tariff).
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": 0.0700, "export_rate": 0.15},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": 0.3142, "export_rate": 0.15}
+            "low":  {
+                "start": "23:30",
+                "end": "05:30",
+                "import_rate": config.IMPORT_LOW / 100,
+                "export_rate": config.EXPORT_MID / 100,
+            },
+            "high": {
+                "start": "05:30",
+                "end": "23:30",
+                "import_rate": config.IMPORT_HIGH / 100,
+                "export_rate": config.EXPORT_MID / 100,
+            },
         }
 
         # OCPP state tracking

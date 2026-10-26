@@ -250,7 +250,7 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (0-100)
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
-- `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100)
+- `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
 - `grid_import_threshold_high_soc`: When SoC >= threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover the house load completely
 - `grid_import_threshold_low_soc`: When SoC < threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover most of the house load with a small amount coming from the grid
 - `smart_ocpp_operation`: Flag to enable intelligent OCPP management based on SoC and time (true/false)
