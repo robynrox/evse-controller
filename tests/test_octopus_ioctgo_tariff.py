@@ -118,7 +118,15 @@ def test_home_demand_levels(intgo_tariff):
     mock_controller.setDischargeCurrentBias.assert_called_with(-0.5)
 
 def test_get_rates(intgo_tariff):
-    """Test rate retrieval from time_of_use dictionary"""
+    """Test rate retrieval from time_of_use dictionary.
+
+    NOTE: this test currently fails on a clean checkout. IOCTGO builds
+    time_of_use directly from config.IMPORT_LOW/IMPORT_HIGH (10/30 by
+    default), which are pence-per-kWh integers, while this test expects
+    floats in £/kWh. The mismatch predates the IOCTGO_AGILEOUT energy
+    shortfall work and is unrelated to it; someone needs to decide whether
+    the tariff or the test is the source of truth for units.
+    """
     from datetime import datetime
     
     # Test off-peak rates (values may change, so just test they exist and are reasonable)
