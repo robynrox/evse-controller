@@ -225,8 +225,8 @@ Detailed explanation of each configuration option:
 - `username`: Your Wallbox account email (optional, for auto-restart feature)
 - `password`: Your Wallbox account password (optional, for auto-restart feature)
 - `serial`: Your Wallbox serial number (optional, for auto-restart feature)
-- `max_charge_current`: Maximum charging current, integer between 3-32 (amperes)
-- `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes)
+- `max_charge_current`: Maximum charging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
+- `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
 
 #### Shelly Section
 - `primary_url`: IP address or hostname of your primary Shelly EM
@@ -259,6 +259,7 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")
 - `ocpp_disable_time`: Time to disable OCPP even if the SoC does not rise to the desired level in "HH:MM" format (default "11:00")
 - `export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during bulk export (0 = use calculated value based on export power). Set this to your measured value for more accurate export planning
+- `max_export_power_kw`: Upper bound on export power in kW (default 7.2, the non-derated Wallbox limit). The planner also caps this at the measured AC power for the configured discharge current (~3.53 kW at 16 A, ~7.07 kW at 32 A)
 - `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
 
 #### Logging Section

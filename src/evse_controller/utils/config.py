@@ -357,7 +357,10 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
     )
 
-    # Maximum export power for Agile Outgoing (kW)
+    # Maximum export power for Agile Outgoing (kW).  Default is the non-derated
+    # Wallbox nameplate (7.2 kW).  The export decision is additionally capped by
+    # the measured AC power at the configured discharge current, so a derated
+    # 16 A unit plans ~3.533 kW while a 32 A unit plans ~7.07 kW.
     MAX_EXPORT_POWER_KW = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "max_export_power_kw", 7.2),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)

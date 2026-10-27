@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
-from evse_controller.utils.config import config
+from evse_controller.utils.config import config, Config
 
 
 def create_test_state(battery_level: int, current: float = 0.0) -> EvseAsyncState:
@@ -61,20 +61,24 @@ def create_mock_agile_rates():
     return rates
 
 
-@pytest.fixture
-def agile_tariff():
-    """Create tariff instance with mocked Agile rates."""
+def _build_tariff() -> IOctGoWithAgileOutgoingTariff:
+    """Create a tariff instance with the Wallbox thread mocked out."""
     mock_thread = Mock()
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
     mock_thread.get_state = Mock(return_value={})
-    
+
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
                return_value=mock_thread):
         tariff = IOctGoWithAgileOutgoingTariff()
-        # Inject mock rates
-        tariff.agile_rates = create_mock_agile_rates()
-        tariff._planned_export_slots = []  # No planned exports for these tests
-        yield tariff
+    tariff.agile_rates = create_mock_agile_rates()
+    tariff._planned_export_slots = []  # No planned exports for these tests
+    return tariff
+
+
+@pytest.fixture
+def agile_tariff():
+    """Create tariff instance with mocked Agile rates."""
+    yield _build_tariff()
 
 
 class TestStorageFloorThreshold:
@@ -113,10 +117,10 @@ class TestStorageFloorThreshold:
 
 
 class TestSelfUseValueThreshold:
-    """Test Tier 2: Self-Use Value (5p-15.71p/kWh with dynamic SoC threshold)."""
+    """Test Tier 2: Self-Use Value (5p-SELF_USE_VALUE_THRESHOLD_P/kWh with dynamic SoC threshold)."""
 
     def test_rate_below_self_use_with_low_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC below dynamic threshold, should store for self-use."""
+        """When 5p < rate < SELF_USE_VALUE_THRESHOLD_P and SoC below dynamic threshold, should store for self-use."""
         # Rate of 10p, low SoC (30%)
         # At slot 20 (10:00), remaining slots = 47 - 20 = 27
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
@@ -126,10 +130,10 @@ class TestSelfUseValueThreshold:
             current_export_rate_p=10.0,
             soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "Should store when rate < self-use value (15.71p) and SoC below dynamic threshold"
+        assert result is True, "Should store when rate < self-use value (SELF_USE_VALUE_THRESHOLD_P) and SoC below dynamic threshold"
 
     def test_rate_below_self_use_with_high_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC above dynamic threshold, fall through to Tier 3."""
+        """When 5p < rate < SELF_USE_VALUE_THRESHOLD_P and SoC above dynamic threshold, fall through to Tier 3."""
         # Rate of 10p at slot 20 (10:00)
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
         # SoC 90% > 87%, should fall through to Tier 3
@@ -142,7 +146,7 @@ class TestSelfUseValueThreshold:
         assert result is True, "Should store when future rate justifies (Tier 3)"
 
     def test_rate_at_self_use_boundary_low_soc(self, agile_tariff):
-        """Test behavior at 15.71p boundary with low SoC."""
+        """Test behavior at SELF_USE_VALUE_THRESHOLD_P boundary with low SoC."""
         # Rate of 15.5p (just below self-use threshold), low SoC
         # At slot 32 (16:00), remaining slots = 47 - 32 = 15
         # Dynamic threshold = 60% + (15 × 1.0%) = 75%
@@ -152,10 +156,10 @@ class TestSelfUseValueThreshold:
             current_export_rate_p=15.5,
             soc_percent=30
         )
-        assert result is True, "Should store when rate < 15.71p and SoC below dynamic threshold"
+        assert result is True, "Should store when rate < SELF_USE_VALUE_THRESHOLD_P and SoC below dynamic threshold"
 
     def test_rate_above_self_use_threshold(self, agile_tariff):
-        """When rate > 15.71p, only Tier 3 applies."""
+        """When rate > SELF_USE_VALUE_THRESHOLD_P, only Tier 3 applies."""
         # Rate of 20p (above self-use threshold)
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=35,  # 17:30-18:00, peak rate
@@ -251,7 +255,7 @@ class TestExampleScenarios:
             current_export_rate_p=6.0,
             soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "STORE: self-use value (6p < 15.71p, SoC below dynamic threshold)"
+        assert result is True, "STORE: self-use value (6p < SELF_USE_VALUE_THRESHOLD_P, SoC below dynamic threshold)"
 
     def test_scenario_3_low_rate_high_soc(self, agile_tariff):
         """Example 3: 6p/kWh current, 8p/kWh future, high SoC → Tier 3 evaluation."""
@@ -387,9 +391,79 @@ class TestConstants:
     def test_storage_thresholds(self, agile_tariff):
         """Test storage decision thresholds."""
         assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == config.IMPORT_LOW
-        # Self-use value = peak import × bidirectional efficiency
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == config.IMPORT_HIGH * 0.50
-        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == 0.50
+        # Self-use value = peak import × measured solar-to-export round trip
+        solar_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
+            agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
+            agile_tariff.EXPORT_REFERENCE_CURRENT,
+        )
+        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == pytest.approx(
+            solar_round_trip
+        )
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(
+            config.IMPORT_HIGH * solar_round_trip
+        )
+
+    def test_round_trips_are_current_dependent(self, agile_tariff):
+        """A blanket 50% is wrong at both ends of the current range."""
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        assert model.round_trip_efficiency(3, 16) == pytest.approx(0.567, abs=0.002)
+        assert model.round_trip_efficiency(16, 16) == pytest.approx(0.841, abs=0.002)
+        assert model.round_trip_efficiency(3, 3) == pytest.approx(0.446, abs=0.002)
+        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY == pytest.approx(0.841, abs=0.002)
+
+    def test_export_power_and_soc_drop_follow_configured_current(self, agile_tariff):
+        """A 32 A default plans the extrapolated power, not the derated limit."""
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        # The committed config defaults to 32 A, so export is planned at the
+        # extrapolated 32 A AC power (~7.07 kW), capped by MAX_EXPORT_POWER_KW.
+        assert agile_tariff.EXPORT_REFERENCE_CURRENT == 32
+        assert agile_tariff.EXPORT_POWER_KW == pytest.approx(7.066, abs=0.002)
+        assert agile_tariff.STORED_TO_AC_EFFICIENCY == pytest.approx(0.947, abs=0.002)
+        # 7.066 AC / 0.947 / 46.5 kWh × 0.5 h × 100 = ~8.0 %/slot
+        expected_drop = (
+            agile_tariff.EXPORT_POWER_KW
+            / agile_tariff.STORED_TO_AC_EFFICIENCY
+            * 0.5
+            / agile_tariff.SOC_CAPACITY_KWH
+            * 100
+        )
+        assert expected_drop == pytest.approx(8.0, abs=0.1)
+        # And the model itself still honours the measured 16 A point.
+        assert model.discharge_ac_power_kw(16) == pytest.approx(3.533, abs=0.002)
+
+    def test_derated_16a_site_plans_measured_limit(self):
+        """A physically derated unit should plan at its configured 16 A."""
+        with patch.object(Config, "WALLBOX_MAX_DISCHARGE_CURRENT", 16):
+            tariff = _build_tariff()
+
+        assert tariff.EXPORT_REFERENCE_CURRENT == 16
+        assert tariff.EXPORT_POWER_KW == pytest.approx(3.533, abs=0.002)
+        expected_drop = (
+            tariff.EXPORT_POWER_KW
+            / tariff.STORED_TO_AC_EFFICIENCY
+            * 0.5
+            / tariff.SOC_CAPACITY_KWH
+            * 100
+        )
+        assert expected_drop == pytest.approx(4.0, abs=0.1)
+
+    def test_bulk_discharge_current_uses_measured_soc_rate(self, agile_tariff):
+        """The old 0.46 %/h/A fudge is replaced by the measured curve."""
+        # 67% -> 60% over 3 hours is 2.33 %/h, between the 3 A and 4 A points.
+        current = agile_tariff.calculate_target_discharge_current(67, 960)
+        assert current == pytest.approx(3.47, abs=0.1)
+
+        # 90% -> 60% over 3 hours needs 10 %/h, above the 16 A measured rate
+        # (~8 %/h), so it scales into the extrapolated range but stays within
+        # the configured 32 A limit.
+        current = agile_tariff.calculate_target_discharge_current(90, 960)
+        assert current == pytest.approx(19.94, abs=0.1)
+        assert current <= agile_tariff.MAX_DISCHARGE_CURRENT
+
+        # A tiny difference below the 3 A minimum is not worth discharging.
+        assert agile_tariff.calculate_target_discharge_current(60.2, 960) == 0
 
 
 class TestEnergyShortfall:
@@ -445,8 +519,8 @@ class TestEnergyShortfall:
 
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
-        # At 22:00 with 11p current and 10p best future, 10p × 0.5 < 11p,
-        # so the tier logic chooses load-follow discharge.
+        # At 22:00 with 11p current and 10p best future, 10p × solar round trip
+        # (~0.567) < 11p, so the tier logic chooses load-follow discharge.
         assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
 
     def test_shortfall_configures_conservative_discharge(self, agile_tariff):
@@ -504,7 +578,7 @@ class TestEdgeCases:
 
         # At slot 20, remaining slots = 47 - 20 = 27
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
-        # SoC 50% < 87%, and rate 10p < 15.71p (self-use threshold)
+        # SoC 50% < 87%, and rate 10p < SELF_USE_VALUE_THRESHOLD_P (self-use threshold)
         # So Tier 2 applies - should store even if all slots are exporting
         # (the plan should be recalculated)
         assert result is True, "Should store via Tier 2 when SoC below dynamic threshold"

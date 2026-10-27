@@ -19,6 +19,7 @@ from evse_controller.tools.efficiency_analysis import (
     bin_by_current,
     build_windows,
     classify_direction,
+    estimate_capacity_and_active_load,
     estimate_soc_efficiency,
     estimate_standby,
     filter_windows,
@@ -207,6 +208,196 @@ def test_model_table_contains_missing_directions():
     assert rows[0]["round_trip_efficiency"] is None
 
 
+def test_model_table_applies_active_load_correction():
+    by_current = {
+        "charge": [
+            {
+                "bin_low": 10.0,
+                "efficiency": 0.90,
+                "loss_kw_mean": 0.2,
+                "n_windows": 100,
+                "mean_current_a": 10.0,
+                "mean_ac_power_kw": 2.5,
+            }
+        ],
+        "discharge": [
+            {
+                "bin_low": 10.0,
+                "efficiency": 0.95,
+                "loss_kw_mean": 0.1,
+                "n_windows": 100,
+                "mean_current_a": 10.0,
+                "mean_dc_power_kw": 2.0,
+            }
+        ],
+    }
+
+    row = model_table(by_current, active_load_kw=0.1)[0]
+
+    charge_stored = 0.90 - 0.1 / 2.5
+    discharge_stored = 0.95 * 2.0 / 2.1
+    assert row["charge_stored_efficiency"] == pytest.approx(charge_stored)
+    assert row["discharge_stored_efficiency"] == pytest.approx(discharge_stored)
+    assert row["round_trip_efficiency"] == pytest.approx(0.90 * 0.95)
+    assert row["stored_round_trip_efficiency"] == pytest.approx(charge_stored * discharge_stored)
+    assert row["price_ratio_required"] == pytest.approx(1.0 / (charge_stored * discharge_stored), rel=0.002)
+
+
+def make_calibration_run(
+    *,
+    capacity_kwh: float = 50.0,
+    load_kw: float = 0.12,
+    dc_power_kw: float = 3.0,
+    duration_hours: float = 2.0,
+    repeats: int = 3,
+    dt: float = 5.0,
+) -> list[ChargerSample]:
+    """Build steady charge/discharge runs whose energy matches C and L."""
+    n = int(round(duration_hours * 3600.0 / dt)) + 1
+    voltage = 300.0
+    dc_current = dc_power_kw * 1000.0 / voltage
+    energy_kwh = dc_power_kw * duration_hours
+    charge_delta = (energy_kwh - load_kw * duration_hours) / capacity_kwh * 100.0
+    discharge_delta = (energy_kwh + load_kw * duration_hours) / capacity_kwh * 100.0
+
+    samples: list[ChargerSample] = []
+    start = START
+    for direction in ("charge", "discharge"):
+        for _ in range(repeats):
+            if direction == "charge":
+                soc, soc_end = 40.0, 40.0 + charge_delta
+            else:
+                soc, soc_end = 60.0, 60.0 - discharge_delta
+            block = make_samples(
+                n,
+                direction=direction,
+                dc_current=dc_current,
+                voltage=voltage,
+                loss_kw=0.3,
+                target=10.0,
+                soc=soc,
+                soc_end=soc_end,
+                dt=dt,
+                start=start,
+            )
+            samples.extend(block)
+            start = block[-1].time + timedelta(seconds=60)
+    return samples
+
+
+def test_estimate_capacity_and_active_load_recovers_known_values():
+    segments = segment_samples(make_calibration_run())
+    assert len(segments) == 6
+
+    result = estimate_capacity_and_active_load(segments)
+
+    assert result["n_segments"] == 6
+    assert result["effective_capacity_kwh"] == pytest.approx(50.0, rel=0.01)
+    assert result["active_load_kw"] == pytest.approx(0.12, abs=0.005)
+    assert result["headline_current_bin"] == [10.0, 11.0]
+    joint = result["joint_fit"]
+    assert joint["effective_capacity_kwh"] == pytest.approx(50.0, rel=0.01)
+    assert joint["active_load_kw"] == pytest.approx(0.12, abs=0.005)
+
+
+def _custom_run(
+    direction: str,
+    *,
+    dc_power_kw: float,
+    duration_hours: float,
+    soc_fn,
+    dt: float = 60.0,
+    target: float = 10.0,
+) -> list[ChargerSample]:
+    n = int(round(duration_hours * 3600.0 / dt)) + 1
+    sign = 1.0 if direction == "charge" else -1.0
+    samples = []
+    for index in range(n):
+        fraction = index / max(n - 1, 1)
+        samples.append(
+            ChargerSample(
+                time=START + timedelta(seconds=index * dt),
+                ac_power_w=sign * dc_power_kw * 1000.0 + 300.0,
+                ac_voltage_v=240.0,
+                dc_voltage_v=300.0,
+                dc_current_a=sign * dc_power_kw * 1000.0 / 300.0,
+                soc=soc_fn(fraction),
+                target_current_a=sign * target,
+            )
+        )
+    return samples
+
+
+def test_taper_cutoff_excludes_stalled_top_of_charge():
+    # 80 -> 90 % in the first hour, then flat at 90 % for another hour while
+    # 3 kW still flows.  The flat tail looks like free energy per SoC point.
+    segment = _custom_run(
+        "charge",
+        dc_power_kw=3.0,
+        duration_hours=2.0,
+        soc_fn=lambda fraction: 80.0 + 20.0 * fraction if fraction <= 0.5 else 90.0,
+    )
+
+    no_cutoff = estimate_capacity_and_active_load(
+        [segment], taper_cutoff_soc=None, min_soc_delta=5.0, min_duration_s=60.0
+    )
+    with_cutoff = estimate_capacity_and_active_load(
+        [segment], taper_cutoff_soc=90.0, min_soc_delta=5.0, min_duration_s=60.0
+    )
+
+    assert no_cutoff["effective_capacity_kwh"] == pytest.approx(60.0, rel=0.01)
+    assert with_cutoff["effective_capacity_kwh"] == pytest.approx(30.0, rel=0.01)
+    assert with_cutoff["effective_capacity_kwh"] < no_cutoff["effective_capacity_kwh"]
+
+
+def test_analyse_reports_calibration_and_corrected_model_table():
+    samples = make_calibration_run()
+    report, _ = analyse(
+        samples,
+        AnalysisOptions(
+            battery_capacity_kwh=50.0,
+            calibration_min_soc_delta=10.0,
+            calibration_min_duration_s=1800.0,
+        ),
+    )
+
+    calibration = report["calibration"]
+    assert calibration["n_segments"] == 6
+    assert calibration["effective_capacity_kwh"] == pytest.approx(50.0, rel=0.01)
+    assert calibration["active_load_kw"] == pytest.approx(0.12, abs=0.005)
+    assert calibration["applied_active_load_kw"] == pytest.approx(0.12, abs=0.005)
+    assert calibration["active_load_source"] == "calibrated"
+
+    row = next(r for r in report["model_table"] if r["discharge_stored_efficiency"] is not None)
+    assert row["charge_stored_efficiency"] < row["charge_efficiency"]
+    assert row["discharge_stored_efficiency"] < row["discharge_efficiency"]
+
+
+def test_write_outputs_includes_calibration_table(tmp_path: Path):
+    report, windows = analyse(
+        make_calibration_run(),
+        AnalysisOptions(calibration_min_duration_s=1800.0),
+    )
+    paths = write_outputs(report, windows, tmp_path)
+
+    assert paths["calibration_by_current"].exists()
+    with paths["calibration_by_current"].open() as handle:
+        rows = list(csv.DictReader(handle))
+    assert {row["direction"] for row in rows} == {"charge", "discharge"}
+    assert all(row["median_implied_capacity_kwh"] for row in rows)
+
+
+def test_analyse_active_load_option_overrides_calibration():
+    report, _ = analyse(
+        make_calibration_run(),
+        AnalysisOptions(active_load_kw=0.25),
+    )
+
+    calibration = report["calibration"]
+    assert calibration["active_load_source"] == "option"
+    assert calibration["applied_active_load_kw"] == pytest.approx(0.25)
+
+
 def test_fit_loss_model_recovers_quadratic_term():
     samples: list[ChargerSample] = []
     current_index = 0
@@ -337,7 +528,7 @@ def test_write_outputs(tmp_path: Path):
     assert paths["model_table"].exists()
 
     loaded = json.loads(paths["json"].read_text())
-    assert loaded["schema_version"] == 1
+    assert loaded["schema_version"] == 2
     with paths["by_current"].open() as handle:
         rows = list(csv.DictReader(handle))
     assert rows and rows[0]["direction"] == "charge"
@@ -480,12 +671,29 @@ def test_main_offline_csv_end_to_end(tmp_path: Path, capsys):
     config = tmp_path / "config.yaml"
     config.write_text("influxdb: {}\n")
     exit_code = cli.main(
-        ["--input-csv", str(csv_path), "--config", str(config), "--output", str(output), "--quiet"]
+        [
+            "--input-csv",
+            str(csv_path),
+            "--config",
+            str(config),
+            "--output",
+            str(output),
+            "--active-load-kw",
+            "0.1",
+            "--quiet",
+        ]
     )
 
     assert exit_code == 0
     assert (output / "efficiency_analysis.json").exists()
-    assert "Samples: 240" in capsys.readouterr().out
+    output_text = capsys.readouterr().out
+    assert "Samples: 240" in output_text
+    assert "Calibration:" in output_text
+
+    with (output / "model_table.csv").open() as handle:
+        header = handle.readline()
+    assert "charge_stored_efficiency" in header
+    assert "price_ratio_required" in header
 
 
 def test_main_reports_missing_config(tmp_path: Path, capsys, monkeypatch):

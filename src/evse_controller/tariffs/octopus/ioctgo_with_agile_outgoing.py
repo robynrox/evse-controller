@@ -1,4 +1,5 @@
 from ..base import Tariff
+from .battery_efficiency import BatteryEfficiencyModel, DASHBOARD_SOC_CAPACITY_KWH
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
@@ -50,32 +51,44 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     Tier 1 - Storage Floor (< STORAGE_FLOOR_THRESHOLD_P p/kWh):
       Always store - rate is too trivial to justify exporting
 
-    Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-15.71p/kWh, low SoC):
+    Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-SELF_USE_VALUE_THRESHOLD_P p/kWh, low SoC):
       Store for self-consumption when SoC is below threshold
-      (avoids importing at 31.42p/kWh later, effective value = 15.71p after efficiency)
+      (avoids importing at 31.42p/kWh later, effective value is the peak rate
+      times the measured solar-to-export round trip)
 
     Tier 3 - Future Export Optimization (all other cases):
-      Store if: best_future_rate × 50% > current_rate
+      Store if: best_future_rate × round_trip_efficiency > current_rate
       Export otherwise
 
     Decision summary:
-        if current_rate < 5p:
+        if current_rate < STORAGE_FLOOR_THRESHOLD_P:
             STORE (rate too trivial)
-        elif current_rate < 15.71p and SoC < threshold:
+        elif current_rate < SELF_USE_VALUE_THRESHOLD_P and SoC < threshold:
             STORE (self-use value)
-        elif future_rate × 0.50 > current_rate:
+        elif future_rate × round_trip_efficiency > current_rate:
             STORE (better future value)
         else:
             EXPORT now
+
+    The round-trip efficiency is not a single constant: it is the product of
+    the measured charge and discharge efficiencies at the relevant currents.
+    Solar harvest at 3 A followed by export at the configured current is about
+    0.567 (efficiency is flat above the measured 16 A), a grid-charge → export
+    cycle is about 0.841, and a 3 A→3 A cycle is only about 0.446.
 
     Attributes:
         time_of_use (dict): IOCTGO time periods and rates
         agile_rates (list): Today's Agile Outgoing rates (p/kWh)
         agile_rates_fetched_at (datetime): When rates were last fetched
         STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (=off peak import price)
-        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (=50% of peak import price)
-        BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL (float): Conservative
-            efficiency estimate (50%) for bidirectional decisions
+        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (peak import price
+            times the solar-to-export round trip)
+        BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL (float): Solar-harvest
+            round trip (3 A charge → export current discharge)
+        BATTERY_ROUND_TRIP_EFFICIENCY (float): Grid-charge → export round trip
+        STORED_TO_AC_EFFICIENCY (float): Pack → AC efficiency at export current
+        SOC_CAPACITY_KWH (float): Effective kWh per 100% dashboard SoC
+        EFFICIENCY_MODEL (BatteryEfficiencyModel): Measured current-dependent model
     """
 
     # Agile Outgoing tariff codes by region
@@ -101,10 +114,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
         
-        # Round-trip efficiency for bidirectional decision making
-        # Conservative 50% estimate accounts for efficiency loss + battery wear
-        # TODO: move to config.yaml
-        self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = 0.50
+        # Measured, current-dependent AC <-> pack model.  See
+        # reports/efficiency/REVIEW.md and battery_efficiency.py.
+        self.EFFICIENCY_MODEL = BatteryEfficiencyModel()
+        self.SOC_CAPACITY_KWH = DASHBOARD_SOC_CAPACITY_KWH
+
+        # Solar harvest usually happens at the minimum current; a grid charge
+        # for export happens at the maximum.  Keep both reference currents so
+        # the round trips are not confused with each other.  Use the configured
+        # currents directly: the model clamps efficiency at the last measured
+        # point (16 A) but extrapolates AC power above it, so a non-derated
+        # 32 A unit plans proportionally more export than the derated test
+        # unit.  If your Wallbox is physically derated, set
+        # WALLBOX_MAX_CHARGE_CURRENT / WALLBOX_MAX_DISCHARGE_CURRENT to the
+        # derated value (e.g. 16 A).
+        self.SOLAR_CHARGE_REFERENCE_CURRENT = config.WALLBOX_MIN_CHARGE_CURRENT
+        self.GRID_CHARGE_REFERENCE_CURRENT = config.WALLBOX_MAX_CHARGE_CURRENT
+        self.EXPORT_REFERENCE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT
+
+        # Round-trip efficiency for solar storage vs export.  A 3 A harvest
+        # followed by export at the configured current is ~0.567; a 3 A->3 A
+        # cycle is ~0.446.
+        self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = (
+            self.EFFICIENCY_MODEL.round_trip_efficiency(
+                self.SOLAR_CHARGE_REFERENCE_CURRENT,
+                self.EXPORT_REFERENCE_CURRENT,
+            )
+        )
         
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
@@ -112,10 +148,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.STORAGE_FLOOR_THRESHOLD_P = config.IMPORT_LOW
         
         # Self-use value threshold: effective value of stored energy when used
-        # for self-consumption instead of importing at peak rates.
-        # Calculation: 31.42p × 50% = 15.71p/kWh
-        # When SoC is low and export rate < this threshold, storing for self-use
-        # is preferable to exporting (avoids peak import later)
+        # for self-consumption instead of importing at peak rates.  This uses
+        # the measured solar-to-export round trip, not a blanket 50%.
         self.SELF_USE_VALUE_THRESHOLD_P = (
             config.IMPORT_HIGH * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
         )
@@ -164,10 +198,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.OCPP_DISABLE_SOC_THRESHOLD = config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD
         
         # Export optimization parameters
-        # Use configured max export power (default 7.2kW = full Wallbox capacity)
-        self.EXPORT_POWER_KW = config.MAX_EXPORT_POWER_KW
-        self.BATTERY_ROUND_TRIP_EFFICIENCY = 0.80  # 80% round-trip efficiency
-        self.DISCHARGE_LOSS_FACTOR = 0.90  # 10% loss when discharging
+        # The configured maximum is the Wallbox nameplate (7.2 kW by default,
+        # or the derated value if the unit is derated).  If both are present,
+        # use the lower of the configured cap and the model's AC power at the
+        # export current, so a 16 A unit plans 3.533 kW and a 32 A unit plans
+        # ~7.07 kW without exceeding a user-imposed export cap.
+        self.EXPORT_POWER_KW = min(
+            config.MAX_EXPORT_POWER_KW,
+            self.EFFICIENCY_MODEL.discharge_ac_power_kw(self.EXPORT_REFERENCE_CURRENT),
+        )
+        # Grid charge -> export round trip (~0.841; efficiency is flat above
+        # the measured 16 A point).
+        self.BATTERY_ROUND_TRIP_EFFICIENCY = (
+            self.EFFICIENCY_MODEL.round_trip_efficiency(
+                self.GRID_CHARGE_REFERENCE_CURRENT,
+                self.EXPORT_REFERENCE_CURRENT,
+            )
+        )
+        # Pack -> AC efficiency at the export current, ~0.947.  Used to turn
+        # an AC export energy into the stored energy (and SoC drop) it costs.
+        self.STORED_TO_AC_EFFICIENCY = self.EFFICIENCY_MODEL.discharge_efficiency(
+            self.EXPORT_REFERENCE_CURRENT
+        )
 
         # SoC loss percentages per slot (configured by user)
         # If export_slot_soc_loss_percent is 0, use calculated value from EXPORT_POWER_KW
@@ -268,7 +320,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if not self.agile_rates or current_soc_percent < 0:
             return []
 
-        battery_capacity_kwh = self.BATTERY_CAPACITY_KWH
+        battery_capacity_kwh = self.SOC_CAPACITY_KWH
         min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
 
         # Calculate export slot SoC loss per slot
@@ -277,7 +329,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             export_slot_soc_loss = self.EXPORT_SLOT_SOC_LOSS_PERCENT
         else:
             # Calculate: (power_kw / efficiency × 0.5h / battery_kwh) × 100
-            export_slot_soc_loss = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / battery_capacity_kwh) * 100
+            export_slot_soc_loss = (
+                self.EXPORT_POWER_KW / self.STORED_TO_AC_EFFICIENCY
+                * 0.5 / battery_capacity_kwh
+            ) * 100
 
         non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
 
@@ -454,14 +509,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         **Tier 3: Future Export Optimization (store for better rate)**
         When export rate is above self-use threshold, compare against best
         future unused rate adjusted for efficiency:
-        - Store if: best_future_rate × 50% > current_rate
+        - Store if: best_future_rate × solar_round_trip > current_rate
         - Export otherwise
         
         Decision summary:
         ```
-        if current_rate < 3.49p:
+        if current_rate < STORAGE_FLOOR_THRESHOLD_P:
             STORE (rate too trivial)
-        elif current_rate < 15.71p:
+        elif current_rate < SELF_USE_VALUE_THRESHOLD_P:
             dynamic_threshold = min_agile_soc + (remaining_slots × non_export_slot_loss)
             if SoC < dynamic_threshold:
                 STORE (self-use value + curve correction)
@@ -815,11 +870,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             partial_slot_idx = None
             if planned_slots and rate_dict:
                 # Calculate energy needed for all planned slots
-                energy_per_slot_kwh = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR) * 0.5
+                energy_per_slot_kwh = (
+                    self.EXPORT_POWER_KW / self.STORED_TO_AC_EFFICIENCY
+                ) * 0.5
                 total_energy_needed = len(planned_slots) * energy_per_slot_kwh
                 
                 # Calculate available energy
-                battery_capacity_kwh = self.BATTERY_CAPACITY_KWH
+                battery_capacity_kwh = self.SOC_CAPACITY_KWH
                 min_soc_kwh = (config.MIN_AGILE_DISCHARGE_SOC / 100.0) * battery_capacity_kwh
                 current_soc = 0
                 try:
@@ -1011,7 +1068,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if self.EXPORT_SLOT_SOC_LOSS_PERCENT > 0:
                     soc_drop_per_slot = self.EXPORT_SLOT_SOC_LOSS_PERCENT
                 else:
-                    soc_drop_per_slot = (self.EXPORT_POWER_KW / self.DISCHARGE_LOSS_FACTOR * 0.5 / self.BATTERY_CAPACITY_KWH) * 100
+                    soc_drop_per_slot = (
+                        self.EXPORT_POWER_KW / self.STORED_TO_AC_EFFICIENCY
+                        * 0.5 / self.SOC_CAPACITY_KWH
+                    ) * 100
             else:
                 expected_revenue_gbp = 0
                 soc_drop_per_slot = 0
@@ -1089,8 +1149,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return 0
         
         required_discharge_rate = soc_difference / hours_until_bulk_discharge_end
-        DISCHARGE_RATE_PER_AMP = (0.46 * 59) / self.BATTERY_CAPACITY_KWH
-        required_amps = required_discharge_rate / DISCHARGE_RATE_PER_AMP
+        if required_discharge_rate < self.EFFICIENCY_MODEL.soc_rate_percent_per_hour(
+            self.MIN_DISCHARGE_CURRENT
+        ):
+            return 0
+        required_amps = self.EFFICIENCY_MODEL.discharge_current_for_soc_rate(
+            required_discharge_rate,
+            max_current_a=self.MAX_DISCHARGE_CURRENT,
+        )
         required_amps = max(0, min(required_amps, self.MAX_DISCHARGE_CURRENT))
         
         if required_amps < self.MIN_DISCHARGE_CURRENT:
@@ -1108,9 +1174,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         - Energy shortfall: Bidirectional mode with conservative discharge
           (cover most of the house load, no planned export)
         - Other times: Three-tier decision for bidirectional vs export:
-          1. Rate < 5p: STORE (too trivial to export)
-          2. Rate < 15.71p + low SoC: STORE (self-use value)
-          3. Otherwise: STORE if future_rate × 50% > current_rate
+          1. Rate < STORAGE_FLOOR_THRESHOLD_P: STORE (too trivial to export)
+          2. Rate < SELF_USE_VALUE_THRESHOLD_P and low SoC: STORE (self-use value)
+          3. Otherwise: STORE if future_rate × solar round trip > current_rate
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30

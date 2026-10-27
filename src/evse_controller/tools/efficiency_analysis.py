@@ -68,7 +68,7 @@ DIRECTIONS = (DIRECTION_CHARGE, DIRECTION_DISCHARGE)
 MIN_PLAUSIBLE_EFFICIENCY = 0.2
 MAX_PLAUSIBLE_EFFICIENCY = 1.02
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _mean(values: Sequence[float]) -> float | None:
@@ -705,8 +705,46 @@ def _representative_current(
     return round(low + 0.5, 2)
 
 
-def model_table(by_current: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Build a flat current -> efficiency table suitable for the DP/planner."""
+def corrected_efficiency(
+    efficiency: float | None,
+    power_kw: float | None,
+    active_load_kw: float,
+    *,
+    direction: str,
+) -> float | None:
+    """Apply the vehicle active-load correction to an AC<->DC efficiency.
+
+    Charge: ``eta_stored = eta_acdc - L / P_ac``.  The charger supplies both
+    the pack and the vehicle load, so the fraction reaching the pack is
+    reduced by the load divided by the AC input power.
+
+    Discharge: ``eta_stored = eta_acdc * P_dc / (P_dc + L)``.  The pack
+    supplies the vehicle load plus the DC power that reaches the charger.
+    """
+    if efficiency is None or power_kw is None or power_kw <= 0:
+        return None
+    if direction == DIRECTION_CHARGE:
+        corrected = efficiency - active_load_kw / power_kw
+    else:
+        corrected = efficiency * power_kw / (power_kw + active_load_kw)
+    return max(0.0, min(1.0, corrected))
+
+
+def model_table(
+    by_current: dict[str, list[dict[str, Any]]],
+    *,
+    active_load_kw: float | None = None,
+) -> list[dict[str, Any]]:
+    """Build a flat current -> efficiency table suitable for the DP/planner.
+
+    ``active_load_kw`` adds the vehicle-side overhead that the AC<->DC
+    measurement cannot see.  The raw ``charge_efficiency`` and
+    ``discharge_efficiency`` columns are AC<->DC; the ``*_stored_efficiency``
+    columns are the corrected AC<->pack values.  ``round_trip_efficiency`` is
+    the AC<->DC product, while ``stored_round_trip_efficiency`` and
+    ``price_ratio_required`` use the corrected values.
+    """
+    load = 0.0 if active_load_kw is None else active_load_kw
     charge = {row["bin_low"]: row for row in by_current.get(DIRECTION_CHARGE, [])}
     discharge = {row["bin_low"]: row for row in by_current.get(DIRECTION_DISCHARGE, [])}
 
@@ -721,16 +759,43 @@ def model_table(by_current: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
             if charge_eff is not None and discharge_eff is not None
             else None
         )
+        charge_stored = corrected_efficiency(
+            charge_eff,
+            charge_row.get("mean_ac_power_kw") if charge_row else None,
+            load,
+            direction=DIRECTION_CHARGE,
+        )
+        discharge_stored = corrected_efficiency(
+            discharge_eff,
+            discharge_row.get("mean_dc_power_kw") if discharge_row else None,
+            load,
+            direction=DIRECTION_DISCHARGE,
+        )
+        stored_round_trip = (
+            charge_stored * discharge_stored
+            if charge_stored is not None and discharge_stored is not None
+            else None
+        )
         rows.append(
             {
                 "current_a": _representative_current(charge_row, discharge_row, low),
                 "charge_efficiency": charge_eff,
                 "charge_loss_kw": charge_row.get("loss_kw_mean") if charge_row else None,
                 "charge_n_windows": charge_row["n_windows"] if charge_row else 0,
+                "charge_stored_efficiency": _round(charge_stored),
+                "charge_ac_power_kw": charge_row.get("mean_ac_power_kw") if charge_row else None,
                 "discharge_efficiency": discharge_eff,
                 "discharge_loss_kw": discharge_row.get("loss_kw_mean") if discharge_row else None,
                 "discharge_n_windows": discharge_row["n_windows"] if discharge_row else 0,
+                "discharge_stored_efficiency": _round(discharge_stored),
+                "discharge_dc_power_kw": discharge_row.get("mean_dc_power_kw") if discharge_row else None,
                 "round_trip_efficiency": _round(round_trip),
+                "stored_round_trip_efficiency": _round(stored_round_trip),
+                "price_ratio_required": (
+                    _round(1.0 / stored_round_trip, 3)
+                    if stored_round_trip not in (None, 0)
+                    else None
+                ),
             }
         )
     return rows
@@ -767,6 +832,94 @@ def estimate_standby(
     }
 
 
+def _segment_soc_record(
+    segment: Sequence[ChargerSample],
+    *,
+    min_soc_delta: float,
+    min_duration_s: float,
+    taper_cutoff_soc: float | None = None,
+) -> dict[str, Any] | None:
+    """Build one DC-energy-vs-SoC observation from a steady segment.
+
+    ``taper_cutoff_soc`` truncates a charge segment at the first sample at or
+    above the cutoff.  This avoids the top-of-charge taper and balancing
+    region, where the dashboard SoC stalls while DC energy still flows and the
+    apparent capacity is biased high.
+    """
+    if len(segment) < 3:
+        return None
+
+    valid = [sample for sample in segment if sample.has_soc]
+    if len(valid) < 2:
+        return None
+
+    ac_values = [sample.ac_power_w for sample in segment if sample.ac_power_w is not None]
+    if not ac_values:
+        return None
+    direction = classify_direction(statistics.fmean(ac_values))
+    if direction is None:
+        return None
+
+    if direction == DIRECTION_CHARGE and taper_cutoff_soc is not None:
+        cutoff_index = next(
+            (index for index, sample in enumerate(valid) if sample.soc >= taper_cutoff_soc),
+            None,
+        )
+        if cutoff_index is not None:
+            valid = valid[: cutoff_index + 1]
+        if len(valid) < 2:
+            return None
+
+    first, last = valid[0], valid[-1]
+    duration = (last.time - first.time).total_seconds()
+    if duration < min_duration_s:
+        return None
+
+    soc_delta = last.soc - first.soc
+    if abs(soc_delta) < min_soc_delta:
+        return None
+    if direction == DIRECTION_CHARGE and soc_delta <= 0:
+        return None
+    if direction == DIRECTION_DISCHARGE and soc_delta >= 0:
+        return None
+
+    slice_ = [sample for sample in segment if first.time <= sample.time <= last.time]
+    if len(slice_) < 3:
+        return None
+
+    ac_energy_wh = abs(_integrate_power(slice_, lambda s: s.ac_power_w) / 3600.0)
+    dc_energy_wh = abs(_integrate_power(slice_, lambda s: s.dc_power_w) / 3600.0)
+    if ac_energy_wh <= 0 or dc_energy_wh <= 0:
+        return None
+
+    targets = [abs(sample.target_current_a) for sample in slice_ if sample.target_current_a is not None]
+    ac_currents = [
+        abs(sample.ac_power_w) / sample.ac_voltage_v
+        for sample in slice_
+        if sample.ac_power_w is not None and sample.ac_voltage_v
+    ]
+    current = _mean(targets) or _mean(ac_currents) or 0.0
+    duration_hours = duration / 3600.0
+    return {
+        "direction": direction,
+        "current_a": abs(current),
+        "soc_start": first.soc,
+        "soc_end": last.soc,
+        "soc_delta": soc_delta,
+        "duration_s": duration,
+        "ac_energy_kwh": ac_energy_wh / 1000.0,
+        "dc_energy_kwh": dc_energy_wh / 1000.0,
+        "mean_ac_power_kw": ac_energy_wh / 1000.0 / duration_hours,
+        "mean_dc_power_kw": dc_energy_wh / 1000.0 / duration_hours,
+        "ac_dc_efficiency": (
+            dc_energy_wh / ac_energy_wh
+            if direction == DIRECTION_CHARGE
+            else ac_energy_wh / dc_energy_wh
+        ),
+        "implied_capacity_kwh": dc_energy_wh / (abs(soc_delta) / 100.0) / 1000.0,
+    }
+
+
 def estimate_soc_efficiency(
     segments: Sequence[Sequence[ChargerSample]],
     *,
@@ -792,71 +945,24 @@ def estimate_soc_efficiency(
 
     records: list[dict[str, Any]] = []
     for segment in segments:
-        if len(segment) < 3:
-            continue
-        valid = [sample for sample in segment if sample.has_soc]
-        if len(valid) < 2:
-            continue
-        first, last = valid[0], valid[-1]
-        duration = (last.time - first.time).total_seconds()
-        if duration < min_duration_s:
+        record = _segment_soc_record(
+            segment,
+            min_soc_delta=min_soc_delta,
+            min_duration_s=min_duration_s,
+        )
+        if record is None:
             continue
 
-        slice_ = [sample for sample in segment if first.time <= sample.time <= last.time]
-        if len(slice_) < 3:
-            continue
-
-        soc_delta = last.soc - first.soc
-        if abs(soc_delta) < min_soc_delta:
-            continue
-
-        direction = classify_direction(statistics.fmean([s.ac_power_w for s in slice_]))
-        if direction is None:
-            continue
-        if direction == DIRECTION_CHARGE and soc_delta <= 0:
-            continue
-        if direction == DIRECTION_DISCHARGE and soc_delta >= 0:
-            continue
-
-        ac_energy_wh = abs(_integrate_power(slice_, lambda s: s.ac_power_w) / 3600.0)
-        dc_energy_wh = abs(_integrate_power(slice_, lambda s: s.dc_power_w) / 3600.0)
-        if ac_energy_wh <= 0 or dc_energy_wh <= 0:
-            continue
-
-        stored_energy_wh = abs(soc_delta) / 100.0 * battery_capacity_kwh * 1000.0
-        if direction == DIRECTION_CHARGE:
-            soc_efficiency = stored_energy_wh / ac_energy_wh
+        stored_energy_kwh = abs(record["soc_delta"]) / 100.0 * battery_capacity_kwh
+        if record["direction"] == DIRECTION_CHARGE:
+            soc_efficiency = stored_energy_kwh / record["ac_energy_kwh"]
         else:
-            soc_efficiency = ac_energy_wh / stored_energy_wh
+            soc_efficiency = record["ac_energy_kwh"] / stored_energy_kwh
         if not MIN_PLAUSIBLE_EFFICIENCY <= soc_efficiency <= MAX_PLAUSIBLE_EFFICIENCY:
             continue
 
-        ac_dc_efficiency = (
-            dc_energy_wh / ac_energy_wh if direction == DIRECTION_CHARGE else ac_energy_wh / dc_energy_wh
-        )
-        targets = [abs(s.target_current_a) for s in slice_ if s.target_current_a is not None]
-        ac_currents = [
-            abs(s.ac_power_w) / s.ac_voltage_v
-            for s in slice_
-            if s.ac_power_w is not None and s.ac_voltage_v
-        ]
-        current = _mean(targets) or _mean(ac_currents) or 0.0
-
-        records.append(
-            {
-                "direction": direction,
-                "current_a": abs(current),
-                "soc_start": first.soc,
-                "soc_end": last.soc,
-                "soc_delta": soc_delta,
-                "duration_s": duration,
-                "ac_energy_kwh": ac_energy_wh / 1000.0,
-                "dc_energy_kwh": dc_energy_wh / 1000.0,
-                "soc_efficiency": soc_efficiency,
-                "ac_dc_efficiency": ac_dc_efficiency,
-                "implied_capacity_kwh": dc_energy_wh / (abs(soc_delta) / 100.0) / 1000.0,
-            }
-        )
+        record["soc_efficiency"] = soc_efficiency
+        records.append(record)
 
     if not records:
         return {
@@ -910,6 +1016,241 @@ def estimate_soc_efficiency(
     }
 
 
+def _fit_capacity_overhead(
+    records: Sequence[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Fit ``E_dc = C * |dSoC| + sign * L * duration`` with no intercept.
+
+    Charge is ``+L`` because the charger supplies the vehicle load as well as
+    the pack; discharge is ``-L`` because the pack supplies both the charger
+    and the vehicle load.
+    """
+    if len(records) < 4:
+        return None
+
+    rows: list[tuple[float, float, float]] = []
+    for record in records:
+        x1 = abs(record["soc_delta"]) / 100.0
+        x2 = record["duration_s"] / 3600.0
+        if record["direction"] == DIRECTION_DISCHARGE:
+            x2 = -x2
+        y = record["dc_energy_kwh"]
+        rows.append((x1, x2, y))
+
+    s11 = sum(x1 * x1 for x1, _, _ in rows)
+    s22 = sum(x2 * x2 for _, x2, _ in rows)
+    s12 = sum(x1 * x2 for x1, x2, _ in rows)
+    determinant = s11 * s22 - s12 * s12
+    if s11 <= 0 or s22 <= 0 or abs(determinant) < 1e-9 * s11 * s22:
+        return None
+
+    b1 = sum(x1 * y for x1, _, y in rows)
+    b2 = sum(x2 * y for _, x2, y in rows)
+    capacity = (b1 * s22 - b2 * s12) / determinant
+    active_load = (s11 * b2 - s12 * b1) / determinant
+
+    y_bar = _mean([y for _, _, y in rows]) or 0.0
+    ss_res = sum((y - (capacity * x1 + active_load * x2)) ** 2 for x1, x2, y in rows)
+    ss_tot = sum((y - y_bar) ** 2 for _, _, y in rows)
+    r_squared = None if ss_tot <= 0 else 1.0 - ss_res / ss_tot
+    rmse = math.sqrt(ss_res / len(rows))
+
+    return {
+        "n_segments": len(rows),
+        "effective_capacity_kwh": _round(capacity, 3),
+        "active_load_kw": _round(active_load, 4),
+        "r_squared": _round(r_squared, 4),
+        "rmse_kwh": _round(rmse, 4),
+    }
+
+
+def _capacity_by_current(
+    records: Sequence[dict[str, Any]],
+    current_bin_a: float,
+) -> dict[str, list[dict[str, Any]]]:
+    by_current: dict[str, list[dict[str, Any]]] = {}
+    for direction in DIRECTIONS:
+        groups: dict[float, list[dict[str, Any]]] = {}
+        for record in records:
+            if record["direction"] != direction:
+                continue
+            low = round(math.floor(record["current_a"] / current_bin_a) * current_bin_a, 6)
+            groups.setdefault(low, []).append(record)
+        rows = []
+        for low in sorted(groups):
+            subset = groups[low]
+            rows.append(
+                {
+                    "bin_low": low,
+                    "bin_high": round(low + current_bin_a, 6),
+                    "n_segments": len(subset),
+                    "median_implied_capacity_kwh": _round(
+                        _median([r["implied_capacity_kwh"] for r in subset]), 3
+                    ),
+                    "mean_dc_power_kw": _round(_mean([r["mean_dc_power_kw"] for r in subset]), 4),
+                    "mean_current_a": _round(_mean([r["current_a"] for r in subset]), 3),
+                    "mean_abs_soc_delta": _round(
+                        _mean([abs(r["soc_delta"]) for r in subset]), 2
+                    ),
+                    "mean_duration_s": _round(_mean([r["duration_s"] for r in subset]), 1),
+                }
+            )
+        by_current[direction] = rows
+    return by_current
+
+
+def estimate_capacity_and_active_load(
+    segments: Sequence[Sequence[ChargerSample]],
+    *,
+    min_soc_delta: float = 10.0,
+    min_duration_s: float = 1800.0,
+    taper_cutoff_soc: float | None = 90.0,
+    current_bin_a: float = 1.0,
+    min_segments_per_direction: int = 3,
+) -> dict[str, Any]:
+    """Estimate effective dashboard-SoC capacity and vehicle active load.
+
+    The effective capacity is the DC energy per 100% of *reported dashboard
+    SoC* in the linear mid-range.  It is deliberately not called pack
+    capacity: the Leaf dashboard SoC is nonlinear, holds a few kWh in reserve
+    at the bottom, and tapers at the top.  Use it to predict SoC movement, not
+    to claim degradation.
+
+    The vehicle active load is solved from the charge/discharge difference:
+
+    ``C_charge = C + L * C_charge / P_charge``
+    ``C_discharge = C - L * C_discharge / P_discharge``
+
+    where ``C_charge`` and ``C_discharge`` are the observed DC energy per 100%
+    dashboard SoC in each direction.  This is the same calculation as the
+    direct 4 h charge / 3 h discharge experiment.
+    """
+    records: list[dict[str, Any]] = []
+    for segment in segments:
+        record = _segment_soc_record(
+            segment,
+            min_soc_delta=min_soc_delta,
+            min_duration_s=min_duration_s,
+            taper_cutoff_soc=taper_cutoff_soc,
+        )
+        if record is not None:
+            records.append(record)
+
+    if not records:
+        return {
+            "n_segments": 0,
+            "min_soc_delta": min_soc_delta,
+            "min_duration_s": min_duration_s,
+            "taper_cutoff_soc": taper_cutoff_soc,
+            "effective_capacity_kwh": None,
+            "active_load_kw": None,
+            "headline_current_bin": None,
+            "by_current": {DIRECTION_CHARGE: [], DIRECTION_DISCHARGE: []},
+            "joint_fit": None,
+            "note": "No segments met the calibration thresholds.",
+        }
+
+    by_current = _capacity_by_current(records, current_bin_a)
+    charge_bins = {row["bin_low"] for row in by_current[DIRECTION_CHARGE]}
+    discharge_bins = {row["bin_low"] for row in by_current[DIRECTION_DISCHARGE]}
+    common_bins = sorted(charge_bins & discharge_bins)
+
+    selected_low: float | None = None
+    for low in reversed(common_bins):
+        if (
+            len([r for r in records if r["direction"] == DIRECTION_CHARGE and math.floor(r["current_a"] / current_bin_a) * current_bin_a == low])
+            >= min_segments_per_direction
+            and len([r for r in records if r["direction"] == DIRECTION_DISCHARGE and math.floor(r["current_a"] / current_bin_a) * current_bin_a == low])
+            >= min_segments_per_direction
+        ):
+            selected_low = low
+            break
+
+    def subset(direction: str, low: float | None) -> list[dict[str, Any]]:
+        if low is None:
+            return [r for r in records if r["direction"] == direction]
+        return [
+            r
+            for r in records
+            if r["direction"] == direction
+            and math.floor(r["current_a"] / current_bin_a) * current_bin_a == low
+        ]
+
+    charge_subset = subset(DIRECTION_CHARGE, selected_low)
+    discharge_subset = subset(DIRECTION_DISCHARGE, selected_low)
+
+    capacity_charge = (
+        _median([r["implied_capacity_kwh"] for r in charge_subset])
+        if charge_subset
+        else None
+    )
+    capacity_discharge = (
+        _median([r["implied_capacity_kwh"] for r in discharge_subset])
+        if discharge_subset
+        else None
+    )
+    power_charge = (
+        _mean([r["mean_dc_power_kw"] for r in charge_subset]) if charge_subset else None
+    )
+    power_discharge = (
+        _mean([r["mean_dc_power_kw"] for r in discharge_subset])
+        if discharge_subset
+        else None
+    )
+
+    active_load: float | None = None
+    effective_capacity: float | None = None
+    if capacity_charge is not None and capacity_discharge is not None:
+        denominator = 0.0
+        if power_charge and power_charge > 0:
+            denominator += capacity_charge / power_charge
+        if power_discharge and power_discharge > 0:
+            denominator += capacity_discharge / power_discharge
+        if denominator > 0:
+            active_load = max(0.0, (capacity_charge - capacity_discharge) / denominator)
+            corrected_charge = (
+                capacity_charge - active_load * capacity_charge / power_charge
+                if power_charge and power_charge > 0
+                else None
+            )
+            corrected_discharge = (
+                capacity_discharge + active_load * capacity_discharge / power_discharge
+                if power_discharge and power_discharge > 0
+                else None
+            )
+            candidates = [value for value in (corrected_charge, corrected_discharge) if value is not None]
+            effective_capacity = _mean(candidates) if candidates else None
+    elif capacity_charge is not None:
+        active_load = 0.0
+        effective_capacity = capacity_charge
+    elif capacity_discharge is not None:
+        active_load = 0.0
+        effective_capacity = capacity_discharge
+
+    return {
+        "n_segments": len(records),
+        "min_soc_delta": min_soc_delta,
+        "min_duration_s": min_duration_s,
+        "taper_cutoff_soc": taper_cutoff_soc,
+        "effective_capacity_kwh": _round(effective_capacity, 3),
+        "active_load_kw": _round(active_load, 4),
+        "headline_current_bin": (
+            [selected_low, round(selected_low + current_bin_a, 6)]
+            if selected_low is not None
+            else None
+        ),
+        "by_current": by_current,
+        "joint_fit": _fit_capacity_overhead(records),
+        "note": (
+            "Effective capacity is DC energy per 100% of reported dashboard SoC "
+            "in the linear mid-range, not a pack-capacity or degradation claim. "
+            "The Leaf dashboard is nonlinear and keeps a few kWh in reserve at "
+            "the bottom. Use this value for SoC-rate planning and keep the "
+            "low-SoC reserve as a separate constraint."
+        ),
+    }
+
+
 @dataclass
 class AnalysisOptions:
     """Tunable thresholds for :func:`analyse`."""
@@ -928,6 +1269,10 @@ class AnalysisOptions:
     min_soc_delta: float = 3.0
     min_soc_segment_duration_s: float = 300.0
     battery_capacity_kwh: float | None = None
+    calibration_min_soc_delta: float = 10.0
+    calibration_min_duration_s: float = 1800.0
+    calibration_taper_cutoff_soc: float | None = 90.0
+    active_load_kw: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -987,6 +1332,24 @@ def analyse(
             current_bin_a=options.current_bin_a,
         )
 
+    calibration = estimate_capacity_and_active_load(
+        segments,
+        min_soc_delta=options.calibration_min_soc_delta,
+        min_duration_s=options.calibration_min_duration_s,
+        taper_cutoff_soc=options.calibration_taper_cutoff_soc,
+        current_bin_a=options.current_bin_a,
+    )
+    active_load_kw = options.active_load_kw
+    if active_load_kw is None:
+        active_load_kw = calibration.get("active_load_kw")
+    calibration["applied_active_load_kw"] = active_load_kw
+    if options.active_load_kw is not None:
+        calibration["active_load_source"] = "option"
+    elif active_load_kw is not None:
+        calibration["active_load_source"] = "calibrated"
+    else:
+        calibration["active_load_source"] = "none"
+
     first_time = ordered[0].time if ordered else None
     last_time = ordered[-1].time if ordered else None
     report = {
@@ -1013,8 +1376,9 @@ def analyse(
         "by_soc": by_soc,
         "loss_fit": loss_fits,
         "round_trip": round_trip_table(by_current),
-        "model_table": model_table(by_current),
+        "model_table": model_table(by_current, active_load_kw=active_load_kw),
         "soc_based": soc_based,
+        "calibration": calibration,
     }
     return report, accepted
 
@@ -1079,6 +1443,16 @@ def write_outputs(
     model_path = output / "model_table.csv"
     _write_csv(model_path, report.get("model_table", []))
     paths["model_table"] = model_path
+
+    calibration_rows: list[dict[str, Any]] = []
+    calibration = report.get("calibration") or {}
+    for direction in DIRECTIONS:
+        for row in (calibration.get("by_current") or {}).get(direction, []):
+            calibration_rows.append({"direction": direction, **row})
+    if calibration_rows:
+        calibration_path = output / "calibration_by_current.csv"
+        _write_csv(calibration_path, calibration_rows)
+        paths["calibration_by_current"] = calibration_path
 
     return paths
 

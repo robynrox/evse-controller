@@ -535,6 +535,36 @@ def _print_summary(report: Mapping[str, Any], paths: Mapping[str, Path]) -> None
             f"assumed capacity {soc_based['capacity_kwh_assumed']} kWh"
         )
 
+    calibration = report.get("calibration")
+    if calibration:
+        print(
+            f"Calibration: effective capacity "
+            f"{_format_number(calibration.get('effective_capacity_kwh'), 2)} kWh/100% SoC, "
+            f"active load {_format_number(calibration.get('active_load_kw'), 3)} kW "
+            f"(n={calibration.get('n_segments', 0)}, "
+            f"applied {_format_number(calibration.get('applied_active_load_kw'), 3)} kW "
+            f"from {calibration.get('active_load_source')})"
+        )
+        joint = calibration.get("joint_fit")
+        if joint:
+            print(
+                f"  joint fit: C={_format_number(joint.get('effective_capacity_kwh'), 2)} kWh "
+                f"L={_format_number(joint.get('active_load_kw'), 3)} kW "
+                f"R2={_format_number(joint.get('r_squared'), 2)} "
+                f"n={joint.get('n_segments')}"
+            )
+        table = report.get("model_table") or []
+        for row in table:
+            if row.get("discharge_stored_efficiency") is None:
+                continue
+            print(
+                f"  {_format_number(row['current_a'], 1)} A: "
+                f"charge->stored {_format_number(row['charge_stored_efficiency'])} "
+                f"stored->AC {_format_number(row['discharge_stored_efficiency'])} "
+                f"round trip {_format_number(row['stored_round_trip_efficiency'])} "
+                f"(price ratio {_format_number(row['price_ratio_required'], 2)})"
+            )
+
     for label, path in paths.items():
         print(f"Wrote {label}: {path}")
 
@@ -605,6 +635,32 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Usable pack capacity for the SoC cross-check; omit to skip it",
     )
+    analysis.add_argument(
+        "--active-load-kw",
+        type=float,
+        help=(
+            "Vehicle-side active load used to correct efficiency; "
+            "omit to use the value calibrated from the data"
+        ),
+    )
+    analysis.add_argument(
+        "--calibration-min-soc-delta",
+        type=float,
+        default=10.0,
+        help="Minimum dashboard SoC delta for a calibration segment",
+    )
+    analysis.add_argument(
+        "--calibration-min-duration-minutes",
+        type=float,
+        default=30.0,
+        help="Minimum duration for a calibration segment",
+    )
+    analysis.add_argument(
+        "--calibration-taper-soc",
+        type=float,
+        default=90.0,
+        help="Truncate charge calibration segments at this SoC (0 disables)",
+    )
 
     output = parser.add_argument_group("output")
     output.add_argument("--output", default="reports/efficiency", help="Output directory")
@@ -640,9 +696,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("--current-bin-a", args.current_bin_a),
         ("--power-bin-kw", args.power_bin_kw),
         ("--soc-bin-percent", args.soc_bin_percent),
+        ("--calibration-min-soc-delta", args.calibration_min_soc_delta),
+        ("--calibration-min-duration-minutes", args.calibration_min_duration_minutes),
     ):
         if value <= 0:
             parser.error(f"{name} must be positive")
+    if args.active_load_kw is not None and args.active_load_kw < 0:
+        parser.error("--active-load-kw must be non-negative")
+    if args.calibration_taper_soc < 0:
+        parser.error("--calibration-taper-soc must be non-negative (0 disables)")
     if args.downsample < 0:
         parser.error("--downsample must be non-negative")
     if args.min_coverage <= 0 or args.min_coverage > 1:
@@ -763,6 +825,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_soc_delta=args.min_soc_delta,
         min_soc_segment_duration_s=args.min_soc_segment_minutes * 60.0,
         battery_capacity_kwh=_battery_capacity(args, config_data),
+        calibration_min_soc_delta=args.calibration_min_soc_delta,
+        calibration_min_duration_s=args.calibration_min_duration_minutes * 60.0,
+        calibration_taper_cutoff_soc=(
+            None if args.calibration_taper_soc <= 0 else args.calibration_taper_soc
+        ),
+        active_load_kw=args.active_load_kw,
     )
 
     report, windows = analyse(samples, options, source=source)
