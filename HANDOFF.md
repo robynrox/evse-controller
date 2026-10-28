@@ -87,22 +87,35 @@ completed fixes.
   `54fa671` (second report), `86773b0` (efficiency refinement),
   `6a00577` (cost solar at the actual harvest current),
   `0ef1e5f` (explicit wear cost and 0p missing rates),
-  `9f46498` (rename wear to minimum profit margin).
+  `9f46498` (rename wear to minimum profit margin),
+  `7bda518` (dashboard decision line and charge cap),
+  `e90647c` (saved-today as a stored-energy spread),
+  `c01be8e` (zero and negative export price coverage),
+  `2a9b081` (when a zero export price is a loss),
+  `a217efd` (explain a negative saved-today figure),
+  `693b284` (dynamic discharge activation threshold).
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
 - `IOCTGO + Agile Outgoing` now uses the measured current-dependent model.
 - The tariff dashboard has a compact decision line above the 48-slot strip:
-  mode, reason, efficiency actually used, minimum round-trip gain, and the
-  money saved today by cycling stored energy (charge cost booked on entry,
-  avoided import/export value booked on discharge, round-trip loss included).
-  The strip is 28px (was 40px); detailed SoC/slot analysis stays in the text
-  log.  The off-peak charge ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and
-  the same ceiling zeroes the charge range outside off-peak, so solar cannot
-  overfill the pack.
+  mode, reason, efficiency actually used, minimum round-trip gain, discharge
+  activation threshold, and the money saved today by cycling stored energy
+  (charge cost booked on entry, avoided import/export value booked on
+  discharge, round-trip loss included). The strip is 28px (was 40px);
+  detailed SoC/slot analysis stays in the text log. The off-peak charge
+  ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling zeroes
+  the charge range outside off-peak, so solar cannot overfill the pack.
+- Discharge activation is no longer the hard-coded 1 W (aggressive) or 720 W
+  (conservative). It is the break-even house load
+  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `H` is the
+  stored cost per delivered kWh plus the profit margin. The Wallbox cannot go
+  below 3 A (~720 W), so starting for a tiny load would export the excess.
+  Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
+  controller never starts a discharge.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **314 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **330 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
