@@ -150,6 +150,21 @@ class BatteryEfficiencyModel:
     def max_current_a(self) -> float:
         return self.points[-1].current_a
 
+    def measured_current_at_or_below(self, current_a: float) -> float:
+        """Largest tabulated current not exceeding *current_a*.
+
+        The planner uses this to cost a measured solar surplus conservatively:
+        a 5.7 A surplus is costed at the 5 A point rather than interpolated
+        between 5 A and 6 A.  Rounding down also gives a little natural
+        hysteresis, so a passing cloud cannot flip the store/export decision on
+        a fractional-amp change.  Values below the first point return the first
+        point; values above the last return the last point.
+        """
+        candidates = [
+            point.current_a for point in self.points if point.current_a <= current_a
+        ]
+        return max(candidates) if candidates else self.points[0].current_a
+
     def _attribute_points(self, attribute: str) -> tuple[tuple[float, float], ...]:
         return tuple((point.current_a, getattr(point, attribute)) for point in self.points)
 

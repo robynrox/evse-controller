@@ -22,26 +22,41 @@
 >   `--calibration-min-duration-minutes`, `--calibration-taper-soc`.
 > - `src/evse_controller/tariffs/octopus/battery_efficiency.py` holds the
 >   measured current-dependent model. `IOCTGO + Agile Outgoing` now uses it:
->   solar 3 A → export = 0.547, grid charge → export = 0.833,
->   pack → AC at export = 0.943, effective capacity 48.3 kWh. Export power is
+>   grid charge → export = 0.833, pack → AC at export = 0.943, effective
+>   capacity 48.3 kWh. Export power is
 >   `min(MAX_EXPORT_POWER_KW, model AC power at the configured current)`:
 >   **3.534 kW at 16 A** (the derated test unit) and **~7.07 kW at 32 A** (the
 >   non-derated default). Above 16 A efficiency is held at the last measured
 >   point and AC power scales linearly with current. `MAX_EXPORT_POWER_KW`
 >   stays at the non-derated **7.2 kW** default; set the wallbox max currents
 >   to the real derating (16 A here) to plan 3.534 kW.
+> - **The harvest current is a decision, not a fixed 3 A.** The manager
+>   estimates the current the load-following loop will use from the live grid
+>   surplus (`EvseController.current_grid_power`), rounds down to a measured
+>   efficiency point, and costs the store/export comparison there. A 6 A
+>   harvest is 0.734 solar → export rather than 0.547 at 3 A, so a strong
+>   surplus is stored where a 3 A trickle would be exported. Falls back to 3 A
+>   when there is no measurement.
+> - Discharge to cover the house load is assumed at **3 A** (~0.72 kW, the base
+>   load), giving a self-use threshold of `IMPORT_HIGH × η_chg(I) × η_dis(3 A)`
+>   = **12.8p at 3 A**, **17.1p at 6 A**. Grid-charge arbitrage and export stay
+>   at the configured maximum current.
+> - The 3 A floor stays. Raising it only affects the 0.7–1.0 kW surplus band,
+>   where a 4 A command draws from the grid; a higher floor is a grid top-up
+>   decision, not an efficiency gain.
 > - Round trips are **separable products of the two per-direction curves**
 >   (`η_chg(I_chg) × η_dis(I_dis)`), not measured matched-current pairs. Do not
 >   build a 2D table; carry the actual charge and discharge current per slot.
->   The common cases are asymmetric: 3 A→max export, max→low self-use, and
->   max→max.
-> - The old 0.50 bidirectional and 0.90 discharge constants are gone. The
->   self-use threshold is `IMPORT_HIGH × 0.547`.
-> - Local full test suite: **275 passed, 4 skipped**.
+>   The common cases are asymmetric: 3–12 A solar → max export, max → low
+>   self-use, and max → max.
+> - The old 0.50 bidirectional and 0.90 discharge constants are gone.
+> - Local full test suite: **286 passed, 4 skipped**.
 > - Next step: start the DP using the corrected table. The DP should carry the
 >   actual charge/discharge power per slot rather than a single round-trip
 >   constant, and keep the low-SoC reserve as a separate constraint. See
 >   sections 5–7.
+> - Deferred future enhancement: online/self-measured efficiency refinement
+>   with recency weighting, so the model tracks degradation. Not implemented.
 >
 > Where the older design brief below conflicts with `REVIEW.md`, `REVIEW.md`
 > wins.
@@ -277,17 +292,19 @@ prices need no special case; maximum charge simply becomes optimal.
 The efficiency work is done; steps 1–2 below are the remaining design decisions
 to settle before writing DP code, then the implementation and validation.
 
-1. Decide two remaining modelling approximations, or accept them explicitly:
+1. Decide the one remaining modelling approximation, or accept it
+   explicitly:
    - **Minimum export rate.** The tariff manager uses the max→max pair for the
      minimum export rate, which is optimistic for solar-charged energy. In the
      DP this disappears, because the pair is chosen per slot. Until then, treat
      the threshold as a heuristic.
-   - **Self-use threshold.** It assumes solar→max export although self-use
-     discharge is usually near 3 A. Again, the DP replaces it with opportunity
-     cost.
-2. Decide whether to fix those two heuristics now (small, low risk) or leave
-   them until the DP replaces them. Recommended: leave them, note the error
-   direction, and let the DP supersede them.
+   - **Self-use threshold** is no longer an approximation in the same sense: it
+     now uses `η_chg(I_harvest) × η_dis(3 A)`, with the harvest current taken
+     from the live surplus. The DP still replaces the single threshold with an
+     opportunity cost, because the heuristic cannot tag stored energy with its
+     acquisition cost.
+2. Recommended: leave the minimum export rate heuristic until the DP replaces
+   it, note the error direction, and let the DP supersede it.
 3. Implement the DP core in pure Python:
    - layers/slots, SoC nodes, successor-indexed arcs, action masks
    - tariff series, PV/load arrays, `battery_efficiency` lookup by current

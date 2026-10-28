@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from evse_controller.drivers.EvseController import ControlState
+from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.config import config, Config
 
@@ -233,6 +234,94 @@ class TestFutureExportOptimization:
         assert result is True
 
 
+class TestHarvestCurrentDecision:
+    """The store/export decision is costed at the current solar will use."""
+
+    def test_strong_surplus_stores_where_3a_would_export(self, agile_tariff):
+        """At 22p with a 35p future: 3 A exports, a 6 A harvest stores.
+
+        35p x 0.547 = 19.1p < 22p (export), but 35p x 0.734 = 25.7p > 22p
+        (store).  This is the case the old fixed-3-A assumption got wrong.
+        """
+        kicker = dict(
+            current_slot=33,  # 16:30, next peak is 35p at 18:00
+            current_export_rate_p=22.0,
+            soc_percent=80,
+        )
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=3
+        ) is False
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=6
+        ) is True
+
+    def test_self_use_threshold_moves_with_harvest_current(self, agile_tariff):
+        """15p is above the 3 A self-use value but below the 6 A one."""
+        kicker = dict(
+            current_slot=39,  # 19:30, best remaining future is 15p
+            current_export_rate_p=15.0,
+            soc_percent=30,  # below the 60% + 8 slots dynamic threshold
+        )
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=3
+        ) is False
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=6
+        ) is True
+
+    def test_default_harvest_current_is_minimum(self, agile_tariff):
+        """Without a surplus estimate the conservative 3 A assumption holds."""
+        assert agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT == pytest.approx(3)
+        assert agile_tariff.solar_export_round_trip() == pytest.approx(
+            agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(3, 32)
+        )
+
+
+class TestSolarHarvestCurrentEstimate:
+    """Estimate the load-following charge current from the live surplus."""
+
+    @staticmethod
+    def _attach(tariff, surplus_w, voltage=240.0, bias=-0.5):
+        controller = Mock()
+        controller.chargeCurrentBias = bias
+        # getHomeWatts() = ch1 - ch2, and -getHomeWatts() is the solar surplus.
+        controller.current_grid_power = Power(
+            ch1Watts=0, ch2Watts=surplus_w, voltage=voltage
+        )
+        tariff.evseController = controller
+        return controller
+
+    def test_uses_surplus_and_snaps_down_to_measured_point(self, agile_tariff):
+        # 1680 W / 240 V = 7 A, -0.5 A bias = 6.5 A -> 6 A measured point.
+        self._attach(agile_tariff, 1680)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(6)
+
+    def test_surplus_just_over_5a_uses_5a(self, agile_tariff):
+        # 1320 W / 240 V = 5.5 A, -0.5 A bias = 5.0 A -> 5 A.
+        self._attach(agile_tariff, 1320)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(5)
+
+    def test_weak_surplus_stays_at_minimum(self, agile_tariff):
+        # 720 W / 240 V = 3 A, bias takes it to 2.5 A -> clamped to 3 A.
+        self._attach(agile_tariff, 720)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(3)
+
+    def test_huge_surplus_clamps_to_measured_model(self, agile_tariff):
+        """Efficiency is flat above 16 A, so the estimate stops there."""
+        self._attach(agile_tariff, 20000)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(16)
+
+    def test_no_power_reading_falls_back_to_minimum(self, agile_tariff):
+        agile_tariff.evseController = None
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(3)
+
+    def test_missing_voltage_uses_nominal(self, agile_tariff):
+        self._attach(agile_tariff, 1680, voltage=0)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(6)
+
+
 class TestExampleScenarios:
     """Test the example scenarios from the docstring."""
 
@@ -391,7 +480,7 @@ class TestConstants:
     def test_storage_thresholds(self, agile_tariff):
         """Test storage decision thresholds."""
         assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == config.IMPORT_LOW
-        # Self-use value = peak import × measured solar-to-export round trip
+        # Reference round trip: minimum harvest current -> export current.
         solar_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
             agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
             agile_tariff.EXPORT_REFERENCE_CURRENT,
@@ -399,8 +488,27 @@ class TestConstants:
         assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == pytest.approx(
             solar_round_trip
         )
+        # The self-use value discharge is at ~3 A, not the export current.
+        self_use_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
+            agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
+            agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
+        )
+        assert agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT == pytest.approx(3)
         assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(
-            config.IMPORT_HIGH * solar_round_trip
+            config.IMPORT_HIGH * self_use_round_trip
+        )
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(12.77, abs=0.05)
+
+    def test_self_use_value_rises_with_harvest_current(self, agile_tariff):
+        """A strong surplus harvest is worth more than a 3 A trickle."""
+        assert agile_tariff.self_use_value_threshold_p(3) == pytest.approx(
+            12.77, abs=0.05
+        )
+        assert agile_tariff.self_use_value_threshold_p(6) == pytest.approx(
+            17.1, abs=0.1
+        )
+        assert agile_tariff.self_use_value_threshold_p(6) > (
+            agile_tariff.self_use_value_threshold_p(3)
         )
 
     def test_round_trips_are_current_dependent(self, agile_tariff):

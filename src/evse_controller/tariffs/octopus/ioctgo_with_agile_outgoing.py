@@ -53,42 +53,63 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-SELF_USE_VALUE_THRESHOLD_P p/kWh, low SoC):
       Store for self-consumption when SoC is below threshold
-      (avoids importing at 31.42p/kWh later, effective value is the peak rate
-      times the measured solar-to-export round trip)
+      (avoids importing at the peak rate later; the effective value is the
+      peak import price times the measured harvest -> self-use round trip,
+      i.e. charge at the actual solar current and discharge at ~3 A)
 
     Tier 3 - Future Export Optimization (all other cases):
-      Store if: best_future_rate × round_trip_efficiency > current_rate
+      Store if: best_future_rate × solar round trip > current_rate
       Export otherwise
 
     Decision summary:
         if current_rate < STORAGE_FLOOR_THRESHOLD_P:
             STORE (rate too trivial)
-        elif current_rate < SELF_USE_VALUE_THRESHOLD_P and SoC < threshold:
+        elif current_rate < self_use_value and SoC < threshold:
             STORE (self-use value)
-        elif future_rate × round_trip_efficiency > current_rate:
+        elif future_rate × solar_round_trip > current_rate:
             STORE (better future value)
         else:
             EXPORT now
 
-    The round-trip efficiency is not a single constant: it is the product of
-    the measured charge and discharge efficiencies at the relevant currents.
-    Solar harvest at 3 A followed by export at the configured current is about
-    0.547 (efficiency is flat above the measured 16 A), a grid-charge → export
-    cycle is about 0.833, and a 3 A→3 A cycle is only about 0.426.
+    **The solar current is not fixed at 3 A.**  In bidirectional mode the
+    load-following loop charges at whatever current the solar surplus supports
+    (from the Wallbox minimum up to the configured maximum).  The efficiency
+    therefore depends on the surplus, and the same store/export comparison must
+    use the current that will actually be used:
+
+    - 3 A harvest -> export at the configured current: 0.580 × 0.943 = 0.547
+    - 6 A harvest -> export: 0.778 × 0.943 = 0.734
+    - 12 A harvest -> export: 0.880 × 0.943 = 0.830
+    - grid charge at max -> export at max: 0.883 × 0.943 = 0.833
+    - 3 A harvest -> self-use discharge at 3 A: 0.580 × 0.734 = 0.426
+
+    Using 3 A for every solar decision is pessimistic on a sunny day: it can
+    export when storing at 6–12 A would have paid.  The tariff estimates the
+    current from the live grid surplus, rounds down to a measured point, and
+    uses that for the threshold.  A grid charge for arbitrage still runs at the
+    maximum current, and a self-use discharge is assumed to run at the Wallbox
+    minimum (~3 A, which is enough to cover the house base load).
 
     Attributes:
         time_of_use (dict): IOCTGO time periods and rates
         agile_rates (list): Today's Agile Outgoing rates (p/kWh)
         agile_rates_fetched_at (datetime): When rates were last fetched
         STORAGE_FLOOR_THRESHOLD_P (float): Rate below which always store (=off peak import price)
-        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value (peak import price
-            times the solar-to-export round trip)
+        SELF_USE_VALUE_THRESHOLD_P (float): Effective self-use value at the minimum
+            harvest current (peak import price times the 3 A/3 A round trip).
+            The live decision uses the actual harvest current instead.
         BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL (float): Solar-harvest
-            round trip (3 A charge → export current discharge)
+            round trip at the minimum current (3 A charge → export current
+            discharge); a floor/reference value, not the live threshold
         BATTERY_ROUND_TRIP_EFFICIENCY (float): Grid-charge → export round trip
         STORED_TO_AC_EFFICIENCY (float): Pack → AC efficiency at export current
         SOC_CAPACITY_KWH (float): Effective kWh per 100% dashboard SoC
         EFFICIENCY_MODEL (BatteryEfficiencyModel): Measured current-dependent model
+        SOLAR_CHARGE_REFERENCE_CURRENT (float): Minimum harvest current, used
+            when the solar surplus is unknown
+        SELF_USE_DISCHARGE_REFERENCE_CURRENT (float): Discharge current assumed
+            for self-consumption (~3 A, the house base load)
+        EXPORT_REFERENCE_CURRENT (float): Discharge current used for export
     """
 
     # Agile Outgoing tariff codes by region
@@ -119,40 +140,48 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.EFFICIENCY_MODEL = BatteryEfficiencyModel()
         self.SOC_CAPACITY_KWH = DASHBOARD_SOC_CAPACITY_KWH
 
-        # Solar harvest usually happens at the minimum current; a grid charge
-        # for export happens at the maximum.  Keep both reference currents so
-        # the round trips are not confused with each other.  Use the configured
-        # currents directly: the model clamps efficiency at the last measured
-        # point (16 A) but extrapolates AC power above it, so a non-derated
-        # 32 A unit plans proportionally more export than the derated test
-        # unit.  If your Wallbox is physically derated, set
+        # Reference currents.  The solar harvest current is not fixed: in
+        # bidirectional mode the load-following loop charges at whatever the
+        # surplus supports, from the Wallbox minimum up to the configured
+        # maximum.  SOLAR_CHARGE_REFERENCE_CURRENT is the fallback when the
+        # surplus is unknown, and the worst-case value for logging.  A grid
+        # charge for arbitrage runs at the maximum.  A self-use discharge is
+        # assumed to run at the Wallbox minimum (~3 A), because that is what
+        # covers the house base load.
+        #
+        # Use the configured currents directly: the model clamps efficiency at
+        # the last measured point (16 A) but extrapolates AC power above it, so
+        # a non-derated 32 A unit plans proportionally more export than the
+        # derated test unit.  If your Wallbox is physically derated, set
         # WALLBOX_MAX_CHARGE_CURRENT / WALLBOX_MAX_DISCHARGE_CURRENT to the
         # derated value (e.g. 16 A).
         self.SOLAR_CHARGE_REFERENCE_CURRENT = config.WALLBOX_MIN_CHARGE_CURRENT
         self.GRID_CHARGE_REFERENCE_CURRENT = config.WALLBOX_MAX_CHARGE_CURRENT
         self.EXPORT_REFERENCE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT
 
-        # Round-trip efficiency for solar storage vs export.  A 3 A harvest
-        # followed by export at the configured current is ~0.547; a 3 A->3 A
-        # cycle is ~0.426.
-        self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = (
-            self.EFFICIENCY_MODEL.round_trip_efficiency(
-                self.SOLAR_CHARGE_REFERENCE_CURRENT,
-                self.EXPORT_REFERENCE_CURRENT,
-            )
+        # Discharge to cover the house load runs at the minimum current in
+        # normal operation (~3 A, ~0.72 kW).  Using the export current here
+        # would over-value self-use storage by ~28% at 3 A.
+        self.SELF_USE_DISCHARGE_REFERENCE_CURRENT = max(
+            config.WALLBOX_MIN_DISCHARGE_CURRENT,
+            config.WALLBOX_MIN_CHARGE_CURRENT,
         )
-        
+
+        # Worst-case solar round trip, at the minimum harvest current.  The
+        # live decision uses the surplus-derived current instead; this is the
+        # floor used when the surplus is unknown and for logging.
+        self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = (
+            self.solar_export_round_trip()
+        )
+
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
         # This prevents exporting at trivial rates when energy may be needed later
         self.STORAGE_FLOOR_THRESHOLD_P = config.IMPORT_LOW
-        
-        # Self-use value threshold: effective value of stored energy when used
-        # for self-consumption instead of importing at peak rates.  This uses
-        # the measured solar-to-export round trip, not a blanket 50%.
-        self.SELF_USE_VALUE_THRESHOLD_P = (
-            config.IMPORT_HIGH * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
-        )
+
+        # Self-use value threshold at the minimum harvest current.  The live
+        # decision recomputes this from the actual harvest current.
+        self.SELF_USE_VALUE_THRESHOLD_P = self.self_use_value_threshold_p()
         
         self.time_of_use = {
             "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": config.EXPORT_MID},
@@ -482,22 +511,99 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         debug(f"IOCTGO_AGILEOUT: Best unused export rate: {best_rate:.1f}p/kWh")
         return best_rate
 
+    def solar_export_round_trip(self, harvest_current_a: float | None = None) -> float:
+        """Round trip for solar harvest -> later export.
+
+        The harvest current is the current the load-following loop will use,
+        which depends on the solar surplus.  It is not fixed at 3 A: a 6 A
+        harvest is 0.778 x 0.943 = 0.734, versus 0.547 at 3 A.
+        """
+        current = (
+            self.SOLAR_CHARGE_REFERENCE_CURRENT
+            if harvest_current_a is None
+            else harvest_current_a
+        )
+        return self.EFFICIENCY_MODEL.round_trip_efficiency(
+            current, self.EXPORT_REFERENCE_CURRENT
+        )
+
+    def self_use_value_threshold_p(
+        self,
+        harvest_current_a: float | None = None,
+    ) -> float:
+        """Value of solar stored for self-consumption, in p/kWh.
+
+        Charge at the harvest current and discharge at ~3 A to cover the house
+        base load, then compare the avoided peak import with the export rate
+        forgone now.  At a 3 A harvest this is 0.580 x 0.734 x 30p = 12.8p; at
+        6 A it is 0.778 x 0.734 x 30p = 17.1p.  Using the export current here
+        (0.943 instead of 0.734) would overstate the value by ~28%.
+        """
+        current = (
+            self.SOLAR_CHARGE_REFERENCE_CURRENT
+            if harvest_current_a is None
+            else harvest_current_a
+        )
+        round_trip = self.EFFICIENCY_MODEL.round_trip_efficiency(
+            current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
+        )
+        return config.IMPORT_HIGH * round_trip
+
+    def _estimate_solar_harvest_current(self) -> float:
+        """Estimate the charge current the load-following loop will use.
+
+        ``EvseController.getHomeWatts()`` is the house load net of PV,
+        *excluding* the EVSE, so its negative is the surplus available to the
+        car.  Mirror the controller's calculation (``P / V + bias``, clamped to
+        the configured charge range) and then round down to a measured
+        efficiency point.
+
+        Falls back to the minimum current when there is no recent measurement,
+        so the decision is never better than the old 3 A assumption.  This is
+        an instantaneous estimate, re-evaluated each control cycle; a PV
+        forecast would be better, and the DP replaces this heuristic.
+        """
+        controller = getattr(self, "evseController", None)
+        power = getattr(controller, "current_grid_power", None) if controller else None
+        if power is None:
+            return self.SOLAR_CHARGE_REFERENCE_CURRENT
+
+        try:
+            surplus_w = -power.getHomeWatts()
+            voltage = power.voltage if power.voltage and power.voltage > 0 else 240.0
+        except Exception:
+            return self.SOLAR_CHARGE_REFERENCE_CURRENT
+
+        bias = getattr(controller, "chargeCurrentBias", -0.5)
+        amps = surplus_w / voltage + bias
+        amps = max(
+            self.SOLAR_CHARGE_REFERENCE_CURRENT,
+            min(amps, self.MAX_CHARGE_CURRENT),
+        )
+        estimate = self.EFFICIENCY_MODEL.measured_current_at_or_below(amps)
+        debug(
+            f"IOCTGO_AGILEOUT: Solar surplus {surplus_w:.0f} W at "
+            f"{voltage:.0f} V -> harvest estimate {estimate:.0f} A"
+        )
+        return estimate
+
     def _should_use_bidirectional_mode(
         self,
         current_slot: int,
         current_export_rate_p: float,
-        soc_percent: float
+        soc_percent: float,
+        harvest_current_a: float | None = None,
     ) -> bool:
         """Determine if bidirectional load-following is better than export.
-        
+
         Uses a three-tier decision process based on export rate and battery SoC:
-        
+
         **Tier 1: Storage Floor (always store)**
         When export rate is below STORAGE_FLOOR_THRESHOLD_P, the rate
         is too trivial to justify exporting. Always store for future use.
-        
+
         **Tier 2: Self-Use Value (store if SoC is low)**
-        When export rate is below SELF_USE_VALUE_THRESHOLD_P:
+        When export rate is below the self-use value:
         - Dynamic SoC threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
         - If SoC < dynamic_threshold: Store energy for self-consumption
           (avoids importing at peak rate later, and attempts to reach desired SoC target at 23:30)
@@ -505,18 +611,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         This dynamic threshold approach pushes the system to "get back on the curve" by accounting
         for expected SoC loss in remaining slots, avoiding the need for grid import later.
-        
+
         **Tier 3: Future Export Optimization (store for better rate)**
         When export rate is above self-use threshold, compare against best
         future unused rate adjusted for efficiency:
         - Store if: best_future_rate × solar_round_trip > current_rate
         - Export otherwise
-        
+
         Decision summary:
         ```
         if current_rate < STORAGE_FLOOR_THRESHOLD_P:
             STORE (rate too trivial)
-        elif current_rate < SELF_USE_VALUE_THRESHOLD_P:
+        elif current_rate < self_use_value:
             dynamic_threshold = min_agile_soc + (remaining_slots × non_export_slot_loss)
             if SoC < dynamic_threshold:
                 STORE (self-use value + curve correction)
@@ -525,12 +631,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         else:
             evaluate Tier 3
         ```
-        
+
+        The solar round trip depends on the harvest current.  ``harvest_current_a``
+        should be the current the load-following loop will actually use (from
+        the live surplus); ``None`` falls back to the minimum current, which is
+        the conservative/cold-start case.
+
         Args:
             current_slot: Current slot index (0-47)
             current_export_rate_p: Current slot's export rate (p/kWh)
             soc_percent: Current battery state of charge (%)
-            
+            harvest_current_a: Expected solar charge current (A), or None to
+                use the minimum
+
         Returns:
             True if bidirectional mode should be used
         """
@@ -541,12 +654,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # This is used for dynamic SoC threshold calculation in Tier 2
         slots_remaining = max(0, 47 - current_slot)
 
+        solar_round_trip = self.solar_export_round_trip(harvest_current_a)
+        self_use_value_p = self.self_use_value_threshold_p(harvest_current_a)
+
         # Unknown SoC - fall back to export optimization only
         if soc_percent < 0:
             best_unused_rate = self._get_best_unused_export_rate(current_slot)
             if best_unused_rate <= 0:
                 return False
-            adjusted_future_rate = best_unused_rate * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
+            adjusted_future_rate = best_unused_rate * solar_round_trip
             return adjusted_future_rate > current_export_rate_p
 
         # === TIER 1: Storage Floor ===
@@ -557,7 +673,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         # === TIER 2: Self-Use Value ===
         # When rate is below self-use threshold and SoC is low, store for self-consumption
-        if current_export_rate_p < self.SELF_USE_VALUE_THRESHOLD_P:
+        if current_export_rate_p < self_use_value_p:
             # Calculate dynamic SoC threshold based on remaining slots until 23:30
             # This attempts to "get back on the curve" without needing grid import
             # Dynamic threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
@@ -566,7 +682,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             if soc_percent < dynamic_soc_threshold:
                 debug(f"IOCTGO_AGILEOUT: STORE (Tier 2): rate {current_export_rate_p:.1f}p < self-use value "
-                      f"{self.SELF_USE_VALUE_THRESHOLD_P:.1f}p, SoC {soc_percent}% < dynamic threshold "
+                      f"{self_use_value_p:.1f}p, SoC {soc_percent}% < dynamic threshold "
                       f"{dynamic_soc_threshold:.1f}% (min {min_soc_percent}% + {slots_remaining} slots × {self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT:.1f}%)")
                 return True
             # SoC is adequate, fall through to Tier 3
@@ -579,18 +695,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): no better future rates available")
             return False
         
-        # Apply round-trip efficiency to the future rate
-        adjusted_future_rate = best_unused_rate * self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL
+        # Apply round-trip efficiency at the actual harvest current
+        adjusted_future_rate = best_unused_rate * solar_round_trip
         
         should_use_bidirectional = adjusted_future_rate > current_export_rate_p
         
         if should_use_bidirectional:
             debug(f"IOCTGO_AGILEOUT: STORE (Tier 3): current={current_export_rate_p:.1f}p, "
-                  f"future={best_unused_rate:.1f}p × {self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL:.0%} = "
+                  f"future={best_unused_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         else:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): current={current_export_rate_p:.1f}p >= "
-                  f"future={best_unused_rate:.1f}p × {self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL:.0%} = "
+                  f"future={best_unused_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         
         return should_use_bidirectional
@@ -1175,8 +1291,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
           (cover most of the house load, no planned export)
         - Other times: Three-tier decision for bidirectional vs export:
           1. Rate < STORAGE_FLOOR_THRESHOLD_P: STORE (too trivial to export)
-          2. Rate < SELF_USE_VALUE_THRESHOLD_P and low SoC: STORE (self-use value)
+          2. Rate < self-use value and low SoC: STORE (self-use value)
           3. Otherwise: STORE if future_rate × solar round trip > current_rate
+
+        The solar round trip is evaluated at the harvest current implied by the
+        live solar surplus, not at the 3 A floor, so a strong surplus is stored
+        when a weak one would be exported.
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
@@ -1263,11 +1383,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 current_export_rate_p = rate_data['rate']
                 break
 
-        # Determine if bidirectional mode is better than export (uses SoC-aware logic)
+        # Determine if bidirectional mode is better than export (uses SoC-aware
+        # logic).  Cost the solar at the current the surplus will actually
+        # support, not at the 3 A floor: a sunny slot can harvest at 6-12 A,
+        # where the round trip is materially better.
+        harvest_current_a = self._estimate_solar_harvest_current()
         use_bidirectional = self._should_use_bidirectional_mode(
             current_slot,
             current_export_rate_p,
-            battery_level
+            battery_level,
+            harvest_current_a=harvest_current_a,
         )
 
         if use_bidirectional:
@@ -1347,10 +1472,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 current_export_rate_p = rate_data['rate']
                 break
 
+        # Use the same surplus-derived harvest current as get_control_state()
+        # so the control state and the configured levels agree.
+        harvest_current_a = self._estimate_solar_harvest_current()
         use_bidirectional = self._should_use_bidirectional_mode(
             current_slot,
             current_export_rate_p,
-            battery_level
+            battery_level,
+            harvest_current_a=harvest_current_a,
         )
 
         if use_bidirectional:

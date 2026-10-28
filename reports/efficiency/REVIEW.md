@@ -330,10 +330,13 @@ Concrete issues:
    (~0.67 %/h/A at 3 A AC). It should be derived from the corrected efficiency
    table and the effective capacity.
 7. **The self-use value threshold** (`IMPORT_HIGH × 0.50` = 15p with the
-   default 30p peak) is conservative for solar-charged energy (round trip
-   0.547 → 16.4p) but much too low for grid-charged energy at 16 A (round trip
-   0.833 → 25.0p). The threshold should depend on how the stored energy was
-   acquired, or be replaced by the planner's opportunity cost.
+   default 30p peak) is conservative for solar-charged energy later exported
+   (0.547 at a 3 A harvest → 16.4p), but it is too high for the self-use case
+   the threshold is named after: discharge to cover the base load is ~3 A, so
+   the relevant round trip is 0.426 and the value is only 12.8p. It is much too
+   low for grid-charged energy at 16 A (0.833 → 25.0p). The threshold should
+   depend on how the stored energy was acquired and the discharge current, or
+   be replaced by the planner's opportunity cost.
 
 Note that the round-trip values above are products of the two per-direction
 curves, not measured matched-current pairs. The manager is almost never
@@ -353,7 +356,8 @@ follows:
 
 | Old behaviour | New behaviour |
 |---|---|
-| `BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = 0.50` | Solar 3 A → export at the configured current = **0.547** (`SOLAR_CHARGE_REFERENCE_CURRENT` → `EXPORT_REFERENCE_CURRENT`) |
+| `BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = 0.50` | Fallback/reference solar 3 A → export at the configured current = **0.547** (`SOLAR_CHARGE_REFERENCE_CURRENT` → `EXPORT_REFERENCE_CURRENT`); the live decision uses `η_chg(I_harvest) × η_dis(I_export)` |
+| `SELF_USE_VALUE_THRESHOLD_P = IMPORT_HIGH × 0.50` | `IMPORT_HIGH × η_chg(I_harvest) × η_dis(3 A)` = **12.8p at 3 A**, **17.1p at 6 A** |
 | `BATTERY_ROUND_TRIP_EFFICIENCY = 0.80` | Grid charge → export at the configured current = **0.833** (efficiency is flat above 16 A) |
 | `DISCHARGE_LOSS_FACTOR = 0.90` | `STORED_TO_AC_EFFICIENCY = 0.943` at the export current |
 | SoC drop used 59 kWh and 0.90 | Uses **48.3 kWh** effective dashboard capacity and 0.943 |
@@ -376,11 +380,27 @@ trip is still modelled as poor, but it no longer contaminates the common solar
 case.
 
 Remaining approximation: the Tier 3 decision still compares one current pair.
-It uses the minimum solar current for charging and the export current for
-discharging. A future DP can carry the actual charge/discharge powers per slot
-instead. The self-use threshold is now `IMPORT_HIGH × 0.547` rather than
-`IMPORT_HIGH × 0.50`; it is still a single threshold because the manager does
-not tag stored energy with its acquisition cost. That is a DP concern.
+It uses the harvest current for charging and the export current for discharging.
+Initially that used the minimum solar current, which is pessimistic on a sunny
+day; it now estimates the harvest current from the live grid surplus, rounds
+down to a measured point, and costs the decision there. A future DP can carry
+the actual charge/discharge powers per slot instead.
+
+The self-use threshold is now `IMPORT_HIGH × η_chg(I_harvest) × η_dis(3 A)`
+rather than `IMPORT_HIGH × 0.50`. Discharging to cover the house base load
+really does run at about 3 A (~0.72 kW), so the 3 A discharge efficiency is the
+right one there. At a 3 A harvest the threshold is 12.8p; at 6 A it is 17.1p.
+It is still a single threshold because the manager does not tag stored energy
+with its acquisition cost. That is a DP concern.
+
+The 3 A floor is kept. Raising the minimum harvest current would only affect
+the 0.7–1.0 kW surplus band, where a 4 A harvest imports from the grid; at that
+surplus the car should either harvest at 3 A or export. The marginal AC→stored
+efficiency from 3 A to 4 A is ~0.96 because the fixed overhead is already sunk,
+so the floor is not the cause of the low 3 A round trip. Choosing a *higher*
+current when the surplus supports it is the useful change, and that is now
+what the decision does. Forcing a higher floor would be a deliberate grid
+top-up decision, not an efficiency improvement.
 
 The old 0.50 constant also carried an implicit battery-wear margin. The new
 model is pure measured efficiency, so the heuristic is less conservative than
