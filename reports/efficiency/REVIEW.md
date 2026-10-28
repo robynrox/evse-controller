@@ -357,8 +357,8 @@ follows:
 | Old behaviour | New behaviour |
 |---|---|
 | `BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = 0.50` | Fallback/reference solar 3 A → export at the configured current = **0.547** (`SOLAR_CHARGE_REFERENCE_CURRENT` → `EXPORT_REFERENCE_CURRENT`); the live decision uses `η_chg(I_harvest) × η_dis(I_export)` |
-| `SELF_USE_VALUE_THRESHOLD_P = IMPORT_HIGH × 0.50` | `IMPORT_HIGH × η_chg(I_harvest) × η_dis(3 A)` = **12.8p at 3 A**, **17.1p at 6 A** |
-| `BATTERY_ROUND_TRIP_EFFICIENCY = 0.80` | Grid charge → export at the configured current = **0.833** (efficiency is flat above 16 A) |
+| `SELF_USE_VALUE_THRESHOLD_P = IMPORT_HIGH × 0.50` | `(IMPORT_HIGH − wear) × η_chg(I_harvest) × η_dis(3 A)` = **11.9p at 3 A**, **16.0p at 6 A** with the default 2p wear |
+| `BATTERY_ROUND_TRIP_EFFICIENCY = 0.80` (min export rate) | Grid charge → export at the configured current = **0.833** (efficiency is flat above 16 A), plus the wear cost: `IMPORT_LOW / 0.833 + 2p` = **14.0p** |
 | `DISCHARGE_LOSS_FACTOR = 0.90` | `STORED_TO_AC_EFFICIENCY = 0.943` at the export current |
 | SoC drop used 59 kWh and 0.90 | Uses **48.3 kWh** effective dashboard capacity and 0.943 |
 | `MAX_EXPORT_POWER_KW` default 7.2 | Remains 7.2 as the non-derated default, but export power is `min(config cap, model AC power at the configured current)`: **3.534 kW** at 16 A, **~7.07 kW** at 32 A |
@@ -386,12 +386,12 @@ day; it now estimates the harvest current from the live grid surplus, rounds
 down to a measured point, and costs the decision there. A future DP can carry
 the actual charge/discharge powers per slot instead.
 
-The self-use threshold is now `IMPORT_HIGH × η_chg(I_harvest) × η_dis(3 A)`
-rather than `IMPORT_HIGH × 0.50`. Discharging to cover the house base load
-really does run at about 3 A (~0.72 kW), so the 3 A discharge efficiency is the
-right one there. At a 3 A harvest the threshold is 12.8p; at 6 A it is 17.1p.
-It is still a single threshold because the manager does not tag stored energy
-with its acquisition cost. That is a DP concern.
+The self-use threshold is now `(IMPORT_HIGH − wear) × η_chg(I_harvest) ×
+η_dis(3 A)` rather than `IMPORT_HIGH × 0.50`. Discharging to cover the house
+base load really does run at about 3 A (~0.72 kW), so the 3 A discharge
+efficiency is the right one there. At a 3 A harvest the threshold is 11.9p; at
+6 A it is 16.0p. It is still a single threshold because the manager does not
+tag stored energy with its acquisition cost. That is a DP concern.
 
 The 3 A floor is kept. Raising the minimum harvest current would only affect
 the 0.7–1.0 kW surplus band, where a 4 A harvest imports from the grid; at that
@@ -403,10 +403,26 @@ what the decision does. Forcing a higher floor would be a deliberate grid
 top-up decision, not an efficiency improvement.
 
 The old 0.50 constant also carried an implicit battery-wear margin. The new
-model is pure measured efficiency, so the heuristic is less conservative than
-before on that axis. The DP should add an explicit degradation cost per kWh
-throughput (as the original handoff plan proposed); do not reintroduce wear by
-lowering the efficiency numbers again.
+model is pure measured efficiency, so wear is now an explicit cost instead of
+a hidden efficiency haircut. `IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH`
+defaults to **2.0p/kWh discharged** and is used in three places:
+
+- Tier 2: `(IMPORT_HIGH − wear) × η_chg(I_harvest) × η_dis(3 A)`.
+- Tier 3: `(best_future_rate − wear) × η_chg(I_harvest) × η_dis(export)` vs
+  the current export rate.
+- Export planning: `IMPORT_LOW / η_chg(max) × η_dis(max) + wear` = **14.0p**
+  by default (12.0p with wear at 0).
+
+Set the value to 0 to disable it. The 2p figure is a policy/assumption value,
+not a measurement from the 180-day report; the DP will carry the same number
+as an explicit arc cost. Do not reintroduce wear by lowering the efficiency
+numbers again — that double-counts and distorts the price threshold.
+
+Missing Octopus rates are **not a special state**. If no prices have been
+received (or only stale prices from a previous day), every current and future
+export price is treated as **0p**. Tier 1 then stores, and the export planner
+finds no profitable slots. Date-filtered lookups implement this, so a failed
+fetch cannot silently reuse yesterday's prices.
 
 ## 8. Reproduction
 

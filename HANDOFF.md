@@ -38,9 +38,21 @@
 >   surplus is stored where a 3 A trickle would be exported. Falls back to 3 A
 >   when there is no measurement.
 > - Discharge to cover the house load is assumed at **3 A** (~0.72 kW, the base
->   load), giving a self-use threshold of `IMPORT_HIGH × η_chg(I) × η_dis(3 A)`
->   = **12.8p at 3 A**, **17.1p at 6 A**. Grid-charge arbitrage and export stay
->   at the configured maximum current.
+>   load), giving a self-use threshold of
+>   `(IMPORT_HIGH − wear) × η_chg(I) × η_dis(3 A)` = **11.9p at 3 A**,
+>   **16.0p at 6 A** with the default 2p wear. Grid-charge arbitrage and export
+>   stay at the configured maximum current.
+> - **Wear is an explicit cost, not an efficiency haircut.**
+>   `IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH` defaults to **2.0p/kWh
+>   discharged** (set 0 to disable). It reduces the Tier 2 avoided-import value,
+>   is subtracted from the future rate in Tier 3, and is added to the export
+>   planner's minimum rate (`IMPORT_LOW / 0.833 + 2p` = **14.0p**). The 2p value
+>   is a policy assumption, not a measurement; the DP will carry it as an
+>   explicit arc cost.
+> - **Missing rates mean 0p, not a special mode.** If the Octopus API has not
+>   supplied prices (or only stale prices from a previous day), all current and
+>   future export prices are 0p. Tier 1 then stores and the export planner finds
+>   no profitable slots. Date-filtered lookups ignore yesterday's prices.
 > - The 3 A floor stays. Raising it only affects the 0.7–1.0 kW surplus band,
 >   where a 4 A command draws from the grid; a higher floor is a grid top-up
 >   decision, not an efficiency gain.
@@ -50,7 +62,7 @@
 >   The common cases are asymmetric: 3–12 A solar → max export, max → low
 >   self-use, and max → max.
 > - The old 0.50 bidirectional and 0.90 discharge constants are gone.
-> - Local full test suite: **286 passed, 4 skipped**.
+> - Local full test suite: **291 passed, 4 skipped, 10 subtests passed**.
 > - Next step: start the DP using the corrected table. The DP should carry the
 >   actual charge/discharge power per slot rather than a single round-trip
 >   constant, and keep the low-SoC reserve as a separate constraint. See
@@ -77,7 +89,7 @@ completed fixes.
 - `IOCTGO + Agile Outgoing` now uses the measured current-dependent model.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **275 passed, 4 skipped**.
+- Local full test suite: **291 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

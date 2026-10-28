@@ -378,6 +378,18 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
     )
 
+    # Marginal battery wear cost, p/kWh discharged.  The heuristic uses this
+    # to avoid cycles whose revenue does not cover degradation; the DP will
+    # use the same value as an explicit arc cost.  Set to 0 to disable.
+    IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH = property(
+        lambda self: self._get_config_value(
+            "tariffs.ioctgo", "battery_degradation_cost_p_per_kwh", 2.0
+        ),
+        lambda self, value: self._set_config_value(
+            "tariffs.ioctgo", "battery_degradation_cost_p_per_kwh", value
+        )
+    )
+
     # Wallbox simulator properties
     USE_WALLBOX_SIMULATOR = property(
         lambda self: self._get_config_value("wallbox", "use_simulator", False),
@@ -597,6 +609,7 @@ class Config:
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'battery_degradation_cost_p_per_kwh': self.IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,

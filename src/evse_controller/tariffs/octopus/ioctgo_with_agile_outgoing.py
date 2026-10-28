@@ -54,11 +54,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-SELF_USE_VALUE_THRESHOLD_P p/kWh, low SoC):
       Store for self-consumption when SoC is below threshold
       (avoids importing at the peak rate later; the effective value is the
-      peak import price times the measured harvest -> self-use round trip,
-      i.e. charge at the actual solar current and discharge at ~3 A)
+      peak import price less battery wear, times the measured harvest ->
+      self-use round trip, i.e. charge at the actual solar current and
+      discharge at ~3 A)
 
     Tier 3 - Future Export Optimization (all other cases):
-      Store if: best_future_rate × solar round trip > current_rate
+      Store if: (best_future_rate - wear) × solar round trip > current_rate
       Export otherwise
 
     Decision summary:
@@ -66,10 +67,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             STORE (rate too trivial)
         elif current_rate < self_use_value and SoC < threshold:
             STORE (self-use value)
-        elif future_rate × solar_round_trip > current_rate:
+        elif (future_rate - wear) × solar_round_trip > current_rate:
             STORE (better future value)
         else:
             EXPORT now
+
+    **Missing rate data is 0p, not a mode.**  If Octopus has not supplied
+    prices, every current and future export price is treated as 0p.  The tier
+    logic then stores (Tier 1) and the export planner finds no profitable
+    slots.  There is no separate "no rates" branch, and stale prices from a
+    previous day are ignored.
 
     **The solar current is not fixed at 3 A.**  In bidirectional mode the
     load-following loop charges at whatever current the solar surplus supports
@@ -110,6 +117,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         SELF_USE_DISCHARGE_REFERENCE_CURRENT (float): Discharge current assumed
             for self-consumption (~3 A, the house base load)
         EXPORT_REFERENCE_CURRENT (float): Discharge current used for export
+        BATTERY_DEGRADATION_COST_P_PER_KWH (float): Marginal wear cost, p/kWh
+            discharged, applied to stored-energy decisions
     """
 
     # Agile Outgoing tariff codes by region
@@ -139,6 +148,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # reports/efficiency/REVIEW.md and battery_efficiency.py.
         self.EFFICIENCY_MODEL = BatteryEfficiencyModel()
         self.SOC_CAPACITY_KWH = DASHBOARD_SOC_CAPACITY_KWH
+
+        # Marginal battery wear cost, p/kWh discharged.  The old blanket 0.50
+        # constant carried an implicit wear margin; the measured model is pure
+        # efficiency, so make the margin explicit instead of hiding it in the
+        # efficiency numbers.  The DP will use the same value as an arc cost.
+        self.BATTERY_DEGRADATION_COST_P_PER_KWH = (
+            config.IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH
+        )
 
         # Reference currents.  The solar harvest current is not fixed: in
         # bidirectional mode the load-following loop charges at whatever the
@@ -346,7 +363,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # SoC change resync and the post-fetch recalculation.
         self._update_energy_shortfall(current_soc_percent)
 
-        if not self.agile_rates or current_soc_percent < 0:
+        if current_soc_percent < 0:
             return []
 
         battery_capacity_kwh = self.SOC_CAPACITY_KWH
@@ -405,10 +422,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         debug(f"IOCTGO_AGILEOUT: Additional SoC cost per export slot: {additional_soc_cost_per_export_slot:.2f}%")
 
-        # Calculate minimum profitable rate
-        # Need: export_rate ≥ import_rate / round_trip_efficiency
-        import_rate = config.IMPORT_LOW
-        min_export_rate_p = import_rate / self.BATTERY_ROUND_TRIP_EFFICIENCY  # £/kWh
+        # Calculate minimum profitable rate.  With no rate data this is just a
+        # threshold that no (0p) slot can meet, so the plan is empty.
+        min_export_rate_p = self.export_min_rate_p()
 
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
 
@@ -416,7 +432,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Only consider slots 0-46 (exclude slot 47 = 23:30-00:00)
         # Missing slots are treated as unprofitable (not included)
         slot_rates = []
-        for rate_data in self.agile_rates:
+        for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
 
@@ -460,6 +476,38 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         return planned_slots
 
+    def _today_rates(self) -> list:
+        """Rate entries for today, or an empty list if none are available.
+
+        An empty list deliberately means every export price is **0p** rather
+        than a special "no data" state: the normal tier logic then stores
+        instead of exporting, and the export planner finds no profitable
+        slots.  Stale entries from a previous day are excluded by date, so a
+        failed fetch cannot silently reuse yesterday's prices.
+        """
+        today = self.get_current_datetime().date()
+        return [rate for rate in self.agile_rates if rate['start'].date() == today]
+
+    def _current_export_rate_p(self, current_slot: int) -> float:
+        """Export price for *current_slot*, or 0p if it is not known."""
+        for rate_data in self._today_rates():
+            hour = rate_data['start'].hour
+            slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
+            if slot_idx == current_slot:
+                return rate_data['rate']
+        return 0.0
+
+    def export_min_rate_p(self) -> float:
+        """Minimum export price covering cheap import and battery wear.
+
+        Cost per kWh delivered to the grid is ``IMPORT_LOW / round_trip``
+        (grid charge at max, export at max) plus the marginal wear cost.
+        """
+        return (
+            config.IMPORT_LOW / self.BATTERY_ROUND_TRIP_EFFICIENCY
+            + self.BATTERY_DEGRADATION_COST_P_PER_KWH
+        )
+
     def _get_best_unused_export_rate(self, current_slot: int) -> float:
         """Find the best export rate among slots not selected for export.
         
@@ -472,19 +520,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Returns:
             Best export rate (p/kWh) from unused slots, or 0 if none available
         """
-        if not self.agile_rates:
-            return 0.0
-        
-        # Get current time to filter out past slots
-        now = self.get_current_datetime()
-        
         # Build list of (slot_index, rate) for all slots that:
         # - Are in the future (or current slot)
         # - Are NOT in the planned export slots
         # - Are before slot 47 (23:30-00:00, not available for export)
         unused_slot_rates = []
-        
-        for rate_data in self.agile_rates:
+
+        for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
             
@@ -535,9 +577,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         Charge at the harvest current and discharge at ~3 A to cover the house
         base load, then compare the avoided peak import with the export rate
-        forgone now.  At a 3 A harvest this is 0.580 x 0.734 x 30p = 12.8p; at
-        6 A it is 0.778 x 0.734 x 30p = 17.1p.  Using the export current here
-        (0.943 instead of 0.734) would overstate the value by ~28%.
+        forgone now.  At a 3 A harvest this is (30p - 2p wear) x 0.580 x 0.734
+        = 11.9p; at 6 A it is (30p - 2p) x 0.778 x 0.734 = 16.0p.  Using the
+        export current here (0.943 instead of 0.734) would overstate the value
+        by ~28%.
+
+        The battery wear cost is subtracted from the avoided import price
+        before the round trip, because the wear is incurred per kWh delivered
+        to the house.
         """
         current = (
             self.SOLAR_CHARGE_REFERENCE_CURRENT
@@ -547,7 +594,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         round_trip = self.EFFICIENCY_MODEL.round_trip_efficiency(
             current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
         )
-        return config.IMPORT_HIGH * round_trip
+        return (
+            config.IMPORT_HIGH - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+        ) * round_trip
 
     def _estimate_solar_harvest_current(self) -> float:
         """Estimate the charge current the load-following loop will use.
@@ -637,6 +686,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         the live surplus); ``None`` falls back to the minimum current, which is
         the conservative/cold-start case.
 
+        Missing rate data is not a special case: callers pass 0p when no
+        current/future export price is known, and the normal tier logic then
+        stores rather than exporting.
+
         Args:
             current_slot: Current slot index (0-47)
             current_export_rate_p: Current slot's export rate (p/kWh)
@@ -647,9 +700,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Returns:
             True if bidirectional mode should be used
         """
-        if not self.agile_rates:
-            return False
-
         # Calculate remaining slots until 23:30 (slot 47)
         # This is used for dynamic SoC threshold calculation in Tier 2
         slots_remaining = max(0, 47 - current_slot)
@@ -657,20 +707,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         solar_round_trip = self.solar_export_round_trip(harvest_current_a)
         self_use_value_p = self.self_use_value_threshold_p(harvest_current_a)
 
+        # === TIER 1: Storage Floor ===
+        # Below this rate, always store - rate is too trivial to export.
+        # With no rate data the rate is 0p, so this also covers the "Octopus
+        # has not given us prices" case without a separate branch.
+        if current_export_rate_p < self.STORAGE_FLOOR_THRESHOLD_P:
+            debug(
+                f"IOCTGO_AGILEOUT: STORE (Tier 1): rate {current_export_rate_p:.1f}p "
+                f"< floor {self.STORAGE_FLOOR_THRESHOLD_P:.1f}p"
+            )
+            return True
+
         # Unknown SoC - fall back to export optimization only
         if soc_percent < 0:
             best_unused_rate = self._get_best_unused_export_rate(current_slot)
             if best_unused_rate <= 0:
                 return False
-            adjusted_future_rate = best_unused_rate * solar_round_trip
+            net_future_rate = (
+                best_unused_rate - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+            )
+            adjusted_future_rate = net_future_rate * solar_round_trip
             return adjusted_future_rate > current_export_rate_p
 
-        # === TIER 1: Storage Floor ===
-        # Below this rate, always store - rate is too trivial to export
-        if current_export_rate_p < self.STORAGE_FLOOR_THRESHOLD_P:
-            debug(f"IOCTGO_AGILEOUT: STORE (Tier 1): rate {current_export_rate_p:.1f}p < floor {self.STORAGE_FLOOR_THRESHOLD_P:.1f}p")
-            return True
-        
         # === TIER 2: Self-Use Value ===
         # When rate is below self-use threshold and SoC is low, store for self-consumption
         if current_export_rate_p < self_use_value_p:
@@ -694,19 +752,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if best_unused_rate <= 0:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): no better future rates available")
             return False
-        
-        # Apply round-trip efficiency at the actual harvest current
-        adjusted_future_rate = best_unused_rate * solar_round_trip
+
+        # Apply wear first, then the round trip at the actual harvest current.
+        # 1 kWh of solar input yields `solar_round_trip` kWh later, each of
+        # which is worth (future export price - wear).
+        net_future_rate = best_unused_rate - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+        adjusted_future_rate = net_future_rate * solar_round_trip
         
         should_use_bidirectional = adjusted_future_rate > current_export_rate_p
         
         if should_use_bidirectional:
             debug(f"IOCTGO_AGILEOUT: STORE (Tier 3): current={current_export_rate_p:.1f}p, "
-                  f"future={best_unused_rate:.1f}p × {solar_round_trip:.0%} = "
+                  f"future={best_unused_rate:.1f}p - wear {self.BATTERY_DEGRADATION_COST_P_PER_KWH:.1f}p "
+                  f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         else:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): current={current_export_rate_p:.1f}p >= "
-                  f"future={best_unused_rate:.1f}p × {solar_round_trip:.0%} = "
+                  f"future={best_unused_rate:.1f}p - wear {self.BATTERY_DEGRADATION_COST_P_PER_KWH:.1f}p "
+                  f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         
         return should_use_bidirectional
@@ -954,18 +1017,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Planned export slots are highlighted with "EX" label.
         """
         with self._rates_lock:
-            if not self.agile_rates:
-                # No rates fetched yet - show loading message
+            # Only today's rates are valid.  Empty (no fetch yet, or only
+            # stale data) shows the loading placeholder rather than yesterday's
+            # prices.
+            rates = self._today_rates()
+            if not rates:
                 return """
                 <div class="agile-rate-strip" style="height:40px;display:flex;align-items:center;justify-content:center;background:#f5f5f5;border-radius:4px;margin:10px 0;">
                     <span style="color:#666;font-size:14px;">Loading Agile Outgoing rates...</span>
                 </div>
                 """
-
-            # Get rates for display (today's 48 half-hour slots)
-            rates = self.agile_rates
-            if not rates:
-                return ""
 
             # Get current time to determine current slot
             now = self.get_current_datetime()
@@ -1375,13 +1436,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # All other times: Decide between load-follow discharge and bidirectional mode
         # Get current slot's export rate for comparison
-        current_export_rate_p = 0.0
-        for rate_data in self.agile_rates:
-            hour = rate_data['start'].hour
-            slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
-            if slot_idx == current_slot:
-                current_export_rate_p = rate_data['rate']
-                break
+        # No rates means 0p; the tier logic then stores rather than exports.
+        current_export_rate_p = self._current_export_rate_p(current_slot)
 
         # Determine if bidirectional mode is better than export (uses SoC-aware
         # logic).  Cost the solar at the current the surplus will actually
@@ -1464,13 +1520,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Not shortfall: use the existing tier logic to decide between storing
         # (bidirectional) and exporting (load-follow discharge).
         # Get current export rate for comparison
-        current_export_rate_p = 0.0
-        for rate_data in self.agile_rates:
-            hour = rate_data['start'].hour
-            slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
-            if slot_idx == current_slot:
-                current_export_rate_p = rate_data['rate']
-                break
+        # No rates means 0p; the tier logic then stores rather than exports.
+        current_export_rate_p = self._current_export_rate_p(current_slot)
 
         # Use the same surplus-derived harvest current as get_control_state()
         # so the control state and the configured levels agree.

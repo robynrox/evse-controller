@@ -488,28 +488,53 @@ class TestConstants:
         assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == pytest.approx(
             solar_round_trip
         )
-        # The self-use value discharge is at ~3 A, not the export current.
+        # The self-use value discharge is at ~3 A, not the export current, and
+        # the avoided import price is reduced by the marginal wear cost.
         self_use_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
             agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
             agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
         )
         assert agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT == pytest.approx(3)
+        assert agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH == pytest.approx(2.0)
         assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(
-            config.IMPORT_HIGH * self_use_round_trip
+            (config.IMPORT_HIGH - agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH)
+            * self_use_round_trip
         )
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(12.77, abs=0.05)
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(11.92, abs=0.05)
 
     def test_self_use_value_rises_with_harvest_current(self, agile_tariff):
         """A strong surplus harvest is worth more than a 3 A trickle."""
         assert agile_tariff.self_use_value_threshold_p(3) == pytest.approx(
-            12.77, abs=0.05
+            11.92, abs=0.05
         )
         assert agile_tariff.self_use_value_threshold_p(6) == pytest.approx(
-            17.1, abs=0.1
+            16.0, abs=0.1
         )
         assert agile_tariff.self_use_value_threshold_p(6) > (
             agile_tariff.self_use_value_threshold_p(3)
         )
+
+    def test_export_min_rate_includes_wear(self, agile_tariff):
+        """Cheap grid -> export must cover the round trip plus degradation."""
+        assert agile_tariff.export_min_rate_p() == pytest.approx(14.0, abs=0.05)
+
+        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 0.0
+        assert agile_tariff.export_min_rate_p() == pytest.approx(12.0, abs=0.05)
+
+    def test_wear_cost_suppresses_a_marginal_cycle(self, agile_tariff):
+        """A 35p future justifies 18.5p at 3 A only without wear."""
+        kicker = dict(
+            current_slot=33,  # best remaining future is 35p at 18:00
+            current_export_rate_p=18.5,
+            soc_percent=80,  # above the Tier 2 dynamic threshold
+            harvest_current_a=3,
+        )
+
+        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 0.0
+        assert agile_tariff._should_use_bidirectional_mode(**kicker) is True
+
+        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 2.0
+        assert agile_tariff._should_use_bidirectional_mode(**kicker) is False
 
     def test_round_trips_are_current_dependent(self, agile_tariff):
         """A blanket 50% is wrong at both ends of the current range."""
@@ -662,16 +687,55 @@ class TestEdgeCases:
     """Test edge cases and boundary conditions."""
     
     def test_no_agile_rates(self, agile_tariff):
-        """Test behavior when no Agile rates are available."""
+        """No rates means every export price is 0p, so the normal tier logic stores."""
         agile_tariff.agile_rates = []
-        
+
+        # The rate lookup itself defaults to 0p; there is no special branch.
+        assert agile_tariff._current_export_rate_p(20) == 0.0
+        assert agile_tariff._get_best_unused_export_rate(20) == 0.0
+
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=20,
-            current_export_rate_p=10.0,
+            current_export_rate_p=agile_tariff._current_export_rate_p(20),
             soc_percent=50
         )
-        
-        assert result is False, "Should export when no rate data available"
+
+        assert result is True, "0p export price should store via Tier 1"
+
+    def test_stale_rates_are_treated_as_zero_price(self, agile_tariff):
+        """Yesterday's prices must not be used after a failed fetch."""
+        yesterday = datetime.now() - timedelta(days=1)
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['start'] = rate_data['start'].replace(
+                year=yesterday.year, month=yesterday.month, day=yesterday.day
+            )
+            rate_data['end'] = rate_data['end'].replace(
+                year=yesterday.year, month=yesterday.month, day=yesterday.day
+            )
+
+        assert agile_tariff._today_rates() == []
+        assert agile_tariff._current_export_rate_p(20) == 0.0
+        assert agile_tariff._should_use_bidirectional_mode(
+            current_slot=20,
+            current_export_rate_p=0.0,
+            soc_percent=50
+        ) is True
+
+    def test_no_rates_plans_no_exports(self, agile_tariff):
+        """The export planner sees 0p everywhere, so no slot is profitable."""
+        agile_tariff.agile_rates = []
+        assert agile_tariff.calculate_export_plan(80) == []
+
+    def test_no_rates_stores_instead_of_exporting(self, agile_tariff):
+        """An API outage must not silently put the controller into export."""
+        fixed = datetime.now().replace(hour=22, minute=0, second=0, microsecond=0)
+        agile_tariff.set_time_functions(datetime_func=lambda: fixed)
+        agile_tariff.agile_rates = []
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
+
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
     
     def test_all_slots_already_exporting(self, agile_tariff):
         """Test when all future slots are already planned for export."""

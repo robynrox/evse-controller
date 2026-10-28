@@ -250,6 +250,7 @@ class TestConfig:
         assert config_dict["tariffs"]["ioctgo"]["target_soc_at_bulk_discharge_end"] == 60
         assert config_dict["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:00"
         assert config_dict["tariffs"]["ioctgo"]["enable_bulk_discharge"] is True
+        assert config_dict["tariffs"]["ioctgo"]["battery_degradation_cost_p_per_kwh"] == 2.0
 
         # Update a value and check it appears in as_dict
         config.IOCTGO_BATTERY_CAPACITY_KWH = 70
@@ -393,7 +394,8 @@ class TestConfig:
             'IOCTGO_BULK_DISCHARGE_END_TIME': "21:00",
             'IOCTGO_ENABLE_BULK_DISCHARGE': False,
             'IOCTGO_MIN_DISCHARGE_CURRENT': 5,
-            'IOCTGO_SOC_THRESHOLD_FOR_STRATEGY': 60
+            'IOCTGO_SOC_THRESHOLD_FOR_STRATEGY': 60,
+            'IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH': 3.5
         }
 
         for prop_name, test_value in test_values.items():
