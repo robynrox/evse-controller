@@ -736,6 +736,26 @@ class TestEdgeCases:
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+
+    def test_negative_export_prices_store_and_plan_nothing(self, agile_tariff):
+        """Agile can go negative; paying to export must never be chosen."""
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = -5.0
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            current_slot=20, current_export_rate_p=-5.0, soc_percent=50
+        ) is True
+        assert agile_tariff.calculate_export_plan(80) == []
+
+    def test_dashboard_renders_with_flat_zero_rates(self, agile_tariff):
+        """All-zero rates collapse the colour range; that must not divide by 0."""
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "agile-rate-strip" in html
+        assert "ioctgo-decision-line" in html
     
     def test_all_slots_already_exporting(self, agile_tariff):
         """Test when all future slots are already planned for export."""
@@ -1098,6 +1118,22 @@ class TestDailySavings:
         assert agile_tariff._saved_today_gbp == pytest.approx(
             avoided - released_cost, rel=0.01
         )
+
+    def test_zero_export_price_books_a_loss_on_export(self, agile_tariff):
+        """Exporting at 0p gives the energy away, so the saving is negative."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-3300, ch2=-3600)
+        self._run(agile_tariff, clock, 1, ch1=-3300, ch2=-3600)
+
+        assert agile_tariff._saved_today_gbp < 0
 
     def test_ledger_survives_midnight_but_daily_total_resets(self, agile_tariff):
         clock = self._start(agile_tariff, 23, 0)
