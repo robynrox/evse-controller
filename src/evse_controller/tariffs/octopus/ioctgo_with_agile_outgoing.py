@@ -842,6 +842,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         DC-side energy and the discharge is divided by its measured discharge
         efficiency.  Resets the daily total at midnight; the ledger persists,
         so energy bought yesterday is priced correctly when it is used today.
+
+        This is a counterfactual cash-flow measure, not a capital-cost one.
+        Solar is costed at the export revenue it displaced, so at a 0p export
+        price it enters free and a later 0p export books nothing.  A negative
+        figure therefore means either bought energy was sold for less than it
+        cost, or stored solar was sold for less than the export it displaced —
+        forgone revenue, not a running cost.
         """
         now = self.get_current_datetime()
         today = now.date()
@@ -1576,12 +1583,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         saved = self._format_saved_today()
         saved_class = "ioctgo-saved" if self._saved_today_gbp >= 0 else "ioctgo-lost"
         title = html_module.escape(
-            "Money saved today by cycling stored energy instead of buying it "
-            "when the house needed it. A discharge earns the import price it "
-            "avoids (or the Agile export price if it goes to the grid), less "
-            "what that energy cost to store, including round-trip losses. A "
-            "charge is only counted when the energy is used, so energy still "
-            "in the battery is not booked yet. Resets at midnight.",
+            "Money saved today versus not cycling the battery. Each discharge "
+            "earns the import price it avoids (or the Agile export price for "
+            "energy sent to the grid), less what that energy cost to store, "
+            "including round-trip losses. Solar is costed at the Agile export "
+            "price it displaced when stored, so a negative figure means bought "
+            "energy was sold for less than it cost, or stored solar was sold "
+            "for less than the export it displaced (forgone revenue, not a "
+            "running cost). A charge is only counted when the energy is used. "
+            "Resets at midnight.",
             quote=True,
         )
         parts.append(

@@ -303,7 +303,9 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   than export; solar that was worth 0p when stored and is exported at 0p books
   £0. A negative figure means either bought energy was sold for less than it
   cost, or stored solar displaced a positive export price and was sold for
-  less — forgone revenue, not a running cost.
+  less — forgone revenue, not a running cost. Solar is costed at the export it
+  displaced, not at the panel's capital cost; no capital is amortised anywhere
+  in this figure.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

@@ -480,10 +480,12 @@ store, because the displaced export was worth nothing. Solar stored at 0p and
 later exported at 0p therefore books £0, not a loss. A negative figure means
 bought energy was sold for less than it cost, or stored solar displaced a
 positive export price and was sold for less; the latter is forgone revenue, not
-a running cost. Negative prices are rejected by the same threshold. The only
-range division in the dashboard is the colour scale, which falls back to a range
-of 1 when every slot has the same price. Zero-capacity and zero-efficiency cases
-are likewise guarded (`max(…, 1e-6)` or an explicit `<= 0` return).
+a running cost. Solar is costed at the export it displaced, not at panel
+capital; no capital is amortised in this figure. Negative prices are rejected
+by the same threshold. The only range division in the dashboard is the colour
+scale, which falls back to a range of 1 when every slot has the same price.
+Zero-capacity and zero-efficiency cases are likewise guarded (`max(…, 1e-6)` or
+an explicit `<= 0` return).
 
 The off-peak charge branch uses `charge_cap_percent() =
 min(config.MAX_CHARGE_PERCENT, 97)`. The config can lower the ceiling but
