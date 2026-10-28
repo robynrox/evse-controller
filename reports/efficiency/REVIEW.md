@@ -475,12 +475,15 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   persists so yesterday's cheap energy is priced correctly today.
 
 Export prices are always **numerators**, never denominators. A 0p price makes
-Tier 1 store, makes the planner find no profitable slot, and books a negative
-saving if energy is exported anyway; a negative price is rejected by the same
-threshold. The only range division in the dashboard is the colour scale, which
-falls back to a range of 1 when every slot has the same price. Zero-capacity
-and zero-efficiency cases are likewise guarded (`max(…, 1e-6)` or an explicit
-`<= 0` return).
+Tier 1 store, makes the planner find no profitable slot, and costs nothing to
+store, because the displaced export was worth nothing. Solar stored at 0p and
+later exported at 0p therefore books £0, not a loss. A negative figure means
+bought energy was sold for less than it cost, or stored solar displaced a
+positive export price and was sold for less; the latter is forgone revenue, not
+a running cost. Negative prices are rejected by the same threshold. The only
+range division in the dashboard is the colour scale, which falls back to a range
+of 1 when every slot has the same price. Zero-capacity and zero-efficiency cases
+are likewise guarded (`max(…, 1e-6)` or an explicit `<= 0` return).
 
 The off-peak charge branch uses `charge_cap_percent() =
 min(config.MAX_CHARGE_PERCENT, 97)`. The config can lower the ceiling but

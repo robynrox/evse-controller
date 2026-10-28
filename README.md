@@ -299,8 +299,11 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   displaces 32.26p daytime import books `32.26p − 7.62p / η_rt` per kWh
   delivered. It resets at local midnight, but the stored-energy ledger carries
   over, so energy bought yesterday is priced with yesterday's cost. Export
-  prices are only ever numerators: 0p or negative prices make the controller
-  store rather than export, and exporting anyway is booked as a loss.
+  prices are only ever numerators. A 0p price makes the controller store rather
+  than export; solar that was worth 0p when stored and is exported at 0p books
+  £0. A negative figure means either bought energy was sold for less than it
+  cost, or stored solar displaced a positive export price and was sold for
+  less — forgone revenue, not a running cost.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

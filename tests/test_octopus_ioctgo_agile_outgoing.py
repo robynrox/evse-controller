@@ -1119,8 +1119,31 @@ class TestDailySavings:
             avoided - released_cost, rel=0.01
         )
 
+    def test_solar_at_zero_price_is_worth_nothing_to_export(self, agile_tariff):
+        """Zero-price solar exported at zero price must book exactly £0.
+
+        No cash changed hands, so there is no operational loss: the ledger
+        cost is zero because the displaced export was worth zero.
+        """
+        clock = self._start(agile_tariff, 12, 0)
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        # 2 kW surplus, charging at 1 kW for five minutes.
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=1000)
+        self._run(agile_tariff, clock, 5, ch1=-1000, ch2=1000)
+        assert agile_tariff._bank_cost_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh > 0.03
+
+        # Export 1 kW at 0p for one minute, with no house load to offset.
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=-1000)
+        self._run(agile_tariff, clock, 1, ch1=-1000, ch2=-1000)
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+
     def test_zero_export_price_books_a_loss_on_export(self, agile_tariff):
-        """Exporting at 0p gives the energy away, so the saving is negative."""
+        """Exporting bought energy at 0p loses the money spent on it."""
         clock = self._start(agile_tariff, 2, 0)
 
         self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
