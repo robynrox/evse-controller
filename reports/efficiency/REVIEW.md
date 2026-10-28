@@ -357,8 +357,8 @@ follows:
 | Old behaviour | New behaviour |
 |---|---|
 | `BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = 0.50` | Fallback/reference solar 3 A → export at the configured current = **0.547** (`SOLAR_CHARGE_REFERENCE_CURRENT` → `EXPORT_REFERENCE_CURRENT`); the live decision uses `η_chg(I_harvest) × η_dis(I_export)` |
-| `SELF_USE_VALUE_THRESHOLD_P = IMPORT_HIGH × 0.50` | `(IMPORT_HIGH − wear) × η_chg(I_harvest) × η_dis(3 A)` = **11.9p at 3 A**, **16.0p at 6 A** with the default 2p wear |
-| `BATTERY_ROUND_TRIP_EFFICIENCY = 0.80` (min export rate) | Grid charge → export at the configured current = **0.833** (efficiency is flat above 16 A), plus the wear cost: `IMPORT_LOW / 0.833 + 2p` = **14.0p** |
+| `SELF_USE_VALUE_THRESHOLD_P = IMPORT_HIGH × 0.50` | `(IMPORT_HIGH − margin) × η_chg(I_harvest) × η_dis(3 A)` = **12.6p at 3 A**, **17.0p at 6 A** with the default 0.3p margin |
+| `BATTERY_ROUND_TRIP_EFFICIENCY = 0.80` (min export rate) | Grid charge → export at the configured current = **0.833** (efficiency is flat above 16 A), plus the profit margin: `IMPORT_LOW / 0.833 + 0.3p` = **12.3p** |
 | `DISCHARGE_LOSS_FACTOR = 0.90` | `STORED_TO_AC_EFFICIENCY = 0.943` at the export current |
 | SoC drop used 59 kWh and 0.90 | Uses **48.3 kWh** effective dashboard capacity and 0.943 |
 | `MAX_EXPORT_POWER_KW` default 7.2 | Remains 7.2 as the non-derated default, but export power is `min(config cap, model AC power at the configured current)`: **3.534 kW** at 16 A, **~7.07 kW** at 32 A |
@@ -386,11 +386,11 @@ day; it now estimates the harvest current from the live grid surplus, rounds
 down to a measured point, and costs the decision there. A future DP can carry
 the actual charge/discharge powers per slot instead.
 
-The self-use threshold is now `(IMPORT_HIGH − wear) × η_chg(I_harvest) ×
+The self-use threshold is now `(IMPORT_HIGH − margin) × η_chg(I_harvest) ×
 η_dis(3 A)` rather than `IMPORT_HIGH × 0.50`. Discharging to cover the house
 base load really does run at about 3 A (~0.72 kW), so the 3 A discharge
-efficiency is the right one there. At a 3 A harvest the threshold is 11.9p; at
-6 A it is 16.0p. It is still a single threshold because the manager does not
+efficiency is the right one there. At a 3 A harvest the threshold is 12.6p; at
+6 A it is 17.0p. It is still a single threshold because the manager does not
 tag stored energy with its acquisition cost. That is a DP concern.
 
 The 3 A floor is kept. Raising the minimum harvest current would only affect
@@ -403,20 +403,32 @@ what the decision does. Forcing a higher floor would be a deliberate grid
 top-up decision, not an efficiency improvement.
 
 The old 0.50 constant also carried an implicit battery-wear margin. The new
-model is pure measured efficiency, so wear is now an explicit cost instead of
-a hidden efficiency haircut. `IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH`
-defaults to **2.0p/kWh discharged** and is used in three places:
+model is pure measured efficiency, so the hurdle is now explicit instead of a
+hidden efficiency haircut. `IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH` defaults to
+**0.3p/kWh delivered** and is used in three places:
 
-- Tier 2: `(IMPORT_HIGH − wear) × η_chg(I_harvest) × η_dis(3 A)`.
-- Tier 3: `(best_future_rate − wear) × η_chg(I_harvest) × η_dis(export)` vs
+- Tier 2: `(IMPORT_HIGH − margin) × η_chg(I_harvest) × η_dis(3 A)`.
+- Tier 3: `(best_future_rate − margin) × η_chg(I_harvest) × η_dis(export)` vs
   the current export rate.
-- Export planning: `IMPORT_LOW / η_chg(max) × η_dis(max) + wear` = **14.0p**
-  by default (12.0p with wear at 0).
+- Export planning: `IMPORT_LOW / η_chg(max) × η_dis(max) + margin` = **12.3p**
+  by default (12.0p with the margin at 0).
 
-Set the value to 0 to disable it. The 2p figure is a policy/assumption value,
-not a measurement from the 180-day report; the DP will carry the same number
-as an explicit arc cost. Do not reintroduce wear by lowering the efficiency
-numbers again — that double-counts and distorts the price threshold.
+This is deliberately a **policy hurdle, not a degradation measurement**. It
+covers marginal wear plus unmodelled actuation and forecast overheads, and it
+gives the controller a little hysteresis so it does not cycle for spreads that
+are within model error. For context, a pessimistic linear replacement-cost
+model (a £5k pack over ~1,500 full cycles) gives ~5.6p/kWh, but Leaf
+degradation is calendar/heat-dominated, so the marginal per-kWh wear is likely
+well under 1p; 0.3p is a provision, not a claim about the pack. Set the value
+to 0 to optimise purely on the measured efficiency model. The DP will carry the
+same value as a provision in its arc cost; if a physical wear term is modelled
+separately later, keep the hurdle as a distinct component rather than folding
+it into efficiency.
+
+Note that "powering up the gear" is largely a fixed cost per transition
+(inverter standby, contactors, pumps, fans), not a per-kWh cost. A per-kWh
+margin is a deliberate simplification that scales with the size of the
+opportunity; a separate fixed £/transition term would be a future refinement.
 
 Missing Octopus rates are **not a special state**. If no prices have been
 received (or only stale prices from a previous day), every current and future

@@ -54,12 +54,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     Tier 2 - Self-Use Value (STORAGE_FLOOR_THRESHOLD_P p-SELF_USE_VALUE_THRESHOLD_P p/kWh, low SoC):
       Store for self-consumption when SoC is below threshold
       (avoids importing at the peak rate later; the effective value is the
-      peak import price less battery wear, times the measured harvest ->
-      self-use round trip, i.e. charge at the actual solar current and
-      discharge at ~3 A)
+      peak import price less the minimum profit margin, times the measured
+      harvest -> self-use round trip, i.e. charge at the actual solar current
+      and discharge at ~3 A)
 
     Tier 3 - Future Export Optimization (all other cases):
-      Store if: (best_future_rate - wear) × solar round trip > current_rate
+      Store if: (best_future_rate - margin) × solar round trip > current_rate
       Export otherwise
 
     Decision summary:
@@ -67,7 +67,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             STORE (rate too trivial)
         elif current_rate < self_use_value and SoC < threshold:
             STORE (self-use value)
-        elif (future_rate - wear) × solar_round_trip > current_rate:
+        elif (future_rate - margin) × solar_round_trip > current_rate:
             STORE (better future value)
         else:
             EXPORT now
@@ -117,8 +117,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         SELF_USE_DISCHARGE_REFERENCE_CURRENT (float): Discharge current assumed
             for self-consumption (~3 A, the house base load)
         EXPORT_REFERENCE_CURRENT (float): Discharge current used for export
-        BATTERY_DEGRADATION_COST_P_PER_KWH (float): Marginal wear cost, p/kWh
-            discharged, applied to stored-energy decisions
+        MIN_PROFIT_MARGIN_P_PER_KWH (float): Minimum profit margin, p/kWh
+            delivered, required before cycling the battery or exporting
     """
 
     # Agile Outgoing tariff codes by region
@@ -149,12 +149,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.EFFICIENCY_MODEL = BatteryEfficiencyModel()
         self.SOC_CAPACITY_KWH = DASHBOARD_SOC_CAPACITY_KWH
 
-        # Marginal battery wear cost, p/kWh discharged.  The old blanket 0.50
+        # Minimum profit margin, p/kWh delivered.  The old blanket 0.50
         # constant carried an implicit wear margin; the measured model is pure
-        # efficiency, so make the margin explicit instead of hiding it in the
-        # efficiency numbers.  The DP will use the same value as an arc cost.
-        self.BATTERY_DEGRADATION_COST_P_PER_KWH = (
-            config.IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH
+        # efficiency, so make the hurdle explicit instead of hiding it in the
+        # efficiency numbers.  It covers marginal wear plus unmodelled
+        # actuation/forecast overheads and is deliberately a policy value, not
+        # a degradation measurement.  The DP will use the same value as a
+        # provision in its arc cost.
+        self.MIN_PROFIT_MARGIN_P_PER_KWH = (
+            config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH
         )
 
         # Reference currents.  The solar harvest current is not fixed: in
@@ -498,14 +501,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return 0.0
 
     def export_min_rate_p(self) -> float:
-        """Minimum export price covering cheap import and battery wear.
+        """Minimum export price covering cheap import and the profit margin.
 
         Cost per kWh delivered to the grid is ``IMPORT_LOW / round_trip``
-        (grid charge at max, export at max) plus the marginal wear cost.
+        (grid charge at max, export at max) plus the minimum profit margin.
         """
         return (
             config.IMPORT_LOW / self.BATTERY_ROUND_TRIP_EFFICIENCY
-            + self.BATTERY_DEGRADATION_COST_P_PER_KWH
+            + self.MIN_PROFIT_MARGIN_P_PER_KWH
         )
 
     def _get_best_unused_export_rate(self, current_slot: int) -> float:
@@ -577,14 +580,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         Charge at the harvest current and discharge at ~3 A to cover the house
         base load, then compare the avoided peak import with the export rate
-        forgone now.  At a 3 A harvest this is (30p - 2p wear) x 0.580 x 0.734
-        = 11.9p; at 6 A it is (30p - 2p) x 0.778 x 0.734 = 16.0p.  Using the
-        export current here (0.943 instead of 0.734) would overstate the value
-        by ~28%.
+        forgone now.  At a 3 A harvest this is (30p - 0.3p margin) x 0.580 x
+        0.734 = 12.6p; at 6 A it is (30p - 0.3p) x 0.778 x 0.734 = 17.0p.
+        Using the export current here (0.943 instead of 0.734) would overstate
+        the value by ~28%.
 
-        The battery wear cost is subtracted from the avoided import price
-        before the round trip, because the wear is incurred per kWh delivered
-        to the house.
+        The minimum profit margin is subtracted from the avoided import price
+        before the round trip, because the margin is required per kWh
+        delivered to the house.
         """
         current = (
             self.SOLAR_CHARGE_REFERENCE_CURRENT
@@ -595,7 +598,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
         )
         return (
-            config.IMPORT_HIGH - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+            config.IMPORT_HIGH - self.MIN_PROFIT_MARGIN_P_PER_KWH
         ) * round_trip
 
     def _estimate_solar_harvest_current(self) -> float:
@@ -724,7 +727,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if best_unused_rate <= 0:
                 return False
             net_future_rate = (
-                best_unused_rate - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+                best_unused_rate - self.MIN_PROFIT_MARGIN_P_PER_KWH
             )
             adjusted_future_rate = net_future_rate * solar_round_trip
             return adjusted_future_rate > current_export_rate_p
@@ -753,22 +756,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): no better future rates available")
             return False
 
-        # Apply wear first, then the round trip at the actual harvest current.
-        # 1 kWh of solar input yields `solar_round_trip` kWh later, each of
-        # which is worth (future export price - wear).
-        net_future_rate = best_unused_rate - self.BATTERY_DEGRADATION_COST_P_PER_KWH
+        # Apply the margin first, then the round trip at the actual harvest
+        # current. 1 kWh of solar input yields `solar_round_trip` kWh later,
+        # each of which must clear (future export price - margin).
+        net_future_rate = best_unused_rate - self.MIN_PROFIT_MARGIN_P_PER_KWH
         adjusted_future_rate = net_future_rate * solar_round_trip
         
         should_use_bidirectional = adjusted_future_rate > current_export_rate_p
         
         if should_use_bidirectional:
             debug(f"IOCTGO_AGILEOUT: STORE (Tier 3): current={current_export_rate_p:.1f}p, "
-                  f"future={best_unused_rate:.1f}p - wear {self.BATTERY_DEGRADATION_COST_P_PER_KWH:.1f}p "
+                  f"future={best_unused_rate:.1f}p - margin {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         else:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): current={current_export_rate_p:.1f}p >= "
-                  f"future={best_unused_rate:.1f}p - wear {self.BATTERY_DEGRADATION_COST_P_PER_KWH:.1f}p "
+                  f"future={best_unused_rate:.1f}p - margin {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
         

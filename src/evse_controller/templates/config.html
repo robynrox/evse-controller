@@ -428,6 +428,12 @@
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('non_export_slot_soc_loss_percent', 1.0) }}" min="0" max="10" step="0.1">
             <small>State of charge loss percentage during load-following (non-export) slots. Used to project available SoC for export planning.</small>
         </div>
+        <div class="form-group">
+            <label for="min_profit_margin_p_per_kwh">Minimum Profit Margin (p/kWh):</label>
+            <input type="number" id="min_profit_margin_p_per_kwh" name="tariffs.ioctgo[min_profit_margin_p_per_kwh]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_profit_margin_p_per_kwh', 0.3) }}" min="0" max="10" step="0.1">
+            <small>Minimum margin required before cycling the battery or exporting. Covers marginal wear and unmodelled overheads; set 0 to optimise purely on measured efficiency.</small>
+        </div>
     </div>
 
     <div class="config-section">

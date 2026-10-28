@@ -39,16 +39,18 @@
 >   when there is no measurement.
 > - Discharge to cover the house load is assumed at **3 A** (~0.72 kW, the base
 >   load), giving a self-use threshold of
->   `(IMPORT_HIGH − wear) × η_chg(I) × η_dis(3 A)` = **11.9p at 3 A**,
->   **16.0p at 6 A** with the default 2p wear. Grid-charge arbitrage and export
->   stay at the configured maximum current.
-> - **Wear is an explicit cost, not an efficiency haircut.**
->   `IOCTGO_BATTERY_DEGRADATION_COST_P_PER_KWH` defaults to **2.0p/kWh
->   discharged** (set 0 to disable). It reduces the Tier 2 avoided-import value,
->   is subtracted from the future rate in Tier 3, and is added to the export
->   planner's minimum rate (`IMPORT_LOW / 0.833 + 2p` = **14.0p**). The 2p value
->   is a policy assumption, not a measurement; the DP will carry it as an
->   explicit arc cost.
+>   `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` = **12.6p at 3 A**,
+>   **17.0p at 6 A** with the default 0.3p margin. Grid-charge arbitrage and
+>   export stay at the configured maximum current.
+> - **The wear/hurdle term is explicit, not an efficiency haircut.**
+>   `IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH` defaults to **0.3p/kWh delivered**
+>   (set 0 to disable). It is a **policy margin**, not a measured degradation
+>   figure: it covers marginal wear plus unmodelled actuation/forecast
+>   overheads and gives the controller hysteresis. It reduces the Tier 2
+>   avoided-import value, is subtracted from the future rate in Tier 3, and is
+>   added to the export planner's minimum rate (`IMPORT_LOW / 0.833 + 0.3p` =
+>   **12.3p**). The DP will carry it as a provision in its arc cost; if a
+>   physical wear term is added later, keep the two distinct.
 > - **Missing rates mean 0p, not a special mode.** If the Octopus API has not
 >   supplied prices (or only stale prices from a previous day), all current and
 >   future export prices are 0p. Tier 1 then stores and the export planner finds

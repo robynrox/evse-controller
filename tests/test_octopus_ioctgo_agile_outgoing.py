@@ -489,40 +489,40 @@ class TestConstants:
             solar_round_trip
         )
         # The self-use value discharge is at ~3 A, not the export current, and
-        # the avoided import price is reduced by the marginal wear cost.
+        # the avoided import price is reduced by the minimum profit margin.
         self_use_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
             agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
             agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
         )
         assert agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT == pytest.approx(3)
-        assert agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH == pytest.approx(2.0)
+        assert agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH == pytest.approx(0.3)
         assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(
-            (config.IMPORT_HIGH - agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH)
+            (config.IMPORT_HIGH - agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH)
             * self_use_round_trip
         )
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(11.92, abs=0.05)
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(12.64, abs=0.05)
 
     def test_self_use_value_rises_with_harvest_current(self, agile_tariff):
         """A strong surplus harvest is worth more than a 3 A trickle."""
         assert agile_tariff.self_use_value_threshold_p(3) == pytest.approx(
-            11.92, abs=0.05
+            12.64, abs=0.05
         )
         assert agile_tariff.self_use_value_threshold_p(6) == pytest.approx(
-            16.0, abs=0.1
+            16.96, abs=0.1
         )
         assert agile_tariff.self_use_value_threshold_p(6) > (
             agile_tariff.self_use_value_threshold_p(3)
         )
 
-    def test_export_min_rate_includes_wear(self, agile_tariff):
-        """Cheap grid -> export must cover the round trip plus degradation."""
-        assert agile_tariff.export_min_rate_p() == pytest.approx(14.0, abs=0.05)
+    def test_export_min_rate_includes_margin(self, agile_tariff):
+        """Cheap grid -> export must cover the round trip plus the margin."""
+        assert agile_tariff.export_min_rate_p() == pytest.approx(12.3, abs=0.05)
 
-        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 0.0
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0.0
         assert agile_tariff.export_min_rate_p() == pytest.approx(12.0, abs=0.05)
 
-    def test_wear_cost_suppresses_a_marginal_cycle(self, agile_tariff):
-        """A 35p future justifies 18.5p at 3 A only without wear."""
+    def test_margin_suppresses_a_marginal_cycle(self, agile_tariff):
+        """A 35p future justifies 18.5p at 3 A only without a margin."""
         kicker = dict(
             current_slot=33,  # best remaining future is 35p at 18:00
             current_export_rate_p=18.5,
@@ -530,10 +530,10 @@ class TestConstants:
             harvest_current_a=3,
         )
 
-        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 0.0
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0.0
         assert agile_tariff._should_use_bidirectional_mode(**kicker) is True
 
-        agile_tariff.BATTERY_DEGRADATION_COST_P_PER_KWH = 2.0
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 2.0
         assert agile_tariff._should_use_bidirectional_mode(**kicker) is False
 
     def test_round_trips_are_current_dependent(self, agile_tariff):

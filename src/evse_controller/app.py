@@ -428,6 +428,9 @@ def config_page():
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
             if non_export_slot_loss is not None:
                 config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+            min_profit_margin = request.form.get('tariffs.ioctgo[min_profit_margin_p_per_kwh]')
+            if min_profit_margin is not None:
+                config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = float(min_profit_margin)
 
             # Update Minimum SoC for Agile Discharge
             min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
