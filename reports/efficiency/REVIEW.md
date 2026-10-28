@@ -452,10 +452,24 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   `Harvest 5 A · aggressive discharge`, `Harvest ≥3 A · conservative
   discharge`, `Do not charge · aggressive discharge ≥3 A`, `Idle — battery
   protection`, or `Charge at 3 A (SoC unknown)`.
-- **Aggressive** means 1 W discharge activation and +0.5 A bias (effective
-  start ~600 W import). **Conservative** means 720 W activation and −0.5 A bias
-  (effective start ~840 W import), so a 600 W house load is deliberately left
-  on the grid.
+- **Aggressive** means a +0.5 A bias with the activation set to the calculated
+  break-even load. **Conservative** means a −0.5 A bias with the activation
+  floored at the Wallbox minimum (3 A, ~720 W), so it never starts a discharge
+  that would have to export; above that floor it covers the load to within
+  ~120 W (the bias).
+- **Discharge ≥N W** is the house import at which a discharge starts. A
+  load-following discharge cannot follow a load smaller than 3 A (~720 W):
+  starting for a 30 W base load sends the other ~690 W to the grid at the
+  prevailing export price. The break-even load is
+  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `P_min` is the
+  minimum output, `H` is the stored cost per delivered kWh plus the profit
+  margin, and the prices are the live import and export rates. If
+  `P_export ≥ H` the forced export alone clears the hurdle, so any import
+  starts it (0 W). If `H ≥ P_import`, even a load equal to `P_min` cannot repay
+  the energy, so it never starts. At 32.26p import, 0p export and `H ≈ 12.1p`
+  the threshold is ~269 W: a 480 W house load is economic, a 30 W one is not.
+  The threshold is recalculated each control cycle from the ledger, so cheap
+  stored energy lowers it and expensive stored energy raises it.
 - **Efficiency** is the measured value the decision actually used
   (`charge`, `discharge`, `round trip`, or `solar → house`). There is no single
   global minimum because the model is current-dependent.

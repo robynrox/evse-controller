@@ -95,9 +95,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     - The car still absorbs surplus solar, since that improves the chance of
       reaching the target.
     - Discharge covers most of the house load but deliberately leaves a small
-      import (720 W activation, -0.5 A bias) so it does not intentionally
-      export. This replaces the fixed SOC_THRESHOLD_FOR_STRATEGY approach in
-      the standard IOCTGO tariff.
+      import (activation floored at the 3 A minimum, -0.5 A bias) so it does
+      not intentionally export. This replaces the fixed
+      SOC_THRESHOLD_FOR_STRATEGY approach in the standard IOCTGO tariff.
     - The shortfall state is recalculated whenever the export plan is
       recalculated (slot boundaries, significant SoC changes, and rate
       refreshes), keeping the plan and discharge mode consistent.
@@ -194,6 +194,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         'N': 'AGILE-OUTGOING-19-05-13',
         'P': 'AGILE-OUTGOING-19-05-13',
     }
+
+    # Activation power that no house load will reach.  Used when even the
+    # minimum discharge output cannot repay the stored energy, so a discharge
+    # must never start rather than exporting at a loss.
+    NEVER_DISCHARGE_ACTIVATION_W = 1_000_000.0
+
+    # Load-following discharge biases.  Positive exports the excess, negative
+    # deliberately leaves a small import.
+    AGGRESSIVE_DISCHARGE_BIAS_A = 0.5
+    CONSERVATIVE_DISCHARGE_BIAS_A = -0.5
 
     # Styles for the compact decision line.  Kept separate from the rate-strip
     # CSS so the line is styled even while the rates are still loading.
@@ -820,6 +830,153 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.GRID_CHARGE_REFERENCE_CURRENT
         )
         return (config.IMPORT_LOW / 100.0) / max(charge_efficiency, 1e-6)
+
+    def _delivered_cost_per_kwh_p(self) -> float:
+        """Ledger cost per kWh delivered from the pack, in p/kWh.
+
+        The ledger carries DC-side kWh, so the cost is divided by the measured
+        discharge efficiency at the minimum current - the current a
+        house-load discharge actually runs at.  When the ledger has no basis
+        (fresh process, or energy that predates it) this uses the off-peak
+        purchase price, which keeps the estimate conservative.
+        """
+        if self._bank_dc_kwh > 0:
+            cost_per_dc_gbp = self._bank_cost_gbp / self._bank_dc_kwh
+        else:
+            cost_per_dc_gbp = self._bank_fallback_cost_per_dc_kwh()
+        discharge_efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
+            self.MIN_DISCHARGE_CURRENT
+        )
+        return cost_per_dc_gbp * 100.0 / max(discharge_efficiency, 1e-6)
+
+    def discharge_activation_threshold_w(
+        self,
+        export_rate_p: float,
+        *,
+        import_rate_p: float | None = None,
+        aggressive: bool = True,
+        voltage: float | None = None,
+    ) -> float:
+        """Smallest house import at which discharging still makes money.
+
+        A load-following discharge cannot follow a small house load: the
+        Wallbox cannot go below ``MIN_DISCHARGE_CURRENT`` (~720 W).  Starting
+        for a 30 W base load therefore sends the other ~690 W to the grid at
+        the prevailing export price, which can cost more than the import it
+        avoids.  This threshold is the break-even load.
+
+        One hour at the minimum output ``P_min`` serving a load ``L``
+        (``L < P_min``) earns ``L * P_import + (P_min - L) * P_export`` and
+        costs ``P_min * H``, where ``H`` is the stored cost per delivered kWh
+        plus the profit margin.  Solving for zero gives::
+
+            G* = P_min * (H - P_export) / (P_import - P_export)
+
+        The aggressive +0.5 A bias moves the output to ``L + b`` once that
+        exceeds ``P_min``, exporting ``b`` watts.  Above that point the
+        break-even is solved separately, allowing another half amp because
+        the Wallbox current is quantised to whole amps::
+
+            L_b = (b + V/2) * (H - P_export) / (P_import - H)
+
+        and the threshold is ``G*`` when it falls in the clamped region, or
+        ``L_b`` when the bias is already pushing power to the grid.
+
+        * ``H >= P_import``: even a load equal to ``P_min`` cannot repay the
+          stored energy, so never start (the export planner handles any
+          profitable export separately).
+        * ``P_export >= H``: the forced export alone clears the hurdle, so
+          any import justifies a start (0 W).
+        * Conservative mode floors the result at ``P_min``: below that it
+          would have to export at the activation point, which is exactly what
+          conservative mode is meant to avoid.
+
+        Args:
+            export_rate_p: Export price that the forced excess would earn.
+            import_rate_p: Import price the discharge avoids.  Defaults to
+                the peak rate, because discharge decisions happen outside
+                off-peak charging.
+            aggressive: True for the +0.5 A bias strategy, False for the
+                -0.5 A conservative strategy.
+            voltage: Live grid voltage in volts.  Defaults to 240 V.
+        """
+        import_p = (
+            config.IMPORT_HIGH if import_rate_p is None else import_rate_p
+        )
+        volts = 240.0 if voltage is None or voltage <= 0 else voltage
+        p_min_w = max(0.0, self.MIN_DISCHARGE_CURRENT) * volts
+        hurdle_p = (
+            self._delivered_cost_per_kwh_p()
+            + self.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+
+        if hurdle_p >= import_p:
+            return self.NEVER_DISCHARGE_ACTIVATION_W
+        if export_rate_p >= hurdle_p:
+            return 0.0
+
+        spread_p = import_p - export_rate_p
+        if p_min_w <= 0 or spread_p <= 0:
+            return self.NEVER_DISCHARGE_ACTIVATION_W
+
+        clamped_break_even_w = p_min_w * (hurdle_p - export_rate_p) / spread_p
+        if not aggressive:
+            return round(max(clamped_break_even_w, p_min_w))
+
+        bias_w = self.AGGRESSIVE_DISCHARGE_BIAS_A * volts
+        if clamped_break_even_w <= p_min_w - bias_w:
+            threshold_w = clamped_break_even_w
+        else:
+            # The bias already exports b W; the break-even for that region is
+            # higher than the clamped one because the extra export must also
+            # repay the stored energy.  Allow half an amp for the Wallbox's
+            # whole-amp current quantisation.
+            threshold_w = (
+                (bias_w + volts / 2.0)
+                * (hurdle_p - export_rate_p)
+                / (import_p - hurdle_p)
+            )
+        # Whole watts: the ledger cost drifts continuously, and a sub-watt
+        # change is not worth re-configuring the Wallbox (or logging) for.
+        return round(max(0.0, threshold_w))
+
+    def _current_import_rate_p(self, day_minute: int) -> float:
+        """Import price in force at *day_minute*, in p/kWh."""
+        return (
+            config.IMPORT_LOW
+            if self.is_off_peak(day_minute)
+            else config.IMPORT_HIGH
+        )
+
+    def _current_discharge_activation_w(
+        self, current_slot: int, day_minute: int, *, aggressive: bool
+    ) -> float:
+        """Discharge activation for the live prices and stored-energy cost."""
+        power = self._read_power_snapshot()
+        return self.discharge_activation_threshold_w(
+            self._current_export_rate_p(current_slot),
+            import_rate_p=self._current_import_rate_p(day_minute),
+            aggressive=aggressive,
+            voltage=power["voltage"] if power else None,
+        )
+
+    @classmethod
+    def _activation_note(cls, activation_w: float) -> str:
+        """One-sentence explanation of a discharge activation threshold."""
+        min_current_a = config.WALLBOX_MIN_DISCHARGE_CURRENT
+        if activation_w >= cls.NEVER_DISCHARGE_ACTIVATION_W:
+            return (
+                f"will not run: even the {min_current_a:.0f} A minimum cannot "
+                "repay the stored energy"
+            )
+        if activation_w <= 0:
+            return (
+                "starts on any import: export covers the stored-energy hurdle"
+            )
+        return (
+            f"starts at {activation_w:.0f} W import: below that the "
+            f"{min_current_a:.0f} A minimum would export more than it saves"
+        )
 
     def _accumulate_daily_savings(self) -> None:
         """Accumulate the money saved today by cycling stored energy.
@@ -1580,6 +1737,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"min gain {snapshot.min_round_trip_saving_p:.1f}p/kWh{suffix}</span>"
             )
 
+        if snapshot.discharge_activation_w is not None:
+            activation_w = snapshot.discharge_activation_w
+            if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                activation_label = "discharge off"
+            elif activation_w <= 0:
+                activation_label = "discharge on any import"
+            else:
+                activation_label = f"discharge ≥{activation_w:.0f} W"
+            title = html_module.escape(
+                "The house import at which discharging starts. A "
+                "load-following discharge cannot go below the Wallbox "
+                f"minimum ({config.WALLBOX_MIN_DISCHARGE_CURRENT:.0f} A, "
+                f"~{config.WALLBOX_MIN_DISCHARGE_CURRENT * 240:.0f} W), so "
+                "starting for a smaller load would export the difference at "
+                "the current Agile price. The threshold is the break-even "
+                "point: "
+                f"stored energy costs {self._delivered_cost_per_kwh_p():.1f}p/kWh "
+                f"delivered plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
+                "margin. It rises when stored energy was expensive and falls "
+                "when the export price it displaces is high.",
+                quote=True,
+            )
+            parts.append(
+                f'<span class="ioctgo-metric" title="{title}">'
+                f"{activation_label}</span>"
+            )
+
         saved = self._format_saved_today()
         saved_class = "ioctgo-saved" if self._saved_today_gbp >= 0 else "ioctgo-lost"
         title = html_module.escape(
@@ -2147,7 +2331,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                discharge_activation_w=0,
             )
             return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
 
@@ -2177,33 +2360,44 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             projection_text = (
                 f"{projected:.0f}%" if projected is not None else "below target"
             )
+            detail_projection = (
+                f"projected 23:30 SoC {projected:.0f}%"
+                if projected is not None
+                else "23:30 SoC projection unavailable"
+            )
+            # Conservative discharge deliberately refuses to start below the
+            # Wallbox's minimum output, so this is usually the 3 A floor.
+            activation_w = self._current_discharge_activation_w(
+                current_slot, dayMinute, aggressive=False
+            )
+            activation_text = self._activation_note(activation_w)
             if charge_at_cap:
                 reason = (
                     f"SoC {battery_level}% at the {charge_cap:.0f}% cap — "
-                    "conserving; discharge starts at 840 W import"
+                    "conserving energy"
                 )
             elif projected is not None:
                 reason = (
                     f"projected 23:30 SoC {projection_text} < "
-                    f"{target_soc:.0f}% target — conserving; discharge starts "
-                    "at 840 W import"
+                    f"{target_soc:.0f}% target — conserving energy"
                 )
             else:
                 reason = (
                     f"projected to miss the {target_soc:.0f}% 23:30 target — "
-                    "conserving; discharge starts at 840 W import"
+                    "conserving energy"
                 )
             self._record_decision(
                 mode=mode,
                 reason=reason,
                 soc_percent=battery_level,
                 detail=(
-                    f"SoC {battery_level}%, projected 23:30 SoC "
-                    f"{projection_text} versus the {target_soc:.0f}% target. "
-                    f"Conservative discharge uses 720 W activation and a "
-                    f"-0.5 A bias, so it starts at about 840 W import and "
-                    f"leaves a 600 W house load on the grid. Harvest estimate "
-                    f"{harvest_current_a:.0f} A."
+                    f"SoC {battery_level}%, {detail_projection}. "
+                    f"Target {target_soc:.0f}%. "
+                    f"Conservative discharge {activation_text}. "
+                    f"Stored energy costs "
+                    f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
+                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    f"Harvest estimate {harvest_current_a:.0f} A."
                     + (
                         f" Charging is inhibited at the {charge_cap:.0f}% cap."
                         if charge_at_cap
@@ -2223,7 +2417,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=False,
-                discharge_activation_w=720,
+                discharge_activation_w=activation_w,
             )
             return (
                 ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
@@ -2261,6 +2455,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 else f"Harvest ≥{self.SOLAR_CHARGE_REFERENCE_CURRENT:.0f} A"
             )
             charge_at_cap = battery_level >= charge_cap
+            activation_w = self._current_discharge_activation_w(
+                current_slot, dayMinute, aggressive=True
+            )
+            activation_text = self._activation_note(activation_w)
             if charge_at_cap:
                 mode = (
                     f"Do not charge — SoC at {charge_cap:.0f}% cap · "
@@ -2283,15 +2481,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
                     f"current export {current_export_rate_p:.1f}p, harvest "
                     f"estimate {harvest_current_a:.0f} A, surplus "
-                    f"{surplus_w:.0f} W. Aggressive discharge starts at 1 W "
-                    "import. Detailed slot and SoC projections are in the log."
+                    f"{surplus_w:.0f} W. Aggressive discharge {activation_text}. "
+                    "Stored energy costs "
+                    f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
+                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    "Detailed slot and SoC projections are in the log."
                     if surplus_w is not None
                     else (
                         f"{decision.tier.capitalize()} decision. SoC "
                         f"{battery_level}%, current export "
                         f"{current_export_rate_p:.1f}p, harvest estimate "
                         f"{harvest_current_a:.0f} A. No live power sample yet. "
-                        "Aggressive discharge starts at 1 W import."
+                        f"Aggressive discharge {activation_text}."
                     )
                 ),
                 target_soc_percent=target_soc,
@@ -2311,7 +2512,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                discharge_activation_w=1,
+                discharge_activation_w=activation_w,
             )
             return ControlState.LOAD_FOLLOW_BIDIRECTIONAL, 3, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Bidirectional (store for better rate)"
         else:
@@ -2322,6 +2523,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 else "no future rate"
             )
             charge_at_cap = battery_level >= charge_cap
+            activation_w = self._current_discharge_activation_w(
+                current_slot, dayMinute, aggressive=True
+            )
+            activation_text = self._activation_note(activation_w)
             reason = (
                 f"SoC {battery_level}% at the {charge_cap:.0f}% cap — covering "
                 "the house instead of storing"
@@ -2339,9 +2544,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 detail=(
                     f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
                     f"current export {current_export_rate_p:.1f}p, best future "
-                    f"{best_future_text}. "
-                    "Aggressive discharge starts at 1 W import and covers the "
-                    "house load. Detailed slot and SoC projections are in the log."
+                    f"{best_future_text}. Aggressive discharge {activation_text}. "
+                    "Stored energy costs "
+                    f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
+                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    "Detailed slot and SoC projections are in the log."
                 ),
                 target_soc_percent=target_soc,
                 projected_soc_at_2330=self._projected_soc_at_2330,
@@ -2357,7 +2564,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=self.MIN_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                discharge_activation_w=1,
+                discharge_activation_w=activation_w,
             )
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Load follow"
 
@@ -2365,11 +2572,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Configure home demand power levels.
 
         In normal operation the existing tier logic chooses between
-        bidirectional and load-follow discharge. When the day is projected to
-        end in an energy shortfall, the system instead stays bidirectional (so
-        surplus solar is absorbed) but discharges conservatively: activation
-        720 W and bias -0.5 A, which covers most of the house load while
-        leaving a small import rather than intentionally exporting.
+        bidirectional and load-follow discharge. The discharge activation is
+        not fixed: it is the smallest house import that repays the stored
+        energy after the forced minimum output is accounted for. When the day
+        is projected to end in an energy shortfall, the system instead stays
+        bidirectional (so surplus solar is absorbed) but discharges
+        conservatively, with the activation floored at the Wallbox minimum
+        (3 A, ~720 W) and a -0.5 A bias, so it covers the house load without
+        intentionally exporting.
         """
         if self.SMART_OCPP_OPERATION:
             self._ocpp_check_turn_on(state, dayMinute)
@@ -2409,10 +2619,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # of the house load and leave a small import rather than intentionally
         # exporting. This replaces the fixed SOC_THRESHOLD_FOR_STRATEGY test.
         if self._energy_shortfall:
-            # 720 W is 3 A at the ~240 V UK supply, so the Wallbox's minimum
-            # discharge current is reached at the activation threshold.
-            evseController.setDischargeActivationPower(720)
-            evseController.setDischargeCurrentBias(-0.5)
+            # Conservative discharge floors the activation at the Wallbox's
+            # minimum output (3 A, ~720 W), so it never starts a discharge
+            # that would have to export at the activation point.
+            activation_w = self._current_discharge_activation_w(
+                current_slot, dayMinute, aggressive=False
+            )
+            evseController.setDischargeActivationPower(activation_w)
+            evseController.setDischargeCurrentBias(
+                self.CONSERVATIVE_DISCHARGE_BIAS_A
+            )
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
             evseController.setChargeActivationPower(720)
             evseController.setChargeCurrentBias(-0.5)
@@ -2427,11 +2643,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=False,
-                discharge_activation_w=720,
+                discharge_activation_w=activation_w,
             )
             debug(
                 f"IOCTGO_AGILEOUT: Shortfall mode configured - conservative "
-                f"discharge (activation=720W, bias=-0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)"
+                f"discharge (activation={activation_w:.0f}W, bias=-0.5, "
+                f"range=3-{self.MAX_DISCHARGE_CURRENT}A)"
             )
             return
 
@@ -2451,12 +2668,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             harvest_current_a=harvest_current_a,
         )
 
+        # Aggressive discharge: start as soon as the forced 3 A minimum earns
+        # back the stored energy.  This is well below 720 W for cheap stored
+        # energy, but not the old blanket 1 W, which exported at a loss.
+        activation_w = self._current_discharge_activation_w(
+            current_slot, dayMinute, aggressive=True
+        )
+
         if decision.use_bidirectional:
-            # Bidirectional mode: prefer small export over any import
-            # Low activation power = discharge even at low surplus
-            # Positive bias = favor higher discharge currents
-            evseController.setDischargeActivationPower(1)
-            evseController.setDischargeCurrentBias(0.5)
+            # Bidirectional mode: prefer small export over any import.
+            # Positive bias = favour higher discharge currents.
+            evseController.setDischargeActivationPower(activation_w)
+            evseController.setDischargeCurrentBias(
+                self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
             evseController.setChargeActivationPower(720)
             evseController.setChargeCurrentBias(-0.5)
@@ -2471,14 +2696,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                discharge_activation_w=1,
+                discharge_activation_w=activation_w,
             )
-            debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation=1W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
+            debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation={activation_w:.0f}W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
             # Standard load-follow discharge. With no shortfall we can afford
             # to cover the house load rather than conserve energy.
-            evseController.setDischargeActivationPower(1)
-            evseController.setDischargeCurrentBias(0.5)
+            evseController.setDischargeActivationPower(activation_w)
+            evseController.setDischargeCurrentBias(
+                self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
             evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
             if charge_at_cap:
                 evseController.setChargeCurrentRange(0, 0)
@@ -2488,7 +2715,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=config.WALLBOX_MIN_DISCHARGE_CURRENT,
                 discharge_max_a=config.WALLBOX_MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                discharge_activation_w=1,
+                discharge_activation_w=activation_w,
             )
 
     def cleanup(self):

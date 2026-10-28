@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
-from evse_controller.drivers.EvseController import ControlState
+from evse_controller.drivers.EvseController import ControlState, EvseController
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.config import config, Config
@@ -671,16 +671,194 @@ class TestEnergyShortfall:
         mock_controller.setChargeCurrentBias.assert_called_with(-0.5)
 
     def test_no_shortfall_configures_aggressive_discharge(self, agile_tariff):
-        """Outside shortfall the aggressive discharge settings are used."""
+        """Outside shortfall the aggressive bias is used, at the break-even."""
         mock_controller = Mock()
         mock_controller.use_new_current_calculation = False
         state = create_test_state(80)
 
+        # Slot 24 (12:00) exports at 9p.  The activation must be the
+        # break-even load, not the old blanket 1 W.
+        expected = agile_tariff.discharge_activation_threshold_w(9.0)
+
         agile_tariff._energy_shortfall = False
         agile_tariff.set_home_demand_levels(mock_controller, state, 12 * 60)
 
-        mock_controller.setDischargeActivationPower.assert_called_with(1)
+        assert 0 < expected < 720
+        mock_controller.setDischargeActivationPower.assert_called_with(expected)
         mock_controller.setDischargeCurrentBias.assert_called_with(0.5)
+
+
+class TestDischargeActivation:
+    """The discharge activation threshold is the economic break-even load.
+
+    The Wallbox cannot discharge below 3 A (~720 W).  Starting for a small
+    house load therefore exports the difference, so the activation must be
+    high enough that the avoided import pays for the forced export.
+    """
+
+    @staticmethod
+    def _ledger(tariff, dc_kwh, cost_gbp):
+        tariff._bank_dc_kwh = dc_kwh
+        tariff._bank_cost_gbp = cost_gbp
+
+    def test_threshold_matches_the_break_even_formula(self, agile_tariff):
+        # 1 GBP for 10 DC kWh = 10p per DC kWh.
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)
+        delivered_p = 10.0 / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        hurdle_p = delivered_p + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        expected = round(
+            720.0 * (hurdle_p - 5.0) / (30.0 - 5.0)
+        )
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0
+        ) == pytest.approx(expected, abs=1)
+
+    def test_any_import_starts_when_export_covers_the_hurdle(self, agile_tariff):
+        """If the forced export alone clears the hurdle, do not wait."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.0)  # free energy
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            1.0, import_rate_p=30.0
+        ) == 0
+
+    def test_never_starts_when_stored_energy_costs_more_than_import(
+        self, agile_tariff
+    ):
+        # 50p per DC kWh, before discharge losses and margin.
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.50)
+
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+
+        assert threshold == agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        assert agile_tariff._activation_note(threshold).startswith("will not run")
+
+    def test_expensive_stored_energy_raises_the_threshold(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.10)
+        cheap = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.20)
+        dear = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+
+        assert dear > cheap
+
+    def test_export_price_lowers_the_threshold(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
+        at_zero = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        at_eight = agile_tariff.discharge_activation_threshold_w(
+            8.0, import_rate_p=30.0
+        )
+
+        assert 0 < at_eight < at_zero < 720
+
+    def test_negative_export_price_raises_the_threshold(self, agile_tariff):
+        """Paying to export means the forced excess hurts more, not less."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
+        at_zero = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        at_minus_five = agile_tariff.discharge_activation_threshold_w(
+            -5.0, import_rate_p=30.0
+        )
+
+        assert at_minus_five > at_zero
+
+    def test_bias_region_raises_the_break_even(self, agile_tariff):
+        """Once +0.5 A exports, the extra 120 W must clear the hurdle too."""
+        efficiency = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        target_hurdle_p = 27.3
+        dc_cost_p = (
+            target_hurdle_p - agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        ) * efficiency
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=dc_cost_p / 100.0)
+
+        hurdle_p = (
+            agile_tariff._delivered_cost_per_kwh_p()
+            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+        clamped = 720.0 * hurdle_p / 30.0
+        biased = 240.0 * hurdle_p / (30.0 - hurdle_p)
+        assert clamped > 600
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        ) == pytest.approx(round(biased), abs=1)
+
+    def test_unaffordable_stored_energy_never_load_follows(self, agile_tariff):
+        """H above import is a job for the export planner, not load-following."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.50)
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            45.0, import_rate_p=30.0
+        ) == agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+
+    def test_conservative_mode_never_starts_below_the_minimum(
+        self, agile_tariff
+    ):
+        """Conservative mode refuses to force an export at the threshold."""
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)
+        aggressive = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0, aggressive=True
+        )
+        conservative = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0, aggressive=False
+        )
+
+        assert aggressive < 720
+        assert conservative == 720
+
+    def test_voltage_scales_the_minimum_output(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.10)
+        at_240 = agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0, voltage=240.0
+        )
+        at_230 = agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0, voltage=230.0
+        )
+
+        assert at_230 == pytest.approx(at_240 * 230.0 / 240.0, abs=1)
+
+    def test_small_load_stays_off_and_affordable_load_starts(
+        self, agile_tariff
+    ):
+        """End-to-end with the controller's own activation comparison."""
+        self._ledger(agile_tariff, dc_kwh=0.0, cost_gbp=0.0)
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        assert 0 < threshold < 720
+
+        def current_for(house_w):
+            return EvseController._compute_wallbox_current(
+                home_power=house_w,
+                discharge_current_min=3,
+                discharge_current_max=32,
+                minimum_discharge_activation_power=threshold,
+                discharge_current_bias=0.5,
+                charge_current_min=3,
+                charge_current_max=16,
+                minimum_charge_activation_power=720,
+                charge_current_bias=-0.5,
+                grid_voltage=240,
+            )
+
+        # A 30 W base load must not force the 3 A minimum and export 690 W.
+        assert current_for(30) == 0
+        assert current_for(threshold - 1) == 0
+        # Above the break-even the clamp to 3 A is economic.
+        assert current_for(threshold + 1) == -3
+        assert current_for(480) == -3
 
 
 class TestEdgeCases:
@@ -875,8 +1053,19 @@ class TestDecisionSnapshot:
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
         assert "conservative discharge" in snapshot.mode
-        assert "840 W" in snapshot.reason
+        assert "conserving" in snapshot.reason
         assert snapshot.discharge_aggressive is False
+        assert snapshot.discharge_activation_w == 720
+
+    def test_dashboard_shows_the_discharge_activation(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        html = agile_tariff.get_dashboard_html()
+
+        assert "discharge ≥720 W" in html
 
     def test_bidirectional_mode_is_aggressive(self, agile_tariff):
         self._set_time(agile_tariff, 10, 0)

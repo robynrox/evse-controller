@@ -271,16 +271,25 @@ efficiency actually used for the decision, the minimum round-trip spread, and
 an estimate of the cost saved today:
 
 ```
-Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   saved today £0.42
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   saved today £0.42
 ```
 
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
   the min/max returned by `get_control_state()` (which load-follow states
   override). When the system is not charging it always states the discharge
-  capability, and labels discharge **aggressive** (1 W activation, +0.5 A bias;
-  covers the house from ~600 W import) or **conservative** (720 W activation,
-  −0.5 A bias; starts at ~840 W import and deliberately leaves a 600 W load on
-  the grid).
+  capability, and labels discharge **aggressive** (+0.5 A bias, activation at
+  the calculated break-even load) or **conservative** (−0.5 A bias, activation
+  floored at the 3 A Wallbox minimum, ~720 W).
+- **Discharge ≥N W** is the house import at which discharging starts. A
+  load-following discharge cannot go below 3 A (~720 W), so starting for a
+  smaller load exports the difference at the current Agile price and can lose
+  money. `N` is the break-even load:
+  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `H` is the
+  stored cost per delivered kWh plus the profit margin. It rises when the
+  stored energy was expensive and falls when the export it displaces is worth
+  more. If the export price alone clears `H`, any import starts it; if `H`
+  exceeds the import price, it never starts. Hover the chip for the current
+  stored-energy cost.
 - **Reason** comes from the same branch that made the decision. Detailed SoC
   projections and slot analysis remain in the text log; hover the line for a
   fuller explanation.
