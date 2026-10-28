@@ -407,10 +407,10 @@ class TestConstants:
         """A blanket 50% is wrong at both ends of the current range."""
         model = agile_tariff.EFFICIENCY_MODEL
 
-        assert model.round_trip_efficiency(3, 16) == pytest.approx(0.567, abs=0.002)
-        assert model.round_trip_efficiency(16, 16) == pytest.approx(0.841, abs=0.002)
-        assert model.round_trip_efficiency(3, 3) == pytest.approx(0.446, abs=0.002)
-        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY == pytest.approx(0.841, abs=0.002)
+        assert model.round_trip_efficiency(3, 16) == pytest.approx(0.547, abs=0.002)
+        assert model.round_trip_efficiency(16, 16) == pytest.approx(0.833, abs=0.002)
+        assert model.round_trip_efficiency(3, 3) == pytest.approx(0.426, abs=0.002)
+        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY == pytest.approx(0.833, abs=0.002)
 
     def test_export_power_and_soc_drop_follow_configured_current(self, agile_tariff):
         """A 32 A default plans the extrapolated power, not the derated limit."""
@@ -419,9 +419,9 @@ class TestConstants:
         # The committed config defaults to 32 A, so export is planned at the
         # extrapolated 32 A AC power (~7.07 kW), capped by MAX_EXPORT_POWER_KW.
         assert agile_tariff.EXPORT_REFERENCE_CURRENT == 32
-        assert agile_tariff.EXPORT_POWER_KW == pytest.approx(7.066, abs=0.002)
-        assert agile_tariff.STORED_TO_AC_EFFICIENCY == pytest.approx(0.947, abs=0.002)
-        # 7.066 AC / 0.947 / 46.5 kWh × 0.5 h × 100 = ~8.0 %/slot
+        assert agile_tariff.EXPORT_POWER_KW == pytest.approx(7.068, abs=0.002)
+        assert agile_tariff.STORED_TO_AC_EFFICIENCY == pytest.approx(0.943, abs=0.002)
+        # 7.068 AC / 0.943 / 48.292 kWh × 0.5 h × 100 = ~7.76 %/slot
         expected_drop = (
             agile_tariff.EXPORT_POWER_KW
             / agile_tariff.STORED_TO_AC_EFFICIENCY
@@ -429,9 +429,9 @@ class TestConstants:
             / agile_tariff.SOC_CAPACITY_KWH
             * 100
         )
-        assert expected_drop == pytest.approx(8.0, abs=0.1)
+        assert expected_drop == pytest.approx(7.76, abs=0.1)
         # And the model itself still honours the measured 16 A point.
-        assert model.discharge_ac_power_kw(16) == pytest.approx(3.533, abs=0.002)
+        assert model.discharge_ac_power_kw(16) == pytest.approx(3.534, abs=0.002)
 
     def test_derated_16a_site_plans_measured_limit(self):
         """A physically derated unit should plan at its configured 16 A."""
@@ -439,7 +439,7 @@ class TestConstants:
             tariff = _build_tariff()
 
         assert tariff.EXPORT_REFERENCE_CURRENT == 16
-        assert tariff.EXPORT_POWER_KW == pytest.approx(3.533, abs=0.002)
+        assert tariff.EXPORT_POWER_KW == pytest.approx(3.534, abs=0.002)
         expected_drop = (
             tariff.EXPORT_POWER_KW
             / tariff.STORED_TO_AC_EFFICIENCY
@@ -447,19 +447,19 @@ class TestConstants:
             / tariff.SOC_CAPACITY_KWH
             * 100
         )
-        assert expected_drop == pytest.approx(4.0, abs=0.1)
+        assert expected_drop == pytest.approx(3.88, abs=0.1)
 
     def test_bulk_discharge_current_uses_measured_soc_rate(self, agile_tariff):
         """The old 0.46 %/h/A fudge is replaced by the measured curve."""
         # 67% -> 60% over 3 hours is 2.33 %/h, between the 3 A and 4 A points.
         current = agile_tariff.calculate_target_discharge_current(67, 960)
-        assert current == pytest.approx(3.47, abs=0.1)
+        assert current == pytest.approx(3.57, abs=0.1)
 
         # 90% -> 60% over 3 hours needs 10 %/h, above the 16 A measured rate
-        # (~8 %/h), so it scales into the extrapolated range but stays within
+        # (~7.8 %/h), so it scales into the extrapolated range but stays within
         # the configured 32 A limit.
         current = agile_tariff.calculate_target_discharge_current(90, 960)
-        assert current == pytest.approx(19.94, abs=0.1)
+        assert current == pytest.approx(20.62, abs=0.1)
         assert current <= agile_tariff.MAX_DISCHARGE_CURRENT
 
         # A tiny difference below the 3 A minimum is not worth discharging.
@@ -520,7 +520,7 @@ class TestEnergyShortfall:
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
         # At 22:00 with 11p current and 10p best future, 10p × solar round trip
-        # (~0.567) < 11p, so the tier logic chooses load-follow discharge.
+        # (~0.547) < 11p, so the tier logic chooses load-follow discharge.
         assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
 
     def test_shortfall_configures_conservative_discharge(self, agile_tariff):

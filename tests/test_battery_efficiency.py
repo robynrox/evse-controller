@@ -20,16 +20,16 @@ def test_efficiency_is_monotonic_with_current(model):
 
     assert charge == sorted(charge)
     assert discharge == sorted(discharge)
-    assert charge[0] == pytest.approx(0.599)
-    assert charge[-1] == pytest.approx(0.888)
-    assert discharge[0] == pytest.approx(0.745)
-    assert discharge[-1] == pytest.approx(0.947)
+    assert charge[0] == pytest.approx(0.580)
+    assert charge[-1] == pytest.approx(0.883)
+    assert discharge[0] == pytest.approx(0.734)
+    assert discharge[-1] == pytest.approx(0.943)
 
 
 def test_efficiency_interpolates_and_clamps(model):
     # Halfway between the 3 A and 4 A points.
-    assert model.charge_efficiency(3.5) == pytest.approx((0.599 + 0.688) / 2)
-    assert model.discharge_efficiency(3.5) == pytest.approx((0.745 + 0.789) / 2)
+    assert model.charge_efficiency(3.5) == pytest.approx((0.580 + 0.674) / 2)
+    assert model.discharge_efficiency(3.5) == pytest.approx((0.734 + 0.780) / 2)
 
     # Efficiency is held at the last measured point above 16 A, even though
     # AC power keeps growing with current.
@@ -40,38 +40,38 @@ def test_efficiency_interpolates_and_clamps(model):
 def test_ac_power_extrapolates_above_measured_range(model):
     """The test unit stops at 16 A; a non-derated unit keeps scaling."""
     # Measured at the derated 16 A test unit.
-    assert model.discharge_ac_power_kw(16) == pytest.approx(3.533, abs=0.001)
-    assert model.charge_ac_power_kw(16) == pytest.approx(3.154, abs=0.001)
+    assert model.discharge_ac_power_kw(16) == pytest.approx(3.534, abs=0.001)
+    assert model.charge_ac_power_kw(16) == pytest.approx(3.153, abs=0.001)
 
     # Constant pack voltage, so P ∝ I above the measured range.
-    assert model.discharge_ac_power_kw(32) == pytest.approx(3.533 * 2, abs=0.002)
-    assert model.charge_ac_power_kw(32) == pytest.approx(3.154 * 2, abs=0.002)
-    assert model.discharge_ac_power_kw(24) == pytest.approx(3.533 * 1.5, abs=0.002)
+    assert model.discharge_ac_power_kw(32) == pytest.approx(3.534 * 2, abs=0.002)
+    assert model.charge_ac_power_kw(32) == pytest.approx(3.153 * 2, abs=0.002)
+    assert model.discharge_ac_power_kw(24) == pytest.approx(3.534 * 1.5, abs=0.002)
 
     # Below the minimum we hold the first point rather than extrapolate down.
     assert model.discharge_ac_power_kw(1) == pytest.approx(0.717, abs=0.001)
 
 
 def test_round_trip_matches_measured_cases(model):
-    assert model.round_trip_efficiency(16, 16) == pytest.approx(0.841, abs=0.002)
-    assert model.round_trip_efficiency(3, 16) == pytest.approx(0.567, abs=0.002)
-    assert model.round_trip_efficiency(16, 3) == pytest.approx(0.662, abs=0.002)
-    assert model.round_trip_efficiency(3, 3) == pytest.approx(0.446, abs=0.002)
+    assert model.round_trip_efficiency(16, 16) == pytest.approx(0.833, abs=0.002)
+    assert model.round_trip_efficiency(3, 16) == pytest.approx(0.547, abs=0.002)
+    assert model.round_trip_efficiency(16, 3) == pytest.approx(0.649, abs=0.002)
+    assert model.round_trip_efficiency(3, 3) == pytest.approx(0.426, abs=0.002)
 
 
 def test_required_price_ratio_is_inverse_round_trip(model):
-    assert model.required_price_ratio(16, 16) == pytest.approx(1 / 0.841, rel=0.003)
-    assert model.required_price_ratio(3, 3) == pytest.approx(1 / 0.446, rel=0.005)
+    assert model.required_price_ratio(16, 16) == pytest.approx(1 / 0.833, rel=0.003)
+    assert model.required_price_ratio(3, 3) == pytest.approx(1 / 0.426, rel=0.005)
 
 
 def test_soc_drop_uses_effective_capacity_and_current(model):
-    # 3.533 kW AC at 16 A for half an hour is ~1.77 kWh AC, ~1.87 kWh stored.
-    drop = model.soc_drop_percent(3.533 * 0.5, 16)
+    # 3.534 kW AC at 16 A for half an hour is ~1.77 kWh AC, ~1.87 kWh stored.
+    drop = model.soc_drop_percent(3.534 * 0.5, 16)
 
     assert model.capacity_kwh == DASHBOARD_SOC_CAPACITY_KWH
-    assert drop == pytest.approx(1.7665 / 0.947 / 46.5 * 100, rel=0.001)
-    assert drop == pytest.approx(4.0, abs=0.1)
-    assert model.ac_energy_for_soc_drop(drop, 16) == pytest.approx(3.533 * 0.5, rel=0.001)
+    assert drop == pytest.approx(1.767 / 0.943 / 48.292 * 100, rel=0.001)
+    assert drop == pytest.approx(3.88, abs=0.1)
+    assert model.ac_energy_for_soc_drop(drop, 16) == pytest.approx(3.534 * 0.5, rel=0.001)
 
 
 def test_discharge_current_inverts_soc_rate(model):

@@ -4,10 +4,14 @@
 generated, but the current best report is worth committing so that the planner
 has a stable efficiency model to use and changes over time are reviewable.
 
-The committed JSON and CSVs were generated before schema version 2, so they do
-not yet contain the `calibration` section or the corrected model columns.
-`REVIEW.md` records the calibration derived from them. Re-run the tool on the
-production machine to regenerate the files with the new columns.
+**Scope — one specific system.** The committed report and the static model in
+`battery_efficiency.py` come from a **2022 Nissan Leaf E+ Tekna** charged
+through a **Wallbox Quasar derated to 16 A**. They show the shape and rough
+magnitude of losses for a similar system. They are **not a universal
+calibration**: battery variant (40 vs 62 kWh Leaf), pack age, charger firmware,
+ambient temperature, cabling and the actual derating will all shift the curves.
+Re-run the tool on your own data before relying on these numbers for a
+different car or charger.
 
 ## Generating a report
 
@@ -124,14 +128,19 @@ The corrected model table adds:
 | `stored_round_trip_efficiency` | Product of the two corrected values |
 | `price_ratio_required` | `1 / stored_round_trip_efficiency` |
 
-Natural-data calibration lands around 45–47 kWh and 0.07–0.13 kW because the
-long discharge sessions reach lower SoC, where the dashboard slope differs.
-The direct 4 h/3 h experiment is the cleaner 46.5 kWh / 0.125 kW figure and is
-the value used by `battery_efficiency.py`.
+Natural-data calibration is sensitive to the segment filters and the SoC range
+sampled. The second run with the standard thresholds gives **48.3 kWh /
+0.1395 kW** (joint fit 48.28 kWh / 0.1117 kW); earlier runs gave 45–47 kWh and
+0.07–0.13 kW. The direct 4 h/3 h experiment gave 46.5–46.7 kWh / 0.125 kW. The
+model uses the second-run automated value because it covers many more sessions;
+the direct experiment remains a cross-check. The ~4% capacity difference is
+within dashboard-SoC quantisation uncertainty, not evidence of degradation.
 
 Use the corrected columns, not the raw AC↔DC columns, when deciding whether a
 storage/export cycle is worth it. A blanket round-trip constant cannot
-represent both a 16 A→16 A cycle (~0.84) and a 3 A→3 A cycle (~0.45).
+represent both a 16 A→16 A cycle (~0.83) and a 3 A→3 A cycle (~0.43). The
+round-trip product is separable: evaluate the actual charge and discharge
+currents, which are usually different.
 
 The static model in `battery_efficiency.py` uses the same 3–16 A table. The
 test Wallbox is derated to 16 A, so that is the top *measured* point, not a
@@ -143,6 +152,11 @@ capability); a derated site must configure its real limit. The
 
 ## Caveats
 
+- **These are one car and one charger.** The source system is a 2022 Leaf E+
+  Tekna and a Wallbox Quasar derated to 16 A. Another Leaf (especially a 40 kWh
+  pack), a non-derated unit, different firmware or a cold climate may show
+  materially different efficiencies. Treat the committed table as an
+  indication, not a calibration of your own system.
 - The measurements come from the Wallbox side, not LeafSpy. Cell resistance and
   any vehicle auxiliary load are not visible at that boundary. The
   `calibration` section estimates the vehicle load, but only from long steady

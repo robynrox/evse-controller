@@ -5,15 +5,24 @@ The numbers come from the 180-day Wallbox efficiency report in
 measured at the Wallbox boundary and corrected for the vehicle's own active
 load, so the efficiencies here describe **AC ↔ pack**, not AC ↔ charger DC.
 
-Three things in this module are easy to get wrong:
+**Scope:** these measurements come from one specific system — a 2022 Nissan
+Leaf E+ Tekna charged through a Wallbox Quasar that is derated to 16 A.  They
+are an indicative starting point for other Leaf/Wallbox combinations, not a
+universal calibration.  Pack age, battery variant (40 vs 62 kWh Leaf), charger
+firmware, ambient temperature and wiring will all shift the curves.  Re-run
+``analyse_efficiency`` on your own data before relying on these numbers for a
+different car or charger.
+
+A few things in this module are easy to get wrong:
 
 * The Leaf dashboard SoC is nonlinear and holds a few kWh in reserve at the
   bottom.  ``DASHBOARD_SOC_CAPACITY_KWH`` is an *effective slope* for predicting
   how fast the dashboard moves, not a degradation measurement and not the
   nominal 59 kWh pack.
 * Efficiency depends on the commanded current, not on SoC (in 15–100% SoC).
-  A single round-trip constant is wrong at both ends: 16 A→16 A is about 0.84
-  while 3 A→3 A is about 0.45.
+  A single round-trip constant is wrong at both ends: a max-rate pair is about
+  0.83 while a 3 A→3 A pair is about 0.43.  Use the actual charge and discharge
+  currents, not a matched-current diagonal.
 * The top of the charge curve tapers and balances, so a charge segment that
   includes it stores less energy than the DC meter suggests.  The per-current
   values below come from the taper-excluded report.
@@ -34,14 +43,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Effective DC energy per 100% of reported dashboard SoC in the linear
-# mid-range.  Derived from repeated max-rate sessions and a direct 4 h charge /
-# 3 h discharge experiment (see REVIEW.md §3).
-DASHBOARD_SOC_CAPACITY_KWH = 46.5
+# mid-range.  The second 180-day calibration (2026-10-27, 16 A headline bin,
+# 186 charge + 161 discharge segments) gives 48.3 kWh; the direct 4 h/3 h
+# experiment gave 46.5–46.7 kWh.  The automated value is used for planning
+# because it covers many more sessions.  This is an effective dashboard slope,
+# not a pack-capacity or degradation claim: 59 kWh remains the nominal /
+# new-capacity prior, and the low-SoC reserve is a separate constraint.
+DASHBOARD_SOC_CAPACITY_KWH = 48.292
 
 # Vehicle-side load present during both charge and discharge.  The AC↔DC
 # efficiency from the report cannot see it; the calibration experiment solves
-# for it from the charge/discharge difference (REVIEW.md §3).
-VEHICLE_ACTIVE_LOAD_KW = 0.125
+# for it from the charge/discharge difference.  The second 180-day fit gives
+# 0.1395 kW; the direct experiment gave 0.125 kW.  The difference is within the
+# calibration uncertainty and is small next to the ~0.23 kW charger loss.
+VEHICLE_ACTIVE_LOAD_KW = 0.1395
 
 
 @dataclass(frozen=True)
@@ -61,21 +76,23 @@ class EfficiencyPoint:
 # power saturates near 3.2 / 3.5 kW.  A non-derated unit at 32 A is planned by
 # extrapolation (see _extrapolate_power), not by these points.
 #
-# The stored efficiencies are the AC↔DC report values corrected with
-# L = VEHICLE_ACTIVE_LOAD_KW (the direct-experiment value).  Natural-data
-# calibration can give a slightly different L; see REVIEW.md §3.
+# The stored efficiencies are the AC↔DC report values from the second 180-day
+# run, corrected with L = VEHICLE_ACTIVE_LOAD_KW.  The contaminated 14 A charge
+# point is omitted so the charge curve stays monotonic; the 12 A and 16 A
+# points bracket it.  These values are specific to the 2022 Leaf E+ Tekna /
+# derated Quasar test system (see the module docstring).
 POINTS: tuple[EfficiencyPoint, ...] = (
-    EfficiencyPoint(3.0, 0.599, 0.745, 0.743, 0.717),
-    EfficiencyPoint(4.0, 0.688, 0.789, 0.980, 0.967),
-    EfficiencyPoint(5.0, 0.749, 0.826, 1.227, 1.219),
-    EfficiencyPoint(6.0, 0.787, 0.859, 1.472, 1.467),
-    EfficiencyPoint(7.0, 0.814, 0.889, 1.715, 1.668),
-    EfficiencyPoint(8.0, 0.837, 0.900, 1.952, 1.919),
-    EfficiencyPoint(9.0, 0.851, 0.911, 2.175, 2.172),
-    EfficiencyPoint(10.0, 0.865, 0.925, 2.417, 2.407),
-    EfficiencyPoint(11.0, 0.873, 0.929, 2.635, 2.624),
-    EfficiencyPoint(12.0, 0.885, 0.935, 2.936, 2.854),
-    EfficiencyPoint(16.0, 0.888, 0.947, 3.154, 3.533),
+    EfficiencyPoint(3.0, 0.580, 0.734, 0.743, 0.717),
+    EfficiencyPoint(4.0, 0.674, 0.780, 0.980, 0.967),
+    EfficiencyPoint(5.0, 0.739, 0.818, 1.227, 1.219),
+    EfficiencyPoint(6.0, 0.778, 0.852, 1.471, 1.467),
+    EfficiencyPoint(7.0, 0.806, 0.882, 1.714, 1.668),
+    EfficiencyPoint(8.0, 0.831, 0.894, 1.949, 1.920),
+    EfficiencyPoint(9.0, 0.847, 0.906, 2.175, 2.172),
+    EfficiencyPoint(10.0, 0.861, 0.920, 2.416, 2.408),
+    EfficiencyPoint(11.0, 0.869, 0.924, 2.633, 2.624),
+    EfficiencyPoint(12.0, 0.880, 0.930, 2.936, 2.854),
+    EfficiencyPoint(16.0, 0.883, 0.943, 3.153, 3.534),
 )
 
 

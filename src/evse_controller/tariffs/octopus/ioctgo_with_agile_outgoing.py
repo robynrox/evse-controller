@@ -73,8 +73,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     The round-trip efficiency is not a single constant: it is the product of
     the measured charge and discharge efficiencies at the relevant currents.
     Solar harvest at 3 A followed by export at the configured current is about
-    0.567 (efficiency is flat above the measured 16 A), a grid-charge → export
-    cycle is about 0.841, and a 3 A→3 A cycle is only about 0.446.
+    0.547 (efficiency is flat above the measured 16 A), a grid-charge → export
+    cycle is about 0.833, and a 3 A→3 A cycle is only about 0.426.
 
     Attributes:
         time_of_use (dict): IOCTGO time periods and rates
@@ -133,8 +133,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.EXPORT_REFERENCE_CURRENT = config.WALLBOX_MAX_DISCHARGE_CURRENT
 
         # Round-trip efficiency for solar storage vs export.  A 3 A harvest
-        # followed by export at the configured current is ~0.567; a 3 A->3 A
-        # cycle is ~0.446.
+        # followed by export at the configured current is ~0.547; a 3 A->3 A
+        # cycle is ~0.426.
         self.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL = (
             self.EFFICIENCY_MODEL.round_trip_efficiency(
                 self.SOLAR_CHARGE_REFERENCE_CURRENT,
@@ -201,13 +201,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # The configured maximum is the Wallbox nameplate (7.2 kW by default,
         # or the derated value if the unit is derated).  If both are present,
         # use the lower of the configured cap and the model's AC power at the
-        # export current, so a 16 A unit plans 3.533 kW and a 32 A unit plans
+        # export current, so a 16 A unit plans 3.534 kW and a 32 A unit plans
         # ~7.07 kW without exceeding a user-imposed export cap.
         self.EXPORT_POWER_KW = min(
             config.MAX_EXPORT_POWER_KW,
             self.EFFICIENCY_MODEL.discharge_ac_power_kw(self.EXPORT_REFERENCE_CURRENT),
         )
-        # Grid charge -> export round trip (~0.841; efficiency is flat above
+        # Grid charge -> export round trip (~0.833; efficiency is flat above
         # the measured 16 A point).
         self.BATTERY_ROUND_TRIP_EFFICIENCY = (
             self.EFFICIENCY_MODEL.round_trip_efficiency(
@@ -215,7 +215,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 self.EXPORT_REFERENCE_CURRENT,
             )
         )
-        # Pack -> AC efficiency at the export current, ~0.947.  Used to turn
+        # Pack -> AC efficiency at the export current, ~0.943.  Used to turn
         # an AC export energy into the stored energy (and SoC drop) it costs.
         self.STORED_TO_AC_EFFICIENCY = self.EFFICIENCY_MODEL.discharge_efficiency(
             self.EXPORT_REFERENCE_CURRENT
