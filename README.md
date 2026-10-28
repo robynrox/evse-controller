@@ -239,7 +239,7 @@ Detailed explanation of each configuration option:
 - `org`: Organization name for InfluxDB
 
 #### Charging Section
-- `max_charge_percent`: Maximum battery charge percentage (0-100)
+- `max_charge_percent`: Maximum battery charge percentage (0-100). The IOCTGO_AGILEOUT tariff hard-limits the effective ceiling to **97%** even if this is set higher, leaving headroom at the top of the pack; set a lower value to stop earlier. The ceiling applies to solar charging too, not just off-peak grid charging — at or above it the charge range is set to zero and the dashboard says `Do not charge — SoC at N% cap`
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
 
@@ -262,6 +262,38 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `max_export_power_kw`: Upper bound on export power in kW (default 7.2, the non-derated Wallbox limit). The planner also caps this at the measured AC power for the configured discharge current (~3.53 kW at 16 A, ~7.07 kW at 32 A)
 - `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
 - `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure
+
+##### IOCTGO_AGILEOUT dashboard
+
+The tariff dashboard shows a compact decision line above the 48-slot Agile
+Outgoing rate strip. It states the current mode, the reason for it, the
+efficiency actually used for the decision, the minimum round-trip spread, and
+an estimate of the cost saved today:
+
+```
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   saved today £0.42
+```
+
+- **Mode** uses the actual Wallbox ranges after load-follow configuration, not
+  the min/max returned by `get_control_state()` (which load-follow states
+  override). When the system is not charging it always states the discharge
+  capability, and labels discharge **aggressive** (1 W activation, +0.5 A bias;
+  covers the house from ~600 W import) or **conservative** (720 W activation,
+  −0.5 A bias; starts at ~840 W import and deliberately leaves a 600 W load on
+  the grid).
+- **Reason** comes from the same branch that made the decision. Detailed SoC
+  projections and slot analysis remain in the text log; hover the line for a
+  fuller explanation.
+- **Efficiency** is the measured value actually used for this decision
+  (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
+  current-dependent, so there is no single global minimum figure.
+- **Minimum gain** is the spread a round trip must clear: free solar → export
+  needs only the profit margin (~0.3p/kWh), while cheap grid → export needs
+  `IMPORT_LOW / round_trip + margin − IMPORT_LOW` (~2.3p/kWh at 10p import).
+- **Saved today** compares actual grid cost with the same house load without
+  any EVSE/battery activity, at today's import and Agile export prices, less
+  the profit margin provision. It resets at local midnight and can be negative
+  while the car is charging from the grid.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

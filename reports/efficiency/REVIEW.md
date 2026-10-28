@@ -436,6 +436,46 @@ export price is treated as **0p**. Tier 1 then stores, and the export planner
 finds no profitable slots. Date-filtered lookups implement this, so a failed
 fetch cannot silently reuse yesterday's prices.
 
+### Dashboard, charge ceiling and savings estimate
+
+The manager now records a `DecisionSnapshot` on each control cycle. The
+three-tier evaluator returns a `StorageDecision` (tier, store/export, reason,
+current/future rate, target slot, round-trip efficiency); the bool API is kept
+as a wrapper. `get_control_state()` writes the high-level decision and
+`set_home_demand_levels()` fills in the **actual** Wallbox ranges, bias and
+activation power, because load-follow states override the min/max returned by
+`get_control_state()`. Detailed SoC projections and slot analysis stay in the
+text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
+
+- **Mode** names the charge/discharge capability rather than just the control
+  enum: `Max charge (16 A)`, `Max discharge (16 A) · aggressive`,
+  `Harvest 5 A · aggressive discharge`, `Harvest ≥3 A · conservative
+  discharge`, `Do not charge · aggressive discharge ≥3 A`, `Idle — battery
+  protection`, or `Charge at 3 A (SoC unknown)`.
+- **Aggressive** means 1 W discharge activation and +0.5 A bias (effective
+  start ~600 W import). **Conservative** means 720 W activation and −0.5 A bias
+  (effective start ~840 W import), so a 600 W house load is deliberately left
+  on the grid.
+- **Efficiency** is the measured value the decision actually used
+  (`charge`, `discharge`, `round trip`, or `solar → house`). There is no single
+  global minimum because the model is current-dependent.
+- **Minimum gain** is the round-trip spread over the input price:
+  `charge_price / η + margin − charge_price`. Free solar → export is just the
+  0.3p margin; cheap grid → export is ~2.3p/kWh at 10p import.
+- **Saved today** compares actual grid cost with a no-EVSE baseline
+  (`grid_w − evse_w`) at the current import rate (off-peak or peak) and current
+  Agile export rate, less the profit margin provision on EVSE throughput. It
+  resets at local midnight and can legitimately be negative while charging.
+
+The off-peak charge branch uses `charge_cap_percent() =
+min(config.MAX_CHARGE_PERCENT, 97)`. The config can lower the ceiling but
+cannot raise it above **97%**; the local test config still sets 90%, so it will
+stop at 90% until that value is raised. The same ceiling applies outside
+off-peak: at or above it `set_home_demand_levels()` sets the charge range to
+zero, so surplus solar cannot push the pack past the cap either. The rate strip
+is 28px (was 40px) and the time axis 14px (was 20px) to make room without
+dropping any of the 48 slots.
+
 ## 8. Reproduction
 
 The report was generated with:

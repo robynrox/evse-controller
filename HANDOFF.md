@@ -84,14 +84,23 @@ completed fixes.
 - Branch: `efficiency-analysis`, based on `main` at `8a373ab`.
 - Recent commits: `98c483c` (analysis tool), `504ede0` (first report),
   `308d606` (measured model, schema-2 tool, tariff-manager integration),
-  `54fa671` (second report).
+  `54fa671` (second report), `86773b0` (efficiency refinement),
+  `6a00577` (cost solar at the actual harvest current),
+  `0ef1e5f` (explicit wear cost and 0p missing rates),
+  `9f46498` (rename wear to minimum profit margin).
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
 - `IOCTGO + Agile Outgoing` now uses the measured current-dependent model.
+- The tariff dashboard has a compact decision line above the 48-slot strip:
+  mode, reason, efficiency actually used, minimum round-trip gain, and an
+  estimate of cost saved today against a no-EVSE baseline.  The strip is 28px
+  (was 40px); detailed SoC/slot analysis stays in the text log.  The off-peak
+  charge ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling
+  zeroes the charge range outside off-peak, so solar cannot overfill the pack.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **291 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **311 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

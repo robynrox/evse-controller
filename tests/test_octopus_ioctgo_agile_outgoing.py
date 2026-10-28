@@ -766,3 +766,314 @@ class TestEdgeCases:
         
         # All future rates are lower, so export now
         assert result is False, "Should export when current rate is best"
+
+
+class TestDecisionSnapshot:
+    """The dashboard snapshot must explain the mode and the reason."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    @staticmethod
+    def _pin_plan(tariff, slot, soc, shortfall=False):
+        """Stop get_control_state() recalculating the plan for this test."""
+        tariff._last_plan_slot = slot
+        tariff._last_plan_soc = soc
+        tariff._prev_battery_level = soc
+        tariff._planned_export_slots = []
+        tariff._plan_cache = []
+        tariff._energy_shortfall = shortfall
+
+    def test_off_peak_charges_to_the_effective_cap(self, agile_tariff):
+        self._set_time(agile_tariff, 23, 45)
+        state = create_test_state(50)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 23 * 60 + 45)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.CHARGE
+        assert snapshot.mode.startswith("Max charge")
+        assert "charging to the" in snapshot.reason
+        assert snapshot.efficiency_label == "charge"
+        assert snapshot.min_round_trip_saving_p == pytest.approx(2.3, abs=0.05)
+
+    def test_off_peak_idles_at_the_cap(self, agile_tariff):
+        self._set_time(agile_tariff, 23, 45)
+        state = create_test_state(95)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 23 * 60 + 45)
+
+        assert control_state == ControlState.DORMANT
+        assert "cap" in agile_tariff._decision_snapshot.mode
+
+    def test_unknown_soc_mode(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        state = create_test_state(-1)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.CHARGE
+        assert agile_tariff._decision_snapshot.mode == "Charge at 3 A (SoC unknown)"
+
+    def test_depleted_battery_mode(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        state = create_test_state(20)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.DORMANT
+        assert agile_tariff._decision_snapshot.mode == "Idle — battery protection"
+
+    def test_export_slot_mode_is_aggressive(self, agile_tariff):
+        self._set_time(agile_tariff, 18, 0)
+        self._pin_plan(agile_tariff, 36, 80)
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 18 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.mode.startswith("Max discharge")
+        assert "aggressive" in snapshot.mode
+        assert "18:00–18:30" in snapshot.reason
+        assert snapshot.efficiency_label == "discharge"
+
+    def test_shortfall_mode_is_conservative(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        state = create_test_state(30)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "conservative discharge" in snapshot.mode
+        assert "840 W" in snapshot.reason
+        assert snapshot.discharge_aggressive is False
+
+    def test_bidirectional_mode_is_aggressive(self, agile_tariff):
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 80)
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 10 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "aggressive discharge" in snapshot.mode
+        assert snapshot.discharge_aggressive is True
+        assert snapshot.efficiency_label in ("round trip", "solar → house")
+
+    def test_load_follow_states_do_not_charge(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert snapshot.mode.startswith("Do not charge")
+        assert "aggressive discharge" in snapshot.mode
+
+    def test_soc_at_cap_stops_solar_charging(self, agile_tariff):
+        """At the cap the mode says so, and no charge range is offered."""
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 95)
+        state = create_test_state(95)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 10 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "SoC at" in snapshot.mode
+        assert "cap" in snapshot.mode
+        assert snapshot.charge_min_a == 0
+        assert snapshot.charge_max_a == 0
+
+
+class TestChargeCap:
+    """Charging cannot exceed 97% even if the config asks for more."""
+
+    def test_cap_is_limited_to_97(self):
+        original = config.MAX_CHARGE_PERCENT
+        try:
+            config.MAX_CHARGE_PERCENT = 100
+            tariff = _build_tariff()
+            assert tariff.charge_cap_percent() == 97
+        finally:
+            config.MAX_CHARGE_PERCENT = original
+
+    def test_cap_can_be_lowered_by_config(self):
+        original = config.MAX_CHARGE_PERCENT
+        try:
+            config.MAX_CHARGE_PERCENT = 80
+            tariff = _build_tariff()
+            assert tariff.charge_cap_percent() == 80
+        finally:
+            config.MAX_CHARGE_PERCENT = original
+
+    def test_solar_charge_range_stops_at_cap(self, agile_tariff):
+        """Surplus solar must not keep charging a pack that is at the cap."""
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff._planned_export_slots = []
+        agile_tariff._energy_shortfall = False
+
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(50), 10 * 60
+        )
+        controller.setChargeCurrentRange.assert_called_with(
+            3, agile_tariff.MAX_CHARGE_CURRENT
+        )
+
+        controller.reset_mock()
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(95), 10 * 60
+        )
+        controller.setChargeCurrentRange.assert_called_with(0, 0)
+
+    def test_shortfall_charge_range_stops_at_cap(self, agile_tariff):
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff._planned_export_slots = []
+        agile_tariff._energy_shortfall = True
+
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(95), 12 * 60
+        )
+
+        controller.setChargeCurrentRange.assert_called_with(0, 0)
+
+
+class TestMinimumRoundTripSaving:
+    """The dashboard can state the spread a round trip must clear."""
+
+    def test_grid_spread_includes_efficiency_and_margin(self, agile_tariff):
+        expected = (
+            config.IMPORT_LOW / agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY
+            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+            - config.IMPORT_LOW
+        )
+        assert agile_tariff.minimum_round_trip_saving_grid_p() == pytest.approx(
+            expected
+        )
+        assert agile_tariff.minimum_round_trip_saving_grid_p() == pytest.approx(
+            2.3, abs=0.05
+        )
+
+    def test_solar_spread_is_just_the_margin(self, agile_tariff):
+        assert agile_tariff.minimum_round_trip_saving_solar_p() == pytest.approx(
+            agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+
+
+class TestDailySavings:
+    """The running saving is measured against a no-storage baseline."""
+
+    def test_saving_accumulates_and_resets_at_midnight(self, agile_tariff):
+        clock = [datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)]
+        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
+
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=0, ch2Watts=-1000, voltage=240
+        )
+        agile_tariff.evseController = controller
+
+        # First sample primes the baseline.
+        agile_tariff._accumulate_daily_savings()
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+
+        # One minute later the house has been supplied by the EVSE, so the
+        # no-storage baseline would have imported 1 kW at the 30p peak rate.
+        clock[0] = clock[0].replace(minute=1)
+        agile_tariff._accumulate_daily_savings()
+        expected = 1.0 * (1 / 60) * config.IMPORT_HIGH / 100
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, abs=0.0002
+        )
+
+        # A new day resets the accumulator.
+        clock[0] = clock[0] + timedelta(days=1)
+        agile_tariff._accumulate_daily_savings()
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+
+    def test_charging_shows_as_a_cost(self, agile_tariff):
+        """Grid charging is a cost relative to doing nothing."""
+        clock = [datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)]
+        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
+
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=3000, ch2Watts=3000, voltage=240
+        )
+        agile_tariff.evseController = controller
+
+        agile_tariff._accumulate_daily_savings()
+        clock[0] = clock[0].replace(minute=1)
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._saved_today_gbp < 0
+
+
+class TestDashboardModeLine:
+    """The compact decision line sits above the 48-slot strip."""
+
+    def test_mode_line_precedes_the_strip(self, agile_tariff):
+        agile_tariff._record_decision(
+            mode="Harvest 5 A · aggressive discharge",
+            reason="future 24.6p at 16:30–17:00 × 73% = 17.7p now",
+            soc_percent=47,
+            efficiency_pct=73,
+            efficiency_label="round trip",
+            min_round_trip_saving_p=0.3,
+            min_round_trip_saving_basis="solar",
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        mode_pos = html.find("ioctgo-decision-line")
+        strip_pos = html.find("agile-rate-strip")
+        assert mode_pos != -1
+        assert strip_pos != -1
+        assert mode_pos < strip_pos
+        assert "Harvest 5 A" in html
+        assert "round trip" in html
+        assert "min gain 0.3p/kWh" in html
+        assert "saved today" in html
+
+    def test_strip_is_compact(self, agile_tariff):
+        agile_tariff._record_decision(
+            mode="Idle — battery protection",
+            reason="SoC at the reserve",
+            soc_percent=20,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert 'class="agile-rate-strip" style="height:28px' in html
+
+    def test_mode_line_still_shows_while_rates_load(self, agile_tariff):
+        agile_tariff.agile_rates = []
+        agile_tariff._record_decision(
+            mode="Max charge (32 A)",
+            reason="off-peak",
+            soc_percent=50,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "ioctgo-decision-line" in html
+        assert "Max charge (32 A)" in html
+        assert "Loading Agile Outgoing rates" in html
+

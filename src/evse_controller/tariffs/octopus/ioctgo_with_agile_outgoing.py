@@ -9,7 +9,63 @@ import queue
 from typing import Optional
 import urllib.request
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+import html as html_module
+
+
+@dataclass
+class StorageDecision:
+    """Structured result of the three-tier store/export evaluation.
+
+    ``_should_use_bidirectional_mode()`` keeps returning a bool for existing
+    callers; this object carries the reasoning the dashboard needs without
+    recomputing the decision.
+    """
+
+    use_bidirectional: bool
+    tier: str
+    reason: str
+    current_rate_p: float
+    future_rate_p: Optional[float] = None
+    target_slot: Optional[int] = None
+    round_trip: Optional[float] = None
+    efficiency_label: str = ""
+
+
+@dataclass
+class DecisionSnapshot:
+    """Dashboard-facing record of the last control decision.
+
+    Written by the control-loop thread in ``get_control_state()`` and
+    ``set_home_demand_levels()``, read by Flask when it renders the dashboard.
+    A single reference assignment is atomic in CPython, and the dashboard
+    tolerates a snapshot that is up to one control cycle (~20 s) old.
+    """
+
+    updated_at: datetime
+    mode: str
+    reason: str
+    detail: str = ""
+    soc_percent: int = -1
+    target_soc_percent: Optional[float] = None
+    projected_soc_at_2330: Optional[float] = None
+    current_rate_p: Optional[float] = None
+    target_rate_p: Optional[float] = None
+    target_slot: Optional[int] = None
+    harvest_current_a: Optional[float] = None
+    surplus_w: Optional[float] = None
+    efficiency_pct: Optional[float] = None
+    efficiency_label: str = ""
+    min_round_trip_saving_p: Optional[float] = None
+    min_round_trip_saving_basis: str = ""
+    charge_min_a: Optional[float] = None
+    charge_max_a: Optional[float] = None
+    discharge_min_a: Optional[float] = None
+    discharge_max_a: Optional[float] = None
+    discharge_aggressive: bool = True
+    charge_activation_w: Optional[float] = None
+    discharge_activation_w: Optional[float] = None
 
 
 class IOctGoWithAgileOutgoingTariff(Tariff):
@@ -138,6 +194,47 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         'N': 'AGILE-OUTGOING-19-05-13',
         'P': 'AGILE-OUTGOING-19-05-13',
     }
+
+    # Styles for the compact decision line.  Kept separate from the rate-strip
+    # CSS so the line is styled even while the rates are still loading.
+    DECISION_LINE_CSS = """
+    <style>
+    .ioctgo-decision-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 2px 10px;
+        font-size: 12px;
+        line-height: 1.35;
+        color: #444;
+        margin: 8px 0 0;
+        padding: 0 2px;
+    }
+    .ioctgo-decision-line .ioctgo-mode {
+        color: #111;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .ioctgo-decision-line .ioctgo-reason { color: #555; }
+    .ioctgo-decision-line .ioctgo-metric {
+        color: #666;
+        white-space: nowrap;
+    }
+    .ioctgo-decision-line .ioctgo-saved {
+        color: #2e7d32;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .ioctgo-decision-line .ioctgo-lost {
+        color: #c62828;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    @media (max-width: 700px) {
+        .ioctgo-decision-line { font-size: 11px; gap: 2px 8px; }
+    }
+    </style>
+    """
 
     def __init__(self, command_queue: Optional[queue.Queue] = None, battery_capacity_kwh=None,
                  bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
@@ -293,6 +390,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # energy should be conserved rather than exported. Updated whenever
         # the export plan is recalculated so the two stay in step.
         self._energy_shortfall = False
+        self._projected_soc_at_2330 = None
+
+        # Dashboard snapshot of the last control decision.  Written by the
+        # control loop; the dashboard only reads it.
+        self._decision_snapshot = None
+
+        # Estimated saving versus the same house load with no EVSE/battery
+        # activity, accumulated in GBP and reset at local midnight.
+        self._savings_day = None
+        self._saved_today_gbp = 0.0
+        self._savings_last_time = None
+        self._savings_last_grid_w = 0.0
+        self._savings_last_baseline_w = 0.0
+        self._savings_last_evse_w = 0.0
 
         # Ensure OCPP is off
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -329,6 +440,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         if current_soc_percent < 0:
             self._energy_shortfall = False
+            self._projected_soc_at_2330 = None
             return False
 
         now = self.get_current_datetime()
@@ -338,6 +450,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             current_soc_percent
             - slots_remaining * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         )
+        self._projected_soc_at_2330 = projected_soc_at_2330
 
         target_soc = config.MIN_AGILE_DISCHARGE_SOC
         self._energy_shortfall = projected_soc_at_2330 < target_soc
@@ -513,15 +626,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     def _get_best_unused_export_rate(self, current_slot: int) -> float:
         """Find the best export rate among slots not selected for export.
-        
+
         This is used to determine whether bidirectional load-following is more
         beneficial than exporting at the current slot's rate.
-        
+
         Args:
             current_slot: Current slot index (0-47)
-            
+
         Returns:
             Best export rate (p/kWh) from unused slots, or 0 if none available
+        """
+        _, best_rate = self._get_best_unused_export_slot_rate(current_slot)
+        return best_rate
+
+    def _get_best_unused_export_slot_rate(
+        self, current_slot: int
+    ) -> tuple[Optional[int], float]:
+        """Best unused export slot and its rate, or ``(None, 0.0)``.
+
+        The slot is the *first* slot carrying the best rate, so the dashboard
+        can say which half-hour the decision is aiming at.
         """
         # Build list of (slot_index, rate) for all slots that:
         # - Are in the future (or current slot)
@@ -549,12 +673,58 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             unused_slot_rates.append((slot_idx, rate_p))
         
         if not unused_slot_rates:
-            return 0.0
+            return None, 0.0
         
-        # Return the highest rate among unused slots
+        # Return the highest rate among unused slots (first slot on a tie).
         best_rate = max(r[1] for r in unused_slot_rates)
+        best_slot = next(slot for slot, rate in unused_slot_rates if rate == best_rate)
         debug(f"IOCTGO_AGILEOUT: Best unused export rate: {best_rate:.1f}p/kWh")
-        return best_rate
+        return best_slot, best_rate
+
+    def minimum_round_trip_saving_p(
+        self, charge_price_p: float, round_trip_efficiency: float
+    ) -> float:
+        """Minimum saving per kWh of input needed for a round trip.
+
+        A round trip turns 1 kWh of input into ``round_trip_efficiency`` kWh
+        of output, and each output kWh must clear the profit margin.  The
+        break-even input price is ``charge_price / efficiency + margin``, so
+        the minimum saving is::
+
+            charge_price / efficiency + margin - charge_price
+
+        For grid import at ``IMPORT_LOW`` and the ~0.833 grid round trip this
+        is ~2.3p/kWh; for free solar it collapses to the margin itself
+        (~0.3p/kWh).
+        """
+        if round_trip_efficiency <= 0:
+            return 0.0
+        return (
+            charge_price_p / round_trip_efficiency
+            + self.MIN_PROFIT_MARGIN_P_PER_KWH
+            - charge_price_p
+        )
+
+    def minimum_round_trip_saving_solar_p(self) -> float:
+        """Minimum saving for free solar -> export, i.e. just the margin."""
+        return self.minimum_round_trip_saving_p(
+            0.0, self.solar_export_round_trip()
+        )
+
+    def minimum_round_trip_saving_grid_p(self) -> float:
+        """Minimum saving for cheap grid import -> export."""
+        return self.minimum_round_trip_saving_p(
+            config.IMPORT_LOW, self.BATTERY_ROUND_TRIP_EFFICIENCY
+        )
+
+    def charge_cap_percent(self) -> float:
+        """Effective charge ceiling: the configured cap, hard-limited to 97%.
+
+        Charging to 100% is hard on the pack and leaves no room for
+        regenerative energy.  The config can lower the ceiling (for example
+        ``max_charge_percent: 90``), but it cannot raise it above 97%.
+        """
+        return min(config.MAX_CHARGE_PERCENT, 97)
 
     def solar_export_round_trip(self, harvest_current_a: float | None = None) -> float:
         """Round trip for solar harvest -> later export.
@@ -601,6 +771,114 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             config.IMPORT_HIGH - self.MIN_PROFIT_MARGIN_P_PER_KWH
         ) * round_trip
 
+    def _read_power_snapshot(self) -> Optional[dict]:
+        """Read the latest grid/EVSE channels, or ``None`` if unavailable.
+
+        ``getHomeWatts()`` is ``ch1 - ch2`` (grid minus EVSE), so the house
+        load without the EVSE is the baseline a no-storage system would show
+        on the grid.  Its negative is the surplus available to the car.
+        """
+        controller = getattr(self, "evseController", None)
+        power = getattr(controller, "current_grid_power", None) if controller else None
+        if power is None:
+            return None
+
+        try:
+            grid_w = float(power.ch1Watts)
+            evse_w = float(power.ch2Watts)
+            baseline_w = grid_w - evse_w
+            voltage = float(power.voltage) if power.voltage and power.voltage > 0 else 240.0
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+        return {
+            "grid_w": grid_w,
+            "evse_w": evse_w,
+            "baseline_w": baseline_w,
+            "surplus_w": -baseline_w,
+            "voltage": voltage,
+        }
+
+    def _grid_interval_cost_gbp(
+        self,
+        grid_w: float,
+        import_rate_p: float,
+        export_rate_p: float,
+        hours: float,
+    ) -> float:
+        """Cost of a grid power level over an interval; export is negative."""
+        if hours <= 0:
+            return 0.0
+        energy_kwh = grid_w / 1000.0 * hours
+        if energy_kwh >= 0:
+            return energy_kwh * import_rate_p / 100.0
+        return energy_kwh * export_rate_p / 100.0
+
+    def _accumulate_daily_savings(self) -> None:
+        """Accumulate today's estimated saving against a no-storage baseline.
+
+        The baseline is the house load *excluding* the EVSE, so the result
+        measures what running the EVSE/battery system has saved (or cost)
+        compared with simply importing/exporting that load.  It uses the
+        current import rate (off-peak or peak) and the current Agile export
+        rate, and subtracts the minimum profit margin as a provision for
+        battery throughput.  Resets at local midnight.
+        """
+        now = self.get_current_datetime()
+        today = now.date()
+        if self._savings_day != today:
+            self._savings_day = today
+            self._saved_today_gbp = 0.0
+            self._savings_last_time = None
+            self._savings_last_grid_w = 0.0
+            self._savings_last_baseline_w = 0.0
+            self._savings_last_evse_w = 0.0
+
+        power = self._read_power_snapshot()
+        if power is None:
+            return
+
+        if self._savings_last_time is None:
+            self._savings_last_time = now
+            self._savings_last_grid_w = power["grid_w"]
+            self._savings_last_baseline_w = power["baseline_w"]
+            self._savings_last_evse_w = power["evse_w"]
+            return
+
+        elapsed = (now - self._savings_last_time).total_seconds()
+        if elapsed <= 0:
+            return
+        # Cap a long gap (process suspended, clock jump) so a single sample
+        # cannot invent a large saving.
+        hours = min(elapsed, 300.0) / 3600.0
+
+        day_minute = now.hour * 60 + now.minute
+        import_rate_p = config.IMPORT_LOW if self.is_off_peak(day_minute) else config.IMPORT_HIGH
+        current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        export_rate_p = self._current_export_rate_p(current_slot)
+
+        # Trapezoidal average over the sample interval.
+        grid_w = 0.5 * (self._savings_last_grid_w + power["grid_w"])
+        baseline_w = 0.5 * (self._savings_last_baseline_w + power["baseline_w"])
+        evse_w = 0.5 * (self._savings_last_evse_w + power["evse_w"])
+
+        actual_cost = self._grid_interval_cost_gbp(
+            grid_w, import_rate_p, export_rate_p, hours
+        )
+        baseline_cost = self._grid_interval_cost_gbp(
+            baseline_w, import_rate_p, export_rate_p, hours
+        )
+        provision = (
+            abs(evse_w) / 1000.0 * hours
+            * self.MIN_PROFIT_MARGIN_P_PER_KWH / 100.0
+        )
+        self._saved_today_gbp += baseline_cost - actual_cost - provision
+
+        self._savings_last_time = now
+        self._savings_last_grid_w = power["grid_w"]
+        self._savings_last_baseline_w = power["baseline_w"]
+        self._savings_last_evse_w = power["evse_w"]
+
     def _estimate_solar_harvest_current(self) -> float:
         """Estimate the charge current the load-following loop will use.
 
@@ -615,17 +893,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         an instantaneous estimate, re-evaluated each control cycle; a PV
         forecast would be better, and the DP replaces this heuristic.
         """
+        power_snapshot = self._read_power_snapshot()
+        if power_snapshot is None:
+            return self.SOLAR_CHARGE_REFERENCE_CURRENT
+
+        surplus_w = power_snapshot["surplus_w"]
+        voltage = power_snapshot["voltage"]
+
         controller = getattr(self, "evseController", None)
-        power = getattr(controller, "current_grid_power", None) if controller else None
-        if power is None:
-            return self.SOLAR_CHARGE_REFERENCE_CURRENT
-
-        try:
-            surplus_w = -power.getHomeWatts()
-            voltage = power.voltage if power.voltage and power.voltage > 0 else 240.0
-        except Exception:
-            return self.SOLAR_CHARGE_REFERENCE_CURRENT
-
         bias = getattr(controller, "chargeCurrentBias", -0.5)
         amps = surplus_w / voltage + bias
         amps = max(
@@ -639,50 +914,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         return estimate
 
-    def _should_use_bidirectional_mode(
+    @staticmethod
+    def _slot_range_label(slot_idx: int) -> str:
+        """Human-readable half-hour range for a slot index, e.g. 16:30–17:00."""
+        start_minute = slot_idx * 30
+        end_minute = start_minute + 30
+        return (
+            f"{start_minute // 60 % 24:02d}:{start_minute % 60:02d}"
+            f"–{end_minute // 60 % 24:02d}:{end_minute % 60:02d}"
+        )
+
+    def _evaluate_storage_decision(
         self,
         current_slot: int,
         current_export_rate_p: float,
         soc_percent: float,
         harvest_current_a: float | None = None,
-    ) -> bool:
-        """Determine if bidirectional load-following is better than export.
+    ) -> StorageDecision:
+        """Evaluate the three-tier store/export decision.
 
-        Uses a three-tier decision process based on export rate and battery SoC:
-
-        **Tier 1: Storage Floor (always store)**
-        When export rate is below STORAGE_FLOOR_THRESHOLD_P, the rate
-        is too trivial to justify exporting. Always store for future use.
-
-        **Tier 2: Self-Use Value (store if SoC is low)**
-        When export rate is below the self-use value:
-        - Dynamic SoC threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
-        - If SoC < dynamic_threshold: Store energy for self-consumption
-          (avoids importing at peak rate later, and attempts to reach desired SoC target at 23:30)
-        - If SoC >= dynamic_threshold: Continue to Tier 3
-
-        This dynamic threshold approach pushes the system to "get back on the curve" by accounting
-        for expected SoC loss in remaining slots, avoiding the need for grid import later.
-
-        **Tier 3: Future Export Optimization (store for better rate)**
-        When export rate is above self-use threshold, compare against best
-        future unused rate adjusted for efficiency:
-        - Store if: best_future_rate × solar_round_trip > current_rate
-        - Export otherwise
-
-        Decision summary:
-        ```
-        if current_rate < STORAGE_FLOOR_THRESHOLD_P:
-            STORE (rate too trivial)
-        elif current_rate < self_use_value:
-            dynamic_threshold = min_agile_soc + (remaining_slots × non_export_slot_loss)
-            if SoC < dynamic_threshold:
-                STORE (self-use value + curve correction)
-            else:
-                evaluate Tier 3
-        else:
-            evaluate Tier 3
-        ```
+        This is the single source of truth for the decision.  The bool-returning
+        ``_should_use_bidirectional_mode()`` wrapper preserves the old API; the
+        dashboard reads the structured result through ``get_control_state()``.
 
         The solar round trip depends on the harvest current.  ``harvest_current_a``
         should be the current the load-following loop will actually use (from
@@ -692,16 +945,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Missing rate data is not a special case: callers pass 0p when no
         current/future export price is known, and the normal tier logic then
         stores rather than exporting.
-
-        Args:
-            current_slot: Current slot index (0-47)
-            current_export_rate_p: Current slot's export rate (p/kWh)
-            soc_percent: Current battery state of charge (%)
-            harvest_current_a: Expected solar charge current (A), or None to
-                use the minimum
-
-        Returns:
-            True if bidirectional mode should be used
         """
         # Calculate remaining slots until 23:30 (slot 47)
         # This is used for dynamic SoC threshold calculation in Tier 2
@@ -709,6 +952,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         solar_round_trip = self.solar_export_round_trip(harvest_current_a)
         self_use_value_p = self.self_use_value_threshold_p(harvest_current_a)
+        harvest_current = (
+            self.SOLAR_CHARGE_REFERENCE_CURRENT
+            if harvest_current_a is None
+            else harvest_current_a
+        )
 
         # === TIER 1: Storage Floor ===
         # Below this rate, always store - rate is too trivial to export.
@@ -719,18 +967,53 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"IOCTGO_AGILEOUT: STORE (Tier 1): rate {current_export_rate_p:.1f}p "
                 f"< floor {self.STORAGE_FLOOR_THRESHOLD_P:.1f}p"
             )
-            return True
+            return StorageDecision(
+                use_bidirectional=True,
+                tier="storage floor",
+                reason=(
+                    f"export {current_export_rate_p:.1f}p is below the "
+                    f"{self.STORAGE_FLOOR_THRESHOLD_P:.1f}p floor — storing solar"
+                ),
+                current_rate_p=current_export_rate_p,
+                round_trip=solar_round_trip,
+                efficiency_label="round trip",
+            )
 
         # Unknown SoC - fall back to export optimization only
         if soc_percent < 0:
-            best_unused_rate = self._get_best_unused_export_rate(current_slot)
+            target_slot, best_unused_rate = self._get_best_unused_export_slot_rate(
+                current_slot
+            )
             if best_unused_rate <= 0:
-                return False
+                return StorageDecision(
+                    use_bidirectional=False,
+                    tier="future export",
+                    reason="SoC unknown and no future export prices — covering the house",
+                    current_rate_p=current_export_rate_p,
+                    round_trip=solar_round_trip,
+                    efficiency_label="round trip",
+                )
             net_future_rate = (
                 best_unused_rate - self.MIN_PROFIT_MARGIN_P_PER_KWH
             )
             adjusted_future_rate = net_future_rate * solar_round_trip
-            return adjusted_future_rate > current_export_rate_p
+            use_bidirectional = adjusted_future_rate > current_export_rate_p
+            return StorageDecision(
+                use_bidirectional=use_bidirectional,
+                tier="future export",
+                reason=(
+                    f"(future {best_unused_rate:.1f}p − "
+                    f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin) × "
+                    f"{solar_round_trip:.0%} = {adjusted_future_rate:.1f}p"
+                    f" {'>' if use_bidirectional else '≤'} "
+                    f"{current_export_rate_p:.1f}p now"
+                ),
+                current_rate_p=current_export_rate_p,
+                future_rate_p=best_unused_rate,
+                target_slot=target_slot,
+                round_trip=solar_round_trip,
+                efficiency_label="round trip",
+            )
 
         # === TIER 2: Self-Use Value ===
         # When rate is below self-use threshold and SoC is low, store for self-consumption
@@ -740,42 +1023,108 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Dynamic threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
             min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
             dynamic_soc_threshold = min_soc_percent + (slots_remaining * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
-            
+
             if soc_percent < dynamic_soc_threshold:
                 debug(f"IOCTGO_AGILEOUT: STORE (Tier 2): rate {current_export_rate_p:.1f}p < self-use value "
                       f"{self_use_value_p:.1f}p, SoC {soc_percent}% < dynamic threshold "
                       f"{dynamic_soc_threshold:.1f}% (min {min_soc_percent}% + {slots_remaining} slots × {self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT:.1f}%)")
-                return True
+                self_use_round_trip = self.EFFICIENCY_MODEL.round_trip_efficiency(
+                    harvest_current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
+                )
+                return StorageDecision(
+                    use_bidirectional=True,
+                    tier="self-use",
+                    reason=(
+                        f"export {current_export_rate_p:.1f}p < self-use "
+                        f"{self_use_value_p:.1f}p and SoC {soc_percent:.0f}% < "
+                        f"{dynamic_soc_threshold:.0f}% curve — storing for the house"
+                    ),
+                    current_rate_p=current_export_rate_p,
+                    round_trip=self_use_round_trip,
+                    efficiency_label="solar → house",
+                )
             # SoC is adequate, fall through to Tier 3
-        
+
         # === TIER 3: Future Export Optimization ===
         # Get the best rate among slots we're NOT exporting in
-        best_unused_rate = self._get_best_unused_export_rate(current_slot)
-        
+        target_slot, best_unused_rate = self._get_best_unused_export_slot_rate(
+            current_slot
+        )
+
         if best_unused_rate <= 0:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): no better future rates available")
-            return False
+            return StorageDecision(
+                use_bidirectional=False,
+                tier="future export",
+                reason="no future export price beats the current one — covering the house",
+                current_rate_p=current_export_rate_p,
+                round_trip=solar_round_trip,
+                efficiency_label="round trip",
+            )
 
         # Apply the margin first, then the round trip at the actual harvest
         # current. 1 kWh of solar input yields `solar_round_trip` kWh later,
         # each of which must clear (future export price - margin).
         net_future_rate = best_unused_rate - self.MIN_PROFIT_MARGIN_P_PER_KWH
         adjusted_future_rate = net_future_rate * solar_round_trip
-        
+
         should_use_bidirectional = adjusted_future_rate > current_export_rate_p
-        
+
+        slot_label = (
+            self._slot_range_label(target_slot)
+            if target_slot is not None
+            else "later"
+        )
         if should_use_bidirectional:
             debug(f"IOCTGO_AGILEOUT: STORE (Tier 3): current={current_export_rate_p:.1f}p, "
                   f"future={best_unused_rate:.1f}p - margin {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
+            reason = (
+                f"future {best_unused_rate:.1f}p at {slot_label} × "
+                f"{solar_round_trip:.0%} − {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
+                f"margin = {adjusted_future_rate:.1f}p > "
+                f"{current_export_rate_p:.1f}p now — storing solar"
+            )
         else:
             debug(f"IOCTGO_AGILEOUT: EXPORT (Tier 3): current={current_export_rate_p:.1f}p >= "
                   f"future={best_unused_rate:.1f}p - margin {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
-        
-        return should_use_bidirectional
+            reason = (
+                f"no future slot beats {current_export_rate_p:.1f}p now after "
+                f"{solar_round_trip:.0%} round trip — covering the house"
+            )
+
+        return StorageDecision(
+            use_bidirectional=should_use_bidirectional,
+            tier="future export",
+            reason=reason,
+            current_rate_p=current_export_rate_p,
+            future_rate_p=best_unused_rate,
+            target_slot=target_slot,
+            round_trip=solar_round_trip,
+            efficiency_label="round trip",
+        )
+
+    def _should_use_bidirectional_mode(
+        self,
+        current_slot: int,
+        current_export_rate_p: float,
+        soc_percent: float,
+        harvest_current_a: float | None = None,
+    ) -> bool:
+        """Return whether bidirectional load-following is better than export.
+
+        Delegates to :meth:`_evaluate_storage_decision`; the bool API is kept
+        for existing callers and tests.
+        """
+        return self._evaluate_storage_decision(
+            current_slot,
+            current_export_rate_p,
+            soc_percent,
+            harvest_current_a=harvest_current_a,
+        ).use_bidirectional
 
     def _fetch_rates_async(self):
         """Fetch Agile Outgoing rates asynchronously (non-blocking).
@@ -1011,6 +1360,184 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             error(f"IOCTGO_AGILEOUT: API fetch failed: {e}")
             return []
 
+    def _record_decision(
+        self,
+        *,
+        mode: str,
+        reason: str,
+        soc_percent: int,
+        detail: str = "",
+        target_soc_percent: Optional[float] = None,
+        projected_soc_at_2330: Optional[float] = None,
+        current_rate_p: Optional[float] = None,
+        target_rate_p: Optional[float] = None,
+        target_slot: Optional[int] = None,
+        harvest_current_a: Optional[float] = None,
+        surplus_w: Optional[float] = None,
+        efficiency_pct: Optional[float] = None,
+        efficiency_label: str = "",
+        min_round_trip_saving_p: Optional[float] = None,
+        min_round_trip_saving_basis: str = "",
+        charge_min_a: Optional[float] = None,
+        charge_max_a: Optional[float] = None,
+        charge_activation_w: Optional[float] = None,
+        discharge_min_a: Optional[float] = None,
+        discharge_max_a: Optional[float] = None,
+        discharge_aggressive: bool = True,
+        discharge_activation_w: Optional[float] = None,
+    ) -> DecisionSnapshot:
+        """Record the decision the dashboard should display."""
+        snapshot = DecisionSnapshot(
+            updated_at=self.get_current_datetime(),
+            mode=mode,
+            reason=reason,
+            detail=detail,
+            soc_percent=soc_percent,
+            target_soc_percent=target_soc_percent,
+            projected_soc_at_2330=projected_soc_at_2330,
+            current_rate_p=current_rate_p,
+            target_rate_p=target_rate_p,
+            target_slot=target_slot,
+            harvest_current_a=harvest_current_a,
+            surplus_w=surplus_w,
+            efficiency_pct=efficiency_pct,
+            efficiency_label=efficiency_label,
+            min_round_trip_saving_p=min_round_trip_saving_p,
+            min_round_trip_saving_basis=min_round_trip_saving_basis,
+            charge_min_a=charge_min_a,
+            charge_max_a=charge_max_a,
+            charge_activation_w=charge_activation_w,
+            discharge_min_a=discharge_min_a,
+            discharge_max_a=discharge_max_a,
+            discharge_aggressive=discharge_aggressive,
+            discharge_activation_w=discharge_activation_w,
+        )
+        self._decision_snapshot = snapshot
+        return snapshot
+
+    def _update_snapshot_ranges(
+        self,
+        *,
+        charge_min_a: Optional[float] = None,
+        charge_max_a: Optional[float] = None,
+        charge_activation_w: Optional[float] = None,
+        discharge_min_a: Optional[float] = None,
+        discharge_max_a: Optional[float] = None,
+        discharge_aggressive: Optional[bool] = None,
+        discharge_activation_w: Optional[float] = None,
+    ) -> None:
+        """Fill in the actual EVSE ranges after ``set_home_demand_levels()``.
+
+        ``get_control_state()`` records the intent; these values are what the
+        Wallbox really receives.  Load-follow states override the min/max
+        returned by ``get_control_state()``, so the dashboard must use these.
+        """
+        snapshot = self._decision_snapshot
+        if snapshot is None:
+            return
+        if charge_min_a is not None:
+            snapshot.charge_min_a = charge_min_a
+        if charge_max_a is not None:
+            snapshot.charge_max_a = charge_max_a
+        if charge_activation_w is not None:
+            snapshot.charge_activation_w = charge_activation_w
+        if discharge_min_a is not None:
+            snapshot.discharge_min_a = discharge_min_a
+        if discharge_max_a is not None:
+            snapshot.discharge_max_a = discharge_max_a
+        if discharge_aggressive is not None:
+            snapshot.discharge_aggressive = discharge_aggressive
+        if discharge_activation_w is not None:
+            snapshot.discharge_activation_w = discharge_activation_w
+
+    def _format_saved_today(self) -> str:
+        """Format the running saving with an explicit sign."""
+        value = self._saved_today_gbp
+        return f"{'-' if value < 0 else ''}£{abs(value):.2f}"
+
+    def _mode_line_html(self) -> str:
+        """One-line mode/reason summary, wrapping on narrow screens."""
+        snapshot = self._decision_snapshot
+        if snapshot is None:
+            return self.DECISION_LINE_CSS + (
+                '<div class="ioctgo-decision-line">'
+                '<span class="ioctgo-metric">Waiting for the first control cycle…</span>'
+                "</div>"
+            )
+        age_seconds = (
+            self.get_current_datetime() - snapshot.updated_at
+        ).total_seconds()
+        if age_seconds > 120:
+            return self.DECISION_LINE_CSS + (
+                '<div class="ioctgo-decision-line">'
+                '<span class="ioctgo-metric">Waiting for the next control '
+                "cycle…</span>"
+                "</div>"
+            )
+
+        parts = [
+            f'<span class="ioctgo-mode">{html_module.escape(snapshot.mode)}</span>'
+        ]
+        if snapshot.reason:
+            parts.append(
+                f'<span class="ioctgo-reason">{html_module.escape(snapshot.reason)}</span>'
+            )
+
+        if snapshot.efficiency_pct is not None:
+            label = html_module.escape(snapshot.efficiency_label or "efficiency")
+            worst_case = self.EFFICIENCY_MODEL.round_trip_efficiency(
+                config.WALLBOX_MIN_CHARGE_CURRENT,
+                config.WALLBOX_MIN_DISCHARGE_CURRENT,
+            )
+            title = html_module.escape(
+                f"Measured {label} efficiency used for this decision. "
+                f"The model varies with current; the {config.WALLBOX_MIN_CHARGE_CURRENT:.0f} A"
+                f"/{config.WALLBOX_MIN_DISCHARGE_CURRENT:.0f} A worst case is "
+                f"{worst_case:.0%}.",
+                quote=True,
+            )
+            parts.append(
+                f'<span class="ioctgo-metric" title="{title}">'
+                f"η {snapshot.efficiency_pct:.0f}% {label}</span>"
+            )
+
+        if snapshot.min_round_trip_saving_p is not None:
+            basis = html_module.escape(snapshot.min_round_trip_saving_basis)
+            title = html_module.escape(
+                "Minimum saving per kWh of input for a round trip. "
+                f"Solar to export: {self.minimum_round_trip_saving_solar_p():.1f}p/kWh. "
+                f"Cheap grid to export: {self.minimum_round_trip_saving_grid_p():.1f}p/kWh "
+                f"at {config.IMPORT_LOW:.1f}p import. Includes the "
+                f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh profit margin.",
+                quote=True,
+            )
+            suffix = f" ({basis})" if basis else ""
+            parts.append(
+                f'<span class="ioctgo-metric" title="{title}">'
+                f"min gain {snapshot.min_round_trip_saving_p:.1f}p/kWh{suffix}</span>"
+            )
+
+        saved = self._format_saved_today()
+        saved_class = "ioctgo-saved" if self._saved_today_gbp >= 0 else "ioctgo-lost"
+        title = html_module.escape(
+            "Estimated saving today versus the same house load with no "
+            "EVSE/battery activity, at today's import and Agile export prices, "
+            "less the minimum profit margin provision. Resets at midnight.",
+            quote=True,
+        )
+        parts.append(
+            f'<span class="{saved_class}" title="{title}">saved today {saved}</span>'
+        )
+
+        detail_attr = ""
+        if snapshot.detail:
+            detail_attr = f' title="{html_module.escape(snapshot.detail, quote=True)}"'
+        return self.DECISION_LINE_CSS + (
+            f'<div class="ioctgo-decision-line"{detail_attr}>'
+            + "".join(parts)
+            + "</div>"
+        )
+
     def get_dashboard_html(self) -> str:
         """Return HTML for Agile Outgoing rate display.
 
@@ -1020,16 +1547,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Planned export slots are highlighted with "EX" label.
         """
         with self._rates_lock:
+            mode_line = self._mode_line_html()
             # Only today's rates are valid.  Empty (no fetch yet, or only
             # stale data) shows the loading placeholder rather than yesterday's
             # prices.
             rates = self._today_rates()
             if not rates:
-                return """
-                <div class="agile-rate-strip" style="height:40px;display:flex;align-items:center;justify-content:center;background:#f5f5f5;border-radius:4px;margin:10px 0;">
-                    <span style="color:#666;font-size:14px;">Loading Agile Outgoing rates...</span>
+                return (
+                    mode_line
+                    + """
+                <div class="agile-rate-strip" style="height:28px;display:flex;
+                    align-items:center;justify-content:center;background:#f5f5f5;
+                    border-radius:4px;margin:6px 0;">
+                    <span style="color:#666;font-size:12px;">Loading Agile Outgoing rates...</span>
                 </div>
                 """
+                )
 
             # Get current time to determine current slot
             now = self.get_current_datetime()
@@ -1087,8 +1620,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             rate_range = max_rate - min_rate if max_rate > min_rate else 1
 
             # Generate HTML - always 48 slots
-            html = ['<div style="position:relative;margin:10px 0;">']
-            html.append('<div class="agile-rate-strip" style="height:40px;display:flex;gap:1px;padding:5px;background:#fafafa;border-radius:4px;overflow:hidden;">')
+            html = [mode_line, '<div style="position:relative;margin:6px 0;">']
+            html.append(
+                '<div class="agile-rate-strip" style="height:28px;display:flex;'
+                "gap:1px;padding:3px;background:#fafafa;border-radius:4px;"
+                'overflow:hidden;">'
+            )
             
             for slot_idx in range(48):
                 hour = slot_idx // 2
@@ -1206,7 +1743,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Add time axis with horizontal line and tick marks
             # Use flex structure matching the cells for perfect alignment
-            time_axis = '<div style="display:flex;gap:1px;padding:0 5px;height:20px;position:relative;">'
+            time_axis = '<div style="display:flex;gap:1px;padding:0 3px;height:14px;position:relative;">'
             
             # Add horizontal line across top (full width of container)
             time_axis += '<span style="position:absolute;left:0;right:0;top:0;height:1px;background:#666;"></span>'
@@ -1223,7 +1760,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     time_axis += f'<span style="position:absolute;left:0;top:1px;transform:translateX(-50%);width:1px;height:6px;background:#666;"></span>'
                     # Time label (for 02:00 through 22:00 only, not 00:00)
                     if slot_idx > 0:
-                        time_axis += f'<span style="position:absolute;left:0;top:9px;transform:translateX(-50%);font-size:9px;color:#666;">{hour:02d}:00</span>'
+                        time_axis += (
+                            '<span style="position:absolute;left:0;top:5px;'
+                            'transform:translateX(-50%);font-size:9px;color:#666;">'
+                            f"{hour:02d}:00</span>"
+                        )
                     time_axis += '</div>'
                 else:
                     time_axis += '<div style="flex:1;min-width:0;"></div>'
@@ -1291,14 +1832,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 .agile-rate-cell .rate-value-full { display: none; }
                 .agile-rate-cell .rate-value-int { display: none; }
                 .agile-rate-cell .rate-value-none { display: inline; }
-                .agile-rate-cell { min-height: 28px; }
-                .agile-rate-strip { height: 36px !important; }
+                .agile-rate-cell { min-height: 22px; }
+                .agile-rate-strip { height: 28px !important; }
             }
             
             /* < 400px: reduce height further */
             @media (max-width: 400px) {
-                .agile-rate-cell { min-height: 20px; }
-                .agile-rate-strip { height: 28px !important; padding-bottom: 12px !important; }
+                .agile-rate-cell { min-height: 18px; }
+                .agile-rate-strip { height: 22px !important; padding-bottom: 8px !important; }
             }
             </style>
             ''')
@@ -1364,6 +1905,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
+        target_soc = config.MIN_AGILE_DISCHARGE_SOC
+        charge_cap = self.charge_cap_percent()
+
+        # Roll the dashboard saving forward with the latest power sample.
+        self._accumulate_daily_savings()
 
         # If we have just reached the 00:00 slot or the 16:00 slot then we should schedule fetching
         # the rates again.
@@ -1400,35 +1946,215 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         self._prev_battery_level = battery_level
 
+        power_snapshot = self._read_power_snapshot()
+        surplus_w = power_snapshot["surplus_w"] if power_snapshot else None
+
         # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
         # Charge at max rate regardless of SoC or other states
         if self.is_off_peak(dayMinute):
-            if battery_level < config.MAX_CHARGE_PERCENT:
+            cap = self.charge_cap_percent()
+            charge_efficiency = (
+                self.EFFICIENCY_MODEL.charge_efficiency(
+                    self.GRID_CHARGE_REFERENCE_CURRENT
+                ) * 100
+            )
+            if battery_level < cap:
+                mode = f"Max charge ({self.MAX_CHARGE_CURRENT:.0f} A)"
+                reason = (
+                    f"off-peak {config.IMPORT_LOW:.1f}p — charging to the "
+                    f"{cap:.0f}% cap"
+                )
+                self._record_decision(
+                    mode=mode,
+                    reason=reason,
+                    soc_percent=battery_level,
+                    detail=(
+                        f"Off-peak import at {config.IMPORT_LOW:.1f}p/kWh. "
+                        f"SoC {battery_level}%, cap {cap:.0f}%. Charge "
+                        f"efficiency {charge_efficiency:.0f}% at "
+                        f"{self.GRID_CHARGE_REFERENCE_CURRENT:.0f} A."
+                    ),
+                    current_rate_p=config.IMPORT_LOW,
+                    efficiency_pct=charge_efficiency,
+                    efficiency_label="charge",
+                    min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
+                    min_round_trip_saving_basis="grid",
+                    charge_min_a=self.MAX_CHARGE_CURRENT,
+                    charge_max_a=self.MAX_CHARGE_CURRENT,
+                    charge_activation_w=0,
+                )
                 return ControlState.CHARGE, None, None, "IOCTGO_AGILEOUT Off-peak: CHARGE AT MAX RATE (priority)"
             else:
+                self._record_decision(
+                    mode=f"Idle — SoC at {cap:.0f}% cap",
+                    reason=(
+                        f"off-peak {config.IMPORT_LOW:.1f}p — no charge needed "
+                        f"at SoC {battery_level}%"
+                    ),
+                    soc_percent=battery_level,
+                    detail=(
+                        f"Off-peak import at {config.IMPORT_LOW:.1f}p/kWh. "
+                        f"SoC {battery_level}% is at or above the {cap:.0f}% "
+                        "charge cap, so the battery is left alone."
+                    ),
+                    current_rate_p=config.IMPORT_LOW,
+                )
                 return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Off-peak: SoC max, dormant"
 
         # Handle unknown SoC (outside off-peak hours)
         if battery_level == -1:
+            charge_efficiency = (
+                self.EFFICIENCY_MODEL.charge_efficiency(
+                    self.SOLAR_CHARGE_REFERENCE_CURRENT
+                ) * 100
+            )
+            self._record_decision(
+                mode="Charge at 3 A (SoC unknown)",
+                reason="no BMS SoC reading — charging gently until it returns",
+                soc_percent=battery_level,
+                detail=(
+                    "The vehicle has not reported a state of charge, so the "
+                    "controller cannot project the 23:30 target or choose a "
+                    "discharge strategy. It charges at the minimum current "
+                    "instead."
+                ),
+                efficiency_pct=charge_efficiency,
+                efficiency_label="charge",
+                min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
+                min_round_trip_saving_basis="grid",
+                charge_min_a=3,
+                charge_max_a=3,
+                charge_activation_w=0,
+            )
             return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
 
         # Battery depleted - protect battery
         if battery_level <= 25:
+            self._record_decision(
+                mode="Idle — battery protection",
+                reason=f"SoC {battery_level}% at or below the 25% reserve",
+                soc_percent=battery_level,
+                detail=(
+                    f"SoC {battery_level}% is at or below the 25% protection "
+                    "reserve. The controller will not discharge the pack."
+                ),
+            )
             return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Battery depleted"
 
         # Check if current slot is a planned export slot
         if current_slot in self._planned_export_slots:
             # Export at maximum rate during planned slots
+            export_rate_p = self._current_export_rate_p(current_slot)
+            discharge_efficiency = (
+                self.EFFICIENCY_MODEL.discharge_efficiency(
+                    self.EXPORT_REFERENCE_CURRENT
+                ) * 100
+            )
+            expected_gbp = (
+                export_rate_p * self.EXPORT_POWER_KW * 0.5 / 100.0
+            )
             debug(f"IOCTGO_AGILEOUT: In export slot {current_slot}, commanding DISCHARGE")
+            self._record_decision(
+                mode=f"Max discharge ({self.MAX_DISCHARGE_CURRENT:.0f} A) · aggressive",
+                reason=(
+                    f"planned export slot {self._slot_range_label(current_slot)} "
+                    f"at {export_rate_p:.1f}p"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"Export slot {self._slot_range_label(current_slot)} at "
+                    f"{export_rate_p:.1f}p/kWh. SoC {battery_level}%, "
+                    f"expected {expected_gbp:.2f} for the slot at "
+                    f"{self.EXPORT_POWER_KW:.2f} kW, discharge efficiency "
+                    f"{discharge_efficiency:.0f}%."
+                ),
+                current_rate_p=export_rate_p,
+                target_rate_p=export_rate_p,
+                target_slot=current_slot,
+                efficiency_pct=discharge_efficiency,
+                efficiency_label="discharge",
+                min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
+                min_round_trip_saving_basis="grid",
+                discharge_min_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=0,
+            )
             return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
 
         # Energy shortfall: conserve energy for the house rather than exporting.
         # Stay bidirectional so surplus solar can still be absorbed, but use
         # the conservative discharge configuration in set_home_demand_levels().
         if self._energy_shortfall:
+            harvest_current_a = self._estimate_solar_harvest_current()
             debug(
                 f"IOCTGO_AGILEOUT: Energy shortfall (SoC {battery_level}%), "
                 f"using conservative bidirectional mode"
+            )
+            harvest_label = (
+                f"Harvest {harvest_current_a:.0f} A"
+                if harvest_current_a > self.SOLAR_CHARGE_REFERENCE_CURRENT
+                else f"Harvest ≥{self.SOLAR_CHARGE_REFERENCE_CURRENT:.0f} A"
+            )
+            charge_at_cap = battery_level >= charge_cap
+            if charge_at_cap:
+                mode = (
+                    f"Do not charge — SoC at {charge_cap:.0f}% cap · "
+                    "conservative discharge"
+                )
+            else:
+                mode = f"{harvest_label} · conservative discharge"
+            projected = self._projected_soc_at_2330
+            projection_text = (
+                f"{projected:.0f}%" if projected is not None else "below target"
+            )
+            if charge_at_cap:
+                reason = (
+                    f"SoC {battery_level}% at the {charge_cap:.0f}% cap — "
+                    "conserving; discharge starts at 840 W import"
+                )
+            elif projected is not None:
+                reason = (
+                    f"projected 23:30 SoC {projection_text} < "
+                    f"{target_soc:.0f}% target — conserving; discharge starts "
+                    "at 840 W import"
+                )
+            else:
+                reason = (
+                    f"projected to miss the {target_soc:.0f}% 23:30 target — "
+                    "conserving; discharge starts at 840 W import"
+                )
+            self._record_decision(
+                mode=mode,
+                reason=reason,
+                soc_percent=battery_level,
+                detail=(
+                    f"SoC {battery_level}%, projected 23:30 SoC "
+                    f"{projection_text} versus the {target_soc:.0f}% target. "
+                    f"Conservative discharge uses 720 W activation and a "
+                    f"-0.5 A bias, so it starts at about 840 W import and "
+                    f"leaves a 600 W house load on the grid. Harvest estimate "
+                    f"{harvest_current_a:.0f} A."
+                    + (
+                        f" Charging is inhibited at the {charge_cap:.0f}% cap."
+                        if charge_at_cap
+                        else ""
+                    )
+                ),
+                target_soc_percent=target_soc,
+                projected_soc_at_2330=projected,
+                current_rate_p=self._current_export_rate_p(current_slot),
+                harvest_current_a=harvest_current_a,
+                surplus_w=surplus_w,
+                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
+                min_round_trip_saving_basis="solar",
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=3,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=False,
+                discharge_activation_w=720,
             )
             return (
                 ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
@@ -1447,20 +2173,123 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # support, not at the 3 A floor: a sunny slot can harvest at 6-12 A,
         # where the round trip is materially better.
         harvest_current_a = self._estimate_solar_harvest_current()
-        use_bidirectional = self._should_use_bidirectional_mode(
+        decision = self._evaluate_storage_decision(
             current_slot,
             current_export_rate_p,
             battery_level,
             harvest_current_a=harvest_current_a,
         )
+        efficiency_pct = (
+            decision.round_trip * 100 if decision.round_trip is not None else None
+        )
+        target_slot = decision.target_slot
+        target_rate_p = decision.future_rate_p
 
-        if use_bidirectional:
+        if decision.use_bidirectional:
+            harvest_label = (
+                f"Harvest {harvest_current_a:.0f} A"
+                if harvest_current_a > self.SOLAR_CHARGE_REFERENCE_CURRENT
+                else f"Harvest ≥{self.SOLAR_CHARGE_REFERENCE_CURRENT:.0f} A"
+            )
+            charge_at_cap = battery_level >= charge_cap
+            if charge_at_cap:
+                mode = (
+                    f"Do not charge — SoC at {charge_cap:.0f}% cap · "
+                    "aggressive discharge"
+                )
+                reason = (
+                    f"SoC {battery_level}% at the {charge_cap:.0f}% cap — "
+                    "covering the house instead of storing"
+                )
+            else:
+                mode = f"{harvest_label} · aggressive discharge"
+                reason = decision.reason
             # Bidirectional mode: charge from solar, prefer small export over any import
             debug(f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_BIDIRECTIONAL (current rate {current_export_rate_p:.1f}p, SoC {battery_level}%)")
+            self._record_decision(
+                mode=mode,
+                reason=reason,
+                soc_percent=battery_level,
+                detail=(
+                    f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
+                    f"current export {current_export_rate_p:.1f}p, harvest "
+                    f"estimate {harvest_current_a:.0f} A, surplus "
+                    f"{surplus_w:.0f} W. Aggressive discharge starts at 1 W "
+                    "import. Detailed slot and SoC projections are in the log."
+                    if surplus_w is not None
+                    else (
+                        f"{decision.tier.capitalize()} decision. SoC "
+                        f"{battery_level}%, current export "
+                        f"{current_export_rate_p:.1f}p, harvest estimate "
+                        f"{harvest_current_a:.0f} A. No live power sample yet. "
+                        "Aggressive discharge starts at 1 W import."
+                    )
+                ),
+                target_soc_percent=target_soc,
+                projected_soc_at_2330=self._projected_soc_at_2330,
+                current_rate_p=current_export_rate_p,
+                target_rate_p=target_rate_p,
+                target_slot=target_slot,
+                harvest_current_a=harvest_current_a,
+                surplus_w=surplus_w,
+                efficiency_pct=efficiency_pct,
+                efficiency_label=decision.efficiency_label,
+                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
+                min_round_trip_saving_basis="solar",
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=3,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=1,
+            )
             return ControlState.LOAD_FOLLOW_BIDIRECTIONAL, 3, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Bidirectional (store for better rate)"
         else:
             # Standard load-follow discharge
+            best_future_text = (
+                f"{target_rate_p:.1f}p"
+                if target_rate_p is not None
+                else "no future rate"
+            )
+            charge_at_cap = battery_level >= charge_cap
+            reason = (
+                f"SoC {battery_level}% at the {charge_cap:.0f}% cap — covering "
+                "the house instead of storing"
+                if charge_at_cap
+                else decision.reason
+            )
             debug(f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_DISCHARGE (current rate {current_export_rate_p:.1f}p, SoC {battery_level}%)")
+            self._record_decision(
+                mode=(
+                    f"Do not charge · aggressive discharge "
+                    f"≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
+                ),
+                reason=reason,
+                soc_percent=battery_level,
+                detail=(
+                    f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
+                    f"current export {current_export_rate_p:.1f}p, best future "
+                    f"{best_future_text}. "
+                    "Aggressive discharge starts at 1 W import and covers the "
+                    "house load. Detailed slot and SoC projections are in the log."
+                ),
+                target_soc_percent=target_soc,
+                projected_soc_at_2330=self._projected_soc_at_2330,
+                current_rate_p=current_export_rate_p,
+                target_rate_p=target_rate_p,
+                target_slot=target_slot,
+                harvest_current_a=harvest_current_a,
+                surplus_w=surplus_w,
+                efficiency_pct=efficiency_pct,
+                efficiency_label=decision.efficiency_label,
+                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
+                min_round_trip_saving_basis="solar",
+                discharge_min_a=self.MIN_DISCHARGE_CURRENT,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=1,
+            )
             return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Load follow"
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
@@ -1483,6 +2312,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         battery_level = state.battery_level
         current_slot = dayMinute // 30
+
+        # At or above the effective ceiling the pack must not accept charge from
+        # any source, including surplus solar.  Outside off-peak/export slots
+        # that means a zero charge range rather than the usual 3 A floor.
+        charge_at_cap = battery_level >= self.charge_cap_percent()
 
         # During off-peak hours (23:30-05:30), don't configure load-following
         # The control state is already set to CHARGE at max current by get_control_state()
@@ -1513,7 +2347,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
             evseController.setChargeActivationPower(720)
             evseController.setChargeCurrentBias(-0.5)
-            evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            if charge_at_cap:
+                evseController.setChargeCurrentRange(0, 0)
+            else:
+                evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            self._update_snapshot_ranges(
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=3,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=False,
+                discharge_activation_w=720,
+            )
             debug(
                 f"IOCTGO_AGILEOUT: Shortfall mode configured - conservative "
                 f"discharge (activation=720W, bias=-0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)"
@@ -1529,14 +2375,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Use the same surplus-derived harvest current as get_control_state()
         # so the control state and the configured levels agree.
         harvest_current_a = self._estimate_solar_harvest_current()
-        use_bidirectional = self._should_use_bidirectional_mode(
+        decision = self._evaluate_storage_decision(
             current_slot,
             current_export_rate_p,
             battery_level,
             harvest_current_a=harvest_current_a,
         )
 
-        if use_bidirectional:
+        if decision.use_bidirectional:
             # Bidirectional mode: prefer small export over any import
             # Low activation power = discharge even at low surplus
             # Positive bias = favor higher discharge currents
@@ -1545,7 +2391,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
             evseController.setChargeActivationPower(720)
             evseController.setChargeCurrentBias(-0.5)
-            evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            if charge_at_cap:
+                evseController.setChargeCurrentRange(0, 0)
+            else:
+                evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            self._update_snapshot_ranges(
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=3,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=1,
+            )
             debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation=1W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
             # Standard load-follow discharge. With no shortfall we can afford
@@ -1553,6 +2411,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setDischargeActivationPower(1)
             evseController.setDischargeCurrentBias(0.5)
             evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
+            if charge_at_cap:
+                evseController.setChargeCurrentRange(0, 0)
+            self._update_snapshot_ranges(
+                charge_min_a=0 if charge_at_cap else None,
+                charge_max_a=0 if charge_at_cap else None,
+                discharge_min_a=config.WALLBOX_MIN_DISCHARGE_CURRENT,
+                discharge_max_a=config.WALLBOX_MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=1,
+            )
 
     def cleanup(self):
         """Restore original calculation mode."""
