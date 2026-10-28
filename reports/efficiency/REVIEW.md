@@ -462,10 +462,17 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
 - **Minimum gain** is the round-trip spread over the input price:
   `charge_price / η + margin − charge_price`. Free solar → export is just the
   0.3p margin; cheap grid → export is ~2.3p/kWh at 10p import.
-- **Saved today** compares actual grid cost with a no-EVSE baseline
-  (`grid_w − evse_w`) at the current import rate (off-peak or peak) and current
-  Agile export rate, less the profit margin provision on EVSE throughput. It
-  resets at local midnight and can legitimately be negative while charging.
+- **Saved today** is the realised spread on stored energy, not a grid-cost
+  difference. The manager keeps a ledger in DC-side kWh plus the money paid for
+  it. Charging adds `AC in × η_chg` and costs the grid share at the current
+  import rate and the solar share (capped at the live surplus) at the current
+  Agile export price. Discharging removes `AC out / η_dis` and books the import
+  price it avoids, or the Agile export price beyond the house load, minus the
+  ledger cost released. An off-peak 7.62p charge that later displaces 32.26p
+  import therefore books `32.26p − 7.62p / η_rt` per kWh delivered, with the
+  round-trip loss included. Only realised energy counts, so a charge still in
+  the pack shows no saving yet. The daily total resets at midnight; the ledger
+  persists so yesterday's cheap energy is priced correctly today.
 
 The off-peak charge branch uses `charge_cap_percent() =
 min(config.MAX_CHARGE_PERCENT, 97)`. The config can lower the ceiling but

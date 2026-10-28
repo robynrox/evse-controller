@@ -396,12 +396,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # control loop; the dashboard only reads it.
         self._decision_snapshot = None
 
-        # Estimated saving versus the same house load with no EVSE/battery
-        # activity, accumulated in GBP and reset at local midnight.
+        # Ledger of stored energy and what it cost, so a discharge can be
+        # priced against the import it avoids.  Energy is carried in DC-side
+        # kWh: AC input is multiplied by the measured charge efficiency on the
+        # way in, and discharge AC output is divided by the measured discharge
+        # efficiency on the way out, so the round-trip loss is charged to the
+        # energy that actually comes back out.  The ledger survives midnight;
+        # only the daily total resets.
+        self._bank_dc_kwh = 0.0
+        self._bank_cost_gbp = 0.0
+
+        # Estimated saving realised today by discharging stored energy, in
+        # GBP, reset at local midnight.
         self._savings_day = None
         self._saved_today_gbp = 0.0
         self._savings_last_time = None
-        self._savings_last_grid_w = 0.0
         self._savings_last_baseline_w = 0.0
         self._savings_last_evse_w = 0.0
 
@@ -799,30 +808,40 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "voltage": voltage,
         }
 
-    def _grid_interval_cost_gbp(
-        self,
-        grid_w: float,
-        import_rate_p: float,
-        export_rate_p: float,
-        hours: float,
-    ) -> float:
-        """Cost of a grid power level over an interval; export is negative."""
-        if hours <= 0:
-            return 0.0
-        energy_kwh = grid_w / 1000.0 * hours
-        if energy_kwh >= 0:
-            return energy_kwh * import_rate_p / 100.0
-        return energy_kwh * export_rate_p / 100.0
+    def _bank_fallback_cost_per_dc_kwh(self) -> float:
+        """Cost basis for stored energy with no recorded purchase price.
+
+        At process start the pack may already hold charge bought before the
+        ledger existed.  Rather than reporting free energy, assume it was
+        bought at the off-peak rate, which is the most expensive way this
+        system normally charges.  That keeps the saving conservative.
+        """
+        charge_efficiency = self.EFFICIENCY_MODEL.charge_efficiency(
+            self.GRID_CHARGE_REFERENCE_CURRENT
+        )
+        return (config.IMPORT_LOW / 100.0) / max(charge_efficiency, 1e-6)
 
     def _accumulate_daily_savings(self) -> None:
-        """Accumulate today's estimated saving against a no-storage baseline.
+        """Accumulate the money saved today by cycling stored energy.
 
-        The baseline is the house load *excluding* the EVSE, so the result
-        measures what running the EVSE/battery system has saved (or cost)
-        compared with simply importing/exporting that load.  It uses the
-        current import rate (off-peak or peak) and the current Agile export
-        rate, and subtracts the minimum profit margin as a provision for
-        battery throughput.  Resets at local midnight.
+        Each interval is priced against what would have happened without the
+        EVSE/battery:
+
+        * **Charging** puts energy into the ledger at the price paid.  Grid
+          energy costs the current import rate; surplus solar is capped at the
+          live surplus and costed at the current Agile export price, because
+          exporting it was the alternative.  No saving is booked yet.
+        * **Discharging** releases the ledger.  Energy that offsets house
+          import earns the current import rate; anything beyond the house load
+          earns the Agile export rate.  The saving is that avoided value minus
+          the ledger cost of the energy released.
+
+        So an off-peak charge at 7.62p followed by a daytime discharge that
+        displaces 32.26p import books ``32.26p − 7.62p / η_rt`` per kWh
+        delivered.  The round-trip loss is included because the ledger holds
+        DC-side energy and the discharge is divided by its measured discharge
+        efficiency.  Resets the daily total at midnight; the ledger persists,
+        so energy bought yesterday is priced correctly when it is used today.
         """
         now = self.get_current_datetime()
         today = now.date()
@@ -830,7 +849,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._savings_day = today
             self._saved_today_gbp = 0.0
             self._savings_last_time = None
-            self._savings_last_grid_w = 0.0
             self._savings_last_baseline_w = 0.0
             self._savings_last_evse_w = 0.0
 
@@ -840,7 +858,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         if self._savings_last_time is None:
             self._savings_last_time = now
-            self._savings_last_grid_w = power["grid_w"]
             self._savings_last_baseline_w = power["baseline_w"]
             self._savings_last_evse_w = power["evse_w"]
             return
@@ -853,29 +870,68 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         hours = min(elapsed, 300.0) / 3600.0
 
         day_minute = now.hour * 60 + now.minute
-        import_rate_p = config.IMPORT_LOW if self.is_off_peak(day_minute) else config.IMPORT_HIGH
+        import_rate_p = (
+            config.IMPORT_LOW
+            if self.is_off_peak(day_minute)
+            else config.IMPORT_HIGH
+        )
         current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
         export_rate_p = self._current_export_rate_p(current_slot)
 
         # Trapezoidal average over the sample interval.
-        grid_w = 0.5 * (self._savings_last_grid_w + power["grid_w"])
         baseline_w = 0.5 * (self._savings_last_baseline_w + power["baseline_w"])
         evse_w = 0.5 * (self._savings_last_evse_w + power["evse_w"])
+        voltage = power["voltage"]
 
-        actual_cost = self._grid_interval_cost_gbp(
-            grid_w, import_rate_p, export_rate_p, hours
-        )
-        baseline_cost = self._grid_interval_cost_gbp(
-            baseline_w, import_rate_p, export_rate_p, hours
-        )
-        provision = (
-            abs(evse_w) / 1000.0 * hours
-            * self.MIN_PROFIT_MARGIN_P_PER_KWH / 100.0
-        )
-        self._saved_today_gbp += baseline_cost - actual_cost - provision
+        energy_kwh = abs(evse_w) / 1000.0 * hours
+        if energy_kwh > 0:
+            current_a = abs(evse_w) / voltage
+            if evse_w > 0:
+                # Charging: split between free surplus and paid import.
+                charge_efficiency = self.EFFICIENCY_MODEL.charge_efficiency(
+                    current_a
+                )
+                surplus_w = max(0.0, -baseline_w)
+                solar_kwh = min(energy_kwh, surplus_w / 1000.0 * hours)
+                grid_kwh = energy_kwh - solar_kwh
+                self._bank_dc_kwh += energy_kwh * charge_efficiency
+                self._bank_cost_gbp += (
+                    grid_kwh * import_rate_p / 100.0
+                    + solar_kwh * export_rate_p / 100.0
+                )
+            else:
+                # Discharging: release the ledger and book the avoided cost.
+                discharge_efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
+                    current_a
+                )
+                drain_dc = energy_kwh / max(discharge_efficiency, 1e-6)
+
+                if self._bank_dc_kwh > 0:
+                    cost_per_dc = self._bank_cost_gbp / self._bank_dc_kwh
+                else:
+                    cost_per_dc = self._bank_fallback_cost_per_dc_kwh()
+                from_bank = min(drain_dc, self._bank_dc_kwh)
+                bank_cost_used = from_bank * cost_per_dc
+                released_cost = bank_cost_used + (
+                    drain_dc - from_bank
+                ) * self._bank_fallback_cost_per_dc_kwh()
+
+                house_kwh = min(
+                    energy_kwh, max(0.0, baseline_w) / 1000.0 * hours
+                )
+                export_kwh = max(0.0, energy_kwh - house_kwh)
+                avoided = (
+                    house_kwh * import_rate_p / 100.0
+                    + export_kwh * export_rate_p / 100.0
+                )
+
+                self._saved_today_gbp += avoided - released_cost
+                self._bank_dc_kwh = max(0.0, self._bank_dc_kwh - from_bank)
+                self._bank_cost_gbp = max(
+                    0.0, self._bank_cost_gbp - bank_cost_used
+                )
 
         self._savings_last_time = now
-        self._savings_last_grid_w = power["grid_w"]
         self._savings_last_baseline_w = power["baseline_w"]
         self._savings_last_evse_w = power["evse_w"]
 
@@ -1520,9 +1576,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         saved = self._format_saved_today()
         saved_class = "ioctgo-saved" if self._saved_today_gbp >= 0 else "ioctgo-lost"
         title = html_module.escape(
-            "Estimated saving today versus the same house load with no "
-            "EVSE/battery activity, at today's import and Agile export prices, "
-            "less the minimum profit margin provision. Resets at midnight.",
+            "Money saved today by cycling stored energy instead of buying it "
+            "when the house needed it. A discharge earns the import price it "
+            "avoids (or the Agile export price if it goes to the grid), less "
+            "what that energy cost to store, including round-trip losses. A "
+            "charge is only counted when the energy is used, so energy still "
+            "in the battery is not booked yet. Resets at midnight.",
             quote=True,
         )
         parts.append(

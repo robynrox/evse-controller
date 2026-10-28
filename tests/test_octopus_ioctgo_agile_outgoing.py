@@ -976,54 +976,145 @@ class TestMinimumRoundTripSaving:
 
 
 class TestDailySavings:
-    """The running saving is measured against a no-storage baseline."""
+    """Saved today is the price spread captured by cycling stored energy."""
 
-    def test_saving_accumulates_and_resets_at_midnight(self, agile_tariff):
-        clock = [datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)]
-        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
-
+    @staticmethod
+    def _start(tariff, hour, minute=0):
+        clock = [datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )]
+        tariff.set_time_functions(datetime_func=lambda: clock[0])
         controller = Mock()
         controller.chargeCurrentBias = -0.5
-        controller.current_grid_power = Power(
-            ch1Watts=0, ch2Watts=-1000, voltage=240
+        tariff.evseController = controller
+        return clock
+
+    @staticmethod
+    def _prime(tariff, clock, ch1, ch2):
+        tariff.evseController.current_grid_power = Power(
+            ch1Watts=ch1, ch2Watts=ch2, voltage=240
         )
-        agile_tariff.evseController = controller
+        tariff._savings_last_time = None
+        tariff._accumulate_daily_savings()
 
-        # First sample primes the baseline.
-        agile_tariff._accumulate_daily_savings()
+    @staticmethod
+    def _run(tariff, clock, minutes, ch1, ch2):
+        tariff.evseController.current_grid_power = Power(
+            ch1Watts=ch1, ch2Watts=ch2, voltage=240
+        )
+        clock[0] = clock[0] + timedelta(minutes=minutes)
+        tariff._accumulate_daily_savings()
+
+    def test_off_peak_charge_then_daytime_discharge(self, agile_tariff):
+        """A 7.62p charge displacing 32.26p import saves the difference/η."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        # House 300 W plus 3.6 kW charging, for 30 minutes.
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
         assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh > 0
 
-        # One minute later the house has been supplied by the EVSE, so the
-        # no-storage baseline would have imported 1 kW at the 30p peak rate.
-        clock[0] = clock[0].replace(minute=1)
-        agile_tariff._accumulate_daily_savings()
-        expected = 1.0 * (1 / 60) * config.IMPORT_HIGH / 100
+        # Midday: the EVSE covers the whole 300 W house load for one minute.
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            3600 / 240.0
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - config.IMPORT_LOW / (eta_chg * eta_dis)
+        ) / 100.0
         assert agile_tariff._saved_today_gbp == pytest.approx(
-            expected, abs=0.0002
+            expected, rel=0.01
         )
 
-        # A new day resets the accumulator.
-        clock[0] = clock[0] + timedelta(days=1)
-        agile_tariff._accumulate_daily_savings()
+    def test_charge_is_booked_when_the_energy_is_used(self, agile_tariff):
+        """Charging is an asset, not a loss, until the energy comes back out."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
         assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_cost_gbp > 0
 
-    def test_charging_shows_as_a_cost(self, agile_tariff):
-        """Grid charging is a cost relative to doing nothing."""
-        clock = [datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)]
-        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
+    def test_solar_basis_is_the_export_price(self, agile_tariff):
+        """Harvested solar is costed at what exporting it would have earned."""
+        clock = self._start(agile_tariff, 12, 0)
+        current_slot = 24
 
-        controller = Mock()
-        controller.chargeCurrentBias = -0.5
-        controller.current_grid_power = Power(
-            ch1Watts=3000, ch2Watts=3000, voltage=240
+        # 2 kW surplus, charging at 1 kW for two minutes.
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=1000)
+        self._run(agile_tariff, clock, 2, ch1=-1000, ch2=1000)
+
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        export_rate_p = agile_tariff._current_export_rate_p(current_slot)
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            1000 / 240.0
         )
-        agile_tariff.evseController = controller
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - export_rate_p / (eta_chg * eta_dis)
+        ) / 100.0
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, rel=0.01
+        )
 
-        agile_tariff._accumulate_daily_savings()
-        clock[0] = clock[0].replace(minute=1)
+    def test_export_beyond_the_house_earns_the_agile_rate(self, agile_tariff):
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+        cost_per_dc_kwh = (
+            agile_tariff._bank_cost_gbp / agile_tariff._bank_dc_kwh
+        )
+
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-3300, ch2=-3600)
+        self._run(agile_tariff, clock, 1, ch1=-3300, ch2=-3600)
+
+        export_rate_p = agile_tariff._current_export_rate_p(36)
+        delivered_kwh = 3.6 / 60.0
+        house_kwh = 0.3 / 60.0
+        avoided = (
+            house_kwh * config.IMPORT_HIGH
+            + (delivered_kwh - house_kwh) * export_rate_p
+        ) / 100.0
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            3600 / 240.0
+        )
+        released_cost = delivered_kwh / eta_dis * cost_per_dc_kwh
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            avoided - released_cost, rel=0.01
+        )
+
+    def test_ledger_survives_midnight_but_daily_total_resets(self, agile_tariff):
+        clock = self._start(agile_tariff, 23, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+        bank_dc = agile_tariff._bank_dc_kwh
+        bank_cost = agile_tariff._bank_cost_gbp
+        assert bank_dc > 0
+
+        clock[0] = clock[0] + timedelta(days=1)
+        agile_tariff._savings_last_time = None
         agile_tariff._accumulate_daily_savings()
 
-        assert agile_tariff._saved_today_gbp < 0
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_dc)
+        assert agile_tariff._bank_cost_gbp == pytest.approx(bank_cost)
 
 
 class TestDashboardModeLine:

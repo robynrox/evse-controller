@@ -290,10 +290,15 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
 - **Minimum gain** is the spread a round trip must clear: free solar → export
   needs only the profit margin (~0.3p/kWh), while cheap grid → export needs
   `IMPORT_LOW / round_trip + margin − IMPORT_LOW` (~2.3p/kWh at 10p import).
-- **Saved today** compares actual grid cost with the same house load without
-  any EVSE/battery activity, at today's import and Agile export prices, less
-  the profit margin provision. It resets at local midnight and can be negative
-  while the car is charging from the grid.
+- **Saved today** is the money actually captured by cycling stored energy. A
+  charge is booked at the price paid (grid) or at the Agile export price it
+  displaced (surplus solar), and no saving is shown yet. The saving appears
+  when the energy is discharged: it earns the import price it avoids, or the
+  Agile export price for anything beyond the house load, minus the stored
+  cost including the round-trip loss. So an off-peak charge at 7.62p that later
+  displaces 32.26p daytime import books `32.26p − 7.62p / η_rt` per kWh
+  delivered. It resets at local midnight, but the stored-energy ledger carries
+  over, so energy bought yesterday is priced with yesterday's cost.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

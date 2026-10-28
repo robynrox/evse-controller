@@ -93,14 +93,16 @@ completed fixes.
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
 - `IOCTGO + Agile Outgoing` now uses the measured current-dependent model.
 - The tariff dashboard has a compact decision line above the 48-slot strip:
-  mode, reason, efficiency actually used, minimum round-trip gain, and an
-  estimate of cost saved today against a no-EVSE baseline.  The strip is 28px
-  (was 40px); detailed SoC/slot analysis stays in the text log.  The off-peak
-  charge ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling
-  zeroes the charge range outside off-peak, so solar cannot overfill the pack.
+  mode, reason, efficiency actually used, minimum round-trip gain, and the
+  money saved today by cycling stored energy (charge cost booked on entry,
+  avoided import/export value booked on discharge, round-trip loss included).
+  The strip is 28px (was 40px); detailed SoC/slot analysis stays in the text
+  log.  The off-peak charge ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and
+  the same ceiling zeroes the charge range outside off-peak, so solar cannot
+  overfill the pack.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **311 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **314 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
