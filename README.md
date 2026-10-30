@@ -334,7 +334,10 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   over, so energy bought yesterday is priced with yesterday's cost. At startup
   the charge already in the pack is seeded at the off-peak fallback price, and
   a ledger below 0.05 kWh is treated as metering noise rather than a price
-  basis. Export
+  basis. After the EVSE changes direction, the ledger also ignores power for
+  the Wallbox's start/stop settling time (21.9 s from idle, 10.9 s back to
+  idle), because the unit draws ~200 W while it powers up or down; current
+  changes within an active direction are booked immediately. Export
   prices are only ever numerators. A 0p price makes the controller store rather
   than export; solar that was worth 0p when stored and is exported at 0p books
   £0. A negative figure means either bought energy was sold for less than it

@@ -1522,6 +1522,86 @@ class TestDailySavings:
             config.IMPORT_LOW / (eta_chg * eta_dis), rel=0.01
         )
 
+    def test_startup_transient_is_not_booked(self, agile_tariff):
+        """The Wallbox's power-up draw is not priced into the ledger."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        bank_before = agile_tariff._bank_dc_kwh
+        saved_before = agile_tariff._saved_today_gbp
+
+        # It powers up drawing ~200 W before it can discharge.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_before)
+        assert agile_tariff._saved_today_gbp == pytest.approx(saved_before)
+        assert (
+            agile_tariff.discharge_activation_threshold_w(
+                8.0, import_rate_p=config.IMPORT_HIGH
+            )
+            < agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        )
+
+    def test_steady_operation_is_booked_after_startup(self, agile_tariff):
+        """Once the settle window has passed, normal charging is recorded."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        bank_before = agile_tariff._bank_dc_kwh
+
+        # First sample starts the 21.9 s window and is discarded.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+        # Thirty seconds later the Wallbox is active and the energy counts.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh > bank_before
+
+    def test_shutdown_transient_is_not_booked(self, agile_tariff):
+        """The power-down draw is not booked as a charge."""
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        # Move past the startup settle so the discharge is recorded.
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+        bank_after = agile_tariff._bank_dc_kwh
+        saved_after = agile_tariff._saved_today_gbp
+
+        # Stopping draws ~200 W the other way for a few seconds.
+        self._run(agile_tariff, clock, 0.1, ch1=300, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_after)
+        assert agile_tariff._saved_today_gbp == pytest.approx(saved_after)
+
+    def test_current_change_within_a_direction_is_not_delayed(
+        self, agile_tariff
+    ):
+        """A larger discharge while already discharging books immediately."""
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+        bank_after = agile_tariff._bank_dc_kwh
+
+        self._run(agile_tariff, clock, 0.5, ch1=0, ch2=-700, soc=50)
+
+        assert agile_tariff._bank_dc_kwh < bank_after
+
+    def test_startup_and_shutdown_use_the_wallbox_delays(self, agile_tariff):
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=0, soc=50)
+
+        self._run(agile_tariff, clock, 0.1, ch1=0, ch2=-700, soc=50)
+        assert (
+            agile_tariff._ledger_settle_until - clock[0]
+        ).total_seconds() == pytest.approx(
+            agile_tariff.LEDGER_STARTUP_SETTLE_SECONDS
+        )
+
+        # Move past the startup window, then stop.
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-700, soc=50)
+        self._run(agile_tariff, clock, 0.1, ch1=0, ch2=0, soc=50)
+        assert (
+            agile_tariff._ledger_settle_until - clock[0]
+        ).total_seconds() == pytest.approx(
+            agile_tariff.LEDGER_SHUTDOWN_SETTLE_SECONDS
+        )
+
     def test_pack_energy_at_restart_is_valued_at_the_fallback(
         self, agile_tariff
     ):

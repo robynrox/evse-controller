@@ -515,7 +515,11 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   persists so yesterday's cheap energy is priced correctly today. At startup,
   the charge already in the pack is seeded at the off-peak fallback price, and
   a ledger below 0.05 kWh is ignored as metering noise, so a momentary positive
-  EVSE sample cannot price a full pack and disable discharge. Below £10
+  EVSE sample cannot price a full pack and disable discharge. A direction
+  change also suppresses the ledger for the Wallbox's start/stop settling time
+  (21.9 s from idle, 10.9 s back to idle): the unit draws ~200 W while it
+  powers up or down, and that draw is not a priced energy flow. Current changes
+  within an active direction are booked immediately. Below £10
   the total is shown to four decimal places, and a `↑N.Np/h` / `↓N.Np/h`
   suffix shows its recent rate over the last couple of minutes while it is
   moving; the suffix is hidden when the total is flat.

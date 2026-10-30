@@ -219,6 +219,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     # is used instead.
     MIN_LEDGER_BASIS_KWH = 0.05
 
+    # Ledger settling after a direction change.  The Wallbox powers up or down
+    # before it reaches the commanded current and draws roughly 200 W while it
+    # does so.  These are the delays already used by the Wallbox thread
+    # (``start_charging`` and ``large_change``); ignore the ledger for the same
+    # time so that transient is not booked at the import price.  Current
+    # changes within an active direction are not delayed.
+    LEDGER_STARTUP_SETTLE_SECONDS = 21.9
+    LEDGER_SHUTDOWN_SETTLE_SECONDS = 10.9
+    LEDGER_DIRECTION_DEADBAND_W = 50.0
+
     # Load-following discharge biases.  Positive exports the excess, negative
     # deliberately leaves a small import.
     AGGRESSIVE_DISCHARGE_BIAS_A = 0.5
@@ -449,6 +459,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # fallback cost.  Without this, the first tiny sample booked after a
         # restart would become the entire cost basis for the pack.
         self._bank_seeded = False
+
+        # Last measured EVSE direction (+1 charging, -1 discharging, 0 idle)
+        # and the end of any settling window after a direction change.
+        self._ledger_direction = 0
+        self._ledger_settle_until = None
 
         # Estimated saving realised today by discharging stored energy, in
         # GBP, reset at local midnight.
@@ -951,6 +966,50 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         self._bank_seeded = True
 
+    @classmethod
+    def _ledger_direction_for(cls, evse_w: float) -> int:
+        """Classify the EVSE power flow, ignoring near-zero idle noise."""
+        if evse_w > cls.LEDGER_DIRECTION_DEADBAND_W:
+            return 1
+        if evse_w < -cls.LEDGER_DIRECTION_DEADBAND_W:
+            return -1
+        return 0
+
+    def _update_ledger_settle(self, now: datetime, direction: int) -> None:
+        """Start a settling window when the power flow changes direction.
+
+        The Wallbox draws power while it starts or stops, and that draw has no
+        useful price.  A transition from idle or to idle opens a window for
+        the corresponding delay from ``wallbox_thread.py``.  A transition
+        inside an existing window is the startup transient itself (for
+        example the brief import before a discharge begins), so it updates the
+        direction without extending the window.  Magnitude changes within one
+        direction do not open a window at all.
+        """
+        previous = self._ledger_direction
+        if direction == previous:
+            return
+        self._ledger_direction = direction
+
+        if self._ledger_settle_until is not None and now < self._ledger_settle_until:
+            return
+
+        if previous == 0:
+            seconds = self.LEDGER_STARTUP_SETTLE_SECONDS
+            label = "startup"
+        elif direction == 0:
+            seconds = self.LEDGER_SHUTDOWN_SETTLE_SECONDS
+            label = "shutdown"
+        else:
+            seconds = self.LEDGER_STARTUP_SETTLE_SECONDS
+            label = "reversal"
+
+        self._ledger_settle_until = now + timedelta(seconds=seconds)
+        debug(
+            f"IOCTGO_AGILEOUT: Ledger settling for {seconds:.1f}s after "
+            f"EVSE {label}"
+        )
+
     def discharge_activation_threshold_w(
         self,
         export_rate_p: float,
@@ -1176,6 +1235,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # so a small sample cannot become the whole cost basis.
         self._seed_bank_from_soc(power.get("soc"))
 
+        direction = self._ledger_direction_for(power["evse_w"])
+        self._update_ledger_settle(now, direction)
+
         if self._savings_last_time is None:
             self._savings_last_time = now
             self._savings_last_baseline_w = power["baseline_w"]
@@ -1186,6 +1248,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         elapsed = (now - self._savings_last_time).total_seconds()
         if elapsed <= 0:
             return
+
+        # The Wallbox is still powering up or down: discard this interval
+        # rather than booking its ~200 W transient at the import price.  Keep
+        # the baseline current so the first post-settle interval is correct.
+        if (
+            self._ledger_settle_until is not None
+            and now < self._ledger_settle_until
+        ):
+            self._savings_last_time = now
+            self._savings_last_baseline_w = power["baseline_w"]
+            self._savings_last_evse_w = power["evse_w"]
+            self._record_savings_rate(now)
+            return
+
         # Cap a long gap (process suspended, clock jump) so a single sample
         # cannot invent a large saving.
         hours = min(elapsed, 300.0) / 3600.0
