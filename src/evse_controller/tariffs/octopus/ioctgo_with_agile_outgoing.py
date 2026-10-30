@@ -6,6 +6,7 @@ from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
 import queue
+from collections import deque
 from typing import Optional
 import urllib.request
 import json
@@ -210,6 +211,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     # must never start rather than exporting at a loss.
     NEVER_DISCHARGE_ACTIVATION_W = 1_000_000.0
 
+    # Window used to estimate the recent rate of change of "saved today".
+    SAVINGS_RATE_WINDOW_SECONDS = 120
+
     # Load-following discharge biases.  Positive exports the excess, negative
     # deliberately leaves a small import.
     AGGRESSIVE_DISCHARGE_BIAS_A = 0.5
@@ -248,6 +252,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     .ioctgo-decision-line .ioctgo-lost {
         color: #c62828;
         font-weight: 600;
+        white-space: nowrap;
+    }
+    .ioctgo-decision-line .ioctgo-rate {
+        color: #777;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
         white-space: nowrap;
     }
     @media (max-width: 700px) {
@@ -438,6 +448,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._savings_last_time = None
         self._savings_last_baseline_w = 0.0
         self._savings_last_evse_w = 0.0
+        # Recent (time, saved-today) samples, used to show the rate at which
+        # the daily total is moving.  Only the control thread mutates this.
+        self._savings_rate_history = deque(maxlen=240)
+        self._savings_rate_gbp_per_hour = 0.0
 
         # Ensure OCPP is off
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -1043,6 +1057,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "it saves."
         )
 
+    def _record_savings_rate(self, now: datetime) -> None:
+        """Update the recent rate of change of the saved-today total.
+
+        A short window keeps the figure responsive while smoothing the
+        control-cycle noise.  The dashboard reads only the resulting float,
+        so the deque is confined to the control thread.
+        """
+        history = self._savings_rate_history
+        history.append((now, self._saved_today_gbp))
+        cutoff = now - timedelta(seconds=self.SAVINGS_RATE_WINDOW_SECONDS)
+        while len(history) > 1 and history[0][0] < cutoff:
+            history.popleft()
+
+        if len(history) < 2:
+            self._savings_rate_gbp_per_hour = 0.0
+            return
+
+        start_time, start_value = history[0]
+        elapsed_hours = (now - start_time).total_seconds() / 3600.0
+        if elapsed_hours <= 0:
+            self._savings_rate_gbp_per_hour = 0.0
+            return
+
+        self._savings_rate_gbp_per_hour = (
+            self._saved_today_gbp - start_value
+        ) / elapsed_hours
+
     def _accumulate_daily_savings(self) -> None:
         """Accumulate the money saved today by cycling stored energy.
 
@@ -1080,15 +1121,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._savings_last_time = None
             self._savings_last_baseline_w = 0.0
             self._savings_last_evse_w = 0.0
+            self._savings_rate_history.clear()
+            self._savings_rate_gbp_per_hour = 0.0
 
         power = self._read_power_snapshot()
         if power is None:
+            self._record_savings_rate(now)
             return
 
         if self._savings_last_time is None:
             self._savings_last_time = now
             self._savings_last_baseline_w = power["baseline_w"]
             self._savings_last_evse_w = power["evse_w"]
+            self._record_savings_rate(now)
             return
 
         elapsed = (now - self._savings_last_time).total_seconds()
@@ -1163,6 +1208,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._savings_last_time = now
         self._savings_last_baseline_w = power["baseline_w"]
         self._savings_last_evse_w = power["evse_w"]
+        self._record_savings_rate(now)
 
     def _estimate_solar_harvest_current(self) -> float:
         """Estimate the charge current the load-following loop will use.
@@ -1736,9 +1782,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             snapshot.discharge_activation_w = discharge_activation_w
 
     def _format_saved_today(self) -> str:
-        """Format the running saving with an explicit sign."""
+        """Format the running saving with an explicit sign.
+
+        Small totals keep four decimal places so a few pence of progress is
+        visible between dashboard refreshes; larger totals stay at pennies.
+        """
         value = self._saved_today_gbp
-        return f"{'-' if value < 0 else ''}£{abs(value):.2f}"
+        decimals = 4 if abs(value) < 10 else 2
+        return f"{'-' if value < 0 else ''}£{abs(value):.{decimals}f}"
+
+    def _format_savings_rate(self) -> str:
+        """Recent rate of change of the saved-today total, or an empty string.
+
+        The rate is hidden while the total is effectively flat, so the
+        indicator only appears when there is something to watch.
+        """
+        rate_p_per_hour = self._savings_rate_gbp_per_hour * 100.0
+        if abs(rate_p_per_hour) < 0.05:
+            return ""
+        arrow = "↑" if rate_p_per_hour > 0 else "↓"
+        return f"{arrow}{abs(rate_p_per_hour):.1f}p/h"
 
     def _mode_line_html(self) -> str:
         """One-line mode/reason summary, wrapping on narrow screens."""
@@ -1830,6 +1893,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
         saved = self._format_saved_today()
+        rate = self._format_savings_rate()
         saved_class = "ioctgo-saved" if self._saved_today_gbp >= 0 else "ioctgo-lost"
         title = html_module.escape(
             "Money saved today versus not cycling the battery. Each discharge "
@@ -1840,11 +1904,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "energy was sold for less than it cost, or stored solar was sold "
             "for less than the export it displaced (forgone revenue, not a "
             "running cost). A charge is only counted when the energy is used. "
-            "Resets at midnight.",
+            "Resets at midnight. The arrow shows the recent rate of change "
+            "over the last couple of minutes and is hidden while the total "
+            "is flat.",
             quote=True,
         )
+        rate_html = (
+            f'<span class="ioctgo-rate"> {rate}</span>' if rate else ""
+        )
         parts.append(
-            f'<span class="{saved_class}" title="{title}">saved today {saved}</span>'
+            f'<span class="{saved_class}" title="{title}">'
+            f"saved today {saved}{rate_html}</span>"
         )
 
         detail_attr = ""

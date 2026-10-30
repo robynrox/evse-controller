@@ -504,7 +504,10 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   import therefore books `32.26p − 7.62p / η_rt` per kWh delivered, with the
   round-trip loss included. Only realised energy counts, so a charge still in
   the pack shows no saving yet. The daily total resets at midnight; the ledger
-  persists so yesterday's cheap energy is priced correctly today.
+  persists so yesterday's cheap energy is priced correctly today. Below £10
+  the total is shown to four decimal places, and a `↑N.Np/h` / `↓N.Np/h`
+  suffix shows its recent rate over the last couple of minutes while it is
+  moving; the suffix is hidden when the total is flat.
 
 Export prices are always **numerators**, never denominators. A 0p price makes
 Tier 1 store, makes the planner find no profitable slot, and costs nothing to

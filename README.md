@@ -276,7 +276,7 @@ efficiency actually used for the decision, the minimum round-trip spread, and
 an estimate of the cost saved today:
 
 ```
-Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   saved today £0.42
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   saved today £0.4200 ↑12.3p/h
 ```
 
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
@@ -331,7 +331,10 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   cost, or stored solar displaced a positive export price and was sold for
   less — forgone revenue, not a running cost. Solar is costed at the export it
   displaced, not at the panel's capital cost; no capital is amortised anywhere
-  in this figure.
+  in this figure. Below £10 the total is shown to four decimal places so small
+  changes are visible; when it is moving, a small `↑N.Np/h` or `↓N.Np/h`
+  suffix shows the recent rate over the last couple of minutes and is hidden
+  while the total is flat.
 - **Channels** are resolved from `shelly.grid` and `shelly.evse` before the
   baseline, surplus and ledger are calculated. The controller hands control and
   accounting the same normalised grid/EVSE view, so moving a CT to the other

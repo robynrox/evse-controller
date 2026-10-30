@@ -1450,6 +1450,24 @@ class TestDailySavings:
 
         assert agile_tariff._saved_today_gbp < 0
 
+    def test_saved_today_rate_tracks_recent_discharge(self, agile_tariff):
+        """The dashboard can show how fast saved-today is moving."""
+        clock = self._start(agile_tariff, 2, 0)
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        saved_before = agile_tariff._saved_today_gbp
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        gained = agile_tariff._saved_today_gbp - saved_before
+        assert gained > 0
+        assert agile_tariff._savings_rate_gbp_per_hour == pytest.approx(
+            gained * 60.0, rel=0.01
+        )
+        assert agile_tariff._format_savings_rate().startswith("↑")
+
     def test_ledger_survives_midnight_but_daily_total_resets(self, agile_tariff):
         clock = self._start(agile_tariff, 23, 0)
 
@@ -1528,6 +1546,40 @@ class TestDashboardModeLine:
         assert "round trip" in html
         assert "min gain 0.3p/kWh" in html
         assert "saved today" in html
+
+    def test_saved_today_shows_finer_resolution(self, agile_tariff):
+        agile_tariff._saved_today_gbp = 0.0243
+        assert agile_tariff._format_saved_today() == "£0.0243"
+
+        agile_tariff._saved_today_gbp = -0.0243
+        assert agile_tariff._format_saved_today() == "-£0.0243"
+
+        agile_tariff._saved_today_gbp = 12.3456
+        assert agile_tariff._format_saved_today() == "£12.35"
+
+    def test_savings_rate_is_hidden_while_flat(self, agile_tariff):
+        agile_tariff._savings_rate_gbp_per_hour = 0.0
+        assert agile_tariff._format_savings_rate() == ""
+
+        agile_tariff._savings_rate_gbp_per_hour = 0.224
+        assert agile_tariff._format_savings_rate() == "↑22.4p/h"
+
+        agile_tariff._savings_rate_gbp_per_hour = -0.224
+        assert agile_tariff._format_savings_rate() == "↓22.4p/h"
+
+    def test_mode_line_shows_the_savings_rate_when_moving(self, agile_tariff):
+        agile_tariff._record_decision(
+            mode="Harvest 5 A · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+        agile_tariff._saved_today_gbp = 0.0243
+        agile_tariff._savings_rate_gbp_per_hour = 0.224
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "saved today £0.0243" in html
+        assert "↑22.4p/h" in html
 
     def test_strip_is_compact(self, agile_tariff):
         agile_tariff._record_decision(
