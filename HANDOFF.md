@@ -132,7 +132,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **364 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **365 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

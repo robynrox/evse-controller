@@ -1619,6 +1619,30 @@ class TestDailySavings:
             agile_tariff._bank_fallback_cost_per_dc_kwh() * 100.0 / eta_dis
         )
 
+    def test_stored_cost_reports_pack_and_delivered_basis(
+        self, agile_tariff
+    ):
+        """The pack cost and the delivered cost are both shown.
+
+        A 7.6p/kWh charge at 88% charge efficiency puts energy in the pack at
+        about 8.6p/kWh.  The discharge threshold needs the cost per kWh
+        delivered, which adds the discharge loss on top.
+        """
+        agile_tariff._bank_dc_kwh = 20.0
+        agile_tariff._bank_cost_gbp = 20.0 * 0.086
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+
+        assert agile_tariff._stored_cost_per_dc_kwh_p() == pytest.approx(8.6)
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            8.6 / eta_dis
+        )
+        assert agile_tariff._format_stored_cost() == (
+            f"stored 8.6p/kWh "
+            f"({agile_tariff._delivered_cost_per_kwh_p():.1f}p delivered)"
+        )
+
     def test_tiny_high_price_sample_does_not_disable_discharge(
         self, agile_tariff
     ):
@@ -1696,7 +1720,10 @@ class TestDashboardModeLine:
         html = agile_tariff.get_dashboard_html()
 
         assert (
-            f"stored {agile_tariff._delivered_cost_per_kwh_p():.1f}p/kWh"
+            f"stored {agile_tariff._stored_cost_per_dc_kwh_p():.1f}p/kWh" in html
+        )
+        assert (
+            f"({agile_tariff._delivered_cost_per_kwh_p():.1f}p delivered)"
             in html
         )
         assert "ledger of 10.0 kWh" in html

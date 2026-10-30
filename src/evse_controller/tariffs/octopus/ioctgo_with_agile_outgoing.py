@@ -916,25 +916,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         return (config.IMPORT_LOW / 100.0) / max(charge_efficiency, 1e-6)
 
+    def _stored_cost_per_dc_kwh_p(self) -> float:
+        """Average purchase cost of the energy in the pack, in p/kWh DC.
+
+        This is the price paid per kWh actually stored in the pack (or the
+        Agile export value forgone when it was stored).  The discharge
+        threshold uses ``_delivered_cost_per_kwh_p()`` instead, which divides
+        this by the measured discharge efficiency.  When the ledger has no
+        basis (fresh process, or energy that predates it) this uses the
+        off-peak purchase price, which keeps the estimate conservative.  A
+        ledger smaller than ``MIN_LEDGER_BASIS_KWH`` is treated as noise
+        rather than a price basis.
+        """
+        if self._bank_dc_kwh >= self.MIN_LEDGER_BASIS_KWH:
+            return (self._bank_cost_gbp / self._bank_dc_kwh) * 100.0
+        return self._bank_fallback_cost_per_dc_kwh() * 100.0
+
     def _delivered_cost_per_kwh_p(self) -> float:
         """Ledger cost per kWh delivered from the pack, in p/kWh.
 
-        The ledger carries DC-side kWh, so the cost is divided by the measured
-        discharge efficiency at the minimum current - the current a
-        house-load discharge actually runs at.  When the ledger has no basis
-        (fresh process, or energy that predates it) this uses the off-peak
-        purchase price, which keeps the estimate conservative.  A ledger
-        smaller than ``MIN_LEDGER_BASIS_KWH`` is treated as noise rather than
-        a price basis.
+        The ledger carries DC-side kWh, so the in-pack cost is divided by the
+        measured discharge efficiency at the minimum current - the current a
+        house-load discharge actually runs at.
         """
-        if self._bank_dc_kwh >= self.MIN_LEDGER_BASIS_KWH:
-            cost_per_dc_gbp = self._bank_cost_gbp / self._bank_dc_kwh
-        else:
-            cost_per_dc_gbp = self._bank_fallback_cost_per_dc_kwh()
         discharge_efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
             self.MIN_DISCHARGE_CURRENT
         )
-        return cost_per_dc_gbp * 100.0 / max(discharge_efficiency, 1e-6)
+        return self._stored_cost_per_dc_kwh_p() / max(discharge_efficiency, 1e-6)
 
     def _seed_bank_from_soc(self, soc_percent) -> None:
         """Value the charge already in the pack when the ledger is fresh.
@@ -1933,8 +1941,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return "off-peak fallback while the ledger is empty"
 
     def _format_stored_cost(self) -> str:
-        """Stored energy cost per kWh delivered, e.g. ``stored 15.4p/kWh``."""
-        return f"stored {self._delivered_cost_per_kwh_p():.1f}p/kWh"
+        """Stored energy cost in the pack and per kWh delivered."""
+        return (
+            f"stored {self._stored_cost_per_dc_kwh_p():.1f}p/kWh "
+            f"({self._delivered_cost_per_kwh_p():.1f}p delivered)"
+        )
 
     def _mode_line_html(self) -> str:
         """One-line mode/reason summary, wrapping on narrow screens."""
@@ -2029,13 +2040,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
 
         stored_title = html_module.escape(
-            "Average cost of the energy in the pack, per kWh delivered to the "
-            "house, including charge and discharge losses. It is the import "
+            "Average cost of the energy in the pack: "
+            f"{self._stored_cost_per_dc_kwh_p():.1f}p/kWh in the pack, or "
+            f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered to the "
+            "house after discharge losses. The in-pack figure is the import "
             "cost paid plus any Agile export value forgone when the energy "
-            "was stored, divided by the measured efficiency. Energy already "
-            "in the pack when the controller starts is valued at the off-peak "
-            "replacement price, not zero, so a restart does not make it look "
-            f"free. The discharge threshold uses this plus the "
+            "was stored, divided by the measured charge efficiency. The "
+            "delivered figure divides that by the measured discharge "
+            "efficiency and is the basis for the discharge threshold. Energy "
+            "already in the pack when the controller starts is valued at the "
+            "off-peak replacement price, not zero, so a restart does not make "
+            "it look free. The threshold uses the delivered figure plus the "
             f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh margin. Basis: "
             f"{self._stored_cost_basis()}.",
             quote=True,
