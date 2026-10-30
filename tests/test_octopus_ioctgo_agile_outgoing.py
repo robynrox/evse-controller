@@ -1364,6 +1364,41 @@ class TestDailySavings:
         assert agile_tariff._bank_dc_kwh == pytest.approx(bank_dc)
         assert agile_tariff._bank_cost_gbp == pytest.approx(bank_cost)
 
+    def test_first_discharge_prices_unknown_energy_at_off_peak(
+        self, agile_tariff
+    ):
+        """Energy already in the pack has no purchase price.
+
+        It is not treated as free: the ledger falls back to the off-peak
+        rate, so the first discharge books the import it avoids minus that
+        conservative cost.  At 30p import that is still a saving, but a
+        smaller one than a charge the ledger actually saw.
+        """
+        clock = self._start(agile_tariff, 12, 0)
+        assert agile_tariff._bank_dc_kwh == 0.0
+
+        # The EVSE covers the whole 300 W house load for one minute.
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            agile_tariff.GRID_CHARGE_REFERENCE_CURRENT
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - config.IMPORT_LOW / (eta_chg * eta_dis)
+        ) / 100.0
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, rel=0.01
+        )
+        # The cost basis is the fallback, not zero.
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            config.IMPORT_LOW / (eta_chg * eta_dis), rel=0.01
+        )
+
 
 class TestDashboardModeLine:
     """The compact decision line sits above the 48-slot strip."""
@@ -1416,3 +1451,31 @@ class TestDashboardModeLine:
         assert "Max charge (32 A)" in html
         assert "Loading Agile Outgoing rates" in html
 
+
+
+class TestRateFetchState:
+    """The rate cache must be usable before the first successful fetch."""
+
+    def test_complete_rates_check_before_first_fetch(self):
+        """A fresh process has no _last_fetch_date until a fetch stores one.
+
+        The check short-circuits on an empty rate list today, but the
+        attribute must still exist so externally supplied rates or a future
+        reordering cannot raise AttributeError.
+        """
+        mock_thread = Mock()
+        mock_thread.getBatteryChargeLevel = Mock(return_value=75)
+        mock_thread.get_state = Mock(return_value={})
+
+        with patch.object(
+            IOctGoWithAgileOutgoingTariff, "_fetch_rates_async"
+        ), patch(
+            'evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
+            return_value=mock_thread,
+        ):
+            tariff = IOctGoWithAgileOutgoingTariff()
+
+        tariff.agile_rates = create_mock_agile_rates()
+
+        assert tariff._last_fetch_date is None
+        assert tariff._have_complete_rates_for_date(datetime.now().date()) is False

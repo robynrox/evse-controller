@@ -115,7 +115,7 @@ completed fixes.
   controller never starts a discharge.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **330 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **332 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

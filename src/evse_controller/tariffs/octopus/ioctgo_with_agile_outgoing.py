@@ -386,9 +386,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._planned_export_slots = []
         self._exported_slots = []  # Track slots where export actually occurred
 
-        # Rate fetching state
+        # Rate fetching state.  _last_fetch_date is read by
+        # _have_complete_rates_for_date() before the first successful fetch,
+        # so it must exist from construction rather than only after a fetch
+        # that stored new data.
         self._rate_fetch_timer = None
         self._last_fetch_attempt = None
+        self._last_fetch_date = None
         
         # Cache for export plan calculation
         self._last_plan_soc = -1
