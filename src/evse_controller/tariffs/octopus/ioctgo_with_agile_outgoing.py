@@ -946,7 +946,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         discharge at another current should pass it explicitly.
         """
         if current_a is None:
-            current_a = self.MIN_DISCHARGE_CURRENT
+            current_a = float(self.MIN_DISCHARGE_CURRENT)
         discharge_efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
             current_a
         )
