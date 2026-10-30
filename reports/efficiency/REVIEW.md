@@ -510,11 +510,13 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   price it avoids, or the Agile export price beyond the house load, minus the
   ledger cost released. An off-peak 7.62p charge that later displaces 32.26p
   import therefore books `32.26p − 7.62p / η_rt` per kWh delivered, with the
-  round-trip loss included. The dashboard shows both the in-pack cost and the
-  cost per kWh delivered; the delivered figure includes the discharge loss and
-  is the discharge-threshold basis. Only realised energy counts, so a charge
-  still in the pack shows no saving yet. The daily total resets at midnight; the
-  ledger persists so yesterday's cheap energy is priced correctly today. At startup,
+  round-trip loss included. The dashboard shows the in-pack cost and the range
+  of cost per kWh delivered across the discharge range; the delivered cost is
+  highest at the 3 A minimum and lowest at maximum current, and the 3 A figure
+  is the discharge-threshold basis because activation starts at the minimum
+  output. Only realised energy counts, so a charge still in the pack shows no
+  saving yet. The daily total resets at midnight; the ledger persists so
+  yesterday's cheap energy is priced correctly today. At startup,
   the charge already in the pack is seeded at the off-peak fallback price, and
   a ledger below 0.05 kWh is ignored as metering noise, so a momentary positive
   EVSE sample cannot price a full pack and disable discharge. A direction

@@ -932,17 +932,35 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return (self._bank_cost_gbp / self._bank_dc_kwh) * 100.0
         return self._bank_fallback_cost_per_dc_kwh() * 100.0
 
-    def _delivered_cost_per_kwh_p(self) -> float:
+    def _delivered_cost_per_kwh_p(self, current_a: float | None = None) -> float:
         """Ledger cost per kWh delivered from the pack, in p/kWh.
 
-        The ledger carries DC-side kWh, so the in-pack cost is divided by the
-        measured discharge efficiency at the minimum current - the current a
-        house-load discharge actually runs at.
+        The delivered cost depends on the discharge current: the pack loses a
+        larger share at low current, so the same stored energy costs more per
+        kWh delivered at 3 A than at maximum current.  ``current_a`` defaults
+        to ``MIN_DISCHARGE_CURRENT`` because the activation threshold is a
+        decision to start at the minimum output.  Callers that describe a
+        discharge at another current should pass it explicitly.
         """
+        if current_a is None:
+            current_a = self.MIN_DISCHARGE_CURRENT
         discharge_efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
-            self.MIN_DISCHARGE_CURRENT
+            current_a
         )
         return self._stored_cost_per_dc_kwh_p() / max(discharge_efficiency, 1e-6)
+
+    def _delivered_cost_range_per_kwh_p(self) -> tuple[float, float]:
+        """Lowest and highest delivered cost across the discharge range.
+
+        The low end is at maximum discharge current (least loss after the
+        pack); the high end is at the 3 A minimum (most loss).
+        """
+        min_current = self.MIN_DISCHARGE_CURRENT
+        max_current = max(min_current, config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        return (
+            self._delivered_cost_per_kwh_p(max_current),
+            self._delivered_cost_per_kwh_p(min_current),
+        )
 
     def _seed_bank_from_soc(self, soc_percent) -> None:
         """Value the charge already in the pack when the ledger is fresh.
@@ -1037,7 +1055,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         One hour at the minimum output ``P_min`` serving a load ``L``
         (``L < P_min``) earns ``L * P_import + (P_min - L) * P_export`` and
         costs ``P_min * H``, where ``H`` is the stored cost per delivered kWh
-        plus the profit margin.  Solving for zero gives::
+        plus the profit margin.  ``H`` is evaluated at the minimum discharge
+        current because activation is a decision to start at that output; once
+        running, the ledger and savings use the actual current.  Solving for
+        zero gives::
 
             G* = P_min * (H - P_export) / (P_import - P_export)
 
@@ -1941,10 +1962,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return "off-peak fallback while the ledger is empty"
 
     def _format_stored_cost(self) -> str:
-        """Stored energy cost in the pack and per kWh delivered."""
+        """Stored energy cost in the pack and across the discharge range."""
+        low_p, high_p = self._delivered_cost_range_per_kwh_p()
+        if high_p - low_p < 0.05:
+            delivered = f"{high_p:.1f}p delivered"
+        else:
+            delivered = f"{low_p:.1f}–{high_p:.1f}p delivered"
         return (
             f"stored {self._stored_cost_per_dc_kwh_p():.1f}p/kWh "
-            f"({self._delivered_cost_per_kwh_p():.1f}p delivered)"
+            f"({delivered})"
         )
 
     def _mode_line_html(self) -> str:
@@ -2027,9 +2053,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"~{config.WALLBOX_MIN_DISCHARGE_CURRENT * 240:.0f} W), so "
                     "starting for a smaller load would export the difference at "
                     "the current Agile price. The threshold is the break-even "
-                    "point: "
-                    f"stored energy costs {self._delivered_cost_per_kwh_p():.1f}p/kWh "
-                    f"delivered plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
+                    "point: at the "
+                    f"{config.WALLBOX_MIN_DISCHARGE_CURRENT:.0f} A minimum, "
+                    f"stored energy costs "
+                    f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
+                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                     "margin. It rises when stored energy was expensive and falls "
                     "when the export price it displaces is high.",
                     quote=True,
@@ -2039,18 +2067,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{activation_label}</span>"
                 )
 
+        low_p, high_p = self._delivered_cost_range_per_kwh_p()
         stored_title = html_module.escape(
             "Average cost of the energy in the pack: "
-            f"{self._stored_cost_per_dc_kwh_p():.1f}p/kWh in the pack, or "
-            f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered to the "
-            "house after discharge losses. The in-pack figure is the import "
-            "cost paid plus any Agile export value forgone when the energy "
-            "was stored, divided by the measured charge efficiency. The "
-            "delivered figure divides that by the measured discharge "
-            "efficiency and is the basis for the discharge threshold. Energy "
-            "already in the pack when the controller starts is valued at the "
-            "off-peak replacement price, not zero, so a restart does not make "
-            "it look free. The threshold uses the delivered figure plus the "
+            f"{self._stored_cost_per_dc_kwh_p():.1f}p/kWh in the pack. "
+            "Discharging it costs "
+            f"{low_p:.1f}–{high_p:.1f}p/kWh delivered, depending on the "
+            "discharge current: the 3 A minimum is the upper end, maximum "
+            "current the lower end. The in-pack figure is the import cost paid "
+            "plus any Agile export value forgone when the energy was stored, "
+            "divided by the measured charge efficiency. The delivered figure "
+            "divides that by the measured discharge efficiency. The activation "
+            "threshold uses the 3 A minimum because a load-following discharge "
+            "starts at the minimum output. Energy already in the pack when the "
+            "controller starts is valued at the off-peak replacement price, "
+            "not zero, so a restart does not make it look free. The threshold "
+            "uses the delivered figure plus the "
             f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh margin. Basis: "
             f"{self._stored_cost_basis()}.",
             quote=True,
@@ -2710,7 +2742,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"Conservative discharge {activation_text}. "
                     f"Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
-                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    f"at the {self.MIN_DISCHARGE_CURRENT:.0f} A minimum plus a "
+                    f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
                     f"Harvest estimate {harvest_current_a:.0f} A."
                     + (
                         f" Charging is inhibited at the {charge_cap:.0f}% cap."
@@ -2802,7 +2835,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{surplus_w:.0f} W. Aggressive discharge {activation_text}. "
                     "Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
-                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    f"at the {self.MIN_DISCHARGE_CURRENT:.0f} A minimum plus a "
+                    f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
                     "Detailed slot and SoC projections are in the log."
                     if surplus_w is not None
                     else (
@@ -2869,7 +2903,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{best_future_text}. Aggressive discharge {activation_text}. "
                     "Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
-                    f"plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    f"at the {self.MIN_DISCHARGE_CURRENT:.0f} A minimum plus a "
+                    f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
                     "Detailed slot and SoC projections are in the log."
                 ),
                 target_soc_percent=target_soc,

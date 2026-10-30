@@ -276,7 +276,7 @@ efficiency actually used for the decision, the minimum round-trip spread, and
 an estimate of the cost saved today:
 
 ```
-Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   stored 8.0p/kWh (10.9p delivered)   saved today £0.4200 ↑12.3p/h
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
 ```
 
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
@@ -294,16 +294,18 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   stored energy was expensive and falls when the export it displaces is worth
   more. If the export price alone clears `H`, any import starts it; if `H`
   exceeds the import price, it never starts.
-- **Stored N.Np/kWh (M.Mp delivered)** shows both cost bases. `N` is the
+- **Stored N.Np/kWh (L–Hp delivered)** shows both cost bases. `N` is the
   money paid for the energy in the ledger (or the Agile export value forgone
   when it was stored) per kWh actually in the pack, divided by the measured
-  charge efficiency. `M` divides that by the measured discharge efficiency,
-  because the pack cannot deliver all of its DC energy to the house; the
-  delivered figure is the threshold basis. Energy already in the pack when the
-  controller starts is valued at the off-peak replacement price, not zero. That
-  existing charge is seeded into the ledger at startup, so a momentary charging
-  blip cannot become the price of the whole pack. Hover for the ledger size and
-  whether the figure comes from the ledger or the fallback.
+  charge efficiency. The delivered cost depends on discharge current, so `L`
+  is the cost at maximum current and `H` at the 3 A minimum, where the
+  discharge loss is greatest. The activation threshold uses the 3 A figure
+  because a load-following discharge starts at the minimum output; actual
+  savings use the measured current throughout. Energy already in the pack when
+  the controller starts is valued at the off-peak replacement price, not zero.
+  That existing charge is seeded into the ledger at startup, so a momentary
+  charging blip cannot become the price of the whole pack. Hover for the ledger
+  size and whether the figure comes from the ledger or the fallback.
 - **Reason** comes from the same branch that made the decision. In the
   aggressive house-load modes it also states the discharge trigger and why:
   `Discharge starts at ≥N W house import; below that the 3 A minimum would

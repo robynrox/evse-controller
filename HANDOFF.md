@@ -97,7 +97,8 @@ completed fixes.
   docs), `0de721f` (normalised Shelly channels), `46d907d` (house-load floor),
   `319c443` (aggressive activation explanation), `b404816` (finer saved-today
   display), `44a7ca3` (ledger noise guard), `69446a8` (Wallbox transition
-  settling), and the follow-up that drops the redundant zero-activation chip.
+  settling), and follow-ups that drop the redundant zero-activation chip and
+  show the in-pack and delivered stored-cost bases.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).

@@ -1630,17 +1630,24 @@ class TestDailySavings:
         """
         agile_tariff._bank_dc_kwh = 20.0
         agile_tariff._bank_cost_gbp = 20.0 * 0.086
-        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
-            agile_tariff.MIN_DISCHARGE_CURRENT
-        )
+        low_p, high_p = agile_tariff._delivered_cost_range_per_kwh_p()
 
         assert agile_tariff._stored_cost_per_dc_kwh_p() == pytest.approx(8.6)
-        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
-            8.6 / eta_dis
+        assert low_p < high_p
+        assert high_p == pytest.approx(
+            8.6
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                agile_tariff.MIN_DISCHARGE_CURRENT
+            )
+        )
+        assert low_p == pytest.approx(
+            8.6
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                config.WALLBOX_MAX_DISCHARGE_CURRENT
+            )
         )
         assert agile_tariff._format_stored_cost() == (
-            f"stored 8.6p/kWh "
-            f"({agile_tariff._delivered_cost_per_kwh_p():.1f}p delivered)"
+            f"stored 8.6p/kWh ({low_p:.1f}–{high_p:.1f}p delivered)"
         )
 
     def test_tiny_high_price_sample_does_not_disable_discharge(
@@ -1719,13 +1726,11 @@ class TestDashboardModeLine:
 
         html = agile_tariff.get_dashboard_html()
 
+        low_p, high_p = agile_tariff._delivered_cost_range_per_kwh_p()
         assert (
             f"stored {agile_tariff._stored_cost_per_dc_kwh_p():.1f}p/kWh" in html
         )
-        assert (
-            f"({agile_tariff._delivered_cost_per_kwh_p():.1f}p delivered)"
-            in html
-        )
+        assert f"({low_p:.1f}–{high_p:.1f}p delivered)" in html
         assert "ledger of 10.0 kWh" in html
 
     def test_zero_activation_does_not_repeat_the_chip(self, agile_tariff):
