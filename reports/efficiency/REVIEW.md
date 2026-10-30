@@ -488,6 +488,14 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   the threshold is ~269 W: a 480 W house load is economic, a 30 W one is not.
   The threshold is recalculated each control cycle from the ledger, so cheap
   stored energy lowers it and expensive stored energy raises it.
+- **Stored N.Np/kWh** is that ledger cost per kWh delivered to the house: the
+  money paid for the energy (or the Agile export value forgone when it was
+  stored), divided by the measured charge and discharge efficiency. The charge
+  already in the pack when the process starts is valued at the off-peak
+  replacement price, not zero, and is seeded into the ledger so a later sample
+  blends with it instead of replacing it. A ledger below 0.05 kWh is treated
+  as metering noise. Hover tells you whether the figure is the ledger average
+  or the fallback.
 - **Efficiency** is the measured value the decision actually used
   (`charge`, `discharge`, `round trip`, or `solar → house`). There is no single
   global minimum because the model is current-dependent.
@@ -504,7 +512,10 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   import therefore books `32.26p − 7.62p / η_rt` per kWh delivered, with the
   round-trip loss included. Only realised energy counts, so a charge still in
   the pack shows no saving yet. The daily total resets at midnight; the ledger
-  persists so yesterday's cheap energy is priced correctly today. Below £10
+  persists so yesterday's cheap energy is priced correctly today. At startup,
+  the charge already in the pack is seeded at the off-peak fallback price, and
+  a ledger below 0.05 kWh is ignored as metering noise, so a momentary positive
+  EVSE sample cannot price a full pack and disable discharge. Below £10
   the total is shown to four decimal places, and a `↑N.Np/h` / `↓N.Np/h`
   suffix shows its recent rate over the last couple of minutes while it is
   moving; the suffix is hidden when the total is flat.

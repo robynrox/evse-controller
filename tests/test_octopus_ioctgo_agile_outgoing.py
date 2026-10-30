@@ -1302,18 +1302,20 @@ class TestDailySavings:
         return clock
 
     @staticmethod
-    def _prime(tariff, clock, ch1, ch2):
-        tariff.evseController.current_grid_power = Power(
-            ch1Watts=ch1, ch2Watts=ch2, voltage=240
-        )
+    def _prime(tariff, clock, ch1, ch2, soc=None):
+        power = Power(ch1Watts=ch1, ch2Watts=ch2, voltage=240)
+        if soc is not None:
+            power.soc = soc
+        tariff.evseController.current_grid_power = power
         tariff._savings_last_time = None
         tariff._accumulate_daily_savings()
 
     @staticmethod
-    def _run(tariff, clock, minutes, ch1, ch2):
-        tariff.evseController.current_grid_power = Power(
-            ch1Watts=ch1, ch2Watts=ch2, voltage=240
-        )
+    def _run(tariff, clock, minutes, ch1, ch2, soc=None):
+        power = Power(ch1Watts=ch1, ch2Watts=ch2, voltage=240)
+        if soc is not None:
+            power.soc = soc
+        tariff.evseController.current_grid_power = power
         clock[0] = clock[0] + timedelta(minutes=minutes)
         tariff._accumulate_daily_savings()
 
@@ -1520,6 +1522,61 @@ class TestDailySavings:
             config.IMPORT_LOW / (eta_chg * eta_dis), rel=0.01
         )
 
+    def test_pack_energy_at_restart_is_valued_at_the_fallback(
+        self, agile_tariff
+    ):
+        """A restart does not make the existing charge look free or dear."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(
+            0.5 * agile_tariff.SOC_CAPACITY_KWH
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            agile_tariff._bank_fallback_cost_per_dc_kwh() * 100.0 / eta_dis
+        )
+
+    def test_tiny_high_price_sample_does_not_disable_discharge(
+        self, agile_tariff
+    ):
+        """Regression: a transient charge must not become the whole basis.
+
+        A 2 W positive EVSE reading for 30 s at the 30p import rate used to
+        set the cost of the entire pack to ~70p/kWh delivered, so the very
+        next control cycle disabled discharge even though the pack had been
+        charged long before the process started.
+        """
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        self._run(agile_tariff, clock, 0.5, ch1=302, ch2=2, soc=50)
+
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            8.0, import_rate_p=config.IMPORT_HIGH
+        )
+
+        assert threshold < agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        assert "disabled" not in agile_tariff._activation_explanation(
+            threshold
+        )
+
+    def test_unknown_soc_noise_keeps_the_fallback_basis(self, agile_tariff):
+        """With no SoC to seed from, a sub-threshold ledger is still noise."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=-1)
+        self._run(agile_tariff, clock, 0.5, ch1=302, ch2=2, soc=-1)
+
+        assert agile_tariff._bank_dc_kwh < agile_tariff.MIN_LEDGER_BASIS_KWH
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            agile_tariff._bank_fallback_cost_per_dc_kwh()
+            * 100.0
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                agile_tariff.MIN_DISCHARGE_CURRENT
+            )
+        )
+
 
 class TestDashboardModeLine:
     """The compact decision line sits above the 48-slot strip."""
@@ -1546,6 +1603,35 @@ class TestDashboardModeLine:
         assert "round trip" in html
         assert "min gain 0.3p/kWh" in html
         assert "saved today" in html
+
+    def test_mode_line_shows_stored_energy_cost(self, agile_tariff):
+        agile_tariff._bank_dc_kwh = 10.0
+        agile_tariff._bank_cost_gbp = 1.0
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert (
+            f"stored {agile_tariff._delivered_cost_per_kwh_p():.1f}p/kWh"
+            in html
+        )
+        assert "ledger of 10.0 kWh" in html
+
+    def test_mode_line_marks_the_fallback_cost_basis(self, agile_tariff):
+        agile_tariff._bank_dc_kwh = 0.0
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "off-peak fallback" in html
 
     def test_saved_today_shows_finer_resolution(self, agile_tariff):
         agile_tariff._saved_today_gbp = 0.0243

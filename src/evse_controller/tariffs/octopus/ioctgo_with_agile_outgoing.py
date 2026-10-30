@@ -214,6 +214,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     # Window used to estimate the recent rate of change of "saved today".
     SAVINGS_RATE_WINDOW_SECONDS = 120
 
+    # Smallest ledger that is trusted as a cost basis.  A few watt-seconds of
+    # meter noise must not price the whole pack; below this the fallback cost
+    # is used instead.
+    MIN_LEDGER_BASIS_KWH = 0.05
+
     # Load-following discharge biases.  Positive exports the excess, negative
     # deliberately leaves a small import.
     AGGRESSIVE_DISCHARGE_BIAS_A = 0.5
@@ -440,6 +445,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # only the daily total resets.
         self._bank_dc_kwh = 0.0
         self._bank_cost_gbp = 0.0
+        # Whether the charge already in the pack has been valued at the
+        # fallback cost.  Without this, the first tiny sample booked after a
+        # restart would become the entire cost basis for the pack.
+        self._bank_seeded = False
 
         # Estimated saving realised today by discharging stored energy, in
         # GBP, reset at local midnight.
@@ -866,6 +875,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evse_w = float(power.ch2Watts)
             baseline_w = grid_w - evse_w
             voltage = float(power.voltage) if power.voltage and power.voltage > 0 else 240.0
+            soc = int(getattr(power, "soc", -1))
         except (AttributeError, TypeError, ValueError):
             return None
 
@@ -875,6 +885,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "baseline_w": baseline_w,
             "surplus_w": -baseline_w,
             "voltage": voltage,
+            "soc": soc,
         }
 
     def _bank_fallback_cost_per_dc_kwh(self) -> float:
@@ -897,9 +908,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         discharge efficiency at the minimum current - the current a
         house-load discharge actually runs at.  When the ledger has no basis
         (fresh process, or energy that predates it) this uses the off-peak
-        purchase price, which keeps the estimate conservative.
+        purchase price, which keeps the estimate conservative.  A ledger
+        smaller than ``MIN_LEDGER_BASIS_KWH`` is treated as noise rather than
+        a price basis.
         """
-        if self._bank_dc_kwh > 0:
+        if self._bank_dc_kwh >= self.MIN_LEDGER_BASIS_KWH:
             cost_per_dc_gbp = self._bank_cost_gbp / self._bank_dc_kwh
         else:
             cost_per_dc_gbp = self._bank_fallback_cost_per_dc_kwh()
@@ -907,6 +920,36 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.MIN_DISCHARGE_CURRENT
         )
         return cost_per_dc_gbp * 100.0 / max(discharge_efficiency, 1e-6)
+
+    def _seed_bank_from_soc(self, soc_percent) -> None:
+        """Value the charge already in the pack when the ledger is fresh.
+
+        The ledger only sees energy that passes through the EVSE while the
+        process is running.  After a restart the pack can hold a full charge
+        bought before the ledger existed; without a seed, the first tiny
+        sample booked afterwards would become the entire cost basis and a
+        momentary positive reading at a high import price could disable
+        discharge.  Value the existing DC energy at the same off-peak
+        fallback used for unknown energy, so later purchases blend with it.
+        """
+        if self._bank_seeded:
+            return
+        try:
+            soc = float(soc_percent)
+        except (TypeError, ValueError):
+            return
+        if soc <= 0:
+            # No usable reading yet: -1 means the measurement failed, and the
+            # placeholder Power starts at 0.  Try again on a later cycle.
+            return
+
+        existing_dc_kwh = (soc / 100.0) * self.SOC_CAPACITY_KWH
+        if existing_dc_kwh > 0:
+            self._bank_dc_kwh += existing_dc_kwh
+            self._bank_cost_gbp += (
+                existing_dc_kwh * self._bank_fallback_cost_per_dc_kwh()
+            )
+        self._bank_seeded = True
 
     def discharge_activation_threshold_w(
         self,
@@ -1128,6 +1171,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if power is None:
             self._record_savings_rate(now)
             return
+
+        # Value the charge that predates this process before booking anything,
+        # so a small sample cannot become the whole cost basis.
+        self._seed_bank_from_soc(power.get("soc"))
 
         if self._savings_last_time is None:
             self._savings_last_time = now
@@ -1803,6 +1850,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         arrow = "↑" if rate_p_per_hour > 0 else "↓"
         return f"{arrow}{abs(rate_p_per_hour):.1f}p/h"
 
+    def _stored_cost_basis(self) -> str:
+        """Where the stored-energy cost comes from, for the dashboard tooltip."""
+        if self._bank_dc_kwh >= self.MIN_LEDGER_BASIS_KWH:
+            return f"ledger of {self._bank_dc_kwh:.1f} kWh"
+        return "off-peak fallback while the ledger is empty"
+
+    def _format_stored_cost(self) -> str:
+        """Stored energy cost per kWh delivered, e.g. ``stored 15.4p/kWh``."""
+        return f"stored {self._delivered_cost_per_kwh_p():.1f}p/kWh"
+
     def _mode_line_html(self) -> str:
         """One-line mode/reason summary, wrapping on narrow screens."""
         snapshot = self._decision_snapshot
@@ -1891,6 +1948,23 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f'<span class="ioctgo-metric" title="{title}">'
                 f"{activation_label}</span>"
             )
+
+        stored_title = html_module.escape(
+            "Average cost of the energy in the pack, per kWh delivered to the "
+            "house, including charge and discharge losses. It is the import "
+            "cost paid plus any Agile export value forgone when the energy "
+            "was stored, divided by the measured efficiency. Energy already "
+            "in the pack when the controller starts is valued at the off-peak "
+            "replacement price, not zero, so a restart does not make it look "
+            f"free. The discharge threshold uses this plus the "
+            f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh margin. Basis: "
+            f"{self._stored_cost_basis()}.",
+            quote=True,
+        )
+        parts.append(
+            f'<span class="ioctgo-metric" title="{stored_title}">'
+            f"{self._format_stored_cost()}</span>"
+        )
 
         saved = self._format_saved_today()
         rate = self._format_savings_rate()
