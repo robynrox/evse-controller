@@ -113,6 +113,12 @@ completed fixes.
   below 3 A (~720 W), so starting for a tiny load would export the excess.
   Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
   controller never starts a discharge.
+- Bulk export planning keeps `MIN_AGILE_DISCHARGE_SOC` as its floor. The
+  aggressive/conservative house-load decision now uses
+  `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
+  (`house_load_margin_percent`, default 5%, clamped above the 25% protection
+  reserve). This keeps aggressive mode after a bulk export reaches the target;
+  only a projection below the lower floor becomes conservative.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts
@@ -122,7 +128,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **339 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **346 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

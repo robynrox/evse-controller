@@ -437,6 +437,11 @@ def config_page():
             if min_agile_soc is not None:
                 config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
 
+            # Flexibility below the bulk-export target for house-load mode
+            house_load_margin = request.form.get('tariffs.ioctgo[house_load_margin_percent]')
+            if house_load_margin is not None:
+                config.HOUSE_LOAD_MARGIN_PERCENT = float(house_load_margin)
+
             # Handle channel configuration for both devices
             devices = ['primary']
             if config.SHELLY_SECONDARY_URL:

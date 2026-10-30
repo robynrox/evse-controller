@@ -251,6 +251,7 @@ class TestConfig:
         assert config_dict["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:00"
         assert config_dict["tariffs"]["ioctgo"]["enable_bulk_discharge"] is True
         assert config_dict["tariffs"]["ioctgo"]["min_profit_margin_p_per_kwh"] == 0.3
+        assert config_dict["tariffs"]["ioctgo"]["house_load_margin_percent"] == 5
 
         # Update a value and check it appears in as_dict
         config.IOCTGO_BATTERY_CAPACITY_KWH = 70

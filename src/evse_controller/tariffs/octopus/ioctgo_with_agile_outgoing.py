@@ -87,8 +87,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     Before applying the storage/export logic, the tariff projects the SoC at
     23:30 assuming every remaining slot loses NON_EXPORT_SLOT_SOC_LOSS_PERCENT.
-    If that projection is below MIN_AGILE_DISCHARGE_SOC, the day is treated as
-    an energy shortfall and the system switches to a conservative bidirectional
+    The bulk-export planner uses MIN_AGILE_DISCHARGE_SOC as its floor.  The
+    aggressive/conservative house-load decision uses a lower floor,
+    MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT (default 5%,
+    clamped above the 25% protection reserve).  That lets the controller stay
+    aggressive after a bulk export has consumed the planned headroom, instead
+    of switching to conservative the moment the projection reaches the target.
+
+    If the projection is below that house floor, the day is treated as an
+    energy shortfall and the system switches to a conservative bidirectional
     mode:
 
     - No export slots are planned (there is no spare SoC above the target).
@@ -194,6 +201,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         'N': 'AGILE-OUTGOING-19-05-13',
         'P': 'AGILE-OUTGOING-19-05-13',
     }
+
+    # SoC at or below which the pack is never discharged.
+    BATTERY_PROTECTION_RESERVE_SOC = 25
 
     # Activation power that no house load will reach.  Used when even the
     # minimum discharge output cannot repay the stored energy, so a discharge
@@ -400,9 +410,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._plan_cache = []
         self._prev_battery_level = -1
 
-        # True when the projected SoC at 23:30 is below the target, meaning
-        # energy should be conserved rather than exported. Updated whenever
-        # the export plan is recalculated so the two stay in step.
+        # True when the projected SoC at 23:30 is below the house-load floor
+        # (target less the configured flexibility), meaning energy should be
+        # conserved rather than exported. Updated whenever the export plan is
+        # recalculated so the two stay in step.
         self._energy_shortfall = False
         self._projected_soc_at_2330 = None
 
@@ -442,13 +453,36 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         hours, minutes = map(int, time_str.split(":"))
         return hours * 60 + minutes
 
+    def _house_load_floor_soc(self) -> float:
+        """SoC floor for the aggressive/conservative house-load decision.
+
+        Bulk export planning keeps using MIN_AGILE_DISCHARGE_SOC as its floor.
+        House load is allowed a little of the same headroom before it becomes
+        conservative, so a bulk export that finishes at the target does not
+        immediately force conservative mode.  The margin is clamped at zero and
+        the result never enters the 25% protection reserve.
+        """
+        try:
+            margin = float(config.HOUSE_LOAD_MARGIN_PERCENT)
+        except (TypeError, ValueError):
+            margin = 5.0
+        margin = max(0.0, margin)
+        return max(
+            self.BATTERY_PROTECTION_RESERVE_SOC + 1,
+            config.MIN_AGILE_DISCHARGE_SOC - margin,
+        )
+
     def _update_energy_shortfall(self, current_soc_percent: float) -> bool:
         """Update and return whether the day is projected to end in shortfall.
 
-        A shortfall means the SoC projected at 23:30 is below
-        MIN_AGILE_DISCHARGE_SOC. The projection uses the same assumption as
-        calculate_export_plan(): every remaining slot loses
+        A shortfall means the SoC projected at 23:30 is below the house-load
+        floor: MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT, clamped
+        above the 25% protection reserve.  The projection uses the same
+        assumption as calculate_export_plan(): every remaining slot loses
         NON_EXPORT_SLOT_SOC_LOSS_PERCENT.
+
+        The export planner itself still plans down to MIN_AGILE_DISCHARGE_SOC;
+        only the aggressive/conservative house-load choice uses the lower floor.
 
         Called from calculate_export_plan(), so this state is refreshed at
         exactly the same times as the export plan: at slot boundaries, on
@@ -459,7 +493,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if unknown.
 
         Returns:
-            True if the projected SoC at 23:30 is below the target.
+            True if the projected SoC at 23:30 is below the house-load floor.
         """
         if current_soc_percent < 0:
             self._energy_shortfall = False
@@ -476,11 +510,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._projected_soc_at_2330 = projected_soc_at_2330
 
         target_soc = config.MIN_AGILE_DISCHARGE_SOC
-        self._energy_shortfall = projected_soc_at_2330 < target_soc
+        floor_soc = self._house_load_floor_soc()
+        self._energy_shortfall = projected_soc_at_2330 < floor_soc
 
         debug(
             f"IOCTGO_AGILEOUT: Projected SoC at 23:30={projected_soc_at_2330:.1f}% "
-            f"(target {target_soc}%), shortfall={self._energy_shortfall}"
+            f"(target {target_soc}%, house floor {floor_soc:.1f}%), "
+            f"shortfall={self._energy_shortfall}"
         )
         return self._energy_shortfall
 
@@ -2291,13 +2327,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
 
         # Battery depleted - protect battery
-        if battery_level <= 25:
+        if battery_level <= self.BATTERY_PROTECTION_RESERVE_SOC:
             self._record_decision(
                 mode="Idle — battery protection",
-                reason=f"SoC {battery_level}% at or below the 25% reserve",
+                reason=(
+                    f"SoC {battery_level}% at or below the "
+                    f"{self.BATTERY_PROTECTION_RESERVE_SOC}% reserve"
+                ),
                 soc_percent=battery_level,
                 detail=(
-                    f"SoC {battery_level}% is at or below the 25% protection "
+                    f"SoC {battery_level}% is at or below the "
+                    f"{self.BATTERY_PROTECTION_RESERVE_SOC}% protection "
                     "reserve. The controller will not discharge the pack."
                 ),
             )
@@ -2367,13 +2407,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 mode = f"{harvest_label} · conservative discharge"
             projected = self._projected_soc_at_2330
             projection_text = (
-                f"{projected:.0f}%" if projected is not None else "below target"
+                f"{projected:.0f}%" if projected is not None else "below floor"
             )
             detail_projection = (
                 f"projected 23:30 SoC {projected:.0f}%"
                 if projected is not None
                 else "23:30 SoC projection unavailable"
             )
+            house_floor = self._house_load_floor_soc()
+            try:
+                margin = max(0.0, float(config.HOUSE_LOAD_MARGIN_PERCENT))
+            except (TypeError, ValueError):
+                margin = 5.0
             # Conservative discharge deliberately refuses to start below the
             # Wallbox's minimum output, so this is usually the 3 A floor.
             activation_w = self._current_discharge_activation_w(
@@ -2388,11 +2433,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             elif projected is not None:
                 reason = (
                     f"projected 23:30 SoC {projection_text} < "
-                    f"{target_soc:.0f}% target — conserving energy"
+                    f"{house_floor:.0f}% house floor — conserving energy"
                 )
             else:
                 reason = (
-                    f"projected to miss the {target_soc:.0f}% 23:30 target — "
+                    f"projected to miss the {house_floor:.0f}% house floor — "
                     "conserving energy"
                 )
             self._record_decision(
@@ -2401,7 +2446,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 soc_percent=battery_level,
                 detail=(
                     f"SoC {battery_level}%, {detail_projection}. "
-                    f"Target {target_soc:.0f}%. "
+                    f"House floor {house_floor:.0f}% "
+                    f"({target_soc:.0f}% bulk target − {margin:.0f}% "
+                    f"flexibility). "
                     f"Conservative discharge {activation_text}. "
                     f"Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "

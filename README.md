@@ -185,7 +185,8 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     tariffs:
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
-        target_soc_at_cheap_start: 54  # Target SoC at start of cheap rate period (23:30)
+        min_agile_discharge_soc: 60     # Bulk-export SoC floor and 23:30 target
+        house_load_margin_percent: 5   # Flexibility below the target before conservative
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
         soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
@@ -250,6 +251,8 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (0-100)
+- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (0-100). Export slots are planned down to this figure
+- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -295,6 +298,13 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
 - **Reason** comes from the same branch that made the decision. Detailed SoC
   projections and slot analysis remain in the text log; hover the line for a
   fuller explanation.
+- **Aggressive vs conservative** is decided against a house-load floor, not the
+  bulk-export target. Bulk export slots are planned down to
+  `min_agile_discharge_soc`; the house-load strategy stays aggressive until the
+  projected 23:30 SoC would fall below that target minus
+  `house_load_margin_percent` (default 5%, clamped above the 25% reserve). A
+  bulk export that finishes at the target therefore does not by itself force
+  conservative mode.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
   current-dependent, so there is no single global minimum figure.

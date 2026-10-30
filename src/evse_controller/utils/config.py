@@ -77,6 +77,7 @@ class Config:
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
+                                'house_load_margin_percent': 5,
                                 'max_export_power_kw': 7.2,
                                 'export_slot_soc_loss_percent': 0,
                                 'non_export_slot_soc_loss_percent': 1.0,
@@ -352,10 +353,18 @@ class Config:
         lambda self, value: self._set_config_value("octopus", "region", value)
     )
 
-    # Minimum SoC for Agile Outgoing discharge
+    # Minimum SoC for Agile Outgoing discharge.  This is the bulk-export
+    # target: export slots are planned down to it.
     MIN_AGILE_DISCHARGE_SOC = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "min_agile_discharge_soc", 60),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
+    )
+
+    # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
+    # house-load decision.  Bulk export planning still uses the target itself.
+    HOUSE_LOAD_MARGIN_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "house_load_margin_percent", 5),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "house_load_margin_percent", value)
     )
 
     # Maximum export power for Agile Outgoing (kW).  Default is the non-derated
@@ -610,6 +619,7 @@ class Config:
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'house_load_margin_percent': self.HOUSE_LOAD_MARGIN_PERCENT,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,

@@ -436,6 +436,22 @@ export price is treated as **0p**. Tier 1 then stores, and the export planner
 finds no profitable slots. Date-filtered lookups implement this, so a failed
 fetch cannot silently reuse yesterday's prices.
 
+### Target, house floor and aggressive mode
+
+The manager uses two SoC thresholds rather than one. Bulk export planning keeps
+`MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots are selected
+until the projected 23:30 SoC would reach that target. The
+aggressive/conservative house-load decision uses
+`MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT` (default 5%, clamped
+above the 25% protection reserve). A projection between the two therefore stays
+in aggressive load-following rather than switching to conservative the moment a
+bulk export has consumed the planned headroom. The decision is a single
+comparison recomputed with the export plan at slot boundaries, so no separate
+latch is needed; the comparison is strict, and exactly on the floor remains
+aggressive. The margin is configuration (`house_load_margin_percent`) and is
+clamped at zero so a bad value cannot put the house floor above the bulk
+target.
+
 ### Dashboard, charge ceiling and savings estimate
 
 The manager now records a `DecisionSnapshot` on each control cycle. The

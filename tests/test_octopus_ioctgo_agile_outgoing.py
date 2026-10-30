@@ -609,19 +609,58 @@ class TestEnergyShortfall:
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
 
-    def test_shortfall_true_when_projection_below_target(self, agile_tariff):
+    def test_shortfall_true_when_projection_below_house_floor(self, agile_tariff):
         """At 12:00, 23 slots remain, so 23% is lost at 1%/slot."""
         self._set_time(agile_tariff, 12, 0)
-        # 80% - 23% = 57%, below the 60% target
-        assert agile_tariff._update_energy_shortfall(80) is True
+        # 77% - 23% = 54%, below the 55% house floor (60% target - 5%).
+        assert agile_tariff._update_energy_shortfall(77) is True
         assert agile_tariff._energy_shortfall is True
 
-    def test_no_shortfall_when_projection_meets_target(self, agile_tariff):
+    def test_no_shortfall_when_projection_meets_house_floor(self, agile_tariff):
         """At 22:00 only 3 slots remain, so 3% is lost."""
         self._set_time(agile_tariff, 22, 0)
-        # 70% - 3% = 67%, above the 60% target
+        # 70% - 3% = 67%, above the 55% house floor.
         assert agile_tariff._update_energy_shortfall(70) is False
         assert agile_tariff._energy_shortfall is False
+
+    def test_projection_at_house_floor_is_not_shortfall(self, agile_tariff):
+        """The comparison is strict: exactly on the floor stays aggressive."""
+        self._set_time(agile_tariff, 12, 0)
+        # 78% - 23% = 55%, exactly the floor.
+        assert agile_tariff._update_energy_shortfall(78) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_target_headroom_does_not_force_conservative(self, agile_tariff):
+        """A projection between the floor and the target stays aggressive."""
+        self._set_time(agile_tariff, 12, 0)
+        # 80% - 23% = 57%: below the 60% bulk target but above the 55% floor.
+        assert agile_tariff._update_energy_shortfall(80) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_house_floor_can_be_configured(self, agile_tariff, monkeypatch):
+        """The margin is configuration, not a hidden constant."""
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 10)
+        # 59% - 3% = 56%, below the 60% target but above the 50% floor.
+        self._set_time(agile_tariff, 22, 0)
+        assert agile_tariff._house_load_floor_soc() == 50
+        assert agile_tariff._update_energy_shortfall(59) is False
+
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 0)
+        assert agile_tariff._house_load_floor_soc() == 60
+        assert agile_tariff._update_energy_shortfall(59) is True
+
+    def test_house_floor_never_enters_the_protection_reserve(
+        self, agile_tariff, monkeypatch
+    ):
+        """A low target plus a large margin must not floor below the reserve."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 25)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 10)
+        assert agile_tariff._house_load_floor_soc() == 26
+
+    def test_negative_margin_is_treated_as_zero(self, agile_tariff, monkeypatch):
+        """Bad configuration must not raise the floor above the target."""
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", -5)
+        assert agile_tariff._house_load_floor_soc() == 60
 
     def test_unknown_soc_clears_shortfall(self, agile_tariff):
         """An unknown SoC should not leave a stale shortfall flag."""
@@ -632,8 +671,21 @@ class TestEnergyShortfall:
     def test_plan_recalculation_updates_shortfall(self, agile_tariff):
         """The flag is refreshed whenever the export plan is calculated."""
         self._set_time(agile_tariff, 12, 0)
-        agile_tariff.calculate_export_plan(80)
+        agile_tariff.calculate_export_plan(77)
         assert agile_tariff._energy_shortfall is True
+
+    def test_export_planning_still_uses_the_bulk_target(
+        self, agile_tariff, monkeypatch
+    ):
+        """The flexibility margin must not add export slots."""
+        self._set_time(agile_tariff, 12, 0)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 0)
+        target_plan = agile_tariff.calculate_export_plan(100)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 50)
+        flexible_plan = agile_tariff.calculate_export_plan(100)
+
+        assert target_plan
+        assert flexible_plan == target_plan
 
     def test_get_control_state_bidirectional_in_shortfall(self, agile_tariff):
         """Shortfall should force bidirectional mode, even if export is otherwise better."""
@@ -1066,6 +1118,19 @@ class TestDecisionSnapshot:
         html = agile_tariff.get_dashboard_html()
 
         assert "discharge ≥720 W" in html
+
+    def test_conservative_reason_names_the_house_floor(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        agile_tariff._projected_soc_at_2330 = 54
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert "55% house floor" in snapshot.reason
+        assert "60% bulk target" in snapshot.detail
+        assert "5% flexibility" in snapshot.detail
 
     def test_bidirectional_mode_is_aggressive(self, agile_tariff):
         self._set_time(agile_tariff, 10, 0)
