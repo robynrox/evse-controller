@@ -2003,27 +2003,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
                 activation_label = "discharge off"
             elif activation_w <= 0:
-                activation_label = "discharge on any import"
+                # The aggressive reason already says that any import starts
+                # discharge because the export alone clears the stored cost.
+                activation_label = None
             else:
                 activation_label = f"discharge ≥{activation_w:.0f} W"
-            title = html_module.escape(
-                "The house import at which discharging starts. A "
-                "load-following discharge cannot go below the Wallbox "
-                f"minimum ({config.WALLBOX_MIN_DISCHARGE_CURRENT:.0f} A, "
-                f"~{config.WALLBOX_MIN_DISCHARGE_CURRENT * 240:.0f} W), so "
-                "starting for a smaller load would export the difference at "
-                "the current Agile price. The threshold is the break-even "
-                "point: "
-                f"stored energy costs {self._delivered_cost_per_kwh_p():.1f}p/kWh "
-                f"delivered plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
-                "margin. It rises when stored energy was expensive and falls "
-                "when the export price it displaces is high.",
-                quote=True,
-            )
-            parts.append(
-                f'<span class="ioctgo-metric" title="{title}">'
-                f"{activation_label}</span>"
-            )
+            if activation_label is not None:
+                title = html_module.escape(
+                    "The house import at which discharging starts. A "
+                    "load-following discharge cannot go below the Wallbox "
+                    f"minimum ({config.WALLBOX_MIN_DISCHARGE_CURRENT:.0f} A, "
+                    f"~{config.WALLBOX_MIN_DISCHARGE_CURRENT * 240:.0f} W), so "
+                    "starting for a smaller load would export the difference at "
+                    "the current Agile price. The threshold is the break-even "
+                    "point: "
+                    f"stored energy costs {self._delivered_cost_per_kwh_p():.1f}p/kWh "
+                    f"delivered plus a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
+                    "margin. It rises when stored energy was expensive and falls "
+                    "when the export price it displaces is high.",
+                    quote=True,
+                )
+                parts.append(
+                    f'<span class="ioctgo-metric" title="{title}">'
+                    f"{activation_label}</span>"
+                )
 
         stored_title = html_module.escape(
             "Average cost of the energy in the pack, per kWh delivered to the "

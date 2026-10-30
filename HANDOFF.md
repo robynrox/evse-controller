@@ -93,7 +93,11 @@ completed fixes.
   `c01be8e` (zero and negative export price coverage),
   `2a9b081` (when a zero export price is a loss),
   `a217efd` (explain a negative saved-today figure),
-  `693b284` (dynamic discharge activation threshold).
+  `693b284` (dynamic discharge activation threshold), `65f4f58` (activation
+  docs), `0de721f` (normalised Shelly channels), `46d907d` (house-load floor),
+  `319c443` (aggressive activation explanation), `b404816` (finer saved-today
+  display), `44a7ca3` (ledger noise guard), `69446a8` (Wallbox transition
+  settling), and the follow-up that drops the redundant zero-activation chip.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -128,7 +132,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **363 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **364 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

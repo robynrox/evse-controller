@@ -1701,6 +1701,23 @@ class TestDashboardModeLine:
         )
         assert "ledger of 10.0 kWh" in html
 
+    def test_zero_activation_does_not_repeat_the_chip(self, agile_tariff):
+        """The reason already says that any import starts discharge."""
+        agile_tariff._record_decision(
+            mode="Harvest ≥3 A · aggressive discharge",
+            reason=(
+                "Any import starts discharge because the export alone clears "
+                "the stored cost."
+            ),
+            soc_percent=47,
+            discharge_activation_w=0,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert html.count("Any import starts discharge") == 1
+        assert "discharge on any import" not in html
+
     def test_mode_line_marks_the_fallback_cost_basis(self, agile_tariff):
         agile_tariff._bank_dc_kwh = 0.0
         agile_tariff._record_decision(
