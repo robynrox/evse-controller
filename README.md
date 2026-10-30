@@ -295,9 +295,14 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   more. If the export price alone clears `H`, any import starts it; if `H`
   exceeds the import price, it never starts. Hover the chip for the current
   stored-energy cost.
-- **Reason** comes from the same branch that made the decision. Detailed SoC
-  projections and slot analysis remain in the text log; hover the line for a
-  fuller explanation.
+- **Reason** comes from the same branch that made the decision. In the
+  aggressive house-load modes it also states the discharge trigger and why:
+  `Discharge starts at ≥N W house import; below that the 3 A minimum would
+  export more than it saves`, `Any import starts discharge because the export
+  alone clears the stored cost`, or `Discharge is disabled because stored
+  energy costs more than the import it avoids`. Detailed SoC projections and
+  slot analysis remain in the text log; hover the line for a fuller
+  explanation.
 - **Aggressive vs conservative** is decided against a house-load floor, not the
   bulk-export target. Bulk export slots are planned down to
   `min_agile_discharge_soc`; the house-load strategy stays aggressive until the

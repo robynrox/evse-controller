@@ -1157,6 +1157,44 @@ class TestDecisionSnapshot:
         assert snapshot.mode.startswith("Do not charge")
         assert "aggressive discharge" in snapshot.mode
 
+    def test_aggressive_reason_includes_the_break_even(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        agile_tariff._current_discharge_activation_w = Mock(return_value=250)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 22 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "starts at ≥250 W house import" in reason
+        assert "3 A minimum would export more than it saves" in reason
+
+    def test_aggressive_reason_explains_a_zero_break_even(self, agile_tariff):
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 80)
+        agile_tariff._current_discharge_activation_w = Mock(return_value=0)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 10 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "Any import starts discharge" in reason
+        assert "export alone clears the stored cost" in reason
+
+    def test_aggressive_reason_explains_a_disabled_discharge(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        agile_tariff._current_discharge_activation_w = Mock(
+            return_value=agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        )
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 22 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "Discharge is disabled" in reason
+        assert "stored energy costs more" in reason
+
     def test_soc_at_cap_stops_solar_charging(self, agile_tariff):
         """At the cap the mode says so, and no charge range is offered."""
         self._set_time(agile_tariff, 10, 0)

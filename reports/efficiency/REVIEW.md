@@ -472,7 +472,9 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   break-even load. **Conservative** means a −0.5 A bias with the activation
   floored at the Wallbox minimum (3 A, ~720 W), so it never starts a discharge
   that would have to export; above that floor it covers the load to within
-  ~120 W (the bias).
+  ~120 W (the bias). The aggressive house-load reason also spells out the
+  trigger: any import, a specific break-even house import, or a disabled
+  discharge when stored energy costs more than the import it avoids.
 - **Discharge ≥N W** is the house import at which a discharge starts. A
   load-following discharge cannot follow a load smaller than 3 A (~720 W):
   starting for a 30 W base load sends the other ~690 W to the grid at the

@@ -1023,6 +1023,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f"{min_current_a:.0f} A minimum would export more than it saves"
         )
 
+    @classmethod
+    def _activation_explanation(cls, activation_w: float) -> str:
+        """Short dashboard sentence explaining the aggressive trigger."""
+        min_current_a = config.WALLBOX_MIN_DISCHARGE_CURRENT
+        if activation_w >= cls.NEVER_DISCHARGE_ACTIVATION_W:
+            return (
+                "Discharge is disabled because stored energy costs more than "
+                "the import it avoids."
+            )
+        if activation_w <= 0:
+            return (
+                "Any import starts discharge because the export alone clears "
+                "the stored cost."
+            )
+        return (
+            f"Discharge starts at ≥{activation_w:.0f} W house import; below "
+            f"that the {min_current_a:.0f} A minimum would export more than "
+            "it saves."
+        )
+
     def _accumulate_daily_savings(self) -> None:
         """Accumulate the money saved today by cycling stored energy.
 
@@ -2527,6 +2547,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             else:
                 mode = f"{harvest_label} · aggressive discharge"
                 reason = decision.reason
+            reason = (
+                f"{reason.rstrip('.')}. "
+                f"{self._activation_explanation(activation_w)}"
+            )
             # Bidirectional mode: charge from solar, prefer small export over any import
             debug(f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_BIDIRECTIONAL (current rate {current_export_rate_p:.1f}p, SoC {battery_level}%)")
             self._record_decision(
@@ -2588,6 +2612,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "the house instead of storing"
                 if charge_at_cap
                 else decision.reason
+            )
+            reason = (
+                f"{reason.rstrip('.')}. "
+                f"{self._activation_explanation(activation_w)}"
             )
             debug(f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_DISCHARGE (current rate {current_export_rate_p:.1f}p, SoC {battery_level}%)")
             self._record_decision(
