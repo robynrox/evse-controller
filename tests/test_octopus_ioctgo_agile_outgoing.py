@@ -1823,6 +1823,64 @@ class TestDashboardModeLine:
 
 
 
+class TestDecisionLog:
+    """The compact decision line is written to the log once per minute."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute, second=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    def test_decision_summary_logs_once_per_minute(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0, second=5)
+        target = (
+            "evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing.info"
+        )
+
+        with patch(target) as log_info:
+            agile_tariff._record_decision(
+                mode="Harvest 5 A · aggressive discharge",
+                reason="storing solar",
+                soc_percent=47,
+                efficiency_pct=73,
+                efficiency_label="round trip",
+                min_round_trip_saving_p=0.3,
+                min_round_trip_saving_basis="solar",
+                discharge_activation_w=250,
+            )
+            # A second control cycle in the same minute must not repeat it.
+            agile_tariff._record_decision(
+                mode="Harvest 6 A · aggressive discharge",
+                reason="still storing solar",
+                soc_percent=47,
+            )
+
+            assert log_info.call_count == 1
+            message = log_info.call_args[0][0]
+            assert message.startswith("IOCTGO_AGILEOUT: Decision: ")
+            assert "Harvest 5 A" in message
+            assert "storing solar" in message
+            assert "η 73% round trip" in message
+            assert "min gain 0.3p/kWh (solar)" in message
+            assert "discharge ≥250 W" in message
+            assert "stored " in message
+            assert "saved today" in message
+
+            # The next minute logs again, with the current decision.
+            self._set_time(agile_tariff, 12, 1)
+            agile_tariff._record_decision(
+                mode="Harvest 6 A · aggressive discharge",
+                reason="still storing solar",
+                soc_percent=47,
+            )
+
+            assert log_info.call_count == 2
+            assert "Harvest 6 A" in log_info.call_args[0][0]
+
+
 class TestRateFetchState:
     """The rate cache must be usable before the first successful fetch."""
 

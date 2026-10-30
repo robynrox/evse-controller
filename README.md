@@ -279,6 +279,9 @@ an estimate of the cost saved today:
 Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
 ```
 
+The same decision line is written to the log at INFO once per minute, on the
+first control cycle in that minute, with `|` separators.
+
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
   the min/max returned by `get_control_state()` (which load-follow states
   override). When the system is not charging it always states the discharge

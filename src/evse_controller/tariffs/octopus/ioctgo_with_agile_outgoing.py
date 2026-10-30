@@ -445,6 +445,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Dashboard snapshot of the last control decision.  Written by the
         # control loop; the dashboard only reads it.
         self._decision_snapshot = None
+        # Last minute whose decision summary was written at INFO, so the log
+        # gets one readable line per minute rather than one per control cycle.
+        self._last_info_log_minute = None
 
         # Ledger of stored energy and what it cost, so a discharge can be
         # priced against the import it avoids.  Energy is carried in DC-side
@@ -1896,6 +1899,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             discharge_activation_w=discharge_activation_w,
         )
         self._decision_snapshot = snapshot
+        self._log_decision_summary(snapshot)
         return snapshot
 
     def _update_snapshot_ranges(
@@ -1961,6 +1965,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return f"ledger of {self._bank_dc_kwh:.1f} kWh"
         return "off-peak fallback while the ledger is empty"
 
+    def _activation_label(self, activation_w: float) -> Optional[str]:
+        """Compact dashboard label for a discharge activation threshold.
+
+        A zero threshold is omitted because the aggressive reason already says
+        that any import starts discharge.
+        """
+        if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+            return "discharge off"
+        if activation_w <= 0:
+            return None
+        return f"discharge ≥{activation_w:.0f} W"
+
     def _format_stored_cost(self) -> str:
         """Stored energy cost in the pack and across the discharge range."""
         low_p, high_p = self._delivered_cost_range_per_kwh_p()
@@ -1972,6 +1988,47 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f"stored {self._stored_cost_per_dc_kwh_p():.1f}p/kWh "
             f"({delivered})"
         )
+
+    def _decision_summary_text(self, snapshot) -> str:
+        """Plain-text version of the dashboard decision line, for the log."""
+        parts = [snapshot.mode]
+        if snapshot.reason:
+            parts.append(snapshot.reason)
+
+        if snapshot.efficiency_pct is not None:
+            label = snapshot.efficiency_label or "efficiency"
+            parts.append(f"η {snapshot.efficiency_pct:.0f}% {label}")
+
+        if snapshot.min_round_trip_saving_p is not None:
+            basis = snapshot.min_round_trip_saving_basis
+            suffix = f" ({basis})" if basis else ""
+            parts.append(
+                f"min gain {snapshot.min_round_trip_saving_p:.1f}p/kWh{suffix}"
+            )
+
+        if snapshot.discharge_activation_w is not None:
+            activation_label = self._activation_label(
+                snapshot.discharge_activation_w
+            )
+            if activation_label is not None:
+                parts.append(activation_label)
+
+        parts.append(self._format_stored_cost())
+        saved = self._format_saved_today()
+        rate = self._format_savings_rate()
+        if rate:
+            saved = f"{saved} {rate}"
+        parts.append(f"saved today {saved}")
+        return " | ".join(parts)
+
+    def _log_decision_summary(self, snapshot) -> None:
+        """Write the decision line once per minute at INFO."""
+        now = self.get_current_datetime()
+        minute_key = (now.date(), now.hour, now.minute)
+        if self._last_info_log_minute == minute_key:
+            return
+        self._last_info_log_minute = minute_key
+        info(f"IOCTGO_AGILEOUT: Decision: {self._decision_summary_text(snapshot)}")
 
     def _mode_line_html(self) -> str:
         """One-line mode/reason summary, wrapping on narrow screens."""
@@ -2036,15 +2093,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
         if snapshot.discharge_activation_w is not None:
-            activation_w = snapshot.discharge_activation_w
-            if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
-                activation_label = "discharge off"
-            elif activation_w <= 0:
-                # The aggressive reason already says that any import starts
-                # discharge because the export alone clears the stored cost.
-                activation_label = None
-            else:
-                activation_label = f"discharge ≥{activation_w:.0f} W"
+            activation_label = self._activation_label(
+                snapshot.discharge_activation_w
+            )
             if activation_label is not None:
                 title = html_module.escape(
                     "The house import at which discharging starts. A "
