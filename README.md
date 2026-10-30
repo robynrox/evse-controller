@@ -10,9 +10,11 @@ monitors and I have implemented these for the following devices:
 
 * [Wallbox Quasar](https://wallbox.com/en_ca/quasar-dc-charger) for EV charging and discharging (V2G)
 * [Shelly EM](https://shellystore.co.uk/product/shelly-em/) for energy monitoring enabling solar energy capture (like S2V)
-  and load following (like V2H); here it is assumed that grid power is monitored through channel 0 and EVSE power through
-  channel 1. The EVSE channel is only used for monitoring and reporting and could be substituted with the solar power, for
-  example.
+  and load following (like V2H). The grid and EVSE channels are configured under
+  `shelly.grid` and `shelly.evse` and may be either channel of either device; the
+  controller resolves them into a normalised grid-on-ch1, EVSE-on-ch2 view for
+  both control and savings accounting. The EVSE feed is used for load following
+  and for the stored-energy ledger.
 
 There's also a complete project that uses those libraries to provide V2X
 functions along with logging, scheduled events, and web or console control
@@ -315,6 +317,11 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
   less — forgone revenue, not a running cost. Solar is costed at the export it
   displaced, not at the panel's capital cost; no capital is amortised anywhere
   in this figure.
+- **Channels** are resolved from `shelly.grid` and `shelly.evse` before the
+  baseline, surplus and ledger are calculated. The controller hands control and
+  accounting the same normalised grid/EVSE view, so moving a CT to the other
+  channel of the same or the other Shelly does not invert the home power or
+  mis-book energy.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

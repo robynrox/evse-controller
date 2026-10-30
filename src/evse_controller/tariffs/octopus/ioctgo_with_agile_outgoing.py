@@ -800,6 +800,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         ``getHomeWatts()`` is ``ch1 - ch2`` (grid minus EVSE), so the house
         load without the EVSE is the baseline a no-storage system would show
         on the grid.  Its negative is the surplus available to the car.
+
+        ``current_grid_power`` has already been normalised by
+        :class:`EvseController` so that ch1 is the configured grid channel and
+        ch2 the configured EVSE channel, whichever Shelly and channel those
+        happen to be.
         """
         controller = getattr(self, "evseController", None)
         power = getattr(controller, "current_grid_power", None) if controller else None

@@ -872,6 +872,58 @@ class EvseController(PowerMonitorObserver):
         """
         return channel_name.lower().replace(' ', '_')
 
+    @staticmethod
+    def _channel_watts(power: Power, channel) -> float:
+        """Read the configured channel from a Shelly reading."""
+        return power.ch1Watts if channel == 1 else power.ch2Watts
+
+    def _resolve_evse_watts(self, grid_power: Power) -> float:
+        """EVSE AC power from the configured channel, or the power model.
+
+        The EVSE is not tied to channel 2 of the grid device: it may be on
+        either channel of either Shelly, or not monitored at all.  When it is
+        monitored on the other device, ``auxpower`` holds that device's most
+        recent reading.
+        """
+        device = config.SHELLY_EVSE_DEVICE
+        channel = config.SHELLY_EVSE_CHANNEL
+        if not device or channel not in (1, 2):
+            self.evse_power_model.set_voltage(grid_power.voltage)
+            return self.evse_power_model.get_power()
+
+        if device == config.SHELLY_GRID_DEVICE:
+            return self._channel_watts(grid_power, channel)
+
+        aux_power = getattr(self, "auxpower", None)
+        if aux_power is None:
+            return 0.0
+        return self._channel_watts(aux_power, channel)
+
+    @staticmethod
+    def _normalised_power(
+        grid_w: float, evse_w: float, source: Power
+    ) -> Power:
+        """Return a ch1 = grid, ch2 = EVSE view of *source*.
+
+        ``Power.getHomeWatts()`` and the tariff ledgers both assume that
+        ordering.  The Shelly channel assignment is configuration, so resolve
+        it once and hand every consumer the same view rather than letting
+        each one guess which channel is which.
+        """
+        return Power(
+            ch1Watts=grid_w,
+            ch2Watts=evse_w,
+            voltage=source.voltage,
+            unixtime=source.unixtime,
+            soc=source.soc,
+        )
+
+    def _normalise_grid_power(self, power: Power) -> Power:
+        """Resolve the configured grid and EVSE channels for *power*."""
+        grid_w = self._channel_watts(power, config.SHELLY_GRID_CHANNEL)
+        evse_w = self._resolve_evse_watts(power)
+        return self._normalised_power(grid_w, evse_w, power)
+
     def update(self, monitor, power):
         """Update controller state based on power monitor readings.
 
@@ -926,25 +978,6 @@ class EvseController(PowerMonitorObserver):
             return
 
         # From here on, we're handling the grid monitor update
-        # Use configured channels instead of fixed assignments
-        grid_channel = config.SHELLY_GRID_CHANNEL
-        evse_channel = config.SHELLY_EVSE_CHANNEL if config.SHELLY_EVSE_DEVICE else None
-
-        # Get EVSE power - either from monitoring or model
-        if evse_channel is not None:
-            if config.SHELLY_EVSE_DEVICE == config.SHELLY_GRID_DEVICE:
-                # EVSE is on same device as grid
-                evse_power = power.ch1Watts if evse_channel == 1 else power.ch2Watts
-            else:
-                # EVSE is on the other device
-                evse_power = self.auxpower.ch1Watts if evse_channel == 1 and hasattr(self, 'auxpower') and self.auxpower else 0.0
-                if evse_channel == 2 and hasattr(self, 'auxpower') and self.auxpower:
-                    evse_power = self.auxpower.ch2Watts
-        else:
-            # No EVSE monitoring configured, use power model
-            self.evse_power_model.set_voltage(power.voltage)
-            evse_power = self.evse_power_model.get_power()
-
         # Get EVSE state once at the start
         evse_state = self.evse.get_state()
         self.evseCurrent = evse_state.current
@@ -1003,9 +1036,14 @@ class EvseController(PowerMonitorObserver):
                 info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
             self.powerAtLastHalfHourlyLog = power
 
+        # Resolve the configured channels into the ch1 = grid, ch2 = EVSE
+        # view that the current calculation and the tariff ledgers assume.
+        normalised_power = self._normalise_grid_power(power)
+        evse_power = normalised_power.ch2Watts
+
         # Calculate desired current based on latest reading
-        desiredEvseCurrent = self.calculateTargetCurrent(power)
-        self.current_grid_power = power
+        desiredEvseCurrent = self.calculateTargetCurrent(normalised_power)
+        self.current_grid_power = normalised_power
 
         # Get the current power values from the monitors
         # We already have these from earlier in the method
@@ -1022,19 +1060,6 @@ class EvseController(PowerMonitorObserver):
         # Build structured measurements data and publish via event bus
         measurements_data = self._build_measurements_data(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
         EventBus().publish(EventType.MEASUREMENTS_UPDATE, measurements_data)
-
-        # Get grid power for InfluxDB (needed later)
-        grid_device = config.SHELLY_GRID_DEVICE
-        grid_channel = config.SHELLY_GRID_CHANNEL
-        gridPower = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
-
-        # Get EVSE power for InfluxDB (needed later)
-        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-            evse_device = config.SHELLY_EVSE_DEVICE
-            evse_channel = config.SHELLY_EVSE_CHANNEL
-            evsePower = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
-        else:
-            evsePower = round(evse_power)
 
         if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
             if self.powerAtBatteryChargeLevel is not None:

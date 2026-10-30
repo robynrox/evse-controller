@@ -113,9 +113,16 @@ completed fixes.
   below 3 A (~720 W), so starting for a tiny load would export the excess.
   Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
   controller never starts a discharge.
+- Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
+  normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
+  ledger both read that view, so a non-default CT assignment no longer inverts
+  the home power or mis-books energy.
+- Deferred: prefer the Wallbox Modbus `ac_power` as the EVSE term (guard on a
+  fresh `last_update` and exclude `COMMS_FAILURE`), with the configured Shelly
+  channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **332 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **339 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
