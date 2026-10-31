@@ -1619,7 +1619,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             committed_slot, committed_rate = self._best_planned_export_slot_rate(
                 current_slot
             )
-            if committed_rate > best_unused_rate:
+            if committed_slot is not None and committed_rate > best_unused_rate:
                 # Name the slot that is *better* but already committed, so the
                 # dashboard does not imply the day has no higher price left.
                 reason = (
@@ -3051,7 +3051,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"{self._slot_range_label(committed_slot)} slot is already "
                 "committed to energy in the pack, so only an unused slot can "
                 "sell extra solar. "
-                if committed_rate > 0
+                if committed_slot is not None
+                and committed_rate > 0
                 and (target_rate_p is None or committed_rate > target_rate_p)
                 else ""
             )
