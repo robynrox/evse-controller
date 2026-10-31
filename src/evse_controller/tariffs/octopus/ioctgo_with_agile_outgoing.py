@@ -1433,9 +1433,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             min(amps, self.MAX_CHARGE_CURRENT),
         )
         estimate = self.EFFICIENCY_MODEL.measured_current_at_or_above(amps)
+        source = (
+            f"surplus {surplus_w:.0f} W"
+            if surplus_w > 0
+            else f"import {-surplus_w:.0f} W (no surplus)"
+        )
+        floor_note = (
+            " (minimum)"
+            if estimate <= self.SOLAR_CHARGE_REFERENCE_CURRENT
+            else ""
+        )
         debug(
-            f"IOCTGO_AGILEOUT: Solar surplus {surplus_w:.0f} W at "
-            f"{voltage:.0f} V -> harvest estimate {estimate:.0f} A"
+            f"IOCTGO_AGILEOUT: Solar {source} at {voltage:.0f} V -> "
+            f"harvest estimate {estimate:.0f} A{floor_note}"
         )
         return estimate
 
@@ -1606,9 +1616,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
             reason = (
-                f"future {best_unused_rate:.1f}p at {slot_label} × "
-                f"{solar_round_trip:.0%} − {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
-                f"margin = {adjusted_future_rate:.1f}p > "
+                f"future {best_unused_rate:.1f}p at {slot_label} "
+                f"− {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin = "
+                f"{net_future_rate:.1f}p × {solar_round_trip:.0%} = "
+                f"{adjusted_future_rate:.1f}p > "
                 f"{current_export_rate_p:.1f}p now — storing solar"
             )
         else:
@@ -1630,6 +1641,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{adjusted_future_rate:.1f}p after the "
                     f"{solar_round_trip:.0%} round trip, below "
                     f"{current_export_rate_p:.1f}p now"
+                )
+            elif best_unused_rate > current_export_rate_p:
+                # A higher slot exists and is not committed: say what it is
+                # actually worth rather than claiming no slot beats the
+                # current price.  At 3 A the round trip is poor enough that a
+                # 30.5p slot can still be worth less than the 19.9p on offer.
+                reason = (
+                    f"future {best_unused_rate:.1f}p at {slot_label} "
+                    f"− {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin = "
+                    f"{net_future_rate:.1f}p × {solar_round_trip:.0%} = "
+                    f"{adjusted_future_rate:.1f}p ≤ "
+                    f"{current_export_rate_p:.1f}p now — covering the house"
                 )
             else:
                 reason = (

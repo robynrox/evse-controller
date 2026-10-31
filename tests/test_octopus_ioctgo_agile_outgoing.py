@@ -332,6 +332,24 @@ class TestPlannedExportSlotExplanation:
         assert decision.target_slot == 32
         assert "storing solar" in decision.reason
 
+    def test_higher_unused_slot_is_valued_not_denied(self, agile_tariff):
+        """A 30.5p slot is not "no future slot" just because 3 A loses 45%.
+
+        This is the 09:30 case: no solar surplus, 19.9p now, 30.5p later, and
+        a 3 A harvest.  (30.5 - 0.3) x 0.547 = 16.5p, so exporting now wins.
+        """
+        self._set_two_peak_rates(agile_tariff, now_slot=19, now_rate=19.9)
+        agile_tariff._planned_export_slots = []
+
+        decision = agile_tariff._evaluate_storage_decision(
+            19, 19.9, 78, harvest_current_a=3
+        )
+
+        assert decision.use_bidirectional is False
+        assert "future 30.5p at 16:00–16:30" in decision.reason
+        assert "30.2p × 55% = 16.5p ≤ 19.9p now" in decision.reason
+        assert "no future slot beats" not in decision.reason
+
     def test_best_planned_rate_ignores_past_slots(self, agile_tariff):
         self._set_two_peak_rates(agile_tariff)
         agile_tariff._planned_export_slots = [20, 32, 47]
