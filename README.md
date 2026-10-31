@@ -272,11 +272,11 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 
 The tariff dashboard shows a compact decision line above the 48-slot Agile
 Outgoing rate strip. It states the current mode, the reason for it, the
-efficiency actually used for the decision, the minimum round-trip spread, and
-an estimate of the cost saved today:
+efficiency actually used for the decision, the configured minimum profit
+spread, and an estimate of the cost saved today:
 
 ```
-Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh (solar)   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
 ```
 
 The same decision line is written to the log at INFO once per minute, on the
@@ -297,6 +297,14 @@ first control cycle in that minute, with `|` separators.
   stored energy was expensive and falls when the export it displaces is worth
   more. If the export price alone clears `H`, any import starts it; if `H`
   exceeds the import price, it never starts.
+- **Min gain N.Np/kWh** is the configured profit spread
+  (`min_profit_margin_p_per_kwh`, 0.3p by default), not a figure derived from
+  it. Control applies this margin to the future price before the round-trip
+  efficiency, so a later sale must beat the current price by at least this
+  much. Covering the round-trip loss needs a larger spread on the input price
+  (about 1.8–2.3p/kWh for cheap grid charging, depending on the modelled
+  efficiency); hover the chip for that break-even figure. Free solar has no
+  input price to recover, so its break-even spread is the margin itself.
 - **Stored N.Np/kWh (L–Hp delivered)** shows both cost bases. `N` is the
   money paid for the energy in the ledger (or the Agile export value forgone
   when it was stored) per kWh actually in the pack, divided by the measured

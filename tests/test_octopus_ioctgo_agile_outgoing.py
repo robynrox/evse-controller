@@ -1050,7 +1050,16 @@ class TestDecisionSnapshot:
         assert snapshot.mode.startswith("Max charge")
         assert "charging to the" in snapshot.reason
         assert snapshot.efficiency_label == "charge"
-        assert snapshot.min_round_trip_saving_p == pytest.approx(2.3, abs=0.05)
+        assert snapshot.min_gain_p == pytest.approx(
+            agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+
+        # The displayed gain is the policy spread, not the larger
+        # efficiency-adjusted break-even spread on the input price.
+        assert agile_tariff.minimum_round_trip_saving_grid_p() > snapshot.min_gain_p
+        html = agile_tariff.get_dashboard_html()
+        assert "min gain 0.3p/kWh" in html
+        assert "min gain 2.3p/kWh" not in html
 
     def test_off_peak_idles_at_the_cap(self, agile_tariff):
         self._set_time(agile_tariff, 23, 45)
@@ -1266,7 +1275,12 @@ class TestChargeCap:
 
 
 class TestMinimumRoundTripSaving:
-    """The dashboard can state the spread a round trip must clear."""
+    """The tooltip can state the efficiency-adjusted break-even spread.
+
+    This is the extra spread needed on the input price to cover the
+    round-trip loss and still earn the configured margin.  It is not the
+    displayed ``min gain``, which is the margin itself.
+    """
 
     def test_grid_spread_includes_efficiency_and_margin(self, agile_tariff):
         expected = (
@@ -1699,8 +1713,7 @@ class TestDashboardModeLine:
             soc_percent=47,
             efficiency_pct=73,
             efficiency_label="round trip",
-            min_round_trip_saving_p=0.3,
-            min_round_trip_saving_basis="solar",
+            min_gain_p=0.3,
         )
 
         html = agile_tariff.get_dashboard_html()
@@ -1713,6 +1726,7 @@ class TestDashboardModeLine:
         assert "Harvest 5 A" in html
         assert "round trip" in html
         assert "min gain 0.3p/kWh" in html
+        assert "min gain 0.3p/kWh (" not in html
         assert "saved today" in html
 
     def test_mode_line_shows_stored_energy_cost(self, agile_tariff):
@@ -1847,8 +1861,7 @@ class TestDecisionLog:
                 soc_percent=47,
                 efficiency_pct=73,
                 efficiency_label="round trip",
-                min_round_trip_saving_p=0.3,
-                min_round_trip_saving_basis="solar",
+                min_gain_p=0.3,
                 discharge_activation_w=250,
             )
             # A second control cycle in the same minute must not repeat it.
@@ -1864,7 +1877,8 @@ class TestDecisionLog:
             assert "Harvest 5 A" in message
             assert "storing solar" in message
             assert "η 73% round trip" in message
-            assert "min gain 0.3p/kWh (solar)" in message
+            assert "min gain 0.3p/kWh" in message
+            assert "min gain 0.3p/kWh (" not in message
             assert "discharge ≥250 W" in message
             assert "stored " in message
             assert "saved today" in message

@@ -97,15 +97,19 @@ completed fixes.
   docs), `0de721f` (normalised Shelly channels), `46d907d` (house-load floor),
   `319c443` (aggressive activation explanation), `b404816` (finer saved-today
   display), `44a7ca3` (ledger noise guard), `69446a8` (Wallbox transition
-  settling), and follow-ups that drop the redundant zero-activation chip and
-  show the in-pack and delivered stored-cost bases.
+  settling), `14e1769` (drop the redundant zero-activation chip),
+  `8c5a973` (in-pack and delivered cost bases), `09345b5` (delivered-cost
+  range), `7909cad` (INFO decision line once per minute), `ab948af` (Pylance
+  narrowing), and the follow-up that shows the configured margin as `min gain`
+  instead of the efficiency-adjusted break-even spread.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
 - `IOCTGO + Agile Outgoing` now uses the measured current-dependent model.
 - The tariff dashboard has a compact decision line above the 48-slot strip:
-  mode, reason, efficiency actually used, minimum round-trip gain, discharge
-  activation threshold, and the money saved today by cycling stored energy
+  mode, reason, efficiency actually used, the configured minimum profit gain,
+  discharge activation threshold, and the money saved today by cycling stored
+  energy
   (charge cost booked on entry, avoided import/export value booked on
   discharge, round-trip loss included). The strip is 28px (was 40px);
   detailed SoC/slot analysis stays in the text log. The off-peak charge

@@ -499,9 +499,13 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
 - **Efficiency** is the measured value the decision actually used
   (`charge`, `discharge`, `round trip`, or `solar → house`). There is no single
   global minimum because the model is current-dependent.
-- **Minimum gain** is the round-trip spread over the input price:
-  `charge_price / η + margin − charge_price`. Free solar → export is just the
-  0.3p margin; cheap grid → export is ~2.3p/kWh at 10p import.
+- **Minimum gain** is the configured profit spread itself
+  (`min_profit_margin_p_per_kwh`, 0.3p by default), not a figure derived from
+  it. Control applies the margin to the future price before the round-trip
+  efficiency. The efficiency-adjusted break-even spread on the *input* price
+  is shown in the tooltip instead: `charge_price / η + margin − charge_price`.
+  Free solar → export is just the 0.3p margin; cheap grid → export is
+  ~2.3p/kWh at 10p import.
 - **Saved today** is the realised spread on stored energy, not a grid-cost
   difference. The manager keeps a ledger in DC-side kWh plus the money paid for
   it. Charging adds `AC in × η_chg` and costs the grid share at the current

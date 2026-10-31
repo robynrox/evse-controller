@@ -58,8 +58,7 @@ class DecisionSnapshot:
     surplus_w: Optional[float] = None
     efficiency_pct: Optional[float] = None
     efficiency_label: str = ""
-    min_round_trip_saving_p: Optional[float] = None
-    min_round_trip_saving_basis: str = ""
+    min_gain_p: Optional[float] = None
     charge_min_a: Optional[float] = None
     charge_max_a: Optional[float] = None
     discharge_min_a: Optional[float] = None
@@ -784,18 +783,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def minimum_round_trip_saving_p(
         self, charge_price_p: float, round_trip_efficiency: float
     ) -> float:
-        """Minimum saving per kWh of input needed for a round trip.
+        """Efficiency-adjusted break-even spread over the input price.
 
-        A round trip turns 1 kWh of input into ``round_trip_efficiency`` kWh
-        of output, and each output kWh must clear the profit margin.  The
-        break-even input price is ``charge_price / efficiency + margin``, so
-        the minimum saving is::
+        This is not the displayed ``min gain``: the configured profit margin
+        is the spread the policy requires, and it is what the dashboard and
+        log report.  This helper answers a different question - how much the
+        input price itself must rise to earn that margin *after* the
+        round-trip loss.  A round trip turns 1 kWh of input into
+        ``round_trip_efficiency`` kWh of output, so the break-even input price
+        is ``charge_price / efficiency + margin`` and the required spread is::
 
             charge_price / efficiency + margin - charge_price
 
         For grid import at ``IMPORT_LOW`` and the ~0.833 grid round trip this
-        is ~2.3p/kWh; for free solar it collapses to the margin itself
-        (~0.3p/kWh).
+        is ~2.3p/kWh on the input price.  For free solar the input price is
+        zero, so it collapses to the margin itself (~0.3p/kWh).  The tooltip
+        uses these figures to show the loss component alongside the policy
+        margin; control decisions apply the margin directly to the future
+        price and never call this helper.
         """
         if round_trip_efficiency <= 0:
             return 0.0
@@ -1862,8 +1867,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         surplus_w: Optional[float] = None,
         efficiency_pct: Optional[float] = None,
         efficiency_label: str = "",
-        min_round_trip_saving_p: Optional[float] = None,
-        min_round_trip_saving_basis: str = "",
+        min_gain_p: Optional[float] = None,
         charge_min_a: Optional[float] = None,
         charge_max_a: Optional[float] = None,
         charge_activation_w: Optional[float] = None,
@@ -1888,8 +1892,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             surplus_w=surplus_w,
             efficiency_pct=efficiency_pct,
             efficiency_label=efficiency_label,
-            min_round_trip_saving_p=min_round_trip_saving_p,
-            min_round_trip_saving_basis=min_round_trip_saving_basis,
+            min_gain_p=min_gain_p,
             charge_min_a=charge_min_a,
             charge_max_a=charge_max_a,
             charge_activation_w=charge_activation_w,
@@ -1999,12 +2002,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             label = snapshot.efficiency_label or "efficiency"
             parts.append(f"η {snapshot.efficiency_pct:.0f}% {label}")
 
-        if snapshot.min_round_trip_saving_p is not None:
-            basis = snapshot.min_round_trip_saving_basis
-            suffix = f" ({basis})" if basis else ""
-            parts.append(
-                f"min gain {snapshot.min_round_trip_saving_p:.1f}p/kWh{suffix}"
-            )
+        if snapshot.min_gain_p is not None:
+            parts.append(f"min gain {snapshot.min_gain_p:.1f}p/kWh")
 
         if snapshot.discharge_activation_w is not None:
             activation_label = self._activation_label(
@@ -2076,20 +2075,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"η {snapshot.efficiency_pct:.0f}% {label}</span>"
             )
 
-        if snapshot.min_round_trip_saving_p is not None:
-            basis = html_module.escape(snapshot.min_round_trip_saving_basis)
+        if snapshot.min_gain_p is not None:
             title = html_module.escape(
-                "Minimum saving per kWh of input for a round trip. "
-                f"Solar to export: {self.minimum_round_trip_saving_solar_p():.1f}p/kWh. "
-                f"Cheap grid to export: {self.minimum_round_trip_saving_grid_p():.1f}p/kWh "
-                f"at {config.IMPORT_LOW:.1f}p import. Includes the "
-                f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh profit margin.",
+                "Minimum profit required per kWh delivered: "
+                f"{snapshot.min_gain_p:.1f}p/kWh. This is the configured "
+                "policy spread, applied to the future price before the "
+                "round-trip efficiency, so a later sale must beat the "
+                "current price by at least this much. It is not the "
+                "efficiency-adjusted break-even spread: covering the "
+                "round-trip loss and earning this margin needs "
+                f"{self.minimum_round_trip_saving_grid_p():.1f}p/kWh on the "
+                f"input price for grid charging at {config.IMPORT_LOW:.1f}p, "
+                f"and {self.minimum_round_trip_saving_solar_p():.1f}p/kWh "
+                "for free solar.",
                 quote=True,
             )
-            suffix = f" ({basis})" if basis else ""
             parts.append(
                 f'<span class="ioctgo-metric" title="{title}">'
-                f"min gain {snapshot.min_round_trip_saving_p:.1f}p/kWh{suffix}</span>"
+                f"min gain {snapshot.min_gain_p:.1f}p/kWh</span>"
             )
 
         if snapshot.discharge_activation_w is not None:
@@ -2616,8 +2619,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     current_rate_p=config.IMPORT_LOW,
                     efficiency_pct=charge_efficiency,
                     efficiency_label="charge",
-                    min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
-                    min_round_trip_saving_basis="grid",
+                    min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                     charge_min_a=self.MAX_CHARGE_CURRENT,
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
@@ -2659,8 +2661,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
                 efficiency_pct=charge_efficiency,
                 efficiency_label="charge",
-                min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
-                min_round_trip_saving_basis="grid",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 charge_min_a=3,
                 charge_max_a=3,
                 charge_activation_w=0,
@@ -2716,8 +2717,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 target_slot=current_slot,
                 efficiency_pct=discharge_efficiency,
                 efficiency_label="discharge",
-                min_round_trip_saving_p=self.minimum_round_trip_saving_grid_p(),
-                min_round_trip_saving_basis="grid",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 discharge_min_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
@@ -2807,8 +2807,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 current_rate_p=self._current_export_rate_p(current_slot),
                 harvest_current_a=harvest_current_a,
                 surplus_w=surplus_w,
-                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
-                min_round_trip_saving_basis="solar",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 charge_min_a=0 if charge_at_cap else 3,
                 charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
                 charge_activation_w=720,
@@ -2907,8 +2906,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 surplus_w=surplus_w,
                 efficiency_pct=efficiency_pct,
                 efficiency_label=decision.efficiency_label,
-                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
-                min_round_trip_saving_basis="solar",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 charge_min_a=0 if charge_at_cap else 3,
                 charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
                 charge_activation_w=720,
@@ -2967,8 +2965,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 surplus_w=surplus_w,
                 efficiency_pct=efficiency_pct,
                 efficiency_label=decision.efficiency_label,
-                min_round_trip_saving_p=self.minimum_round_trip_saving_solar_p(),
-                min_round_trip_saving_basis="solar",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 discharge_min_a=self.MIN_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
