@@ -282,6 +282,14 @@ Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0
 The same decision line is written to the log at INFO once per minute, on the
 first control cycle in that minute, with `|` separators.
 
+The strip below the line is 48 half-hour cells, coloured red→green by rate.
+A slot the planner will bulk-export in carries an orange border and an `EX`
+badge (lowercase `e` for the slot likely to be only partly filled, a green
+border and `✓` for one already exported). The plan is also listed in words
+under the strip — `Export plan: 16:00–16:30 @ 30.5p · …`, or
+`Export plan: none planned` — because a 48-cell strip is only a few pixels per
+cell on a phone, where the badge alone is too small to rely on.
+
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
   the min/max returned by `get_control_state()` (which load-follow states
   override). When the system is not charging it always states the discharge

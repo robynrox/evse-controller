@@ -575,8 +575,11 @@ cannot raise it above **97%**; the local test config still sets 90%, so it will
 stop at 90% until that value is raised. The same ceiling applies outside
 off-peak: at or above it `set_home_demand_levels()` sets the charge range to
 zero, so surplus solar cannot push the pack past the cap either. The rate strip
-is 28px (was 40px) and the time axis 14px (was 20px) to make room without
-dropping any of the 48 slots.
+was briefly compressed to 28px (axis 14px) when the decision line was added,
+but that made the orange `EX` bulk-export badge collide with the rate digits
+and vanish on narrow screens. It is back to 40px (axis 20px), the dashboard
+area reserves 90px, and the planned slots are also listed in words beneath the
+strip so the plan does not depend on a 7px-wide cell carrying a badge.
 
 ## 8. Reproduction
 

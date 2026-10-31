@@ -2251,9 +2251,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 return (
                     mode_line
                     + """
-                <div class="agile-rate-strip" style="height:28px;display:flex;
+                <div class="agile-rate-strip" style="height:40px;display:flex;
                     align-items:center;justify-content:center;background:#f5f5f5;
-                    border-radius:4px;margin:6px 0;">
+                    border-radius:4px;margin:10px 0;">
                     <span style="color:#666;font-size:12px;">Loading Agile Outgoing rates...</span>
                 </div>
                 """
@@ -2317,8 +2317,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Generate HTML - always 48 slots
             html = [mode_line, '<div style="position:relative;margin:6px 0;">']
             html.append(
-                '<div class="agile-rate-strip" style="height:28px;display:flex;'
-                "gap:1px;padding:3px;background:#fafafa;border-radius:4px;"
+                '<div class="agile-rate-strip" style="height:40px;display:flex;'
+                "gap:1px;padding:5px;background:#fafafa;border-radius:4px;"
                 'overflow:hidden;">'
             )
             
@@ -2363,17 +2363,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         # Already exported - show green border, checkmark in text color
                         extra_style = "border:2px solid #4caf50;"
                         tooltip_extra = " - EXPORTED"
-                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">✓</span>'
+                        label = f'<span class="agile-rate-badge" style="color:{text_color};">✓</span>'
                     elif is_partial:
                         # Partial slot (lowest rate) - show lowercase 'e'
                         extra_style = "border:2px solid #ff9800;"
                         tooltip_extra = " - PLANNED EXPORT (may be partial)"
-                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">e</span>'
+                        label = f'<span class="agile-rate-badge" style="color:{text_color};">e</span>'
                     elif is_planned:
                         # Planned for export - show orange border, EX in text color
                         extra_style = "border:2px solid #ff9800;"
                         tooltip_extra = " - PLANNED EXPORT"
-                        label = f'<span style="position:absolute;top:2px;right:2px;font-size:8px;font-weight:bold;color:{text_color};text-shadow:0 0 2px #fff;">EX</span>'
+                        label = f'<span class="agile-rate-badge" style="color:{text_color};">EX</span>'
                     else:
                         # Normal future slot - grey border
                         extra_style = "border:2px solid #ddd;"
@@ -2438,7 +2438,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Add time axis with horizontal line and tick marks
             # Use flex structure matching the cells for perfect alignment
-            time_axis = '<div style="display:flex;gap:1px;padding:0 3px;height:14px;position:relative;">'
+            time_axis = '<div style="display:flex;gap:1px;padding:0 5px;height:20px;position:relative;">'
             
             # Add horizontal line across top (full width of container)
             time_axis += '<span style="position:absolute;left:0;right:0;top:0;height:1px;background:#666;"></span>'
@@ -2500,6 +2500,38 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 <span>High: {max_rate:.1f}p | SoC: {soc_drop_per_slot:.1f}%/slot</span>
             </div>
             ''')
+
+            # Name the planned slots in text as well as on the strip.  The
+            # orange "EX" badge is small and is the first thing to become
+            # illegible on a narrow screen, so the plan must also be readable
+            # as words.  An empty plan is stated too: it explains a decision
+            # that declined to store solar for a later sale.
+            if planned_slots:
+                plan_items = [
+                    f"{self._slot_range_label(idx)} @ {rate_dict[idx]['rate']:.1f}p"
+                    + (" (partial)" if idx == partial_slot_idx else "")
+                    for idx in planned_slots
+                    if idx in rate_dict
+                ]
+            else:
+                plan_items = []
+            if plan_items:
+                if len(plan_items) > 6:
+                    plan_items = plan_items[:6] + [
+                        f"+{len(planned_slots) - 6} more"
+                    ]
+                plan_text = "Export plan: " + " · ".join(plan_items)
+                plan_colour = "#e65100"
+            else:
+                plan_text = "Export plan: none planned"
+                plan_colour = "#888"
+            html.append(
+                '<div style="font-size:10px;color:' + plan_colour + ";"
+                'margin-top:1px;" title="Slots the planner will export in. '
+                'They carry an orange border and an EX badge on the strip.">'
+                + html_module.escape(plan_text)
+                + "</div>"
+            )
             
             # Add CSS for responsive behavior with progressive degradation
             html.append('''
@@ -2508,33 +2540,63 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             .agile-rate-cell .rate-value-full { display: inline; }
             .agile-rate-cell .rate-value-int { display: none; }
             .agile-rate-cell .rate-value-none { display: none; }
-            
+
+            /* Export/exported badge in the top-right corner of a cell.  It
+               needs a fixed, small size and no wrap: the label is what marks
+               a bulk-export slot, so it must survive every breakpoint. */
+            .agile-rate-cell .agile-rate-badge {
+                position: absolute;
+                top: 2px;
+                right: 2px;
+                font-size: 8px;
+                line-height: 1;
+                font-weight: bold;
+                white-space: nowrap;
+                text-shadow: 0 0 2px #fff;
+            }
+
             /* < 1200px: smaller fonts */
             @media (max-width: 1200px) {
                 .agile-rate-cell { font-size: 9px !important; }
                 .agile-rate-cell .rate-value-full { font-size: 8px !important; }
             }
-            
+
             /* < 900px: integer rates only */
             @media (max-width: 900px) {
                 .agile-rate-cell .rate-value-full { display: none; }
                 .agile-rate-cell .rate-value-int { display: inline; }
                 .agile-rate-cell { font-size: 8px !important; }
             }
-            
+
             /* < 700px: hide rate values, show only color */
             @media (max-width: 700px) {
                 .agile-rate-cell .rate-value-full { display: none; }
                 .agile-rate-cell .rate-value-int { display: none; }
                 .agile-rate-cell .rate-value-none { display: inline; }
-                .agile-rate-cell { min-height: 22px; }
-                .agile-rate-strip { height: 28px !important; }
+                .agile-rate-cell { min-height: 28px; }
+                .agile-rate-strip { height: 36px !important; }
+                .agile-rate-cell .agile-rate-badge {
+                    top: 1px; right: 1px; font-size: 7px;
+                }
             }
-            
-            /* < 400px: reduce height further */
+
+            /* < 400px: keep a readable strip rather than squeezing the badge */
             @media (max-width: 400px) {
-                .agile-rate-cell { min-height: 18px; }
-                .agile-rate-strip { height: 22px !important; padding-bottom: 8px !important; }
+                .agile-rate-cell { min-height: 24px; }
+                .agile-rate-strip { height: 32px !important; padding: 4px !important; }
+                /* Cells are ~7px wide here, so the two-letter badge cannot
+                   fit.  Keep a dot (currentColor) and let the export-plan
+                   line below the strip carry the detail. */
+                .agile-rate-cell .agile-rate-badge {
+                    font-size: 0;
+                    top: 2px;
+                    right: 2px;
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 50%;
+                    background: currentColor;
+                    text-shadow: none;
+                }
             }
             </style>
             ''')

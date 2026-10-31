@@ -121,8 +121,13 @@ completed fixes.
   discharge activation threshold, and the money saved today by cycling stored
   energy
   (charge cost booked on entry, avoided import/export value booked on
-  discharge, round-trip loss included). The strip is 28px (was 40px);
-  detailed SoC/slot analysis stays in the text log. The off-peak charge
+  discharge, round-trip loss included). The strip is 40px: the earlier 28px
+  compression left the orange `EX` bulk-export badge overlapping the rate
+  digits, so it was reverted and the dashboard area's `min-height` raised to
+  90px. Planned slots are also named in words under the strip
+  (`Export plan: 16:00–16:30 @ 30.5p …`, or `none planned`), because a
+  48-cell strip is only ~7px per cell on a phone. Detailed SoC/slot analysis
+  stays in the text log. The off-peak charge
   ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling zeroes
   the charge range outside off-peak, so solar cannot overfill the pack.
 - Discharge activation is no longer the hard-coded 1 W (aggressive) or 720 W

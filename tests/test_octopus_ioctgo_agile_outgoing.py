@@ -1909,7 +1909,8 @@ class TestDashboardModeLine:
         assert "saved today £0.0243" in html
         assert "↑22.4p/h" in html
 
-    def test_strip_is_compact(self, agile_tariff):
+    def test_strip_has_room_for_the_rate_and_badge(self, agile_tariff):
+        """The strip must not be squeezed: the EX badge sits above the rate."""
         agile_tariff._record_decision(
             mode="Idle — battery protection",
             reason="SoC at the reserve",
@@ -1918,7 +1919,37 @@ class TestDashboardModeLine:
 
         html = agile_tariff.get_dashboard_html()
 
-        assert 'class="agile-rate-strip" style="height:28px' in html
+        assert 'class="agile-rate-strip" style="height:40px' in html
+        assert ".agile-rate-cell .agile-rate-badge" in html
+
+    def test_export_plan_is_named_in_text(self, agile_tariff):
+        """A planned slot is marked on the strip and named in words."""
+        agile_tariff._planned_export_slots = [32, 34]
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert 'class="agile-rate-badge"' in html
+        assert ">EX</span>" in html
+        assert "Export plan: 16:00–16:30 @ 18.0p" in html
+        assert "17:00–17:30 @ 28.0p" in html
+
+    def test_empty_export_plan_is_stated(self, agile_tariff):
+        agile_tariff._planned_export_slots = []
+        agile_tariff._record_decision(
+            mode="Harvest 6 A · aggressive discharge",
+            reason="storing solar",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "Export plan: none planned" in html
+        assert ">EX</span>" not in html
 
     def test_mode_line_still_shows_while_rates_load(self, agile_tariff):
         agile_tariff.agile_rates = []
