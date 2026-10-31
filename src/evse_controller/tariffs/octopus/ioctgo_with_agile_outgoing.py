@@ -782,6 +782,31 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         debug(f"IOCTGO_AGILEOUT: Best unused export rate: {best_rate:.1f}p/kWh")
         return best_slot, best_rate
 
+    def _best_planned_export_slot_rate(
+        self, current_slot: int
+    ) -> tuple[Optional[int], float]:
+        """Highest-rate planned export slot still to come, or ``(None, 0.0)``.
+
+        A planned slot's revenue is already committed to the energy in the
+        pack: the plan spends the pack's spare SoC on it.  A marginal kWh
+        stored now is therefore sold in the best *unused* slot, which is what
+        the storage decision compares against.
+
+        This helper exists only to explain that.  Without it a no-store
+        decision can look wrong: the best rate of the day is visible in the
+        plan, yet the surplus is exported now, and the reason said "no future
+        slot beats the current one".  The truthful reason is that the good
+        slot is already taken.
+        """
+        planned = [
+            (slot, self._current_export_rate_p(slot))
+            for slot in self._planned_export_slots
+            if current_slot <= slot < 47
+        ]
+        if not planned:
+            return None, 0.0
+        return max(planned, key=lambda item: item[1])
+
     def minimum_round_trip_saving_p(
         self, charge_price_p: float, round_trip_efficiency: float
     ) -> float:
@@ -1591,10 +1616,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                   f"future={best_unused_rate:.1f}p - margin {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p "
                   f"= {net_future_rate:.1f}p × {solar_round_trip:.0%} = "
                   f"{adjusted_future_rate:.1f}p")
-            reason = (
-                f"no future slot beats {current_export_rate_p:.1f}p now after "
-                f"{solar_round_trip:.0%} round trip — covering the house"
+            committed_slot, committed_rate = self._best_planned_export_slot_rate(
+                current_slot
             )
+            if committed_rate > best_unused_rate:
+                # Name the slot that is *better* but already committed, so the
+                # dashboard does not imply the day has no higher price left.
+                reason = (
+                    f"{committed_rate:.1f}p at "
+                    f"{self._slot_range_label(committed_slot)} is already "
+                    "committed to the pack — the best unused slot is "
+                    f"{best_unused_rate:.1f}p, which yields "
+                    f"{adjusted_future_rate:.1f}p after the "
+                    f"{solar_round_trip:.0%} round trip, below "
+                    f"{current_export_rate_p:.1f}p now"
+                )
+            else:
+                reason = (
+                    f"no future slot beats {current_export_rate_p:.1f}p now after "
+                    f"{solar_round_trip:.0%} round trip — covering the house"
+                )
 
         return StorageDecision(
             use_bidirectional=should_use_bidirectional,
@@ -2013,6 +2054,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         if snapshot.min_gain_p is not None:
             parts.append(f"min gain {snapshot.min_gain_p:.1f}p/kWh")
+
+        if snapshot.harvest_current_a is not None:
+            parts.append(f"harvest {snapshot.harvest_current_a:.0f} A")
 
         if snapshot.discharge_activation_w is not None:
             activation_label = self._activation_label(
@@ -2937,6 +2981,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 current_slot, dayMinute, aggressive=True
             )
             activation_text = self._activation_note(activation_w)
+            committed_slot, committed_rate = self._best_planned_export_slot_rate(
+                current_slot
+            )
+            committed_note = (
+                f"The {committed_rate:.1f}p "
+                f"{self._slot_range_label(committed_slot)} slot is already "
+                "committed to energy in the pack, so only an unused slot can "
+                "sell extra solar. "
+                if committed_rate > 0
+                and (target_rate_p is None or committed_rate > target_rate_p)
+                else ""
+            )
             reason = (
                 f"SoC {battery_level}% at the {charge_cap:.0f}% cap — covering "
                 "the house instead of storing"
@@ -2957,8 +3013,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 soc_percent=battery_level,
                 detail=(
                     f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
-                    f"current export {current_export_rate_p:.1f}p, best future "
+                    f"current export {current_export_rate_p:.1f}p, harvest "
+                    f"estimate {harvest_current_a:.0f} A, best unused slot "
                     f"{best_future_text}. Aggressive discharge {activation_text}. "
+                    f"{committed_note}"
                     "Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
                     f"at the {self.MIN_DISCHARGE_CURRENT:.0f} A minimum plus a "

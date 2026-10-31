@@ -412,6 +412,20 @@ efficiency is the right one there. At a 3 A harvest the threshold is 12.6p; at
 6 A it is 17.0p. It is still a single threshold because the manager does not
 tag stored energy with its acquisition cost. That is a DP concern.
 
+Tier 3 is a *marginal* comparison, which is why it reads the best **unused**
+slot. The export plan spends the pack's spare SoC on the highest-rate slots
+until that capacity runs out; those slots' revenue is already committed to the
+energy in the pack. A kWh of solar stored now is therefore sold in the next
+slot the plan would add, not in the best slot overall. At 90% SoC on a day with
+21.4p now, 30.5p later and 5p elsewhere, the plan already holds the 30.5p slot
+and the extra kWh would earn 5p, so exporting now at 21.4p is correct even at a
+6 A harvest: `(5 − 0.3) × 0.734 = 3.4p < 21.4p`. At 80% SoC the plan is empty,
+the extra kWh would be sold at 30.5p, and the same harvest stores
+(`(30.5 − 0.3) × 0.734 = 22.2p > 21.4p`). Excluding planned slots is not a
+pessimistic assumption; including them would compare against a sale the pack
+cannot make. The dashboard names the committed slot so the decision is not
+mistaken for a planner that missed the good price.
+
 The old 0.50 constant also carried an implicit battery-wear margin. The new
 model is pure measured efficiency, so the hurdle is now explicit instead of a
 hidden efficiency haircut. `IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH` defaults to

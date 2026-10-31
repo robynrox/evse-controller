@@ -40,6 +40,12 @@
 >   that pays at 6 A (73.4%). A 6 A harvest is 0.734 solar → export rather
 >   than 0.547 at 3 A, so a strong surplus is stored where a 3 A trickle would
 >   be exported. Falls back to 3 A when there is no measurement.
+> - **A strong harvest does not always store, because Tier 3 is marginal.** The
+>   export plan already commits the pack's spare SoC to the best slots, so extra
+>   solar stored now is sold in the next *unused* slot. At 90% SoC with 30.5p
+>   already planned, the next unused slot pays 5p, so the surplus is exported at
+>   21.4p. The dashboard reason names the committed slot; `Do not charge` is not
+>   a claim that no higher price exists.
 > - Discharge to cover the house load is assumed at **3 A** (~0.72 kW, the base
 >   load), giving a self-use threshold of
 >   `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` = **12.6p at 3 A**,
@@ -104,7 +110,8 @@ completed fixes.
   `8c5a973` (in-pack and delivered cost bases), `09345b5` (delivered-cost
   range), `7909cad` (INFO decision line once per minute), `ab948af` (Pylance
   narrowing), `7df8cdf` (show the configured margin as `min gain`), and the
-  follow-up that rounds the solar harvest estimate up to a measured point.
+  follow-up that rounds the solar harvest estimate up to a measured point and
+  explains a planned-slot no-store decision.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -140,7 +147,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **367 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **372 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

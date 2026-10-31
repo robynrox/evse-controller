@@ -276,7 +276,7 @@ efficiency actually used for the decision, the configured minimum profit
 spread, and an estimate of the cost saved today:
 
 ```
-Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh   harvest 5 A   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
 ```
 
 The same decision line is written to the log at INFO once per minute, on the
@@ -338,6 +338,15 @@ first control cycle in that minute, with `|` separators.
   harvest current is estimated from the live surplus and rounded **up** to a
   measured point: efficiency improves with current, so rounding down would
   understate the round trip and can reject a store that pays.
+- **Harvest N A** is the charge current the estimator used, from the live
+  surplus, so a decision can be checked against what the car is actually
+  drawing. It is absent when the branch made no solar decision.
+- **A planned export slot is already sold to the pack.** The export plan spends
+  the pack's spare SoC on the best slots of the day, so a marginal kWh of solar
+  stored now can only be sold in the next *unused* slot. When the best rate is
+  already committed, the surplus is exported now even with a strong harvest,
+  and the reason says which slot is committed and what the next unused rate
+  would yield. `Do not charge` does not mean the day has no higher price left.
 - **Saved today** is the money actually captured by cycling stored energy. A
   charge is booked at the price paid (grid) or at the Agile export price it
   displaced (surplus solar), and no saving is shown yet. The saving appears

@@ -279,6 +279,74 @@ class TestHarvestCurrentDecision:
         )
 
 
+class TestPlannedExportSlotExplanation:
+    """A committed export slot is not a sale price for extra solar.
+
+    At a high SoC the export plan already spends the pack's spare capacity on
+    the best slot of the day.  Solar stored now can only be sold in the next
+    unused slot, so ``no store`` is the right decision even with a strong
+    surplus.  The reason must say that, because naming only the unused rate
+    looks like the planner has missed the good price.
+    """
+
+    @staticmethod
+    def _set_two_peak_rates(tariff, now_slot=24, now_rate=21.4, later_slot=32,
+                            later_rate=30.5, default=5.0):
+        base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        rates = []
+        for slot in range(48):
+            start = base + timedelta(minutes=30 * slot)
+            rate = now_rate if slot == now_slot else (
+                later_rate if slot == later_slot else default
+            )
+            rates.append({"start": start, "end": start + timedelta(minutes=30),
+                          "rate": rate})
+        tariff.agile_rates = rates
+
+    def test_committed_slot_is_named_in_the_no_store_reason(self, agile_tariff):
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = [32]
+
+        decision = agile_tariff._evaluate_storage_decision(
+            24, 21.4, 90, harvest_current_a=6
+        )
+
+        assert decision.use_bidirectional is False
+        # 30.5p is in the plan, so the marginal sale is the next unused slot.
+        assert decision.future_rate_p == pytest.approx(21.4)
+        assert "30.5p at 16:00–16:30 is already committed" in decision.reason
+        assert "best unused slot is 21.4p" in decision.reason
+        assert "15.5p after the 73% round trip" in decision.reason
+        assert "no future slot beats" not in decision.reason
+
+    def test_unplanned_slot_still_stores(self, agile_tariff):
+        """Without the commitment the same surplus stores at 30.5p."""
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = []
+
+        decision = agile_tariff._evaluate_storage_decision(
+            24, 21.4, 80, harvest_current_a=6
+        )
+
+        assert decision.use_bidirectional is True
+        assert decision.target_slot == 32
+        assert "storing solar" in decision.reason
+
+    def test_best_planned_rate_ignores_past_slots(self, agile_tariff):
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = [20, 32, 47]
+
+        slot, rate = agile_tariff._best_planned_export_slot_rate(24)
+
+        assert slot == 32
+        assert rate == pytest.approx(30.5)
+
+    def test_no_planned_slots_returns_nothing(self, agile_tariff):
+        agile_tariff._planned_export_slots = []
+
+        assert agile_tariff._best_planned_export_slot_rate(24) == (None, 0.0)
+
+
 class TestSolarHarvestCurrentEstimate:
     """Estimate the load-following charge current from the live surplus."""
 
@@ -1172,6 +1240,31 @@ class TestDecisionSnapshot:
         assert snapshot.mode.startswith("Do not charge")
         assert "aggressive discharge" in snapshot.mode
 
+    def test_no_store_detail_names_the_committed_slot(self, agile_tariff):
+        """The hover text explains why a strong surplus was not stored."""
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 88)
+        agile_tariff._planned_export_slots = [32]
+        agile_tariff._plan_cache = [32]
+        TestPlannedExportSlotExplanation._set_two_peak_rates(agile_tariff)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=-1440, ch2Watts=0, voltage=240
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(88)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert "30.5p" in snapshot.reason
+        assert "committed" in snapshot.reason
+        assert "harvest estimate 6 A" in snapshot.detail
+        assert "30.5p 16:00–16:30 slot is already committed" in snapshot.detail
+        assert "best unused slot 21.4p" in snapshot.detail
+
     def test_aggressive_reason_includes_the_break_even(self, agile_tariff):
         self._set_time(agile_tariff, 22, 0)
         self._pin_plan(agile_tariff, 44, 80)
@@ -1868,6 +1961,7 @@ class TestDecisionLog:
                 efficiency_pct=73,
                 efficiency_label="round trip",
                 min_gain_p=0.3,
+                harvest_current_a=6,
                 discharge_activation_w=250,
             )
             # A second control cycle in the same minute must not repeat it.
@@ -1885,6 +1979,7 @@ class TestDecisionLog:
             assert "η 73% round trip" in message
             assert "min gain 0.3p/kWh" in message
             assert "min gain 0.3p/kWh (" not in message
+            assert "harvest 6 A" in message
             assert "discharge ≥250 W" in message
             assert "stored " in message
             assert "saved today" in message
