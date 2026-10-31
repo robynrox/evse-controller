@@ -155,8 +155,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     Using 3 A for every solar decision is pessimistic on a sunny day: it can
     export when storing at 6–12 A would have paid.  The tariff estimates the
-    current from the live grid surplus, rounds down to a measured point, and
-    uses that for the threshold.  A grid charge for arbitrage still runs at the
+    current from the live grid surplus, rounds up to a measured point, and
+    uses that for the threshold.  Rounding up is deliberate: efficiency
+    improves with current, so rounding down understates the round trip and can
+    reject a profitable store.  A grid charge for arbitrage still runs at the
     maximum current, and a self-use discharge is assumed to run at the Wallbox
     minimum (~3 A, which is enough to cover the house base load).
 
@@ -1376,8 +1378,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         ``EvseController.getHomeWatts()`` is the house load net of PV,
         *excluding* the EVSE, so its negative is the surplus available to the
         car.  Mirror the controller's calculation (``P / V + bias``, clamped to
-        the configured charge range) and then round down to a measured
+        the configured charge range) and then round *up* to a measured
         efficiency point.
+
+        Efficiency improves with current, so rounding down understates the
+        round trip and can reject a store that would have paid.  The loop can
+        start at the surplus current, so rounding up reflects the charge it
+        will actually run rather than the worst plausible one.  A fractional
+        surplus may import the difference up to the next measured point, which
+        is small next to the 3 A floor.
 
         Falls back to the minimum current when there is no recent measurement,
         so the decision is never better than the old 3 A assumption.  This is
@@ -1398,7 +1407,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.SOLAR_CHARGE_REFERENCE_CURRENT,
             min(amps, self.MAX_CHARGE_CURRENT),
         )
-        estimate = self.EFFICIENCY_MODEL.measured_current_at_or_below(amps)
+        estimate = self.EFFICIENCY_MODEL.measured_current_at_or_above(amps)
         debug(
             f"IOCTGO_AGILEOUT: Solar surplus {surplus_w:.0f} W at "
             f"{voltage:.0f} V -> harvest estimate {estimate:.0f} A"

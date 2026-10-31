@@ -59,13 +59,14 @@ def test_round_trip_matches_measured_cases(model):
     assert model.round_trip_efficiency(3, 3) == pytest.approx(0.426, abs=0.002)
 
 
-def test_measured_current_snaps_down(model):
-    """Fractional surplus currents are costed at the point below them."""
-    assert model.measured_current_at_or_below(5.7) == pytest.approx(5)
-    assert model.measured_current_at_or_below(6.0) == pytest.approx(6)
+def test_measured_current_snaps_up(model):
+    """Fractional surplus currents are costed at the point above them."""
+    assert model.measured_current_at_or_above(5.7) == pytest.approx(6)
+    assert model.measured_current_at_or_above(6.0) == pytest.approx(6)
+    assert model.measured_current_at_or_above(5.0) == pytest.approx(5)
     # Below the first point and above the last point clamp to the ends.
-    assert model.measured_current_at_or_below(0.5) == pytest.approx(3)
-    assert model.measured_current_at_or_below(32) == pytest.approx(16)
+    assert model.measured_current_at_or_above(0.5) == pytest.approx(3)
+    assert model.measured_current_at_or_above(32) == pytest.approx(16)
 
 
 def test_required_price_ratio_is_inverse_round_trip(model):

@@ -293,14 +293,20 @@ class TestSolarHarvestCurrentEstimate:
         tariff.evseController = controller
         return controller
 
-    def test_uses_surplus_and_snaps_down_to_measured_point(self, agile_tariff):
-        # 1680 W / 240 V = 7 A, -0.5 A bias = 6.5 A -> 6 A measured point.
+    def test_uses_surplus_and_snaps_up_to_measured_point(self, agile_tariff):
+        # 1680 W / 240 V = 7 A, -0.5 A bias = 6.5 A -> 7 A measured point.
         self._attach(agile_tariff, 1680)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(7)
+
+    def test_fractional_surplus_rounds_up(self, agile_tariff):
+        # 1320 W / 240 V = 5.5 A -> 6 A, not 5 A.  Efficiency improves with
+        # current, so rounding down would understate a store that pays.
+        self._attach(agile_tariff, 1320, bias=0.0)
         assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(6)
 
-    def test_surplus_just_over_5a_uses_5a(self, agile_tariff):
-        # 1320 W / 240 V = 5.5 A, -0.5 A bias = 5.0 A -> 5 A.
-        self._attach(agile_tariff, 1320)
+    def test_surplus_at_a_measured_point_stays_there(self, agile_tariff):
+        # 1200 W / 240 V = 5 A, -0.5 A bias = 4.5 A -> 5 A.
+        self._attach(agile_tariff, 1200)
         assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(5)
 
     def test_weak_surplus_stays_at_minimum(self, agile_tariff):
@@ -319,7 +325,7 @@ class TestSolarHarvestCurrentEstimate:
 
     def test_missing_voltage_uses_nominal(self, agile_tariff):
         self._attach(agile_tariff, 1680, voltage=0)
-        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(6)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(7)
 
 
 class TestExampleScenarios:

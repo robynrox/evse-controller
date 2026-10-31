@@ -32,11 +32,14 @@
 >   to the real derating (16 A here) to plan 3.534 kW.
 > - **The harvest current is a decision, not a fixed 3 A.** The manager
 >   estimates the current the load-following loop will use from the live grid
->   surplus (`EvseController.current_grid_power`), rounds down to a measured
->   efficiency point, and costs the store/export comparison there. A 6 A
->   harvest is 0.734 solar → export rather than 0.547 at 3 A, so a strong
->   surplus is stored where a 3 A trickle would be exported. Falls back to 3 A
->   when there is no measurement.
+>   surplus (`EvseController.current_grid_power`), rounds **up** to a measured
+>   efficiency point, and costs the store/export comparison there. Rounding up
+>   matters because efficiency improves with current: with the -0.5 A charge
+>   bias a 6 A surplus is 5.5 A, which the loop commands as 6 A, and rounding
+>   down would have costed it at 5 A (69.7% round trip) and rejected a store
+>   that pays at 6 A (73.4%). A 6 A harvest is 0.734 solar → export rather
+>   than 0.547 at 3 A, so a strong surplus is stored where a 3 A trickle would
+>   be exported. Falls back to 3 A when there is no measurement.
 > - Discharge to cover the house load is assumed at **3 A** (~0.72 kW, the base
 >   load), giving a self-use threshold of
 >   `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` = **12.6p at 3 A**,
@@ -100,8 +103,8 @@ completed fixes.
   settling), `14e1769` (drop the redundant zero-activation chip),
   `8c5a973` (in-pack and delivered cost bases), `09345b5` (delivered-cost
   range), `7909cad` (INFO decision line once per minute), `ab948af` (Pylance
-  narrowing), and the follow-up that shows the configured margin as `min gain`
-  instead of the efficiency-adjusted break-even spread.
+  narrowing), `7df8cdf` (show the configured margin as `min gain`), and the
+  follow-up that rounds the solar harvest estimate up to a measured point.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -137,7 +140,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **366 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **367 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

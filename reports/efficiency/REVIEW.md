@@ -383,8 +383,27 @@ Remaining approximation: the Tier 3 decision still compares one current pair.
 It uses the harvest current for charging and the export current for discharging.
 Initially that used the minimum solar current, which is pessimistic on a sunny
 day; it now estimates the harvest current from the live grid surplus, rounds
-down to a measured point, and costs the decision there. A future DP can carry
-the actual charge/discharge powers per slot instead.
+*up* to a measured point, and costs the decision there. Rounding up is
+deliberate: efficiency improves with current, so rounding down understates the
+round trip and can reject a store that pays. With the -0.5 A charge bias a
+6 A surplus becomes 5.5 A, which the loop actually commands as 6 A; rounding
+down costed it at 5 A (69.7% round trip) and rejected the store, while 6 A
+(73.4%) clears a 21.4p-now/30.5p-later comparison. The cost is that a surplus
+between measured points is modelled as importing the difference up to the next
+point: at most 1 A across the 3–12 A points, and above 12 A the efficiency
+curve is nearly flat, so the 4 A gap to the 16 A point matters little. That is
+small next to the 3 A floor, and avoiding a missed store is the more expensive
+error. A future DP can carry the actual charge/discharge powers per slot
+instead.
+
+The 3 A floor is kept. It is the minimum the loop is allowed to start at, not
+the current the estimator must use. A higher *floor* would force a deliberate
+grid top-up across the whole 0.7–1.0 kW band, which is a different decision;
+the round-up only affects which measured point the available surplus is costed
+at. The marginal AC→stored efficiency from 3 A to 4 A is ~0.96 because the
+fixed overhead is already sunk, so the 3 A floor is not the cause of the low
+3 A round trip. Choosing a *higher* current when the surplus supports it is
+the useful change, and that is now what the decision does.
 
 The self-use threshold is now `(IMPORT_HIGH − margin) × η_chg(I_harvest) ×
 η_dis(3 A)` rather than `IMPORT_HIGH × 0.50`. Discharging to cover the house
@@ -392,15 +411,6 @@ base load really does run at about 3 A (~0.72 kW), so the 3 A discharge
 efficiency is the right one there. At a 3 A harvest the threshold is 12.6p; at
 6 A it is 17.0p. It is still a single threshold because the manager does not
 tag stored energy with its acquisition cost. That is a DP concern.
-
-The 3 A floor is kept. Raising the minimum harvest current would only affect
-the 0.7–1.0 kW surplus band, where a 4 A harvest imports from the grid; at that
-surplus the car should either harvest at 3 A or export. The marginal AC→stored
-efficiency from 3 A to 4 A is ~0.96 because the fixed overhead is already sunk,
-so the floor is not the cause of the low 3 A round trip. Choosing a *higher*
-current when the surplus supports it is the useful change, and that is now
-what the decision does. Forcing a higher floor would be a deliberate grid
-top-up decision, not an efficiency improvement.
 
 The old 0.50 constant also carried an implicit battery-wear margin. The new
 model is pure measured efficiency, so the hurdle is now explicit instead of a

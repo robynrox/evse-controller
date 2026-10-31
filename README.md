@@ -334,10 +334,10 @@ first control cycle in that minute, with `|` separators.
   conservative mode.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
-  current-dependent, so there is no single global minimum figure.
-- **Minimum gain** is the spread a round trip must clear: free solar → export
-  needs only the profit margin (~0.3p/kWh), while cheap grid → export needs
-  `IMPORT_LOW / round_trip + margin − IMPORT_LOW` (~2.3p/kWh at 10p import).
+  current-dependent, so there is no single global minimum figure. The solar
+  harvest current is estimated from the live surplus and rounded **up** to a
+  measured point: efficiency improves with current, so rounding down would
+  understate the round trip and can reject a store that pays.
 - **Saved today** is the money actually captured by cycling stored energy. A
   charge is booked at the price paid (grid) or at the Agile export price it
   displaced (surplus solar), and no saving is shown yet. The saving appears
