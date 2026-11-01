@@ -62,8 +62,8 @@
         margin-top: 2px;
     }
 
-    /* Rate strip: two rows of 24 half-hour cells.  Scrolls sideways on a
-       narrow screen rather than shrinking below a tappable width. */
+    /* Rate strip: all 48 half-hour cells, wrapped into rows that fit the
+       available width so no slot can be clipped out of view. */
     .strip-wrap {
         overflow-x: auto;
         padding-bottom: 8px;
@@ -72,16 +72,33 @@
 
     .strip {
         display: grid;
-        grid-template-columns: repeat(24, minmax(34px, 1fr));
-        gap: 2px;
-        min-width: 850px;
-        touch-action: pan-x pan-y;
+        /* Twelve cells per row, so all 48 half-hours fit without horizontal
+           scrolling.  Dragging still spans rows because the slot index, not
+           the visual position, defines the range. */
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 3px;
+        max-width: 900px;
+        touch-action: pan-y;
         user-select: none;
         -webkit-user-select: none;
     }
 
+    /* Narrow screens: fewer, wider cells rather than clipped or tiny ones. */
+    @media (max-width: 560px) {
+        .strip {
+            grid-template-columns: repeat(8, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 380px) {
+        .strip {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+    }
+
     .cell {
         position: relative;
+        box-sizing: border-box;
         min-height: 46px;
         padding-top: 5px;
         display: flex;
