@@ -903,6 +903,52 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             config.IMPORT_HIGH - self.MIN_PROFIT_MARGIN_P_PER_KWH
         ) * round_trip
 
+    def _minimum_harvest_charge_current_a(
+        self,
+        export_rate_p: float,
+    ) -> Optional[float]:
+        """Smallest measured charge current worth taking instead of exporting.
+
+        The self-use branch is not filling the pack for a later sale; it is
+        deciding whether to keep surplus solar for the house or sell it now at
+        ``export_rate_p``.  Keeping it is worth it when the value delivered to
+        the house, ``(IMPORT_HIGH - margin) × charge_eff(c) × discharge_eff``,
+        beats the export price forgone.  Efficiency rises with current, so that
+        condition is monotonic in ``c``: below some point the round-trip loss
+        is too large, above it the solar is better kept.
+
+        Returns the first measured point that clears the hurdle, or ``None``
+        when even the best measured current does not.  ``None`` means the
+        surplus should be exported now; the caller must then close the charge
+        range rather than inherit a stale one.
+
+        This is a *control* floor.  ``_estimate_solar_harvest_current()`` keeps
+        the 3 A measured point because that is the efficiency at which a small
+        charge would run, not the minimum worth bothering with.
+        """
+        for point in self.EFFICIENCY_MODEL.points:
+            if (
+                self.self_use_value_threshold_p(point.current_a)
+                > export_rate_p
+            ):
+                return point.current_a
+        return None
+
+    def _best_self_use_value_p(self) -> tuple[float, float]:
+        """Best self-use value over the measured points and its current.
+
+        Used for the dashboard explanation when no charge current clears the
+        current export price.
+        """
+        best = max(
+            self.EFFICIENCY_MODEL.points,
+            key=lambda point: self.self_use_value_threshold_p(point.current_a),
+        )
+        return (
+            self.self_use_value_threshold_p(best.current_a),
+            best.current_a,
+        )
+
     def _read_power_snapshot(self) -> Optional[dict]:
         """Read the latest grid/EVSE channels, or ``None`` if unavailable.
 
@@ -3055,7 +3101,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             return ControlState.LOAD_FOLLOW_BIDIRECTIONAL, 3, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Bidirectional (store for better rate)"
         else:
-            # Standard load-follow discharge
+            # Self-use load-follow.  The pack is not being filled for a later
+            # sale, so it covers the house; a surplus is still taken, but only
+            # once it supports the minimum harvest current.  That keeps a
+            # trickle from displacing export revenue while letting a strong
+            # surplus charge at a current where the round trip is worthwhile.
             best_future_text = (
                 f"{target_rate_p:.1f}p"
                 if target_rate_p is not None
@@ -3089,12 +3139,60 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"{reason.rstrip('.')}. "
                 f"{self._activation_explanation(activation_w)}"
             )
-            debug(f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_DISCHARGE (current rate {current_export_rate_p:.1f}p, SoC {battery_level}%)")
+            harvest_floor = self._minimum_harvest_charge_current_a(
+                current_export_rate_p
+            )
+            if charge_at_cap:
+                charge_min_a = 0.0
+                mode = (
+                    f"Do not charge — SoC at {charge_cap:.0f}% cap · "
+                    "aggressive discharge"
+                )
+                charge_note = (
+                    f"Charging is inhibited at the {charge_cap:.0f}% cap. "
+                )
+            elif harvest_floor is None:
+                # No measured current clears the export price, so keeping the
+                # solar for the house would destroy more value than it
+                # delivers.  Close the charge range rather than leave the
+                # previous mode's range in place.
+                charge_min_a = 0.0
+                best_value_p, best_current_a = self._best_self_use_value_p()
+                mode = (
+                    "Do not charge — surplus worth more exported · "
+                    f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
+                )
+                charge_note = (
+                    f"No measured charge current makes self-use worth more "
+                    f"than exporting at {current_export_rate_p:.1f}p now: the "
+                    f"best is {best_value_p:.1f}p at {best_current_a:.0f} A "
+                    f"after the round trip, so the surplus is sold instead. "
+                )
+            else:
+                charge_min_a = harvest_floor
+                mode = (
+                    f"Charge from surplus ≥{harvest_floor:.0f} A · "
+                    f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
+                )
+                charge_note = (
+                    f"Charging starts only when the surplus supports at least "
+                    f"{harvest_floor:.0f} A, the smallest measured current "
+                    f"whose self-use value "
+                    f"({self.self_use_value_threshold_p(harvest_floor):.1f}p) "
+                    f"beats exporting at {current_export_rate_p:.1f}p now. "
+                    "The charge and discharge ranges are independent, so a "
+                    "stronger surplus can charge while the pack still covers "
+                    "the house. "
+                )
+            debug(
+                f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_BIDIRECTIONAL self-use "
+                f"(current rate {current_export_rate_p:.1f}p, "
+                f"SoC {battery_level}%, charge "
+                f"≥{charge_min_a:.0f}A, discharge "
+                f"≥{self.MIN_DISCHARGE_CURRENT:.0f}A)"
+            )
             self._record_decision(
-                mode=(
-                    f"Do not charge · aggressive discharge "
-                    f"≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
-                ),
+                mode=mode,
                 reason=reason,
                 soc_percent=battery_level,
                 detail=(
@@ -3102,6 +3200,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"current export {current_export_rate_p:.1f}p, harvest "
                     f"estimate {harvest_current_a:.0f} A, best unused slot "
                     f"{best_future_text}. Aggressive discharge {activation_text}. "
+                    f"{charge_note}"
                     f"{committed_note}"
                     "Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
@@ -3119,25 +3218,44 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 efficiency_pct=efficiency_pct,
                 efficiency_label=decision.efficiency_label,
                 min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+                charge_min_a=charge_min_a,
+                charge_max_a=(
+                    0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT
+                ),
+                charge_activation_w=720,
                 discharge_min_a=self.MIN_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
                 discharge_activation_w=activation_w,
             )
-            return ControlState.LOAD_FOLLOW_DISCHARGE, 2, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Load follow"
+            return (
+                ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
+                None,
+                None,
+                "IOCTGO_AGILEOUT Bidirectional self-use "
+                f"(charge ≥{charge_min_a:.0f} A)",
+            )
 
     def set_home_demand_levels(self, evseController, state: EvseAsyncState, dayMinute: int):
         """Configure home demand power levels.
 
-        In normal operation the existing tier logic chooses between
-        bidirectional and load-follow discharge. The discharge activation is
-        not fixed: it is the smallest house import that repays the stored
-        energy after the forced minimum output is accounted for. When the day
-        is projected to end in an energy shortfall, the system instead stays
-        bidirectional (so surplus solar is absorbed) but discharges
-        conservatively, with the activation floored at the Wallbox minimum
-        (3 A, ~720 W) and a -0.5 A bias, so it covers the house load without
-        intentionally exporting.
+        In normal operation the existing tier logic chooses between storing
+        solar for a later sale and self-use load-following. The discharge
+        activation is not fixed: it is the smallest house import that repays
+        the stored energy after the forced minimum output is accounted for.
+
+        When the decision is to *not* store (self-use), the controller stays
+        bidirectional so the house can still discharge while the car absorbs a
+        surplus. The charge floor is not a fixed current: it is the smallest
+        measured point whose efficiency makes keeping the solar worth more than
+        exporting it now. If no measured current clears that hurdle - or the
+        pack is at its charge cap - the charge range is explicitly closed to
+        0 A, so a stale range from the previous mode cannot persist.
+
+        When the day is projected to end in an energy shortfall, the system
+        instead discharges conservatively, with the activation floored at the
+        Wallbox minimum (3 A, ~720 W) and a -0.5 A bias, so it covers the house
+        load without intentionally exporting.
         """
         if self.SMART_OCPP_OPERATION:
             self._ocpp_check_turn_on(state, dayMinute)
@@ -3258,22 +3376,51 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation={activation_w:.0f}W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
-            # Standard load-follow discharge. With no shortfall we can afford
-            # to cover the house load rather than conserve energy.
+            # Self-use load-follow.  Cover the house and take only a surplus
+            # that is worth keeping; the minimum charge current comes from the
+            # measured efficiency curve and the current export price, so it is
+            # not a fixed 3 A or 6 A.  Both ranges are set explicitly: a stale
+            # charge range from the previous mode must not leak into this one.
+            harvest_floor = self._minimum_harvest_charge_current_a(
+                current_export_rate_p
+            )
+            charge_min_a = (
+                0.0
+                if charge_at_cap or harvest_floor is None
+                else float(harvest_floor)
+            )
             evseController.setDischargeActivationPower(activation_w)
             evseController.setDischargeCurrentBias(
                 self.AGGRESSIVE_DISCHARGE_BIAS_A
             )
-            evseController.setDischargeCurrentRange(config.WALLBOX_MIN_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-            if charge_at_cap:
-                evseController.setChargeCurrentRange(0, 0)
+            evseController.setDischargeCurrentRange(
+                config.WALLBOX_MIN_DISCHARGE_CURRENT,
+                config.WALLBOX_MAX_DISCHARGE_CURRENT,
+            )
+            evseController.setChargeActivationPower(720)
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(
+                charge_min_a,
+                0.0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT,
+            )
             self._update_snapshot_ranges(
-                charge_min_a=0 if charge_at_cap else None,
-                charge_max_a=0 if charge_at_cap else None,
+                charge_min_a=charge_min_a,
+                charge_max_a=(
+                    0.0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT
+                ),
+                charge_activation_w=720,
                 discharge_min_a=config.WALLBOX_MIN_DISCHARGE_CURRENT,
                 discharge_max_a=config.WALLBOX_MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
                 discharge_activation_w=activation_w,
+            )
+            debug(
+                f"IOCTGO_AGILEOUT: Self-use bidirectional configured "
+                f"(activation={activation_w:.0f}W, bias=+0.5, "
+                f"charge={charge_min_a:.0f}-"
+                f"{0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT}A, "
+                f"discharge={config.WALLBOX_MIN_DISCHARGE_CURRENT}-"
+                f"{config.WALLBOX_MAX_DISCHARGE_CURRENT}A)"
             )
 
     def cleanup(self):

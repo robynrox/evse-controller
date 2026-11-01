@@ -355,6 +355,20 @@ cell on a phone, where the badge alone is too small to rely on.
   already committed, the surplus is exported now even with a strong harvest,
   and the reason says which slot is committed and what the next unused rate
   would yield. `Do not charge` does not mean the day has no higher price left.
+- **The self-use charge floor is calculated, not fixed.** When the decision is
+  not to store for a later sale, the controller stays in
+  `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
+  can still absorb a surplus. It only accepts a surplus that supports a charge
+  current whose measured self-use value,
+  `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)`, beats the export price
+  forgone now. Efficiency rises with current, so the floor moves with the
+  price: at 11p it is 3 A, at 13p 4 A, at 18p 8 A, and at 19p 12 A. If even
+  the best measured current (16 A, ~19.25p with a 30p peak) is below the export
+  price, the charge range is explicitly set to 0 A and the mode reads
+  `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`.
+  The charge and discharge ranges are independent, so a strong surplus can
+  charge while the house is still covered at 3 A. 6 A is an illustrative
+  break-even point, not a policy constant.
 - **Saved today** is the money actually captured by cycling stored energy. A
   charge is booked at the price paid (grid) or at the Agile export price it
   displaced (surplus solar), and no saving is shown yet. The saving appears

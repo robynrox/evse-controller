@@ -67,6 +67,17 @@
 > - The 3 A floor stays. Raising it only affects the 0.7–1.0 kW surplus band,
 >   where a 4 A command draws from the grid; a higher floor is a grid top-up
 >   decision, not an efficiency gain.
+> - **The self-use charge floor is derived per case, not fixed.** When Tier 3
+>   decides not to store for a later sale, the controller stays
+>   `LOAD_FOLLOW_BIDIRECTIONAL` so the house can still discharge while a surplus
+>   charges. The charge floor is the smallest measured current whose self-use
+>   value `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the current
+>   export price. With a 30p peak and 0.3p margin that is 3 A at 11p, 4 A at
+>   13p, 8 A at 18p and 12 A at 19p; above the best measured value (~19.25p at
+>   16 A) no current qualifies and the charge range is explicitly set to 0 A,
+>   with the mode reading `Do not charge — surplus worth more exported`. The two
+>   directions are independent, and the previous mode's charge range can no
+>   longer persist. 6 A was an illustrative break-even point, not a constant.
 > - Round trips are **separable products of the two per-direction curves**
 >   (`η_chg(I_chg) × η_dis(I_dis)`), not measured matched-current pairs. Do not
 >   build a 2D table; carry the actual charge and discharge current per slot.
@@ -109,9 +120,11 @@ completed fixes.
   settling), `14e1769` (drop the redundant zero-activation chip),
   `8c5a973` (in-pack and delivered cost bases), `09345b5` (delivered-cost
   range), `7909cad` (INFO decision line once per minute), `ab948af` (Pylance
-  narrowing), `7df8cdf` (show the configured margin as `min gain`), and the
-  follow-up that rounds the solar harvest estimate up to a measured point and
-  explains a planned-slot no-store decision.
+  narrowing), `7df8cdf` (show the configured margin as `min gain`),
+  `18e0f6d` (round the harvest estimate up), `125d451` (name the committed
+  slot), `f42f93f` (restore the strip and name the plan in words), `5ecad04`
+  (Pylance slot narrowing), `3b1976a` (value the higher unused slot), and the
+  self-use bidirectional charge floor described below.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -152,7 +165,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **372 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **377 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

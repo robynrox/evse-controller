@@ -412,6 +412,22 @@ efficiency is the right one there. At a 3 A harvest the threshold is 12.6p; at
 6 A it is 17.0p. It is still a single threshold because the manager does not
 tag stored energy with its acquisition cost. That is a DP concern.
 
+When Tier 3 decides not to store, the controller now stays in
+`LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
+can still absorb a surplus. The charge floor is not a fixed 3 A or 6 A. It is
+the smallest measured current whose self-use value,
+`(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)`, beats the export price
+forgone now. Because efficiency rises with current, that condition is
+monotonic: with a 30p peak and 0.3p margin the floor is 3 A at 11p, 4 A at
+13p, 8 A at 18p and 12 A at 19p. Above the best measured value (~19.25p at
+16 A) no current qualifies, so the charge range is explicitly closed to 0 A
+and the surplus is exported; the mode reads
+`Do not charge — surplus worth more exported`. The two directions are
+independent, so a strong surplus can charge while the house is still covered
+at 3 A, and the previous mode's charge range can no longer persist. The
+earlier 6 A figure was an illustrative break-even point, not a policy
+constant.
+
 Tier 3 is a *marginal* comparison, which is why it reads the best **unused**
 slot. The export plan spends the pack's spare SoC on the highest-rate slots
 until that capacity runs out; those slots' revenue is already committed to the
@@ -489,9 +505,11 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
 
 - **Mode** names the charge/discharge capability rather than just the control
   enum: `Max charge (16 A)`, `Max discharge (16 A) · aggressive`,
-  `Harvest 5 A · aggressive discharge`, `Harvest ≥3 A · conservative
-  discharge`, `Do not charge · aggressive discharge ≥3 A`, `Idle — battery
-  protection`, or `Charge at 3 A (SoC unknown)`.
+  `Harvest 5 A · aggressive discharge`, `Charge from surplus ≥N A ·
+  aggressive discharge ≥3 A`, `Harvest ≥3 A · conservative discharge`,
+  `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`,
+  `Do not charge — SoC at N% cap · aggressive discharge`,
+  `Idle — battery protection`, or `Charge at 3 A (SoC unknown)`.
 - **Aggressive** means a +0.5 A bias with the activation set to the calculated
   break-even load. **Conservative** means a −0.5 A bias with the activation
   floored at the Wallbox minimum (3 A, ~720 W), so it never starts a discharge

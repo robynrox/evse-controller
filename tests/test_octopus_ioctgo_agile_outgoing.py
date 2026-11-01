@@ -789,16 +789,21 @@ class TestEnergyShortfall:
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
         assert "Shortfall" in reason
 
-    def test_get_control_state_uses_tier_logic_when_not_shortfall(self, agile_tariff):
-        """Outside shortfall, the existing tier logic still applies."""
+    def test_get_control_state_stays_bidirectional_when_not_shortfall(self, agile_tariff):
+        """Outside shortfall the self-use branch still allows solar charging."""
         self._set_time(agile_tariff, 22, 0)
         state = create_test_state(80)
 
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
         # At 22:00 with 11p current and 10p best future, 10p × solar round trip
-        # (~0.547) < 11p, so the tier logic chooses load-follow discharge.
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+        # (~0.547) < 11p, so storing for a later sale is not worth it.  The
+        # pack still covers the house, and 11p is below the 12.6p self-use
+        # value at 3 A, so surplus solar is worth keeping.
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.mode.startswith("Charge from surplus ≥3 A")
+        assert snapshot.charge_min_a == pytest.approx(3.0)
 
     def test_shortfall_configures_conservative_discharge(self, agile_tariff):
         """Shortfall must use 720W activation and -0.5A bias."""
@@ -1246,7 +1251,7 @@ class TestDecisionSnapshot:
         assert snapshot.discharge_aggressive is True
         assert snapshot.efficiency_label in ("round trip", "solar → house")
 
-    def test_load_follow_states_do_not_charge(self, agile_tariff):
+    def test_self_use_mode_charges_above_the_efficiency_floor(self, agile_tariff):
         self._set_time(agile_tariff, 22, 0)
         self._pin_plan(agile_tariff, 44, 80)
         state = create_test_state(80)
@@ -1254,12 +1259,65 @@ class TestDecisionSnapshot:
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
         snapshot = agile_tariff._decision_snapshot
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
-        assert snapshot.mode.startswith("Do not charge")
-        assert "aggressive discharge" in snapshot.mode
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert snapshot.mode.startswith("Charge from surplus ≥3 A")
+        assert "aggressive discharge ≥3 A" in snapshot.mode
+        assert snapshot.charge_min_a == pytest.approx(3.0)
+        assert snapshot.discharge_min_a == pytest.approx(3.0)
 
-    def test_no_store_detail_names_the_committed_slot(self, agile_tariff):
-        """The hover text explains why a strong surplus was not stored."""
+    def test_charge_floor_follows_the_efficiency_curve(self, agile_tariff):
+        """The floor is the first measured current that beats export now.
+
+        Efficiency rises with current, so the hurdle is monotonic.  These
+        values come from the measured Leaf/Quasar table at the configured
+        30p peak import price, not from a fixed constant.
+        """
+        assert agile_tariff._minimum_harvest_charge_current_a(11.0) == pytest.approx(3.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(13.0) == pytest.approx(4.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(18.0) == pytest.approx(8.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(19.0) == pytest.approx(12.0)
+        # The best measured point is worth ~19.25p, so a 19.9p export wins.
+        assert agile_tariff._minimum_harvest_charge_current_a(19.9) is None
+
+    def test_self_use_charge_range_is_computed_for_the_case(self, agile_tariff):
+        """A 13p export sets a 4 A floor; it is not the old 3 A default."""
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=24, now_rate=13.0,
+            later_slot=32, later_rate=5.0, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 24, 88)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(88)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_called_with(
+            4.0, agile_tariff.MAX_CHARGE_CURRENT
+        )
+        assert agile_tariff._decision_snapshot.charge_min_a == pytest.approx(4.0)
+
+    def test_no_suitable_current_closes_the_charge_range(self, agile_tariff):
+        """No stale charge range: when export wins, the range is set to zero."""
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=24, now_rate=19.9,
+            later_slot=32, later_rate=5.0, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 24, 88)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(88)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_called_with(0.0, 0.0)
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        assert snapshot.charge_max_a == pytest.approx(0.0)
+
+
         self._set_time(agile_tariff, 12, 0)
         self._pin_plan(agile_tariff, 24, 88)
         agile_tariff._planned_export_slots = [32]
@@ -1276,7 +1334,10 @@ class TestDecisionSnapshot:
         control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
 
         snapshot = agile_tariff._decision_snapshot
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert snapshot.mode.startswith("Do not charge — surplus worth more exported")
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        assert snapshot.charge_max_a == pytest.approx(0.0)
         assert "30.5p" in snapshot.reason
         assert "committed" in snapshot.reason
         assert "harvest estimate 6 A" in snapshot.detail
