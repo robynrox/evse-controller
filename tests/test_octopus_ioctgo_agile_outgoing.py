@@ -2363,3 +2363,26 @@ class TestEnergySessions:
         controller.setChargeCurrentRange.assert_not_called()
         controller.setDischargeCurrentRange.assert_not_called()
         controller.setChargeActivationPower.assert_not_called()
+
+    def test_dashboard_marks_session_slots(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(
+                FREE_IMPORT, self._fixed(18), self._fixed(19)
+            )
+        )
+        store.add(
+            EnergySession(
+                GRID_SUPPORT, self._fixed(20), self._fixed(20, 30)
+            )
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "FREE ENERGY SESSION" in html
+        assert "SAVE ENERGY SESSION (grid support)" in html
+        assert "box-shadow:inset 0 4px 0 #2563eb;" in html
+        assert "box-shadow:inset 0 4px 0 #d97706;" in html
+        assert "Free Energy Session" in html  # legend

@@ -620,6 +620,36 @@ and vanish on narrow screens. It is back to 40px (axis 20px), the dashboard
 area reserves 90px, and the planned slots are also listed in words beneath the
 strip so the plan does not depend on a 7px-wide cell carrying a badge.
 
+### Supplier energy sessions
+
+The same manager now accepts two whole-slot overlay windows, chosen on
+`/sessions` and shared with the running tariff through a process-wide store:
+
+- `free_import` (Free Energy Session) sets the import price to **0p** for the
+  window. That is not a display convention: `_current_import_rate_p()` is the
+  single lookup used by both the decision logic and the savings ledger, so the
+  charge is commanded at maximum *and* booked at what it actually cost. Before
+  this change the ledger derived the import price inline; a free window would
+  have shown a fabricated loss while the dashboard called the energy free.
+  Free slots are excluded from export planning and from the best-unused-export
+  lookup, because charging at 0p is worth more than selling and the Wallbox
+  cannot do both.
+- `grid_support` (Save Energy Session) forces maximum export for the window,
+  above the ordinary export-price comparison, because the supplier's request
+  is the reason to export rather than the quoted rate. It stops at the existing
+  25% `BATTERY_PROTECTION_RESERVE_SOC`. The supplier's reward is not a price
+  the tariff can observe, so it is deliberately **not** modelled as one and not
+  booked in the ledger; the decision line states that grid support was
+  requested. Inventing a reward would contaminate every ordinary export
+  comparison in the same way a negative margin would.
+
+Both windows are quantised to half-hour slots (`start` floored, exclusive
+`end` ceiled), persisted to `data/state/sessions.json`, and rejected on
+overlap rather than silently merged. They only act in smart mode; a manual
+command still outranks them. Because the store is a singleton, the web UI can
+add a window while the tariff is running, and the test suite isolates it with
+an autouse fixture so a live window cannot change decisions under test.
+
 ## 8. Reproduction
 
 The report was generated with:

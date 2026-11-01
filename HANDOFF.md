@@ -131,8 +131,10 @@ completed fixes.
   narrowing), `7df8cdf` (show the configured margin as `min gain`),
   `18e0f6d` (round the harvest estimate up), `125d451` (name the committed
   slot), `f42f93f` (restore the strip and name the plan in words), `5ecad04`
-  (Pylance slot narrowing), `3b1976a` (value the higher unused slot), and the
-  self-use bidirectional charge floor described below.
+  (Pylance slot narrowing), `3b1976a` (value the higher unused slot), the
+  self-use bidirectional charge floor, the effective charge onset described
+  below, and `b311c32` (supplier energy sessions: free import and grid
+  support).
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -168,12 +170,23 @@ completed fixes.
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts
   the home power or mis-books energy.
+- Supplier energy sessions are a whole-slot overlay on the ordinary price
+  logic, stored in `data/state/sessions.json` and shared by the web app and
+  the running tariff through the `energy_sessions.session_store` singleton.
+  `free_import` makes import 0p for the window, so the same
+  `_current_import_rate_p()` prices both the decision and the ledger;
+  `grid_support` forces maximum export down to the 25% protection reserve and
+  deliberately books no supplier reward. Both are selected on `/sessions` by
+  click/drag across half-hour cells. Sessions only apply in smart mode and a
+  manual command still outranks them; overlapping windows are rejected.
+  Free-import slots are excluded from the export plan. The tariff strip marks
+  each session slot with a coloured bar and a legend entry.
 - Deferred: prefer the Wallbox Modbus `ac_power` as the EVSE term (guard on a
   fresh `last_update` and exclude `COMMS_FAILURE`), with the configured Shelly
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **379 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **428 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

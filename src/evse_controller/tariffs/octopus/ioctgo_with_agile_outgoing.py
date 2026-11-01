@@ -2427,6 +2427,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         red→green gradient coloring. Responsive design adapts to viewport width.
         Missing slots shown as grey placeholders.
         Planned export slots are highlighted with "EX" label.
+        Free Energy Session and Save Energy Session slots carry a coloured
+        bar and appear in the legend below the strip.
         """
         with self._rates_lock:
             mode_line = self._mode_line_html()
@@ -2453,6 +2455,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Use cached export plan (calculated in set_home_demand_levels)
             # Don't recalculate here to avoid excessive logging
             planned_slots = self._planned_export_slots
+
+            # Supplier-requested sessions are pinned to whole slots.  Mark the
+            # windows on the strip even though the rate colour still shows the
+            # quoted export price, which the session may be overriding.
+            free_import_slots = self._free_import_slots_today()
+            store = getattr(self, "session_store", None)
+            grid_support_slots = (
+                store.slots_for_kind(now.date(), GRID_SUPPORT)
+                if store is not None
+                else set()
+            )
 
             # Create a dict for quick lookup by slot index
             # Each slot is 30 minutes, so slot 0 = 00:00, slot 1 = 00:30, etc.
@@ -2512,7 +2525,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             for slot_idx in range(48):
                 hour = slot_idx // 2
                 minute = 30 if slot_idx % 2 else 0
-                
+
+                session_style = ""
+                session_tooltip = ""
+                if slot_idx in free_import_slots:
+                    session_style = "box-shadow:inset 0 4px 0 #2563eb;"
+                    session_tooltip = " - FREE ENERGY SESSION"
+                elif slot_idx in grid_support_slots:
+                    session_style = "box-shadow:inset 0 4px 0 #d97706;"
+                    session_tooltip = " - SAVE ENERGY SESSION (grid support)"
+
                 if slot_idx in rate_dict:
                     # Actual rate available
                     rate_data = rate_dict[slot_idx]
@@ -2587,7 +2609,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         padding:0;
                         margin:0;
                         {extra_style}
-                    " title="{hour:02d}:{minute:02d}: {rate:.1f}p/kWh{tooltip_extra}">
+                        {session_style}
+                    " title="{hour:02d}:{minute:02d}: {rate:.1f}p/kWh{tooltip_extra}{session_tooltip}">
                         {label}
                         <span class="rate-value-full" style="font-size:9px;line-height:1.2;">{rate:.1f}</span>
                         <span class="rate-value-int" style="font-size:9px;line-height:1.2;display:none;">{rate_int}</span>
@@ -2616,7 +2639,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         padding:0;
                         margin:0;
                         border:2px solid #ddd;
-                    " title="{hour:02d}:{minute:02d}: Rate not available">
+                        {session_style}
+                    " title="{hour:02d}:{minute:02d}: Rate not available{session_tooltip}">
                         <span style="font-size:14px;line-height:1;font-weight:300;">?</span>
                     </div>
                     ''')
@@ -2654,7 +2678,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             time_axis += '</div>'
             html.append(time_axis)
             html.append('</div>')  # Close outer wrapper
-            
+
+            if free_import_slots or grid_support_slots:
+                legend_items = []
+                if free_import_slots:
+                    legend_items.append(
+                        '<span><span style="display:inline-block;width:10px;'
+                        'height:10px;background:#2563eb;border-radius:2px;'
+                        'margin-right:4px;vertical-align:middle;"></span>'
+                        'Free Energy Session</span>'
+                    )
+                if grid_support_slots:
+                    legend_items.append(
+                        '<span><span style="display:inline-block;width:10px;'
+                        'height:10px;background:#d97706;border-radius:2px;'
+                        'margin-right:4px;vertical-align:middle;"></span>'
+                        'Save Energy Session (grid support)</span>'
+                    )
+                html.append(
+                    '<div style="display:flex;flex-wrap:wrap;gap:12px;'
+                    'font-size:10px;color:#555;margin:2px 0 6px 5px;">'
+                    + ''.join(legend_items)
+                    + '</div>'
+                )
+
             # Calculate expected revenue and SoC drop
             num_slots = len(planned_slots)
             if num_slots > 0:
