@@ -2,6 +2,12 @@ from ..base import Tariff
 from .battery_efficiency import BatteryEfficiencyModel, DASHBOARD_SOC_CAPACITY_KWH
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
+from evse_controller.energy_sessions import (
+    FREE_IMPORT,
+    GRID_SUPPORT,
+    SLOT_MINUTES,
+    session_store,
+)
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
@@ -11,7 +17,7 @@ from typing import Optional
 import urllib.request
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 import html as html_module
 
 
@@ -286,6 +292,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                  bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
+
+        # Supplier-requested half-hour windows.  The shared store means the web
+        # UI can add one and this running tariff sees it immediately.  Tests
+        # replace the attribute with an isolated store.
+        self.session_store = session_store
         
         # Measured, current-dependent AC <-> pack model.  See
         # reports/efficiency/REVIEW.md and battery_efficiency.py.
@@ -648,10 +659,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Create list of (slot_index, rate) for all future slots today that are profitable
         # Only consider slots 0-46 (exclude slot 47 = 23:30-00:00)
         # Missing slots are treated as unprofitable (not included)
+        free_import_slots = self._free_import_slots_today()
         slot_rates = []
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
+
+            # A free-import session owns the slot: charging at 0p is worth more
+            # than selling stored energy, and the Wallbox cannot do both.
+            if slot_idx in free_import_slots:
+                debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} reserved for a free-import session")
+                continue
 
             # Skip slots that have completely passed (current slot is still valid)
             if slot_idx < current_slot_idx:
@@ -751,8 +769,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Build list of (slot_index, rate) for all slots that:
         # - Are in the future (or current slot)
         # - Are NOT in the planned export slots
+        # - Are NOT reserved for a free-import session
         # - Are before slot 47 (23:30-00:00, not available for export)
         unused_slot_rates = []
+        free_import_slots = self._free_import_slots_today()
 
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
@@ -760,6 +780,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Skip past slots
             if slot_idx < current_slot:
+                continue
+
+            # A free-import slot cannot also be an export target.
+            if slot_idx in free_import_slots:
                 continue
             
             # Skip slot 47 (23:30-00:00)
@@ -1284,8 +1308,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # change is not worth re-configuring the Wallbox (or logging) for.
         return round(max(0.0, threshold_w))
 
+    def _slot_start_datetime(self, day_minute: int) -> datetime:
+        """Start of the half-hour slot containing *day_minute* today."""
+        midnight = datetime.combine(self.get_current_datetime().date(), time())
+        return midnight + timedelta(minutes=SLOT_MINUTES * (day_minute // SLOT_MINUTES))
+
+    def _session_at(self, when: datetime):
+        """Session covering *when*, or ``None`` when no store is configured."""
+        store = getattr(self, "session_store", None)
+        return store.active(when) if store is not None else None
+
+    def _free_import_slots_today(self) -> set[int]:
+        """Today's slots whose import price is 0p under a free session."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return set()
+        return store.free_import_slots(self.get_current_datetime().date())
+
     def _current_import_rate_p(self, day_minute: int) -> float:
-        """Import price in force at *day_minute*, in p/kWh."""
+        """Import price in force at *day_minute*, in p/kWh.
+
+        A ``free_import`` session overrides the normal high/low band to 0p.
+        The ledger and the decision logic both call this, so the booked cost
+        and the control decision cannot disagree about a free window.
+        """
+        session = self._session_at(self._slot_start_datetime(day_minute))
+        if session is not None and session.kind == FREE_IMPORT:
+            return 0.0
         return (
             config.IMPORT_LOW
             if self.is_off_peak(day_minute)
@@ -1450,11 +1499,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         hours = min(elapsed, 300.0) / 3600.0
 
         day_minute = now.hour * 60 + now.minute
-        import_rate_p = (
-            config.IMPORT_LOW
-            if self.is_off_peak(day_minute)
-            else config.IMPORT_HIGH
-        )
+        import_rate_p = self._current_import_rate_p(day_minute)
         current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
         export_rate_p = self._current_export_rate_p(current_slot)
 
@@ -2848,6 +2893,78 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         power_snapshot = self._read_power_snapshot()
         surplus_w = power_snapshot["surplus_w"] if power_snapshot else None
 
+        # Supplier-requested sessions are whole-slot windows, so they outrank
+        # the ordinary price logic while they are active.
+        now = self.get_current_datetime()
+        session = self._session_at(now)
+
+        # Free Energy Session: import costs nothing, so fill the pack even when
+        # the normal target SoC would say to stop.  The charge cap still holds.
+        if session is not None and session.kind == FREE_IMPORT:
+            charge_efficiency = (
+                self.EFFICIENCY_MODEL.charge_efficiency(
+                    self.GRID_CHARGE_REFERENCE_CURRENT
+                ) * 100
+            )
+            if battery_level < charge_cap:
+                self._record_decision(
+                    mode=(
+                        f"Free energy {session.start:%H:%M}–{session.end:%H:%M}"
+                        f" · max charge ({self.MAX_CHARGE_CURRENT:.0f} A)"
+                    ),
+                    reason=(
+                        f"{session.label} — your supplier is offering free "
+                        f"energy; charging at {self.MAX_CHARGE_CURRENT:.0f} A "
+                        f"to the {charge_cap:.0f}% cap"
+                    ),
+                    soc_percent=battery_level,
+                    detail=(
+                        f"Import is 0p for {session.start:%H:%M}–"
+                        f"{session.end:%H:%M}, so the pack is filled regardless "
+                        f"of the normal price comparison. SoC {battery_level}%, "
+                        f"cap {charge_cap:.0f}%, charge efficiency "
+                        f"{charge_efficiency:.0f}% at "
+                        f"{self.GRID_CHARGE_REFERENCE_CURRENT:.0f} A. The "
+                        "ledger books this energy at 0p."
+                    ),
+                    current_rate_p=0.0,
+                    efficiency_pct=charge_efficiency,
+                    efficiency_label="charge",
+                    min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+                    charge_min_a=self.MAX_CHARGE_CURRENT,
+                    charge_max_a=self.MAX_CHARGE_CURRENT,
+                    charge_activation_w=0,
+                )
+                return (
+                    ControlState.CHARGE,
+                    None,
+                    None,
+                    f"IOCTGO_AGILEOUT {session.label}: charge at max rate",
+                )
+            self._record_decision(
+                mode=(
+                    f"Free energy {session.start:%H:%M}–{session.end:%H:%M}"
+                    f" · SoC at {charge_cap:.0f}% cap"
+                ),
+                reason=(
+                    f"{session.label} — free import, but SoC {battery_level}% "
+                    f"is at the {charge_cap:.0f}% cap"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"Import is 0p for {session.start:%H:%M}–"
+                    f"{session.end:%H:%M}, but the pack is already at its "
+                    f"{charge_cap:.0f}% charge cap, so no energy is taken."
+                ),
+                current_rate_p=0.0,
+            )
+            return (
+                ControlState.DORMANT,
+                None,
+                None,
+                f"IOCTGO_AGILEOUT {session.label}: SoC at cap",
+            )
+
         # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
         # Charge at max rate regardless of SoC or other states
         if self.is_off_peak(dayMinute):
@@ -2941,6 +3058,61 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
             )
             return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Battery depleted"
+
+        # Save Energy Session: the supplier has asked for reduced grid demand,
+        # and for a battery-backed installation the useful response is to push
+        # as much out as possible.  This sits above the export planner because
+        # the reason for exporting is the request, not the quoted export price.
+        # The protection reserve above is the floor: at or below 25% the pack
+        # idles instead of exporting.
+        if session is not None and session.kind == GRID_SUPPORT:
+            export_rate_p = self._current_export_rate_p(current_slot)
+            discharge_efficiency = (
+                self.EFFICIENCY_MODEL.discharge_efficiency(
+                    self.EXPORT_REFERENCE_CURRENT
+                ) * 100
+            )
+            expected_gbp = (
+                export_rate_p * self.EXPORT_POWER_KW * 0.5 / 100.0
+            )
+            self._record_decision(
+                mode=(
+                    f"Save Energy Session {session.start:%H:%M}–"
+                    f"{session.end:%H:%M} · max export"
+                ),
+                reason=(
+                    f"{session.label} — your supplier has asked for grid "
+                    f"support; exporting at {self.MAX_DISCHARGE_CURRENT:.0f} A "
+                    "regardless of the quoted export price"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"{session.start:%H:%M}–{session.end:%H:%M} is a "
+                    "supplier-requested grid support window. SoC "
+                    f"{battery_level}% is above the "
+                    f"{self.BATTERY_PROTECTION_RESERVE_SOC}% reserve, so the "
+                    f"pack exports at {self.EXPORT_POWER_KW:.2f} kW. The quoted "
+                    f"export price is {export_rate_p:.1f}p (expected "
+                    f"£{expected_gbp:.2f} for the slot at "
+                    f"{discharge_efficiency:.0f}% discharge efficiency), but "
+                    "the support request is the reason for exporting, not the "
+                    "price. The supplier reward is not booked in the ledger."
+                ),
+                current_rate_p=export_rate_p,
+                efficiency_pct=discharge_efficiency,
+                efficiency_label="discharge",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+                discharge_min_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_max_a=self.MAX_DISCHARGE_CURRENT,
+                discharge_aggressive=True,
+                discharge_activation_w=0,
+            )
+            return (
+                ControlState.DISCHARGE,
+                None,
+                None,
+                f"IOCTGO_AGILEOUT {session.label}: export at max rate",
+            )
 
         # Check if current slot is a planned export slot
         if current_slot in self._planned_export_slots:
@@ -3376,6 +3548,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # any source, including surplus solar.  Outside off-peak/export slots
         # that means a zero charge range rather than the usual 3 A floor.
         charge_at_cap = battery_level >= self.charge_cap_percent()
+
+        # Supplier-requested sessions command a single fixed mode, so
+        # load-follow ranges must not be configured on top of them.
+        session = self._session_at(self.get_current_datetime())
+        if session is not None:
+            debug(
+                f"IOCTGO_AGILEOUT: {session.label} active - skipping "
+                "load-following configuration"
+            )
+            if session.kind == GRID_SUPPORT and state.current < -1:
+                if current_slot not in self._exported_slots:
+                    self._exported_slots.append(current_slot)
+                    info(
+                        f"IOCTGO_AGILEOUT: Export started in slot {current_slot} "
+                        f"({dayMinute//60:02d}:{dayMinute%60:02d}) for "
+                        f"{session.label}"
+                    )
+            return
 
         # During off-peak hours (23:30-05:30), don't configure load-following
         # The control state is already set to CHARGE at max current by get_control_state()

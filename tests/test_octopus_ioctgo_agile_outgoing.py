@@ -4,6 +4,12 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
+from evse_controller.energy_sessions import (
+    FREE_IMPORT,
+    GRID_SUPPORT,
+    EnergySession,
+    SessionStore,
+)
 from evse_controller.drivers.EvseController import ControlState, EvseController
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
@@ -2190,3 +2196,170 @@ class TestRateFetchState:
 
         assert tariff._last_fetch_date is None
         assert tariff._have_complete_rates_for_date(datetime.now().date()) is False
+
+
+class TestEnergySessions:
+    """Supplier-requested half-hour windows change the control mode."""
+
+    @staticmethod
+    def _fixed(hour, minute=0):
+        return datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+
+    @staticmethod
+    def _set_up_store(tariff, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        tariff.session_store = store
+        return store
+
+    def test_free_session_charges_at_max(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, reason = agile_tariff.get_control_state(
+            create_test_state(79), 12 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.CHARGE
+        assert snapshot.mode.startswith("Free energy 12:00–13:00")
+        assert "free energy" in reason.lower()
+        assert snapshot.current_rate_p == pytest.approx(0.0)
+
+    def test_free_session_respects_the_charge_cap(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(98), 12 * 60
+        )
+
+        assert control_state == ControlState.DORMANT
+        assert "cap" in agile_tariff._decision_snapshot.mode.lower()
+
+    def test_free_session_sets_the_import_price_to_zero(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        assert agile_tariff._current_import_rate_p(12 * 60) == pytest.approx(0.0)
+        # Outside the window the normal peak band applies.
+        assert agile_tariff._current_import_rate_p(14 * 60) == pytest.approx(
+            config.IMPORT_HIGH
+        )
+
+    def test_free_session_books_zero_import_cost(self, agile_tariff, tmp_path):
+        """The ledger must agree with the decision, not just the dashboard."""
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+
+        controller = Mock()
+        controller.current_grid_power = Power(
+            ch1Watts=3456, ch2Watts=3456, voltage=240, soc=50
+        )
+        agile_tariff.evseController = controller
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+        agile_tariff._savings_day = start.date()
+        agile_tariff._savings_last_time = start - timedelta(seconds=60)
+        agile_tariff._savings_last_baseline_w = 0.0
+        agile_tariff._savings_last_evse_w = 0.0
+        agile_tariff._ledger_settle_until = None
+        agile_tariff._ledger_direction = 1
+        agile_tariff._bank_dc_kwh = 0.0
+        agile_tariff._bank_cost_gbp = 0.0
+        agile_tariff._bank_seeded = True
+
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._bank_dc_kwh > 0
+        assert agile_tariff._bank_cost_gbp == pytest.approx(0.0)
+
+    def test_free_slot_is_excluded_from_the_export_plan(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        # 18:00–19:00 carries the best rate of the day (35p).
+        store.add(
+            EnergySession(
+                FREE_IMPORT, self._fixed(18), self._fixed(19)
+            )
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        slot, rate = agile_tariff._get_best_unused_export_slot_rate(24)
+
+        assert slot != 36
+        assert slot == 35
+        assert rate == pytest.approx(32.0)
+
+    def test_grid_support_exports_at_max_regardless_of_price(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+        # Even a 0p export price must not stop a support request.
+        for rate_data in agile_tariff.agile_rates:
+            if rate_data["start"].hour == 12:
+                rate_data["rate"] = 0.0
+
+        control_state, _, _, reason = agile_tariff.get_control_state(
+            create_test_state(79), 12 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.mode.startswith("Save Energy Session 12:00–13:00")
+        assert "grid support" in snapshot.reason.lower()
+        assert "Save Energy Session" in reason
+        assert snapshot.discharge_min_a == pytest.approx(
+            agile_tariff.MAX_DISCHARGE_CURRENT
+        )
+
+    def test_grid_support_stops_at_the_protection_reserve(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(agile_tariff.BATTERY_PROTECTION_RESERVE_SOC),
+            12 * 60,
+        )
+
+        assert control_state == ControlState.DORMANT
+
+    def test_sessions_skip_load_follow_configuration(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(79)
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_not_called()
+        controller.setDischargeCurrentRange.assert_not_called()
+        controller.setChargeActivationPower.assert_not_called()

@@ -106,6 +106,16 @@ class Config:
             self.EVSE_STATE_FILE = data_dir / "state" / "evse_state.json"
             self.LOG_DIR = data_dir / "logs"
 
+    @property
+    def SESSIONS_FILE(self):
+        """Path to the supplier-session store.
+
+        A property rather than a plain attribute so importing the store before
+        any other config value has been read still triggers initialisation.
+        """
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "sessions.json"
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         try:
