@@ -1296,6 +1296,7 @@ class TestDecisionSnapshot:
         controller.setChargeCurrentRange.assert_called_with(
             4.0, agile_tariff.MAX_CHARGE_CURRENT
         )
+        controller.setChargeActivationPower.assert_called_with(4.0 * 240)
         assert agile_tariff._decision_snapshot.charge_min_a == pytest.approx(4.0)
 
     def test_no_suitable_current_closes_the_charge_range(self, agile_tariff):
@@ -1313,11 +1314,13 @@ class TestDecisionSnapshot:
         agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
 
         controller.setChargeCurrentRange.assert_called_with(0.0, 0.0)
+        controller.setChargeActivationPower.assert_called_with(0.0)
         snapshot = agile_tariff._decision_snapshot
         assert snapshot.charge_min_a == pytest.approx(0.0)
         assert snapshot.charge_max_a == pytest.approx(0.0)
 
-
+    def test_no_store_detail_names_the_committed_slot(self, agile_tariff):
+        """The hover text explains why a strong surplus was not stored."""
         self._set_time(agile_tariff, 12, 0)
         self._pin_plan(agile_tariff, 24, 88)
         agile_tariff._planned_export_slots = [32]
@@ -1343,6 +1346,61 @@ class TestDecisionSnapshot:
         assert "harvest estimate 6 A" in snapshot.detail
         assert "30.5p 16:00–16:30 slot is already committed" in snapshot.detail
         assert "best unused slot 21.4p" in snapshot.detail
+
+    def test_floor_gates_charge_activation_instead_of_importing(
+        self, agile_tariff, monkeypatch
+    ):
+        """The 09:30 case: 19.8p now, 30.4p later, 32.26p peak import.
+
+        Charging can pay off either by keeping the solar for the house or by
+        storing it for the 30.4p slot.  The self-use floor alone is 9 A, but
+        the store break-even is 5 A, so 5 A is the effective onset.  A 3 A
+        surplus must not activate a 5 A charge and import the difference at
+        the peak price.
+        """
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=19, now_rate=19.8,
+            later_slot=36, later_rate=30.4, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 19, 79)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=85, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(79)
+
+        agile_tariff.get_control_state(state, 9 * 60 + 30)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.mode.startswith("Charge from surplus ≥5 A")
+        assert snapshot.charge_min_a == pytest.approx(5.0)
+        assert snapshot.charge_activation_w == pytest.approx(5 * 240)
+        # The components are still reported/derivable independently.
+        assert agile_tariff._minimum_harvest_charge_current_a(19.8) == pytest.approx(9.0)
+        assert agile_tariff._minimum_store_harvest_current_a(30.4, 19.8) == pytest.approx(5.0)
+
+        def charge_at(home_power):
+            return EvseController._compute_wallbox_current(
+                home_power=home_power,
+                discharge_current_min=3,
+                discharge_current_max=16,
+                minimum_discharge_activation_power=0,
+                discharge_current_bias=0.5,
+                charge_current_min=5,
+                charge_current_max=16,
+                minimum_charge_activation_power=snapshot.charge_activation_w,
+                charge_current_bias=-0.5,
+                grid_voltage=240,
+            )
+
+        # A 3 A surplus is below the floor, so charging stays off.
+        assert charge_at(-750) == 0
+        # A surplus at the floor charges at it without importing.
+        assert charge_at(-1200) == pytest.approx(5.0)
 
     def test_aggressive_reason_includes_the_break_even(self, agile_tariff):
         self._set_time(agile_tariff, 22, 0)

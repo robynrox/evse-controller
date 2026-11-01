@@ -949,6 +949,79 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             best.current_a,
         )
 
+    def _minimum_store_harvest_current_a(
+        self,
+        future_rate_p: float,
+        export_rate_p: float,
+    ) -> Optional[float]:
+        """Smallest measured current whose later sale beats exporting now.
+
+        This mirrors the Tier 3 store test, so crossing it makes the
+        controller switch from self-use to storing.  The discharge is costed
+        at the export reference current, because the stored energy is sold to
+        the grid rather than used at the house base load.
+        """
+        for point in self.EFFICIENCY_MODEL.points:
+            adjusted = (
+                future_rate_p - self.MIN_PROFIT_MARGIN_P_PER_KWH
+            ) * self.solar_export_round_trip(point.current_a)
+            if adjusted > export_rate_p:
+                return point.current_a
+        return None
+
+    def _effective_charge_floor_a(
+        self,
+        export_rate_p: float,
+        future_rate_p: Optional[float],
+    ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+        """Charge onset for the no-store branch, and its two components.
+
+        Charging becomes worthwhile when *either* keeping the solar for the
+        house (self-use) or storing it for a later sale (Tier 3) beats the
+        export price now.  The onset is therefore the lower of the two
+        break-even currents.  Returning the components lets the dashboard
+        explain which one is responsible.
+
+        A store break-even below the current harvest cannot occur here: Tier 3
+        would already have chosen to store, so this branch would not run.
+        """
+        self_use_floor = self._minimum_harvest_charge_current_a(export_rate_p)
+        store_floor = (
+            self._minimum_store_harvest_current_a(
+                future_rate_p, export_rate_p
+            )
+            if future_rate_p is not None and future_rate_p > 0
+            else None
+        )
+        candidates = [
+            floor for floor in (self_use_floor, store_floor)
+            if floor is not None
+        ]
+        return (
+            min(candidates) if candidates else None,
+            self_use_floor,
+            store_floor,
+        )
+
+    @staticmethod
+    def _charge_activation_w_for_current(current_a: float) -> float:
+        """Surplus power at which charging at ``current_a`` should start.
+
+        ``LOAD_FOLLOW_BIDIRECTIONAL`` treats the charge range minimum as a
+        floor: if charging is active at all, a smaller surplus is topped up
+        from the grid to reach it.  That is fine for the inherited 3 A floor
+        (at most ~120 W of bias rounding), but a calculated 9 A floor would
+        turn a 3 A surplus into a 9 A charge and import 6 A at the peak price.
+        Those imported amps were never part of the self-use calculation, which
+        prices the input at the export value it displaces.
+
+        Gate on the floor's AC power instead, so the surplus must support the
+        floor before charging starts.  The only import left is the half-amp
+        bias rounding at the boundary, matching the existing 3 A/720 W
+        behaviour.  A floor of zero disables charging entirely.
+        """
+        return 0.0 if current_a <= 0 else float(current_a) * 240.0
+
     def _read_power_snapshot(self) -> Optional[dict]:
         """Read the latest grid/EVSE channels, or ``None`` if unavailable.
 
@@ -3139,8 +3212,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"{reason.rstrip('.')}. "
                 f"{self._activation_explanation(activation_w)}"
             )
-            harvest_floor = self._minimum_harvest_charge_current_a(
-                current_export_rate_p
+            charge_floor_a, self_use_floor, store_floor = (
+                self._effective_charge_floor_a(
+                    current_export_rate_p, target_rate_p
+                )
             )
             if charge_at_cap:
                 charge_min_a = 0.0
@@ -3151,11 +3226,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 charge_note = (
                     f"Charging is inhibited at the {charge_cap:.0f}% cap. "
                 )
-            elif harvest_floor is None:
-                # No measured current clears the export price, so keeping the
-                # solar for the house would destroy more value than it
-                # delivers.  Close the charge range rather than leave the
-                # previous mode's range in place.
+            elif charge_floor_a is None:
+                # Neither use clears the export price, so keeping the solar
+                # would destroy more value than it delivers.  Close the charge
+                # range rather than leave the previous mode's range in place.
                 charge_min_a = 0.0
                 best_value_p, best_current_a = self._best_self_use_value_p()
                 mode = (
@@ -3163,27 +3237,56 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
                 )
                 charge_note = (
-                    f"No measured charge current makes self-use worth more "
-                    f"than exporting at {current_export_rate_p:.1f}p now: the "
-                    f"best is {best_value_p:.1f}p at {best_current_a:.0f} A "
+                    f"No measured charge current makes self-use or a later "
+                    f"sale worth more than exporting at "
+                    f"{current_export_rate_p:.1f}p now: the best self-use "
+                    f"value is {best_value_p:.1f}p at {best_current_a:.0f} A "
                     f"after the round trip, so the surplus is sold instead. "
                 )
             else:
-                charge_min_a = harvest_floor
+                charge_min_a = charge_floor_a
                 mode = (
-                    f"Charge from surplus ≥{harvest_floor:.0f} A · "
+                    f"Charge from surplus ≥{charge_floor_a:.0f} A · "
                     f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
                 )
-                charge_note = (
-                    f"Charging starts only when the surplus supports at least "
-                    f"{harvest_floor:.0f} A, the smallest measured current "
-                    f"whose self-use value "
-                    f"({self.self_use_value_threshold_p(harvest_floor):.1f}p) "
-                    f"beats exporting at {current_export_rate_p:.1f}p now. "
-                    "The charge and discharge ranges are independent, so a "
-                    "stronger surplus can charge while the pack still covers "
-                    "the house. "
-                )
+                if (
+                    store_floor is not None
+                    and store_floor == charge_floor_a
+                    and (
+                        self_use_floor is None
+                        or store_floor < self_use_floor
+                    )
+                ):
+                    self_use_text = (
+                        f"self-use alone would need {self_use_floor:.0f} A"
+                        if self_use_floor is not None
+                        else (
+                            "self-use alone never clears "
+                            f"{current_export_rate_p:.1f}p"
+                        )
+                    )
+                    charge_note = (
+                        f"Charging starts at {charge_floor_a:.0f} A because "
+                        f"the {target_rate_p:.1f}p slot makes storing worth "
+                        f"more than exporting at {current_export_rate_p:.1f}p "
+                        f"now; {self_use_text}. "
+                        "The charge and discharge ranges are independent, so "
+                        "a stronger surplus can charge while the pack still "
+                        "covers the house. "
+                    )
+                else:
+                    charge_note = (
+                        f"Charging starts at {charge_floor_a:.0f} A, the "
+                        f"smallest measured current whose self-use value "
+                        f"({self.self_use_value_threshold_p(charge_floor_a):.1f}p) "
+                        f"beats exporting at {current_export_rate_p:.1f}p "
+                        "now. The charge and discharge ranges are independent, "
+                        "so a stronger surplus can charge while the pack still "
+                        "covers the house. "
+                    )
+            charge_activation_w = self._charge_activation_w_for_current(
+                charge_min_a
+            )
             debug(
                 f"IOCTGO_AGILEOUT: Using LOAD_FOLLOW_BIDIRECTIONAL self-use "
                 f"(current rate {current_export_rate_p:.1f}p, "
@@ -3222,7 +3325,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 charge_max_a=(
                     0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT
                 ),
-                charge_activation_w=720,
+                charge_activation_w=charge_activation_w,
                 discharge_min_a=self.MIN_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
@@ -3246,11 +3349,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         When the decision is to *not* store (self-use), the controller stays
         bidirectional so the house can still discharge while the car absorbs a
-        surplus. The charge floor is not a fixed current: it is the smallest
-        measured point whose efficiency makes keeping the solar worth more than
-        exporting it now. If no measured current clears that hurdle - or the
-        pack is at its charge cap - the charge range is explicitly closed to
-        0 A, so a stale range from the previous mode cannot persist.
+        surplus. The charge floor is not a fixed current: it is the lower of
+        the smallest measured current whose self-use value beats exporting now
+        and the smallest whose sale in the best unused slot does. If neither
+        qualifies - or the pack is at its charge cap - the charge range is
+        explicitly closed to 0 A, so a stale range from the previous mode
+        cannot persist.
 
         When the day is projected to end in an energy shortfall, the system
         instead discharges conservatively, with the activation floored at the
@@ -3377,17 +3481,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(f"IOCTGO_AGILEOUT: Bidirectional mode configured (activation={activation_w:.0f}W, bias=+0.5, range=3-{self.MAX_DISCHARGE_CURRENT}A)")
         else:
             # Self-use load-follow.  Cover the house and take only a surplus
-            # that is worth keeping; the minimum charge current comes from the
-            # measured efficiency curve and the current export price, so it is
+            # that is worth keeping.  The minimum charge current is the
+            # *effective* onset: either keeping the solar for the house
+            # (self-use) or storing it for the best later slot may make it
+            # worthwhile, so the lower of the two break-evens wins.  It is
+            # derived from the measured efficiency curve and the live prices,
             # not a fixed 3 A or 6 A.  Both ranges are set explicitly: a stale
             # charge range from the previous mode must not leak into this one.
-            harvest_floor = self._minimum_harvest_charge_current_a(
-                current_export_rate_p
+            target_rate_p = decision.future_rate_p
+            charge_floor_a, _, _ = self._effective_charge_floor_a(
+                current_export_rate_p, target_rate_p
             )
             charge_min_a = (
                 0.0
-                if charge_at_cap or harvest_floor is None
-                else float(harvest_floor)
+                if charge_at_cap or charge_floor_a is None
+                else float(charge_floor_a)
+            )
+            charge_activation_w = self._charge_activation_w_for_current(
+                charge_min_a
             )
             evseController.setDischargeActivationPower(activation_w)
             evseController.setDischargeCurrentBias(
@@ -3397,7 +3508,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 config.WALLBOX_MIN_DISCHARGE_CURRENT,
                 config.WALLBOX_MAX_DISCHARGE_CURRENT,
             )
-            evseController.setChargeActivationPower(720)
+            evseController.setChargeActivationPower(charge_activation_w)
             evseController.setChargeCurrentBias(-0.5)
             evseController.setChargeCurrentRange(
                 charge_min_a,
@@ -3408,7 +3519,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 charge_max_a=(
                     0.0 if charge_min_a <= 0 else self.MAX_CHARGE_CURRENT
                 ),
-                charge_activation_w=720,
+                charge_activation_w=charge_activation_w,
                 discharge_min_a=config.WALLBOX_MIN_DISCHARGE_CURRENT,
                 discharge_max_a=config.WALLBOX_MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,

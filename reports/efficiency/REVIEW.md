@@ -414,19 +414,40 @@ tag stored energy with its acquisition cost. That is a DP concern.
 
 When Tier 3 decides not to store, the controller now stays in
 `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
-can still absorb a surplus. The charge floor is not a fixed 3 A or 6 A. It is
-the smallest measured current whose self-use value,
-`(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)`, beats the export price
-forgone now. Because efficiency rises with current, that condition is
-monotonic: with a 30p peak and 0.3p margin the floor is 3 A at 11p, 4 A at
-13p, 8 A at 18p and 12 A at 19p. Above the best measured value (~19.25p at
-16 A) no current qualifies, so the charge range is explicitly closed to 0 A
-and the surplus is exported; the mode reads
+can still absorb a surplus. The charge floor is not a fixed 3 A or 6 A.
+Charging can pay off in two ways, so the onset is the **lower** of two
+break-evens:
+
+* **self-use:** the smallest measured current whose
+  `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the export price
+  forgone now;
+* **store:** the smallest measured current whose later sale,
+  `(future − margin) × η_chg(I) × η_dis(export)`, beats the export price now.
+  Crossing this one flips Tier 3 to storing, so it is where charging would
+  actually begin.
+
+Both conditions are monotonic in current because efficiency rises with it.
+With the default 30p peak and 0.3p margin the self-use floor is 3 A at 11p,
+4 A at 13p, 8 A at 18p and 12 A at 19p. At a 32.26p peak, 19.8p now and 30.4p
+later, the self-use floor is 9 A but the store break-even is 5 A, so charging
+starts at 5 A. The store break-even does not depend on `IMPORT_HIGH`: it
+discharges to the grid at the export current (η ≈ 0.943), while self-use
+discharges at ~3 A (η ≈ 0.734). If neither floor exists the charge range is
+explicitly closed to 0 A and the surplus is exported; the mode reads
 `Do not charge — surplus worth more exported`. The two directions are
 independent, so a strong surplus can charge while the house is still covered
 at 3 A, and the previous mode's charge range can no longer persist. The
 earlier 6 A figure was an illustrative break-even point, not a policy
 constant.
+
+The floor also **gates activation**. `LOAD_FOLLOW_BIDIRECTIONAL` treats the
+charge minimum as a floor: once charging is active a smaller surplus is topped
+up from the grid. The activation power is therefore `floor × 240 W`, not the
+fixed 720 W inherited from the 3 A minimum. At a 5 A floor a 3 A surplus
+cannot start a 5 A charge and import the other 2 A at the peak price - those
+imported amps were never part of the self-use calculation, which prices the
+input at the export value it displaces. Only the ~0.5 A bias rounding remains
+at the boundary.
 
 Tier 3 is a *marginal* comparison, which is why it reads the best **unused**
 slot. The export plan spends the pack's spare SoC on the highest-rate slots

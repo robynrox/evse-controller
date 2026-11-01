@@ -355,20 +355,33 @@ cell on a phone, where the badge alone is too small to rely on.
   already committed, the surplus is exported now even with a strong harvest,
   and the reason says which slot is committed and what the next unused rate
   would yield. `Do not charge` does not mean the day has no higher price left.
-- **The self-use charge floor is calculated, not fixed.** When the decision is
-  not to store for a later sale, the controller stays in
+- **The charge floor and its activation are calculated, not fixed.** When the
+  decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
-  can still absorb a surplus. It only accepts a surplus that supports a charge
-  current whose measured self-use value,
-  `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)`, beats the export price
-  forgone now. Efficiency rises with current, so the floor moves with the
-  price: at 11p it is 3 A, at 13p 4 A, at 18p 8 A, and at 19p 12 A. If even
-  the best measured current (16 A, ~19.25p with a 30p peak) is below the export
-  price, the charge range is explicitly set to 0 A and the mode reads
+  can still absorb a surplus. Charging may pay off either by keeping the solar
+  for the house or by storing it for the best unused slot, so the onset is the
+  **lower** of the two break-evens:
+
+  - self-use: smallest measured current where
+    `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the export price now;
+  - store: smallest measured current where
+    `(future − margin) × η_chg(I) × η_dis(export)` beats the export price now.
+
+  Efficiency rises with current, so each floor moves with the price. With a
+  30p peak and 0.3p margin the self-use floor is 3 A at 11p, 4 A at 13p, 8 A at
+  18p and 12 A at 19p; at 19.8p now and 30.4p later the self-use floor is 9 A
+  but the store break-even is 5 A, so charging starts at 5 A. If neither floor
+  exists, the charge range is explicitly set to 0 A and the mode reads
   `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`.
   The charge and discharge ranges are independent, so a strong surplus can
   charge while the house is still covered at 3 A. 6 A is an illustrative
   break-even point, not a policy constant.
+- **The charge floor also gates activation.** `LOAD_FOLLOW_BIDIRECTIONAL`
+  treats the charge minimum as a floor and tops up from the grid once charging
+  starts, so the activation power is set to `floor × 240 W` rather than the
+  fixed 720 W. A 3 A surplus therefore cannot trigger a 5 A charge and import
+  the other 2 A at the peak price; only the ~0.5 A bias rounding remains at the
+  boundary.
 - **Saved today** is the money actually captured by cycling stored energy. A
   charge is booked at the price paid (grid) or at the Agile export price it
   displaced (surplus solar), and no saving is shown yet. The saving appears

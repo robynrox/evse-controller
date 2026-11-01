@@ -64,20 +64,28 @@
 >   supplied prices (or only stale prices from a previous day), all current and
 >   future export prices are 0p. Tier 1 then stores and the export planner finds
 >   no profitable slots. Date-filtered lookups ignore yesterday's prices.
-> - The 3 A floor stays. Raising it only affects the 0.7–1.0 kW surplus band,
->   where a 4 A command draws from the grid; a higher floor is a grid top-up
->   decision, not an efficiency gain.
-> - **The self-use charge floor is derived per case, not fixed.** When Tier 3
->   decides not to store for a later sale, the controller stays
->   `LOAD_FOLLOW_BIDIRECTIONAL` so the house can still discharge while a surplus
->   charges. The charge floor is the smallest measured current whose self-use
->   value `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the current
->   export price. With a 30p peak and 0.3p margin that is 3 A at 11p, 4 A at
->   13p, 8 A at 18p and 12 A at 19p; above the best measured value (~19.25p at
->   16 A) no current qualifies and the charge range is explicitly set to 0 A,
->   with the mode reading `Do not charge — surplus worth more exported`. The two
->   directions are independent, and the previous mode's charge range can no
->   longer persist. 6 A was an illustrative break-even point, not a constant.
+> - The 3 A floor stays for the Tier 2 self-use branch (export now is below
+>   the self-use value). Raising it there only affects the 0.7–1.0 kW surplus
+>   band, where a 4 A command draws from the grid; a higher floor is a grid
+>   top-up decision, not an efficiency gain. The Tier 3 no-store branch derives
+>   its own floor from the efficiency curve instead.
+> - **The charge floor is derived per case, not fixed, and it gates
+>   activation.** When Tier 3 decides not to store for a later sale, the
+>   controller stays `LOAD_FOLLOW_BIDIRECTIONAL` so the house can still
+>   discharge while a surplus charges. Charging may pay off either by keeping
+>   the solar for the house or by storing it for the best unused slot, so the
+>   onset is the lower of two break-evens: the smallest measured current whose
+>   self-use value `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the
+>   export price now, and the smallest whose later sale beats it. With a 32.26p
+>   peak, 0.3p margin, 19.8p now and 30.4p later the self-use floor is 9 A but
+>   the store break-even is 5 A, so charging starts at 5 A. If neither floor
+>   exists the charge range is explicitly set to 0 A and the mode reads
+>   `Do not charge — surplus worth more exported`. Because the charge minimum
+>   is a floor that tops up from the grid, the activation power is
+>   `floor × 240 W`, not the fixed 720 W: a 3 A surplus cannot start a 5 A
+>   charge and import the other 2 A at the peak price. The two directions are
+>   independent, and the previous mode's charge range can no longer persist.
+>   6 A was an illustrative break-even point, not a constant.
 > - Round trips are **separable products of the two per-direction curves**
 >   (`η_chg(I_chg) × η_dis(I_dis)`), not measured matched-current pairs. Do not
 >   build a 2D table; carry the actual charge and discharge current per slot.
@@ -165,7 +173,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **377 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **379 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
