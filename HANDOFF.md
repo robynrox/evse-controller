@@ -399,7 +399,10 @@ prices need no special case; maximum charge simply becomes optimal.
 ## 7. Plan / next actions
 
 The efficiency work is done; steps 1–2 below are the remaining design decisions
-to settle before writing DP code, then the implementation and validation.
+to settle before writing DP code, then the implementation and validation. The
+forecast layer and the DP's input contract are designed in
+[`reports/dp/ROADMAP.md`](reports/dp/ROADMAP.md); that document is the working
+plan for steps 6–8 and supersedes the sketch in section 6 where they differ.
 
 1. Decide the one remaining modelling approximation, or accept it
    explicitly:

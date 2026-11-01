@@ -529,6 +529,7 @@ If using VS Code (recommended):
 ## Roadmap
 
 * Work on a general smart tariff driver that would minimise costs for any tariff.
+* A forecast layer and dynamic-programming planner are designed in [`reports/dp/ROADMAP.md`](reports/dp/ROADMAP.md).
 
 ## Explanatory video
 
