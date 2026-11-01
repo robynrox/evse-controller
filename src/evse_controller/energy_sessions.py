@@ -62,6 +62,42 @@ def ceil_to_slot(when: datetime) -> datetime:
     )
 
 
+def session_from_slots(
+    kind: str,
+    start_slot,
+    end_slot,
+    day: date_type | None = None,
+    now: datetime | None = None,
+) -> "EnergySession":
+    """Build a session from half-hour slot indices.
+
+    ``start_slot`` is inclusive and ``end_slot`` is exclusive, so selecting the
+    last slot of the day gives ``end_slot == 48`` and an end at midnight.
+    Validation messages are written for the person using the web form.
+    """
+    now = now or datetime.now()
+    day = day or now.date()
+
+    if kind not in SESSION_LABELS:
+        raise ValueError("Choose a session type")
+
+    try:
+        first = int(start_slot)
+        last = int(end_slot)
+    except (TypeError, ValueError):
+        raise ValueError("Select one or more half-hour slots") from None
+
+    if not (0 <= first < last <= SLOTS_PER_DAY):
+        raise ValueError("Selected slots are out of range")
+
+    midnight = datetime.combine(day, time())
+    start = midnight + timedelta(minutes=SLOT_MINUTES * first)
+    end = midnight + timedelta(minutes=SLOT_MINUTES * last)
+    if end <= now:
+        raise ValueError("That window has already ended")
+    return EnergySession(kind, start, end)
+
+
 @dataclass
 class EnergySession:
     """A supplier-requested window, snapped to half-hour slots."""
@@ -153,13 +189,17 @@ class SessionStore:
             key=lambda session: session.start,
         )
 
-    def free_import_slots(self, day: date_type) -> set[int]:
-        """Slots of *day* whose import price is zero."""
+    def slots_for_kind(self, day: date_type, kind: str) -> set[int]:
+        """Slots of *day* covered by enabled sessions of *kind*."""
         slots: set[int] = set()
         for session in self.sessions:
-            if session.kind == FREE_IMPORT and session.enabled:
+            if session.kind == kind and session.enabled:
                 slots.update(session.slot_indices(day))
         return slots
+
+    def free_import_slots(self, day: date_type) -> set[int]:
+        """Slots of *day* whose import price is zero."""
+        return self.slots_for_kind(day, FREE_IMPORT)
 
     def is_free_import(self, when: datetime) -> bool:
         session = self.active(when)

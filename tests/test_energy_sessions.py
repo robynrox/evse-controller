@@ -11,6 +11,7 @@ from evse_controller.energy_sessions import (
     SessionStore,
     ceil_to_slot,
     floor_to_slot,
+    session_from_slots,
 )
 
 
@@ -155,3 +156,83 @@ class TestSessionStore:
         upcoming = store.upcoming(at(12))
         assert upcoming == [future]
         assert past not in upcoming
+
+
+class TestSessionFromSlots:
+    """The web form sends slot indices, not clock times."""
+
+    NOW = at(9, 0)
+
+    def build(self, kind=FREE_IMPORT, start=24, end=25, now=None):
+        return session_from_slots(kind, start, end, now=now or self.NOW)
+
+    def test_single_slot(self):
+        session = self.build(start=24, end=25)
+        assert session.start == at(12, 0)
+        assert session.end == at(12, 30)
+        assert session.slot_indices(at(12).date()) == [24]
+
+    def test_multiple_slots(self):
+        session = self.build(start=24, end=28)
+        assert session.start == at(12, 0)
+        assert session.end == at(14, 0)
+        assert session.slot_indices(at(12).date()) == [24, 25, 26, 27]
+
+    def test_last_slot_ends_at_midnight(self):
+        session = self.build(start=47, end=48)
+        assert session.start == at(23, 30)
+        assert session.end == at(23, 30) + timedelta(minutes=30)
+        assert session.end.strftime("%H:%M") == "00:00"
+
+    def test_strings_from_json_are_accepted(self):
+        session = self.build(start="24", end="26")
+        assert session.start == at(12, 0)
+        assert session.end == at(13, 0)
+
+    def test_a_window_containing_now_is_allowed(self):
+        session = self.build(start=16, end=20, now=at(9, 10))
+        assert session.start == at(8, 0)
+
+    def test_unknown_kind(self):
+        with pytest.raises(ValueError, match="Choose a session type"):
+            self.build(kind="happy_hour")
+
+    def test_missing_kind(self):
+        with pytest.raises(ValueError, match="Choose a session type"):
+            session_from_slots(None, 24, 25, now=self.NOW)
+
+    @pytest.mark.parametrize("start,end", [(None, 25), (24, None), ("x", 25)])
+    def test_missing_or_unparseable_slots(self, start, end):
+        with pytest.raises(ValueError, match="Select one or more"):
+            self.build(start=start, end=end)
+
+    @pytest.mark.parametrize(
+        "start,end",
+        [(-1, 25), (25, 25), (26, 25), (47, 49), (0, 49)],
+    )
+    def test_out_of_range(self, start, end):
+        with pytest.raises(ValueError, match="out of range"):
+            self.build(start=start, end=end)
+
+    def test_window_that_has_already_ended(self):
+        with pytest.raises(ValueError, match="already ended"):
+            self.build(start=16, end=18, now=at(10, 0))
+
+    def test_window_ending_exactly_now_is_rejected(self):
+        with pytest.raises(ValueError, match="already ended"):
+            self.build(start=16, end=18, now=at(9, 0))
+
+
+class TestSlotsForKind:
+    def test_filters_by_kind_and_enabled(self, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        free = store.add(EnergySession(FREE_IMPORT, at(12), at(13)))
+        store.add(EnergySession(GRID_SUPPORT, at(14), at(15)))
+        store.add(EnergySession(FREE_IMPORT, at(16), at(17)))
+
+        day = at(12).date()
+        assert store.slots_for_kind(day, FREE_IMPORT) == {24, 25, 32, 33}
+        assert store.slots_for_kind(day, GRID_SUPPORT) == {28, 29}
+
+        store.set_enabled(free.id, False)
+        assert store.slots_for_kind(day, FREE_IMPORT) == {32, 33}

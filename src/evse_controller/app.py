@@ -24,6 +24,15 @@ from evse_controller.smart_evse_controller import (
 )
 
 from evse_controller.event_bus import EventBus, EventType
+from evse_controller.energy_sessions import (
+    FREE_IMPORT,
+    GRID_SUPPORT,
+    SLOTS_PER_DAY,
+    SESSION_LABELS,
+    EnergySession,
+    session_from_slots,
+    session_store,
+)
 
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
@@ -42,6 +51,81 @@ VALID_COMMANDS = {
     'power-home': 'Power home from vehicle battery',
     'balance': 'Balance between solar charging and home power'
 }
+
+
+def _slot_label(slot: int) -> str:
+    """Clock label for a half-hour slot index."""
+    return f"{slot // 2:02d}:{(slot % 2) * 30:02d}"
+
+
+def _today_slot_rates() -> list[dict]:
+    """The 48 half-hour slots with today's export rate, if it is known.
+
+    Rates come from whichever tariff is active.  ``None`` means the rate is
+    unknown (no tariff, no fetch yet, or a different user), which the strip
+    renders as a neutral cell rather than as 0p.
+    """
+    tariff = tariffManager.get_tariff()
+    rates = getattr(tariff, "agile_rates", None) if tariff else None
+    today = datetime.now().date()
+    by_slot: dict[int, float] = {}
+    for entry in rates or []:
+        start = entry.get("start")
+        if isinstance(start, str):
+            try:
+                start = datetime.fromisoformat(start)
+            except ValueError:
+                continue
+        if start is None or start.date() != today:
+            continue
+        slot = start.hour * 2 + (1 if start.minute >= 30 else 0)
+        rate = entry.get("rate")
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            rate = None
+        by_slot[slot] = rate
+
+    entries = []
+    for slot in range(SLOTS_PER_DAY):
+        rate = by_slot.get(slot)
+        entries.append(
+            {
+                "slot": slot,
+                "time": _slot_label(slot),
+                "rate": rate,
+                "colour": _rate_colour(rate, by_slot.values()),
+            }
+        )
+    return entries
+
+
+def _rate_colour(rate, all_rates) -> str:
+    """Red→green background for a rate, or neutral grey when unknown."""
+    if rate is None:
+        return "#eeeeee"
+    values = [value for value in all_rates if value is not None]
+    if not values:
+        return "#eeeeee"
+    low, high = min(values), max(values)
+    fraction = 0.5 if high == low else (rate - low) / (high - low)
+    hue = 4 + 116 * fraction
+    return f"hsl({hue:.0f}, 70%, {78 - 22 * fraction:.0f}%)"
+
+
+def _session_from_payload(data: dict, now: datetime | None = None) -> EnergySession:
+    """Validate an API payload into a snapped session.
+
+    Slots are indices into today's 48 half-hours.  ``end_slot`` is exclusive,
+    so selecting the last slot of the day gives 48 and ends at midnight.
+    """
+    return session_from_slots(
+        data.get("kind"),
+        data.get("start_slot"),
+        data.get("end_slot"),
+        now=now,
+    )
+
 
 # Global variables to cache the latest measurements and OCPP state
 latest_measurements = None
@@ -304,6 +388,72 @@ def schedule_page():
     return render_template('schedule.html', 
                           scheduled_events=scheduled_events,
                           valid_commands=VALID_COMMANDS)
+
+
+@app.route('/sessions')
+def sessions_page():
+    """Select supplier energy-session windows on a half-hour strip."""
+    now = datetime.now()
+    today = now.date()
+    return render_template(
+        'sessions.html',
+        slots=_today_slot_rates(),
+        sessions=session_store.upcoming(now),
+        labels=SESSION_LABELS,
+        free_kind=FREE_IMPORT,
+        grid_kind=GRID_SUPPORT,
+        free_slots=session_store.slots_for_kind(today, FREE_IMPORT),
+        grid_slots=session_store.slots_for_kind(today, GRID_SUPPORT),
+        now_slot=now.hour * 2 + (1 if now.minute >= 30 else 0),
+        now=now,
+    )
+
+
+@app.route('/api/sessions', methods=['GET'])
+def get_sessions():
+    """List the stored sessions, earliest first."""
+    return jsonify([session.to_dict() for session in session_store.sessions])
+
+
+@app.route('/api/sessions', methods=['POST'])
+def create_session():
+    """Add a session from a half-hour slot selection."""
+    try:
+        session = _session_from_payload(request.get_json(silent=True) or {})
+        session_store.add(session)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    info(
+        f"SESSION Added {session.label} {session.start:%Y-%m-%d %H:%M}–"
+        f"{session.end:%H:%M}"
+    )
+    return jsonify(session.to_dict()), 201
+
+
+@app.route('/api/sessions/<session_id>', methods=['DELETE'])
+def delete_session(session_id):
+    """Remove a session by id."""
+    if not session_store.remove(session_id):
+        return jsonify({'error': 'Unknown session'}), 404
+    info(f"SESSION Removed {session_id}")
+    return jsonify({'deleted': session_id})
+
+
+@app.route('/api/sessions/<session_id>/toggle', methods=['POST'])
+def toggle_session(session_id):
+    """Enable or disable a session without deleting it."""
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get('enabled')
+    if enabled is None:
+        enabled = not any(
+            session.id == session_id and session.enabled
+            for session in session_store.sessions
+        )
+    if not session_store.set_enabled(session_id, bool(enabled)):
+        return jsonify({'error': 'Unknown session'}), 404
+    info(f"SESSION {session_id} {'enabled' if enabled else 'disabled'}")
+    return jsonify({'id': session_id, 'enabled': bool(enabled)})
+
 
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
