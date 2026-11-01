@@ -372,6 +372,11 @@ prices need no special case; maximum charge simply becomes optimal.
 - Wallbox cannot discharge below ~25% SoC and cannot charge above ~97%; model
   this as per-state action masks, but keep nodes across 0–100 so the planner can
   recover from an unusual SoC.
+- Three separate SoC numbers, not one "reserve": a fixed **protection floor**
+  (25%, masks the discharge action), a user-controllable **planning reserve**
+  (clamped to ≥ the floor, soft constraint), and the **terminal target**. SoC may
+  legitimately sit below the floor (after a drive); that is charge-only, not
+  infeasible. Grid-support sessions may cross the reserve down to the floor.
 - Minimum sustained AC current is about 3 A (~0.7 kW). Model allowed power as
   `0 ∪ [P_min, P_max]`, or allow fractional average power and cost the
   efficiency penalty.
@@ -389,10 +394,14 @@ prices need no special case; maximum charge simply becomes optimal.
   plain Agile.
 - Unknown future rates (before the ~16:00 publication) should be handled with a
   terminal value, not invented prices.
-- PV forecast: Solcast / Forecast.Solar / Open-Meteo, half-hour kWh, with
-  confidence derating.
+- PV forecast: Open-Meteo tilted irradiance × a per-slot calibration learned from
+  the measured solar channel; a PV service (Solcast / Forecast.Solar) is an
+  optional cross-check, not the primary input.
 - Load forecast: start with time-of-day/day-of-week persistence plus a
   temperature/degree-day term for the heat pump. Do not start with ML.
+- History for training comes from the controller's own local store
+  (`data/state/history.sqlite`, 30-minute slot means). InfluxDB is optional; do
+  not require it.
 - Later: scenario-based DP (sample PV/load scenarios, minimise expected cost) or
   chance constraints, so the reserve becomes principled rather than arbitrary.
 
