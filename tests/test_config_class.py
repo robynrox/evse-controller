@@ -737,3 +737,62 @@ class TestConfig:
                 assert saved_config['wallbox']['simulator']['initial_battery_level'] == 65
                 assert saved_config['shelly']['grid']['device'] == "primary"
                 assert saved_config['shelly']['evse']['device'] == "secondary"
+
+class TestWholeNumberSocSettings:
+    """SoC targets, thresholds and margins are whole percentages.
+
+    The web form submits integers, but the YAML can be edited by hand.  A
+    fractional value there used to survive into the decision line, where a
+    44.6% projection against a 45% house floor rendered as "45% < 45%".
+    """
+
+    WHOLE_SOC_SETTINGS = [
+        ("MAX_CHARGE_PERCENT", 89.6, 90),
+        ("SOLAR_PERIOD_MAX_CHARGE", 79.6, 80),
+        ("IOCTGO_TARGET_SOC_AT_CHEAP_START", 53.6, 54),
+        ("IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END", 59.6, 60),
+        ("IOCTGO_SOC_THRESHOLD_FOR_STRATEGY", 49.6, 50),
+        ("IOCTGO_OCPP_ENABLE_SOC_THRESHOLD", 29.6, 30),
+        ("IOCTGO_OCPP_DISABLE_SOC_THRESHOLD", 94.6, 95),
+        ("MIN_AGILE_DISCHARGE_SOC", 59.6, 60),
+        ("HOUSE_LOAD_MARGIN_PERCENT", 4.6, 5),
+    ]
+
+    @pytest.mark.parametrize("attribute,written,expected", WHOLE_SOC_SETTINGS)
+    def test_setter_stores_a_whole_number(self, attribute, written, expected):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        setattr(config, attribute, written)
+
+        assert getattr(config, attribute) == expected
+        assert isinstance(getattr(config, attribute), int)
+
+    def test_fractional_value_in_yaml_is_coerced_on_read(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {})[
+            "house_load_margin_percent"
+        ] = 4.6
+
+        assert config.HOUSE_LOAD_MARGIN_PERCENT == 5
+
+    def test_non_numeric_value_falls_back_to_the_default(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {})[
+            "min_agile_discharge_soc"
+        ] = "not a number"
+
+        assert config.MIN_AGILE_DISCHARGE_SOC == 60
+
+    def test_per_slot_soc_loss_rates_stay_fractional(self):
+        """These are rates, not thresholds, so 0.5%/slot must survive."""
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = 0.5
+        config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.5
+
+        assert config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(0.5)
+        assert config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(1.5)

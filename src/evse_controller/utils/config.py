@@ -213,6 +213,30 @@ class Config:
         # Set the final value
         config_ref[all_keys[-1]] = value
 
+    @staticmethod
+    def _as_int(value: Any, default: int) -> int:
+        """Coerce a setting to a whole number.
+
+        SoC targets, thresholds and margin sizes are whole percentages.  The
+        web form only submits integers, but the YAML can be edited by hand, so
+        coercion here keeps a fractional value from leaking into the decision
+        line (where ``44.6%`` used to render as "45% < 45%").
+        """
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _get_config_int(self, section: str, key: str, default: int) -> int:
+        """Read a whole-number setting, coercing a hand-edited float."""
+        return self._as_int(self._get_config_value(section, key, default), default)
+
+    def _set_config_int(self, section: str, key: str, value: Any, default: int) -> int:
+        """Store a whole-number setting and return the coerced value."""
+        coerced = self._as_int(value, default)
+        self._set_config_value(section, key, coerced)
+        return coerced
+
     # Charging section properties
     STARTUP_STATE = property(
         lambda self: self._get_config_value("charging", "startup_state", "FREERUN"),
@@ -220,13 +244,13 @@ class Config:
     )
 
     MAX_CHARGE_PERCENT = property(
-        lambda self: self._get_config_value("charging", "max_charge_percent", 90),
-        lambda self, value: self._set_config_value("charging", "max_charge_percent", value)
+        lambda self: self._get_config_int("charging", "max_charge_percent", 90),
+        lambda self, value: self._set_config_int("charging", "max_charge_percent", value, 90)
     )
 
     SOLAR_PERIOD_MAX_CHARGE = property(
-        lambda self: self._get_config_value("charging", "solar_period_max_charge", 80),
-        lambda self, value: self._set_config_value("charging", "solar_period_max_charge", value)
+        lambda self: self._get_config_int("charging", "solar_period_max_charge", 80),
+        lambda self, value: self._set_config_int("charging", "solar_period_max_charge", value, 80)
     )
 
     # Logging section properties
@@ -288,13 +312,13 @@ class Config:
     )
 
     IOCTGO_TARGET_SOC_AT_CHEAP_START = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", value, 54)
     )
 
     IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value, 60)
     )
 
     IOCTGO_BULK_DISCHARGE_START_TIME = property(
@@ -318,18 +342,18 @@ class Config:
     )
 
     IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "soc_threshold_for_strategy", value, 50)
     )
 
     IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", 0),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "grid_import_threshold_high_soc", 0),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "grid_import_threshold_high_soc", value, 0)
     )
 
     IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", 720),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "grid_import_threshold_low_soc", 720),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "grid_import_threshold_low_soc", value, 720)
     )
 
     IOCTGO_SMART_OCPP_OPERATION = property(
@@ -338,13 +362,13 @@ class Config:
     )
 
     IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", 30),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "ocpp_enable_soc_threshold", 30),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "ocpp_enable_soc_threshold", value, 30)
     )
 
     IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", 95),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "ocpp_disable_soc_threshold", 95),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "ocpp_disable_soc_threshold", value, 95)
     )
 
     IOCTGO_OCPP_ENABLE_TIME = property(
@@ -366,15 +390,15 @@ class Config:
     # Minimum SoC for Agile Outgoing discharge.  This is the bulk-export
     # target: export slots are planned down to it.
     MIN_AGILE_DISCHARGE_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "min_agile_discharge_soc", 60),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 60),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 60)
     )
 
     # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
     # house-load decision.  Bulk export planning still uses the target itself.
     HOUSE_LOAD_MARGIN_PERCENT = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "house_load_margin_percent", 5),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "house_load_margin_percent", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "house_load_margin_percent", 5),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "house_load_margin_percent", value, 5)
     )
 
     # Maximum export power for Agile Outgoing (kW).  Default is the non-derated

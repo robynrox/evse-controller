@@ -250,9 +250,9 @@ Detailed explanation of each configuration option:
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. These parameters **cannot be configured using the interactive text-based configuration tool** and must be edited directly in `config.yaml` when using that approach instead of the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
-- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (0-100)
-- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (0-100). Export slots are planned down to this figure
-- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
+- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
+- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, 0-100). Export slots are planned down to this figure
+- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
