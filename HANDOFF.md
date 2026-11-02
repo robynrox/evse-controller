@@ -80,8 +80,12 @@
 >   peak, 0.3p margin, 19.8p now and 30.4p later the self-use floor is 9 A but
 >   the store break-even is 5 A, so charging starts at 5 A. If neither floor
 >   exists the charge range is explicitly set to 0 A and the mode reads
->   `Do not charge — surplus worth more exported`. Because the charge minimum
->   is a floor that tops up from the grid, the activation power is
+>   `Do not charge — surplus worth more exported`. When a floor is armed but
+>   the live surplus cannot reach it, the mode reads `Do not charge yet — will
+>   charge from ≥N A surplus`: the floor is conditional, not a claim that the
+>   car is charging now. Below the floor exporting pays more; at the floor the
+>   round trip (or the later sale) clears the export price. Because the charge
+>   minimum is a floor that tops up from the grid, the activation power is
 >   `floor × 240 W`, not the fixed 720 W: a 3 A surplus cannot start a 5 A
 >   charge and import the other 2 A at the peak price. The two directions are
 >   independent, and the previous mode's charge range can no longer persist.

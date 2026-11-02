@@ -527,7 +527,8 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
 - **Mode** names the charge/discharge capability rather than just the control
   enum: `Max charge (16 A)`, `Max discharge (16 A) · aggressive`,
   `Harvest 5 A · aggressive discharge`, `Charge from surplus ≥N A ·
-  aggressive discharge ≥3 A`, `Harvest ≥3 A · conservative discharge`,
+  aggressive discharge ≥3 A`, `Do not charge yet — will charge from ≥N A
+  surplus · aggressive discharge ≥3 A`, `Harvest ≥3 A · conservative discharge`,
   `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`,
   `Do not charge — SoC at N% cap · aggressive discharge`,
   `Idle — battery protection`, or `Charge at 3 A (SoC unknown)`.

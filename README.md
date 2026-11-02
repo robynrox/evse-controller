@@ -373,9 +373,12 @@ cell on a phone, where the badge alone is too small to rely on.
   but the store break-even is 5 A, so charging starts at 5 A. If neither floor
   exists, the charge range is explicitly set to 0 A and the mode reads
   `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`.
-  The charge and discharge ranges are independent, so a strong surplus can
-  charge while the house is still covered at 3 A. 6 A is an illustrative
-  break-even point, not a policy constant.
+  When a floor is armed but the live surplus is below it, the mode reads
+  `Do not charge yet — will charge from ≥N A surplus · aggressive discharge
+  ≥3 A`: below the floor exporting pays more, and charging begins only when
+  the surplus reaches it. The charge and discharge ranges are independent, so
+  a strong surplus can charge while the house is still covered at 3 A. 6 A is
+  an illustrative break-even point, not a policy constant.
 - **The charge floor also gates activation.** `LOAD_FOLLOW_BIDIRECTIONAL`
   treats the charge minimum as a floor and tops up from the grid once charging
   starts, so the activation power is set to `floor × 240 W` rather than the

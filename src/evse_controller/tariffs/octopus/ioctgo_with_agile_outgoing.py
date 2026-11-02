@@ -3479,9 +3479,39 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
             else:
                 charge_min_a = charge_floor_a
+                floor_activation_w = self._charge_activation_w_for_current(
+                    charge_floor_a
+                )
+                # The floor is armed even when the live surplus cannot reach
+                # it: a later, stronger surplus may still make charging worth
+                # more than exporting.  Say so, rather than implying the car is
+                # charging now.  At 22:29 with a 19.2p export the floor is 8 A
+                # (self-use worth 19.5p) but the surplus is 3 A, so the honest
+                # line is "not yet".
+                waiting_for_surplus = (
+                    harvest_current_a < charge_floor_a
+                    or (
+                        surplus_w is not None
+                        and surplus_w < floor_activation_w
+                    )
+                )
                 mode = (
-                    f"Charge from surplus ≥{charge_floor_a:.0f} A · "
-                    f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
+                    (
+                        f"Do not charge yet — will charge from "
+                        f"≥{charge_floor_a:.0f} A surplus"
+                    )
+                    if waiting_for_surplus
+                    else f"Charge from surplus ≥{charge_floor_a:.0f} A"
+                )
+                mode = (
+                    f"{mode} · aggressive discharge "
+                    f"≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
+                )
+                below_text = (
+                    f"Below {charge_floor_a:.0f} A the surplus is worth more "
+                    "exported. "
+                    if waiting_for_surplus
+                    else ""
                 )
                 if (
                     store_floor is not None
@@ -3500,6 +3530,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         )
                     )
                     charge_note = (
+                        f"{below_text}"
                         f"Charging starts at {charge_floor_a:.0f} A because "
                         f"the {target_rate_p:.1f}p slot makes storing worth "
                         f"more than exporting at {current_export_rate_p:.1f}p "
@@ -3510,12 +3541,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     )
                 else:
                     charge_note = (
-                        f"Charging starts at {charge_floor_a:.0f} A, the "
-                        f"smallest measured current whose self-use value "
+                        f"{below_text}"
+                        f"At {charge_floor_a:.0f} A the self-use value "
                         f"({self.self_use_value_threshold_p(charge_floor_a):.1f}p) "
-                        f"beats exporting at {current_export_rate_p:.1f}p "
-                        "now. The charge and discharge ranges are independent, "
-                        "so a stronger surplus can charge while the pack still "
+                        f"beats exporting at {current_export_rate_p:.1f}p now. "
+                        "The charge and discharge ranges are independent, so a "
+                        "stronger surplus can charge while the pack still "
                         "covers the house. "
                     )
             charge_activation_w = self._charge_activation_w_for_current(
@@ -3533,7 +3564,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 reason=reason,
                 soc_percent=battery_level,
                 detail=(
-                    f"{decision.tier.capitalize()} decision. SoC {battery_level}%, "
+                    f"SoC {battery_level}%, "
                     f"current export {current_export_rate_p:.1f}p, harvest "
                     f"estimate {harvest_current_a:.0f} A, best unused slot "
                     f"{best_future_text}. Aggressive discharge {activation_text}. "

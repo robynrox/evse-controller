@@ -1402,9 +1402,14 @@ class TestDecisionSnapshot:
         agile_tariff.get_control_state(state, 9 * 60 + 30)
 
         snapshot = agile_tariff._decision_snapshot
-        assert snapshot.mode.startswith("Charge from surplus ≥5 A")
+        # The floor is armed at 5 A, but the live 3 A surplus cannot reach it,
+        # so the dashboard must not imply the car is charging now.
+        assert snapshot.mode.startswith(
+            "Do not charge yet — will charge from ≥5 A surplus"
+        )
         assert snapshot.charge_min_a == pytest.approx(5.0)
         assert snapshot.charge_activation_w == pytest.approx(5 * 240)
+        assert "Below 5 A the surplus is worth more exported" in snapshot.detail
         # The components are still reported/derivable independently.
         assert agile_tariff._minimum_harvest_charge_current_a(19.8) == pytest.approx(9.0)
         assert agile_tariff._minimum_store_harvest_current_a(30.4, 19.8) == pytest.approx(5.0)
@@ -1427,6 +1432,50 @@ class TestDecisionSnapshot:
         assert charge_at(-750) == 0
         # A surplus at the floor charges at it without importing.
         assert charge_at(-1200) == pytest.approx(5.0)
+
+    def test_armed_floor_says_not_yet_when_the_surplus_is_below_it(
+        self, agile_tariff, monkeypatch
+    ):
+        """The 22:29 case: 19.2p now, 19.8p later, 3 A surplus, 52% SoC.
+
+        Keeping an 8 A surplus for the house is worth 19.5p after the round
+        trip, beating the 19.2p export, so the floor stays armed at 8 A.  But
+        the live surplus is only 3 A, so the dashboard must say "not yet"
+        rather than implying the car is charging now.
+        """
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=44, now_rate=19.2,
+            later_slot=45, later_rate=19.8, default=5.0,
+        )
+        self._set_time(agile_tariff, 22, 29)
+        self._pin_plan(agile_tariff, 44, 52)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=370, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(52)
+
+        agile_tariff.get_control_state(state, 22 * 60 + 29)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.mode.startswith(
+            "Do not charge yet — will charge from ≥8 A surplus"
+        )
+        assert snapshot.charge_min_a == pytest.approx(8.0)
+        assert snapshot.charge_activation_w == pytest.approx(8 * 240)
+        # The tooltip explains both sides of the 8 A threshold in plain words.
+        assert "Below 8 A the surplus is worth more exported" in snapshot.detail
+        assert "19.5p" in snapshot.detail
+        assert "19.2p" in snapshot.detail
+        # No internal tier names in anything the user can see.
+        for text in (snapshot.mode, snapshot.reason, snapshot.detail):
+            assert "Tier" not in text
+            assert "tier" not in text
 
     def test_aggressive_reason_includes_the_break_even(self, agile_tariff):
         self._set_time(agile_tariff, 22, 0)
