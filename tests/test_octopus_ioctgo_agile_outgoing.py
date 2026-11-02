@@ -1250,6 +1250,20 @@ class TestDecisionSnapshot:
         assert "60% bulk target" in snapshot.detail
         assert "5% flexibility" in snapshot.detail
 
+    def test_conservative_reason_floors_the_projection(self, agile_tariff):
+        """44.6% must read as 44% against a 45% floor, not 45% vs 45%."""
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        agile_tariff._projected_soc_at_2330 = 54.6
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert "54% < 55% house floor" in snapshot.reason
+        assert "55% < 55%" not in snapshot.reason
+        assert "projected 23:30 SoC 54%" in snapshot.detail
+
     def test_bidirectional_mode_is_aggressive(self, agile_tariff):
         self._set_time(agile_tariff, 10, 0)
         self._pin_plan(agile_tariff, 20, 80)

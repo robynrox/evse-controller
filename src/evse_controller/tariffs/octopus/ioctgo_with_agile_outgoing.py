@@ -12,6 +12,7 @@ from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
 import queue
+import math
 from collections import deque
 from typing import Optional
 import urllib.request
@@ -3233,11 +3234,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             else:
                 mode = f"{harvest_label} · conservative discharge"
             projected = self._projected_soc_at_2330
+            # Display the projection floored, not rounded.  With a 45% house
+            # floor a projection of 44.6% would otherwise read
+            # "45% < 45% house floor", which looks like a contradiction even
+            # though the comparison itself is correct.
             projection_text = (
-                f"{projected:.0f}%" if projected is not None else "below floor"
+                f"{math.floor(projected)}%" if projected is not None else "below floor"
             )
             detail_projection = (
-                f"projected 23:30 SoC {projected:.0f}%"
+                f"projected 23:30 SoC {math.floor(projected)}%"
                 if projected is not None
                 else "23:30 SoC projection unavailable"
             )
