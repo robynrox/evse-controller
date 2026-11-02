@@ -133,8 +133,11 @@ completed fixes.
   slot), `f42f93f` (restore the strip and name the plan in words), `5ecad04`
   (Pylance slot narrowing), `3b1976a` (value the higher unused slot), the
   self-use bidirectional charge floor, the effective charge onset described
-  below, and `b311c32` (supplier energy sessions: free import and grid
-  support).
+  below, `b311c32` (supplier energy sessions: free import and grid support),
+  `033e88f` (sessions page and JSON API), `ff5776e` (session markers on the
+  strip), `1b1fc94` (wrap the session strip instead of clipping it), the
+  forecast/DP roadmap (`53f8bfa`, `f051dcf`), and `2d23873` (fixed modes
+  reassert their current range).
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -181,6 +184,14 @@ completed fixes.
   manual command still outranks them; overlapping windows are rejected.
   Free-import slots are excluded from the export plan. The tariff strip marks
   each session slot with a coloured bar and a legend entry.
+- **Fixed modes own their current range.** `setControlState(CHARGE)` and
+  `setControlState(DISCHARGE)` reassert `min = max` on every call, not only
+  when the state changes, and every max-rate decision returns its range
+  explicitly. This is load-bearing: the SoC-unknown branch enters CHARGE at
+  3 A, and without the reassert a later free-session or off-peak decision
+  stayed at 3 A while the dashboard correctly reported the maximum
+  (`2d23873`). Load-following ranges are still applied on transition only,
+  because `set_home_demand_levels()` refines them immediately afterwards.
 - Deferred: prefer the Wallbox Modbus `ac_power` as the EVSE term (guard on a
   fresh `last_update` and exclude `COMMS_FAILURE`), with the configured Shelly
   channel and power model as fallbacks. Not implemented.
