@@ -659,6 +659,39 @@ def index():
                          scheduled_events=scheduled_events,
                          current_state=current_state)
 
+@app.route('/decision')
+def decision_page():
+    """Explain the last control decision in plain language.
+
+    The tariff freezes a copy of its snapshot when this page is rendered.
+    There is deliberately no auto-refresh: the reader may need time to study
+    the reasoning.
+    """
+    explanation = {
+        "available": False,
+        "message": "No tariff is active, so there is no decision to explain.",
+    }
+    try:
+        tariff = tariffManager.get_tariff()
+        if tariff is None:
+            explanation["message"] = (
+                "No tariff is active, so there is no decision to explain."
+            )
+        elif hasattr(tariff, "get_decision_explanation"):
+            explanation = tariff.get_decision_explanation()
+        else:
+            explanation["message"] = (
+                f"The {tariff.__class__.__name__} tariff does not record a "
+                "decision explanation."
+            )
+    except Exception as e:
+        logging.error(f"Error building decision explanation: {e}")
+        explanation["message"] = (
+            "The decision explanation could not be built. Check the log for "
+            "the error, then refresh the snapshot."
+        )
+    return render_template('decision.html', **explanation)
+
 @app.route('/tariff-designer')
 def tariff_designer():
     return render_template('tariff_designer.html')

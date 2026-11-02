@@ -1531,6 +1531,161 @@ class TestDecisionSnapshot:
         assert snapshot.charge_max_a == 0
 
 
+class TestDecisionExplanation:
+    """The /decision data must teach the calculation, not ask for trust."""
+
+    @staticmethod
+    def _flat(explanation):
+        parts = [explanation.get("mode", ""), explanation.get("reason", "")]
+        parts.append(explanation.get("detail", ""))
+        for row in explanation.get("state", []):
+            parts.extend((row["label"], row["value"]))
+        for step in explanation.get("steps", []):
+            parts.extend(
+                (
+                    step["title"],
+                    step["question"],
+                    step["calculation"],
+                    step["result"],
+                    step["conclusion"],
+                )
+            )
+        for key in ("heading", "summary"):
+            parts.append(explanation["answer"][key])
+        for key in ("charge", "discharge"):
+            parts.extend(
+                (
+                    explanation["answer"][key]["headline"],
+                    explanation["answer"][key]["because"],
+                )
+            )
+        parts.extend(explanation.get("assumptions", []))
+        return " ".join(str(part) for part in parts)
+
+    def _run_2229(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=44, now_rate=19.2,
+            later_slot=45, later_rate=19.8, default=5.0,
+        )
+        TestDecisionSnapshot._set_time(agile_tariff, 22, 29)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 44, 52)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=370, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(52)
+        agile_tariff.get_control_state(state, 22 * 60 + 29)
+        return agile_tariff.get_decision_explanation()
+
+    def test_2229_explanation_names_both_sides_of_the_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        """8 A is armed because self-use is worth 19.5p vs 19.2p exported.
+
+        The live 3 A surplus is below the floor, so the answer must say the
+        car is not charging yet.  No internal tier language may leak out.
+        """
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        text = self._flat(explanation)
+
+        assert explanation["available"] is True
+        assert explanation["slot_label"] == "22:00–22:30"
+        assert explanation["answer"]["heading"] == (
+            "Do not charge yet; sell the current surplus"
+        )
+        assert "≥8 A" in explanation["answer"]["charge"]["headline"]
+        assert "Not yet" in explanation["answer"]["charge"]["headline"]
+        assert "19.5p" in text
+        assert "19.2p" in text
+        assert "Answer" in text and "W" in text
+        assert "Tier" not in text
+        assert "tier" not in text
+
+    def test_explanation_is_a_frozen_copy(self, agile_tariff, monkeypatch):
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        original_mode = explanation["mode"]
+
+        agile_tariff._decision_snapshot.mode = "A newer decision"
+
+        assert explanation["mode"] == original_mode
+        assert explanation["mode"] != "A newer decision"
+
+    def test_store_decision_explains_the_house_value(self, agile_tariff):
+        TestDecisionSnapshot._set_time(agile_tariff, 10, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 20, 80)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 10 * 60)
+        assert agile_tariff._decision_snapshot.store_decision is True
+
+        explanation = agile_tariff.get_decision_explanation()
+        text = self._flat(explanation)
+
+        assert explanation["answer"]["heading"] == "Store the solar for later"
+        assert (
+            "What is the surplus worth if the house uses it later?"
+            in text
+        )
+        assert "Charge from surplus at ≥3 A" in (
+            explanation["answer"]["charge"]["headline"]
+        )
+        assert "Tier" not in text
+        assert "tier" not in text
+
+    def test_shortfall_explanation_names_the_house_floor(self, agile_tariff):
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        TestDecisionSnapshot._pin_plan(
+            agile_tariff, 24, 30, shortfall=True
+        )
+        agile_tariff._projected_soc_at_2330 = 54
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        text = self._flat(explanation)
+
+        assert explanation["answer"]["heading"] == (
+            "Conserve energy for the house"
+        )
+        assert "Will the battery last until 23:30?" in text
+        assert "55% house floor" in text
+        assert "Charge from surplus solar only" in (
+            explanation["answer"]["charge"]["headline"]
+        )
+
+    def test_decision_template_renders_without_auto_refresh(
+        self, agile_tariff, monkeypatch
+    ):
+        from pathlib import Path
+        from jinja2 import Environment, FileSystemLoader
+
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        templates = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "evse_controller"
+            / "templates"
+        )
+        env = Environment(
+            loader=FileSystemLoader(str(templates)), autoescape=True
+        )
+        env.globals["url_for"] = lambda endpoint, **kwargs: f"/{endpoint}"
+        html = env.get_template("decision.html").render(**explanation)
+
+        assert "Frozen at 22:29:00" in html
+        assert "Refresh snapshot" in html
+        assert "19.5p" in html
+        assert "19.2p" in html
+        assert 'http-equiv="refresh"' not in html
+        assert "setInterval" not in html
+        assert "Tier" not in html
+
+
 class TestChargeCap:
     """Charging cannot exceed 97% even if the config asks for more."""
 

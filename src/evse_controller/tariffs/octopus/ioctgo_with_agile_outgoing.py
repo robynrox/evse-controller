@@ -13,6 +13,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
 import queue
 import math
+import copy
 from collections import deque
 from typing import Optional
 import urllib.request
@@ -73,6 +74,16 @@ class DecisionSnapshot:
     discharge_aggressive: bool = True
     charge_activation_w: Optional[float] = None
     discharge_activation_w: Optional[float] = None
+    # Extra context for the "why this decision?" page.  Defaults keep the
+    # snapshot useful for branches that do not need them.
+    decision_tier: str = ""
+    store_decision: bool = False
+    shortfall: bool = False
+    import_rate_p: Optional[float] = None
+    house_floor_soc: Optional[float] = None
+    charge_cap_percent: Optional[float] = None
+    stored_cost_p: Optional[float] = None
+    voltage_v: Optional[float] = None
 
 
 class IOctGoWithAgileOutgoingTariff(Tariff):
@@ -2113,6 +2124,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         discharge_max_a: Optional[float] = None,
         discharge_aggressive: bool = True,
         discharge_activation_w: Optional[float] = None,
+        decision_tier: str = "",
+        store_decision: bool = False,
+        shortfall: bool = False,
+        import_rate_p: Optional[float] = None,
+        house_floor_soc: Optional[float] = None,
+        charge_cap_percent: Optional[float] = None,
+        stored_cost_p: Optional[float] = None,
+        voltage_v: Optional[float] = None,
     ) -> DecisionSnapshot:
         """Record the decision the dashboard should display."""
         snapshot = DecisionSnapshot(
@@ -2138,6 +2157,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             discharge_max_a=discharge_max_a,
             discharge_aggressive=discharge_aggressive,
             discharge_activation_w=discharge_activation_w,
+            decision_tier=decision_tier,
+            store_decision=store_decision,
+            shortfall=shortfall,
+            import_rate_p=import_rate_p,
+            house_floor_soc=house_floor_soc,
+            charge_cap_percent=charge_cap_percent,
+            stored_cost_p=stored_cost_p,
+            voltage_v=voltage_v,
         )
         self._decision_snapshot = snapshot
         self._log_decision_summary(snapshot)
@@ -2420,6 +2447,1011 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             + "".join(parts)
             + "</div>"
         )
+
+    def get_decision_explanation(self) -> dict:
+        """Return a frozen, plain-language explanation of the last decision.
+
+        The dashboard calls this once when ``/decision`` is loaded.  The
+        snapshot is deep-copied, so the explanation cannot change under the
+        reader while they study it.  The numbers are taken from the snapshot
+        wherever possible and from the same helpers the control loop used, so
+        the page and the decision cannot disagree.
+        """
+        snapshot = self._decision_snapshot
+        if snapshot is None:
+            return {
+                "available": False,
+                "message": (
+                    "No control decision has been recorded yet. The controller "
+                    "writes one on its first control cycle; reload this page "
+                    "after a few seconds."
+                ),
+            }
+
+        snap = copy.deepcopy(snapshot)
+        slot = snap.updated_at.hour * 2 + (1 if snap.updated_at.minute >= 30 else 0)
+        slot_label = self._slot_range_label(slot)
+        cap = (
+            snap.charge_cap_percent
+            if snap.charge_cap_percent is not None
+            else self.charge_cap_percent()
+        )
+        import_p = (
+            snap.import_rate_p
+            if snap.import_rate_p is not None
+            else (
+                config.IMPORT_LOW
+                if self.is_off_peak(snap.updated_at.hour * 60 + snap.updated_at.minute)
+                else config.IMPORT_HIGH
+            )
+        )
+        export_p = max(0.0, snap.current_rate_p or 0.0)
+        if snap.decision_tier in (
+            "free", "off_peak", "unknown_soc", "protection"
+        ):
+            # These branches store the import price (or nothing) in
+            # ``current_rate_p``.  The explanation still needs the real export
+            # price for the state table and the discharge comparison.
+            export_p = max(0.0, self._current_export_rate_p(slot))
+        target_p = snap.target_rate_p
+        target_label = (
+            self._slot_range_label(snap.target_slot)
+            if snap.target_slot is not None
+            else None
+        )
+        margin = self.MIN_PROFIT_MARGIN_P_PER_KWH
+        min_discharge_a = float(self.MIN_DISCHARGE_CURRENT)
+        min_discharge_w = min_discharge_a * 240.0
+        stored_cost_p = (
+            snap.stored_cost_p
+            if snap.stored_cost_p is not None
+            else self._delivered_cost_per_kwh_p()
+        )
+        hurdle_p = stored_cost_p + margin
+        harvest_a = snap.harvest_current_a
+        voltage = (
+            snap.voltage_v if snap.voltage_v and snap.voltage_v > 0 else 240.0
+        )
+        charge_floor_a = snap.charge_min_a
+        charge_activation_w = (
+            snap.charge_activation_w
+            if snap.charge_activation_w is not None
+            else self._charge_activation_w_for_current(charge_floor_a or 0.0)
+        )
+        if charge_floor_a and not charge_activation_w:
+            # The store branch always records one, but a snapshot written
+            # before that field existed should still explain the floor.
+            charge_activation_w = self._charge_activation_w_for_current(
+                charge_floor_a
+            )
+        at_cap = snap.soc_percent >= cap if snap.soc_percent >= 0 else False
+
+        self_use_rt = (
+            self.EFFICIENCY_MODEL.round_trip_efficiency(
+                harvest_a or self.SOLAR_CHARGE_REFERENCE_CURRENT,
+                self.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
+            )
+            if harvest_a is not None
+            else None
+        )
+        self_use_value_p = (
+            self.self_use_value_threshold_p(harvest_a)
+            if harvest_a is not None
+            else None
+        )
+        export_rt = self.solar_export_round_trip(harvest_a)
+        store_value_p = (
+            (target_p - margin) * export_rt
+            if target_p is not None and target_p > 0
+            else None
+        )
+
+        steps: list[dict] = []
+
+        def add_step(
+            title: str,
+            question: str,
+            calculation: str,
+            result: str,
+            conclusion: str,
+        ) -> None:
+            steps.append(
+                {
+                    "title": title,
+                    "question": question,
+                    "calculation": calculation,
+                    "result": result,
+                    "conclusion": conclusion,
+                }
+            )
+
+        def surplus_text(value: Optional[float]) -> Optional[str]:
+            """Readable grid balance: negative is a house import, not surplus."""
+            if value is None:
+                return None
+            if value < 0:
+                return f"{abs(value):.0f} W house import (no surplus)"
+            return f"{value:.0f} W surplus"
+
+        def discharge_step() -> None:
+            activation = snap.discharge_activation_w
+            if activation is None:
+                add_step(
+                    "When does the battery start powering the home?",
+                    "Discharging cannot follow a house load below the "
+                    f"Wallbox's {min_discharge_a:.0f} A minimum.",
+                    "No activation threshold was recorded for this decision.",
+                    "Unknown.",
+                    "The next control cycle will record one.",
+                )
+                return
+            if activation >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                add_step(
+                    "When does the battery start powering the home?",
+                    "Would discharging save more than the energy costs?",
+                    f"Stored energy costs {stored_cost_p:.1f}p/kWh delivered "
+                    f"+ {margin:.1f}p margin = {hurdle_p:.1f}p/kWh. The import "
+                    f"it would avoid costs {import_p:.1f}p/kWh.",
+                    f"{hurdle_p:.1f}p ≥ {import_p:.1f}p, so every kWh "
+                    "discharged would cost more than it saves.",
+                    "Discharge is disabled. The planner exports only when a "
+                    "sale clears the stored cost on its own.",
+                )
+                return
+            if activation <= 0:
+                add_step(
+                    "When does the battery start powering the home?",
+                    "Would the forced minimum output already cover the stored "
+                    "energy?",
+                    f"The {min_discharge_a:.0f} A minimum is "
+                    f"{min_discharge_w:.0f} W. The surplus it cannot use is "
+                    f"exported at {export_p:.1f}p/kWh. Stored energy costs "
+                    f"{stored_cost_p:.1f}p/kWh delivered + {margin:.1f}p "
+                    f"margin = {hurdle_p:.1f}p/kWh.",
+                    f"{export_p:.1f}p ≥ {hurdle_p:.1f}p, so the exported "
+                    "surplus alone covers the stored cost.",
+                    "Any house import justifies starting discharge. "
+                    "Answer ≥0 W because the exported surplus alone covers "
+                    "the stored cost, so start immediately.",
+                )
+                return
+            spread_p = import_p - export_p
+            bias_a = self.AGGRESSIVE_DISCHARGE_BIAS_A
+            bias_w = bias_a * voltage
+            if spread_p <= 0:
+                calculation = (
+                    f"The import price ({import_p:.1f}p) is not above the "
+                    f"export price ({export_p:.1f}p), so there is no saving "
+                    "to recover."
+                )
+            else:
+                clamped_w = (
+                    min_discharge_w * (hurdle_p - export_p) / spread_p
+                )
+                if not snap.discharge_aggressive:
+                    calculation = (
+                        f"{min_discharge_w:.0f} W × ({hurdle_p:.1f}p − "
+                        f"{export_p:.1f}p) ÷ ({import_p:.1f}p − "
+                        f"{export_p:.1f}p) = {clamped_w:.0f} W. Conservative "
+                        f"discharge refuses to start below the "
+                        f"{min_discharge_w:.0f} W minimum, so the floor is "
+                        f"{max(clamped_w, min_discharge_w):.0f} W."
+                    )
+                elif clamped_w <= min_discharge_w - bias_w:
+                    calculation = (
+                        f"{min_discharge_w:.0f} W × ({hurdle_p:.1f}p − "
+                        f"{export_p:.1f}p) ÷ ({import_p:.1f}p − "
+                        f"{export_p:.1f}p) = {clamped_w:.0f} W."
+                    )
+                else:
+                    calculation = (
+                        f"The {bias_a:.1f} A bias already exports "
+                        f"{bias_w:.0f} W at this load. Allowing half an amp "
+                        "for the Wallbox's whole-amp steps: "
+                        f"({bias_w:.0f} W + {voltage / 2:.0f} W) × "
+                        f"({hurdle_p:.1f}p − {export_p:.1f}p) ÷ "
+                        f"({import_p:.1f}p − {hurdle_p:.1f}p) = "
+                        f"{activation:.0f} W."
+                    )
+            add_step(
+                "When does the battery start powering the home?",
+                "The Wallbox cannot run below "
+                f"{min_discharge_a:.0f} A (≈{min_discharge_w:.0f} W). Below "
+                "the break-even load, the surplus it exports costs more than "
+                "the import it avoids.",
+                calculation,
+                f"Break-even house import = {activation:.0f} W.",
+                f"Answer {activation:.0f} W because that is the point where "
+                "the import avoided plus the exported surplus exactly covers "
+                "the cost of the stored energy.",
+            )
+
+        def charge_step_store() -> None:
+            if at_cap:
+                add_step(
+                    "Will the car take any charge?",
+                    f"Is the battery below its {cap:.0f}% charge cap?",
+                    f"State of charge = {snap.soc_percent}%; cap = {cap:.0f}%.",
+                    f"{snap.soc_percent}% is at or above {cap:.0f}%.",
+                    "No charging, from solar or grid. The pack is full enough.",
+                )
+                return
+            floor = charge_floor_a if charge_floor_a is not None else 3.0
+            activation = charge_activation_w
+            add_step(
+                "When will the car start charging from surplus?",
+                "How strong must the solar surplus be before charging starts?",
+                f"The charge floor is {floor:.0f} A. "
+                f"{floor:.0f} A × 240 V = {activation:.0f} W.",
+                f"Charging starts at ≥{floor:.0f} A surplus "
+                f"(≈{activation:.0f} W).",
+                "Below that the surplus is left to export. The charge and "
+                "discharge ranges are independent, so the car can charge from "
+                "a strong surplus while the house still runs from the battery.",
+            )
+
+        def charge_step_no_store() -> None:
+            if at_cap:
+                add_step(
+                    "Will the car take any charge?",
+                    f"Is the battery below its {cap:.0f}% charge cap?",
+                    f"State of charge = {snap.soc_percent}%; cap = {cap:.0f}%.",
+                    f"{snap.soc_percent}% is at or above {cap:.0f}%.",
+                    "No charging. The charge range is closed to 0 A.",
+                )
+                return
+            if not charge_floor_a:
+                add_step(
+                    "Will the car take any charge?",
+                    "Is there any charge current at which keeping the solar "
+                    "beats selling it now?",
+                    f"The best measured self-use value is "
+                    f"{self._best_self_use_value_p()[0]:.1f}p after the round "
+                    f"trip; the export price now is {export_p:.1f}p.",
+                    f"No measured current clears {export_p:.1f}p.",
+                    "The charge range is closed to 0 A. The surplus is sold "
+                    "rather than stored.",
+                )
+                return
+            floor = charge_floor_a
+            activation = charge_activation_w
+            current_surplus = snap.surplus_w
+            current_harvest = snap.harvest_current_a
+            waiting = (
+                (current_harvest is not None and current_harvest < floor)
+                or (
+                    current_surplus is not None
+                    and current_surplus < activation
+                )
+            )
+            observed = []
+            if current_harvest is not None:
+                observed.append(f"{current_harvest:.0f} A harvest estimate")
+            if current_surplus is not None:
+                observed.append(surplus_text(current_surplus))
+            observed_text = (
+                " and ".join(observed) if observed else "no live power sample"
+            )
+            add_step(
+                "Can today's surplus reach the charging floor?",
+                "Is the live surplus strong enough to start charging?",
+                f"Floor = {floor:.0f} A (≈{activation:.0f} W). "
+                f"Observed: {observed_text}.",
+                (
+                    f"No: {observed_text} is below the floor."
+                    if waiting
+                    else f"Yes: {observed_text} reaches the floor."
+                ),
+                (
+                    "The floor stays armed for a stronger surplus later, but "
+                    "the car is not charging yet."
+                    if waiting
+                    else "The car charges at the floor current, without "
+                    "importing from the grid."
+                ),
+            )
+
+        # ---- Branch-specific reasoning -------------------------------------
+        if snap.decision_tier == "shortfall":
+            projected = snap.projected_soc_at_2330
+            floor = snap.house_floor_soc
+            bulk = snap.target_soc_percent
+            if projected is not None:
+                projection_text = f"{math.floor(projected)}%"
+                comparison = (
+                    f"Projected 23:30 SoC = {projection_text}; house floor = "
+                    f"{floor:.0f}%."
+                    if floor is not None
+                    else f"Projected 23:30 SoC = {projection_text}."
+                )
+                conclusion = (
+                    "The projection is below the house floor, so the pack must "
+                    "not be spent on exports or extra charging."
+                    if floor is not None and projected < floor
+                    else "The projection is below the target, so the controller "
+                    "keeps a conservative margin."
+                )
+            else:
+                comparison = "The 23:30 projection is unavailable."
+                conclusion = (
+                    "Without a projection the controller conserves energy "
+                    "rather than risk running the house from the grid."
+                )
+            add_step(
+                "Will the battery last until 23:30?",
+                "The controller projects the state of charge at the end of "
+                "the cheap window and compares it with the house floor.",
+                (
+                    f"House floor = bulk target {bulk:.0f}% − "
+                    f"{max(0.0, config.HOUSE_LOAD_MARGIN_PERCENT):.0f}% "
+                    f"flexibility = {floor:.0f}%."
+                    if bulk is not None and floor is not None
+                    else comparison
+                ),
+                comparison,
+                conclusion,
+            )
+            if at_cap:
+                add_step(
+                    "Will the car take any charge?",
+                    f"Is the battery below its {cap:.0f}% charge cap?",
+                    f"State of charge = {snap.soc_percent}%; cap = {cap:.0f}%.",
+                    f"{snap.soc_percent}% is at or above {cap:.0f}%.",
+                    "No charging. The charge range is closed to 0 A.",
+                )
+            else:
+                add_step(
+                    "Will the car take any charge?",
+                    "Can the pack accept solar without risking the 23:30 floor?",
+                    f"SoC {snap.soc_percent}% is below the {cap:.0f}% cap, so "
+                    "solar charging is allowed. No grid charging is requested.",
+                    "Charging is allowed from surplus solar at the 3 A minimum "
+                    "(≈720 W).",
+                    "The car absorbs only what the roof provides; it does not "
+                    "import at the peak price.",
+                )
+            discharge_step()
+            answer = {
+                "heading": "Conserve energy for the house",
+                "summary": (
+                    f"The pack is projected to finish below its "
+                    f"{floor:.0f}% house floor, so today's energy is kept for "
+                    "the house rather than sold or used to charge the car."
+                    if floor is not None
+                    else "The pack is projected to be short of energy, so it "
+                    "is kept for the house."
+                ),
+                "charge": {
+                    "headline": (
+                        "No charging — at the cap"
+                        if at_cap
+                        else "Charge from surplus solar only, at ≥3 A (≈720 W)"
+                    ),
+                    "because": (
+                        "The pack is at its charge cap."
+                        if at_cap
+                        else "Charging from the grid would deepen the "
+                        "shortfall, so only free surplus is accepted."
+                    ),
+                },
+                "discharge": self._answer_discharge(
+                    snap.discharge_activation_w,
+                    hurdle_p,
+                    import_p,
+                    export_p,
+                    min_discharge_w,
+                ),
+            }
+
+        elif snap.store_decision:
+            add_step(
+                "What is the surplus worth if we sell it now?",
+                "The alternative to storing is exporting the solar immediately.",
+                f"Export price = {export_p:.1f}p/kWh.",
+                f"{export_p:.1f}p/kWh.",
+                "Every other option has to beat this value.",
+            )
+            if self_use_value_p is not None and self_use_rt is not None:
+                add_step(
+                    "What is the surplus worth if the house uses it later?",
+                    "Storing the solar to cover the house avoids importing at "
+                    "the peak rate.",
+                    f"(peak import {config.IMPORT_HIGH:.1f}p − {margin:.1f}p "
+                    f"margin) × {self_use_rt * 100:.0f}% round trip at "
+                    f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
+                    f"{self_use_value_p:.1f}p/kWh.",
+                    (
+                        f"That beats {export_p:.1f}p now."
+                        if self_use_value_p > export_p
+                        else f"That does not beat {export_p:.1f}p now."
+                    ),
+                )
+            if store_value_p is not None:
+                add_step(
+                    "What is the surplus worth if we store it for a later sale?",
+                    "The later slot is the best unused export price still "
+                    "ahead of us.",
+                    f"({target_p:.1f}p at {target_label} − {margin:.1f}p "
+                    f"margin) × {export_rt * 100:.0f}% round trip at "
+                    f"{harvest_a:.0f} A = {store_value_p:.1f}p/kWh.",
+                    f"{store_value_p:.1f}p/kWh.",
+                    (
+                        f"That beats {export_p:.1f}p now, so storing for the "
+                        "later slot wins."
+                        if store_value_p > export_p
+                        else f"That does not beat {export_p:.1f}p now."
+                    ),
+                )
+            tier = snap.decision_tier
+            if tier == "storage floor":
+                because = (
+                    f"Export at {export_p:.1f}p is below the "
+                    f"{self.STORAGE_FLOOR_THRESHOLD_P:.1f}p floor, so selling "
+                    "now is not worth doing. The surplus is stored."
+                )
+            elif tier == "self-use":
+                remaining_slots = max(0, 47 - slot)
+                dynamic_floor = (
+                    config.MIN_AGILE_DISCHARGE_SOC
+                    + remaining_slots * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+                )
+                because = (
+                    f"Keeping the solar is worth {self_use_value_p:.1f}p, "
+                    f"above the {export_p:.1f}p export price, and SoC "
+                    f"{snap.soc_percent}% is below the {dynamic_floor:.0f}% "
+                    "curve for this time of day. Storing for the house wins."
+                )
+            else:
+                because = (
+                    f"The later {target_p:.1f}p sale is worth "
+                    f"{store_value_p:.1f}p after the round trip, above the "
+                    f"{export_p:.1f}p available now. Storing for the later "
+                    "slot wins."
+                    if store_value_p is not None and store_value_p > export_p
+                    else f"Storing is worth at least {export_p:.1f}p after "
+                    "the round trip, so holding the solar wins."
+                )
+            add_step(
+                "Which option wins?",
+                "Compare the values calculated above.",
+                because,
+                "Store the solar.",
+                "The pack fills from surplus solar and sells or uses the "
+                "energy later.",
+            )
+            charge_step_store()
+            discharge_step()
+            answer = {
+                "heading": "Store the solar for later",
+                "summary": because,
+                "charge": {
+                    "headline": (
+                        "No charging — at the cap"
+                        if at_cap
+                        else f"Charge from surplus at "
+                        f"≥{charge_floor_a or 3:.0f} A "
+                        f"(≈{charge_activation_w:.0f} W)"
+                    ),
+                    "because": (
+                        "The pack is at its charge cap."
+                        if at_cap
+                        else "The stored energy is worth more later than the "
+                        "surplus is worth exported now."
+                    ),
+                },
+                "discharge": self._answer_discharge(
+                    snap.discharge_activation_w,
+                    hurdle_p,
+                    import_p,
+                    export_p,
+                    min_discharge_w,
+                ),
+            }
+
+        elif not snap.store_decision and snap.decision_tier in (
+            "storage floor", "self-use", "future export"
+        ):
+            add_step(
+                "What is the surplus worth if we sell it now?",
+                "The alternative to keeping the solar is exporting it "
+                "immediately.",
+                f"Export price = {export_p:.1f}p/kWh.",
+                f"{export_p:.1f}p/kWh.",
+                "Every other option has to beat this value.",
+            )
+            self_use_floor = self._minimum_harvest_charge_current_a(export_p)
+            store_floor = (
+                self._minimum_store_harvest_current_a(target_p, export_p)
+                if target_p is not None and target_p > 0
+                else None
+            )
+            if self_use_value_p is not None and self_use_rt is not None:
+                add_step(
+                    "What is the surplus worth if the house uses it later?",
+                    "Storing the solar to cover the house avoids importing at "
+                    "the peak rate.",
+                    f"(peak import {config.IMPORT_HIGH:.1f}p − {margin:.1f}p "
+                    f"margin) × {self_use_rt * 100:.0f}% round trip at "
+                    f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
+                    f"{self_use_value_p:.1f}p/kWh.",
+                    (
+                        f"That beats {export_p:.1f}p at the current "
+                        f"{harvest_a:.0f} A harvest."
+                        if self_use_value_p > export_p
+                        else f"At the current {harvest_a:.0f} A harvest that "
+                        f"does not beat {export_p:.1f}p; the value rises with "
+                        "a stronger surplus."
+                    ),
+                )
+            if store_value_p is not None:
+                add_step(
+                    "What is the surplus worth if we store it for a later sale?",
+                    "The later slot is the best unused export price still "
+                    "ahead of us.",
+                    f"({target_p:.1f}p at {target_label} − {margin:.1f}p "
+                    f"margin) × {export_rt * 100:.0f}% round trip at "
+                    f"{harvest_a:.0f} A = {store_value_p:.1f}p/kWh.",
+                    f"{store_value_p:.1f}p/kWh.",
+                    (
+                        f"That beats {export_p:.1f}p at the current "
+                        f"{harvest_a:.0f} A harvest, but only above the "
+                        "break-even charge current."
+                        if store_value_p > export_p
+                        else f"At the current {harvest_a:.0f} A harvest that "
+                        f"does not beat {export_p:.1f}p."
+                    ),
+                )
+            break_even_bits = []
+            if self_use_floor is not None:
+                break_even_bits.append(
+                    f"self-use first clears at {self_use_floor:.0f} A, where "
+                    f"it is worth "
+                    f"{self.self_use_value_threshold_p(self_use_floor):.1f}p"
+                )
+            else:
+                break_even_bits.append("self-use never clears at any measured current")
+            if store_floor is not None:
+                break_even_bits.append(
+                    f"the later sale first clears at {store_floor:.0f} A, "
+                    f"where it is worth "
+                    f"{(target_p - margin) * self.solar_export_round_trip(store_floor):.1f}p"
+                )
+            elif target_p is not None and target_p > 0:
+                break_even_bits.append(
+                    "the later sale never clears at any measured current"
+                )
+            floor = charge_floor_a
+            if floor and self_use_floor is not None and floor == self_use_floor:
+                value_at_floor = self.self_use_value_threshold_p(floor)
+            elif (
+                floor
+                and store_floor is not None
+                and floor == store_floor
+            ):
+                value_at_floor = (
+                    (target_p - margin) * self.solar_export_round_trip(floor)
+                )
+            else:
+                value_at_floor = None
+            add_step(
+                "Where is the break-even for charging?",
+                "At what surplus current does keeping the solar start to beat "
+                "selling it?",
+                "Efficiency rises with current, so the test is monotonic: "
+                + "; ".join(break_even_bits) + ".",
+                (
+                    f"Charging onset = {floor:.0f} A (≈"
+                    f"{self._charge_activation_w_for_current(floor):.0f} W), "
+                    f"where the surplus is worth {value_at_floor:.1f}p against "
+                    f"{export_p:.1f}p now."
+                    if floor and value_at_floor is not None
+                    else (
+                        f"Charging onset = {floor:.0f} A (≈"
+                        f"{self._charge_activation_w_for_current(floor):.0f} W)."
+                        if floor
+                        else "No measured current clears the export price."
+                    )
+                ),
+                (
+                    "The stronger the surplus, the more of it survives the "
+                    "round trip and the more valuable it is. The floor is the "
+                    "first whole-amp step that wins."
+                    if floor
+                    else "The surplus is worth more sold now than stored."
+                ),
+            )
+            charge_step_no_store()
+            discharge_step()
+            if at_cap:
+                heading = "Cover the house; do not charge"
+                summary = (
+                    f"The pack is already at its {cap:.0f}% charge cap, so "
+                    "extra solar cannot be stored. It is exported and the "
+                    "battery covers the house."
+                )
+            elif not charge_floor_a:
+                heading = "Sell the surplus; do not charge"
+                summary = (
+                    f"This surplus is worth more exported at {export_p:.1f}p "
+                    "than kept for the house or a later sale."
+                )
+            else:
+                waiting = (
+                    (snap.harvest_current_a is not None
+                     and snap.harvest_current_a < charge_floor_a)
+                    or (snap.surplus_w is not None
+                        and snap.surplus_w < charge_activation_w)
+                )
+                if waiting:
+                    heading = "Do not charge yet; sell the current surplus"
+                    summary = (
+                        f"Charging becomes worthwhile at "
+                        f"≥{charge_floor_a:.0f} A "
+                        f"(≈{charge_activation_w:.0f} W) of surplus. Today's "
+                        "surplus is below that, so the floor is armed for a "
+                        "stronger surplus later."
+                    )
+                else:
+                    heading = "Charge from surplus and cover the house"
+                    summary = (
+                        f"Surplus at or above {charge_floor_a:.0f} A "
+                        f"(≈{charge_activation_w:.0f} W) is worth keeping."
+                    )
+            answer = {
+                "heading": heading,
+                "summary": summary,
+                "charge": self._answer_charge(
+                    snap, charge_floor_a, charge_activation_w, at_cap, cap
+                ),
+                "discharge": self._answer_discharge(
+                    snap.discharge_activation_w,
+                    hurdle_p,
+                    import_p,
+                    export_p,
+                    min_discharge_w,
+                ),
+            }
+
+        else:
+            # Simple branches with a single reason: free energy, off-peak,
+            # supplier support, protection, unknown SoC, or a planned export.
+            add_step(
+                "What state was the controller in?",
+                "The decision came from a priority rule, before the ordinary "
+                "store-or-sell comparison.",
+                snap.reason or "No further detail was recorded.",
+                snap.mode,
+                "The rule applies directly; no break-even comparison is needed.",
+            )
+            if snap.decision_tier not in (
+                "planned_export", "grid_support", "protection",
+                "off_peak", "free", "unknown_soc",
+            ):
+                discharge_step()
+            if snap.decision_tier in ("planned_export", "grid_support"):
+                charge_answer = {
+                    "headline": "No charging",
+                    "because": (
+                        "The controller is exporting at the maximum rate for "
+                        "this slot, so the charge range is closed."
+                    ),
+                }
+                discharge_answer = {
+                    "headline": (
+                        f"Export at maximum rate "
+                        f"({self.MAX_DISCHARGE_CURRENT:.0f} A)"
+                    ),
+                    "because": (
+                        "This is a planned export slot priced at "
+                        f"{export_p:.1f}p/kWh."
+                        if snap.decision_tier == "planned_export"
+                        else "The supplier requested grid support for this "
+                        "window."
+                    ),
+                }
+            elif snap.decision_tier == "protection":
+                charge_answer = {
+                    "headline": "No charging",
+                    "because": (
+                        f"SoC {snap.soc_percent}% is at the protection "
+                        "reserve; the pack is left alone."
+                    ),
+                }
+                discharge_answer = {
+                    "headline": "Do not discharge",
+                    "because": (
+                        f"SoC {snap.soc_percent}% is at or below the "
+                        f"{self.BATTERY_PROTECTION_RESERVE_SOC}% protection "
+                        "reserve, so discharging would risk the battery."
+                    ),
+                }
+            elif snap.decision_tier in ("free", "off_peak"):
+                charge_answer = {
+                    "headline": (
+                        "Charge at maximum rate"
+                        if not at_cap
+                        else "No charging — at the cap"
+                    ),
+                    "because": snap.detail
+                    or "The price for this window decides it directly.",
+                }
+                discharge_answer = {
+                    "headline": "No discharge while charging",
+                    "because": (
+                        "The car is filling from a free or cheap import "
+                        "window; discharging would work against that."
+                    ),
+                }
+            elif snap.decision_tier == "unknown_soc":
+                charge_answer = {
+                    "headline": "Charge gently at 3 A",
+                    "because": (
+                        "The battery has not reported a state of charge, so "
+                        "the controller cannot safely choose a discharge."
+                    ),
+                }
+                discharge_answer = {
+                    "headline": "No discharge until SoC returns",
+                    "because": (
+                        "Without a state of charge the controller cannot tell "
+                        "whether discharging would enter the protection "
+                        "reserve."
+                    ),
+                }
+            else:
+                charge_answer = {
+                    "headline": (
+                        f"Charge at {snap.charge_min_a:.0f} A"
+                        if snap.charge_min_a
+                        else "No charging"
+                    ),
+                    "because": snap.detail
+                    or "The state above decides this directly.",
+                }
+                discharge_answer = self._answer_discharge(
+                    snap.discharge_activation_w,
+                    hurdle_p,
+                    import_p,
+                    export_p,
+                    min_discharge_w,
+                )
+            answer = {
+                "heading": snap.mode,
+                "summary": snap.reason or "The controller applied a priority rule.",
+                "charge": charge_answer,
+                "discharge": discharge_answer,
+            }
+
+        state = [
+            {"label": "Decision taken at", "value": snap.updated_at.strftime("%H:%M:%S")},
+            {"label": "Half-hour slot", "value": slot_label},
+            {"label": "Mode", "value": snap.mode},
+            {"label": "Battery state of charge", "value": f"{snap.soc_percent}%"},
+            {"label": "Charge cap", "value": f"{cap:.0f}%"},
+            {
+                "label": "Import price",
+                "value": f"{import_p:.1f}p/kWh",
+            },
+            {
+                "label": "Export price now",
+                "value": f"{export_p:.1f}p/kWh",
+            },
+        ]
+        if target_p is not None and target_label is not None:
+            state.append(
+                {
+                    "label": "Best later export",
+                    "value": f"{target_p:.1f}p/kWh at {target_label}",
+                }
+            )
+        if snap.harvest_current_a is not None:
+            state.append(
+                {
+                    "label": "Solar harvest estimate",
+                    "value": f"{snap.harvest_current_a:.0f} A",
+                }
+            )
+        if snap.surplus_w is not None:
+            state.append(
+                {
+                    "label": "Grid balance",
+                    "value": surplus_text(snap.surplus_w),
+                }
+            )
+        state.append(
+            {
+                "label": "Stored energy cost",
+                "value": f"{stored_cost_p:.1f}p/kWh delivered",
+            }
+        )
+        state.append(
+            {
+                "label": "Minimum discharge",
+                "value": (
+                    f"{min_discharge_a:.0f} A "
+                    f"(≈{min_discharge_w:.0f} W at 240 V)"
+                ),
+            }
+        )
+        if snap.projected_soc_at_2330 is not None:
+            state.append(
+                {
+                    "label": "Projected 23:30 SoC",
+                    "value": f"{math.floor(snap.projected_soc_at_2330)}%",
+                }
+            )
+        if snap.house_floor_soc is not None:
+            state.append(
+                {
+                    "label": "House floor",
+                    "value": f"{snap.house_floor_soc:.0f}%",
+                }
+            )
+        if snap.decision_tier in ("free", "off_peak"):
+            charging_value = (
+                "None — at the charge cap"
+                if at_cap
+                else f"Grid charge at "
+                f"{(charge_floor_a or self.MAX_CHARGE_CURRENT):.0f} A"
+            )
+        elif snap.decision_tier in ("planned_export", "grid_support"):
+            charging_value = "None — exporting at maximum rate"
+        elif snap.decision_tier == "protection":
+            charging_value = "None — protection reserve"
+        elif snap.decision_tier == "unknown_soc":
+            charging_value = "Gentle charge at 3 A until SoC returns"
+        elif at_cap:
+            charging_value = "None — at the charge cap"
+        elif charge_floor_a:
+            charging_value = (
+                f"From surplus at ≥{charge_floor_a:.0f} A "
+                f"(≈{charge_activation_w:.0f} W)"
+            )
+        else:
+            charging_value = "None — the surplus is sold instead"
+        state.append(
+            {"label": "Charging", "value": charging_value}
+        )
+        if snap.discharge_activation_w is not None:
+            if snap.discharge_activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                discharge_value = "Disabled — stored energy costs more than it saves"
+            elif snap.discharge_activation_w <= 0:
+                discharge_value = "Any house import (≥0 W)"
+            else:
+                discharge_value = (
+                    f"≥{snap.discharge_activation_w:.0f} W house import"
+                )
+            state.append(
+                {"label": "Discharge starts", "value": discharge_value}
+            )
+
+        assumptions = [
+            "One half-hour slot is the smallest unit. Prices and sessions are "
+            "applied to whole slots.",
+            "The round-trip efficiency comes from the measured battery table "
+            "at the estimated harvest current, not a fixed percentage.",
+            f"The minimum profit margin is {margin:.1f}p/kWh delivered, "
+            "applied before the round-trip efficiency.",
+            "The stored-energy cost comes from the ledger; when the ledger is "
+            "too small to trust, the off-peak purchase price is used instead.",
+            "The Wallbox cannot run below "
+            f"{min_discharge_a:.0f} A (≈{min_discharge_w:.0f} W), so a "
+            "discharge decision is a decision to start at that output.",
+            "No negative-margin trade is accepted. Every action must cover "
+            "its own cost plus the configured margin.",
+        ]
+
+        return {
+            "available": True,
+            "snapshot_at": snap.updated_at,
+            "slot": slot,
+            "slot_label": slot_label,
+            "mode": snap.mode,
+            "reason": snap.reason,
+            "detail": snap.detail,
+            "state": state,
+            "steps": steps,
+            "answer": answer,
+            "assumptions": assumptions,
+        }
+
+    def _answer_discharge(
+        self,
+        activation_w: Optional[float],
+        hurdle_p: float,
+        import_p: float,
+        export_p: float,
+        min_discharge_w: float,
+    ) -> dict:
+        """Plain-language discharge half of the explanation's answer."""
+        if activation_w is None:
+            return {
+                "headline": "Discharge threshold not recorded",
+                "because": "The next control cycle will record one.",
+            }
+        if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+            return {
+                "headline": "Do not discharge",
+                "because": (
+                    f"Stored energy costs {hurdle_p:.1f}p/kWh delivered, "
+                    f"which is at or above the {import_p:.1f}p/kWh import "
+                    "price. Discharging would lose money."
+                ),
+            }
+        if activation_w <= 0:
+            return {
+                "headline": "Power the home at any import (≥0 W)",
+                "because": (
+                    f"Export at {export_p:.1f}p/kWh already covers the "
+                    f"{hurdle_p:.1f}p/kWh stored-energy hurdle, so the "
+                    f"{min_discharge_w:.0f} W minimum does not lose money."
+                ),
+            }
+        return {
+            "headline": (
+                f"Power the home at ≥{activation_w:.0f} W house import"
+            ),
+            "because": (
+                "That is the break-even point: below it, the "
+                f"{min_discharge_w:.0f} W minimum exports more than the "
+                "import it avoids, so the stored energy would cost more than "
+                "it saves."
+            ),
+        }
+
+    @staticmethod
+    def _answer_charge(
+        snap: DecisionSnapshot,
+        floor_a: Optional[float],
+        activation_w: float,
+        at_cap: bool,
+        cap: float,
+    ) -> dict:
+        """Plain-language charging half of the explanation's answer."""
+        if at_cap:
+            return {
+                "headline": "Do not charge",
+                "because": (
+                    f"State of charge {snap.soc_percent}% is at the "
+                    f"{cap:.0f}% cap."
+                ),
+            }
+        if not floor_a:
+            return {
+                "headline": "Do not charge — sell the surplus",
+                "because": (
+                    "No measured charge current makes the stored energy worth "
+                    "more than exporting it now."
+                ),
+            }
+        waiting = (
+            (snap.harvest_current_a is not None
+             and snap.harvest_current_a < floor_a)
+            or (snap.surplus_w is not None and snap.surplus_w < activation_w)
+        )
+        if waiting:
+            return {
+                "headline": (
+                    f"Not yet — charging starts at ≥{floor_a:.0f} A "
+                    f"(≈{activation_w:.0f} W) of surplus"
+                ),
+                "because": (
+                    "That is the break-even point where the stored energy is "
+                    "worth more than exporting the surplus now. Today's "
+                    "surplus is below it, so the floor stays armed but the "
+                    "car is not charging."
+                ),
+            }
+        return {
+            "headline": (
+                f"Charge from surplus at ≥{floor_a:.0f} A "
+                f"(≈{activation_w:.0f} W)"
+            ),
+            "because": (
+                "That is the break-even point where the stored energy is worth "
+                "more than exporting the surplus now."
+            ),
+        }
 
     def get_dashboard_html(self) -> str:
         """Return HTML for Agile Outgoing rate display.
@@ -2982,6 +4014,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     charge_min_a=self.MAX_CHARGE_CURRENT,
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
+                    decision_tier="free",
+                    import_rate_p=0.0,
+                    charge_cap_percent=charge_cap,
                 )
                 return (
                     ControlState.CHARGE,
@@ -3005,6 +4040,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{charge_cap:.0f}% charge cap, so no energy is taken."
                 ),
                 current_rate_p=0.0,
+                decision_tier="free",
+                import_rate_p=0.0,
+                charge_cap_percent=charge_cap,
             )
             return (
                 ControlState.DORMANT,
@@ -3045,6 +4083,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     charge_min_a=self.MAX_CHARGE_CURRENT,
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
+                    decision_tier="off_peak",
+                    import_rate_p=config.IMPORT_LOW,
+                    charge_cap_percent=cap,
                 )
                 return (
                     ControlState.CHARGE,
@@ -3066,6 +4107,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         "charge cap, so the battery is left alone."
                     ),
                     current_rate_p=config.IMPORT_LOW,
+                    decision_tier="off_peak",
+                    import_rate_p=config.IMPORT_LOW,
+                    charge_cap_percent=cap,
                 )
                 return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Off-peak: SoC max, dormant"
 
@@ -3092,6 +4136,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 charge_min_a=3,
                 charge_max_a=3,
                 charge_activation_w=0,
+                decision_tier="unknown_soc",
+                import_rate_p=self._current_import_rate_p(dayMinute),
             )
             return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
 
@@ -3109,6 +4155,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{self.BATTERY_PROTECTION_RESERVE_SOC}% protection "
                     "reserve. The controller will not discharge the pack."
                 ),
+                decision_tier="protection",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
             )
             return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Battery depleted"
 
@@ -3159,6 +4208,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
                 discharge_activation_w=0,
+                decision_tier="grid_support",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
             )
             return (
                 ControlState.DISCHARGE,
@@ -3203,6 +4255,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
+                decision_tier="planned_export",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
             )
             return (
                 ControlState.DISCHARGE,
@@ -3306,6 +4361,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=False,
                 discharge_activation_w=activation_w,
+                decision_tier="shortfall",
+                shortfall=True,
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                house_floor_soc=house_floor,
+                charge_cap_percent=charge_cap,
+                stored_cost_p=self._delivered_cost_per_kwh_p(),
+                voltage_v=power_snapshot["voltage"] if power_snapshot else None,
             )
             return (
                 ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
@@ -3405,6 +4467,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
                 discharge_activation_w=activation_w,
+                decision_tier=decision.tier,
+                store_decision=True,
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                house_floor_soc=self._house_load_floor_soc(),
+                charge_cap_percent=charge_cap,
+                stored_cost_p=self._delivered_cost_per_kwh_p(),
+                voltage_v=power_snapshot["voltage"] if power_snapshot else None,
             )
             return ControlState.LOAD_FOLLOW_BIDIRECTIONAL, 3, self.MAX_DISCHARGE_CURRENT, "IOCTGO_AGILEOUT Bidirectional (store for better rate)"
         else:
@@ -3595,6 +4664,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
                 discharge_activation_w=activation_w,
+                decision_tier=decision.tier,
+                store_decision=False,
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                house_floor_soc=self._house_load_floor_soc(),
+                charge_cap_percent=charge_cap,
+                stored_cost_p=self._delivered_cost_per_kwh_p(),
+                voltage_v=power_snapshot["voltage"] if power_snapshot else None,
             )
             return (
                 ControlState.LOAD_FOLLOW_BIDIRECTIONAL,

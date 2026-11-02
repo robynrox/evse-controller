@@ -140,8 +140,20 @@ completed fixes.
   below, `b311c32` (supplier energy sessions: free import and grid support),
   `033e88f` (sessions page and JSON API), `ff5776e` (session markers on the
   strip), `1b1fc94` (wrap the session strip instead of clipping it), the
-  forecast/DP roadmap (`53f8bfa`, `f051dcf`), and `2d23873` (fixed modes
-  reassert their current range).
+  forecast/DP roadmap (`53f8bfa`, `f051dcf`), `2d23873` (fixed modes
+  reassert their current range), and `fa2d5f0` (say "not yet" when the armed
+  charge floor is above the live surplus).
+- The dashboard links to a separate **Why this decision?** page (`/decision`).
+  It deep-copies the latest decision snapshot when rendered and deliberately
+  does not auto-refresh, so the reader can study it. It states the state at
+  decision time, then walks through the shortfall, export-worth, self-use,
+  later-sale, break-even, reachability and discharge-activation checks with the
+  exact numbers, and gives a plain-language answer for both charging and
+  discharging. The snapshot carries the context needed for this
+  (`decision_tier`, `store_decision`, `shortfall`, `import_rate_p`,
+  `house_floor_soc`, `charge_cap_percent`, `stored_cost_p`, `voltage_v`). The
+  page avoids internal tier names. `get_decision_explanation()` on the tariff
+  builds it from the same helpers as the control loop.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -201,7 +213,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **428 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **453 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

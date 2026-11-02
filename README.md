@@ -416,6 +416,37 @@ cell on a phone, where the badge alone is too small to rely on.
   channel of the same or the other Shelly does not invert the home power or
   mis-book energy.
 
+##### Why this decision? page (`/decision`)
+
+The dashboard's decision line answers *what* the controller is doing. The
+**Why this decision?** link beside it opens a separate page that answers *why*,
+in plain language and with the exact numbers the control loop used:
+
+- It freezes the latest decision snapshot when the page is loaded. There is no
+  auto-refresh and no polling: the reader can take as long as they need. A
+  **Refresh snapshot** link deliberately requests a new copy.
+- It declares the state at the moment of the decision: time and half-hour
+  slot, SoC, charge cap, import and export prices, the best later export slot,
+  harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
+  output, the projected 23:30 SoC and the house floor where relevant.
+- It walks through the checks in order: whether the pack will last to 23:30,
+  what the surplus is worth exported now, what it is worth kept for the house,
+  what it is worth stored for a later sale, where each break-even lies, whether
+  today's surplus can reach the charge floor, and where discharge starts.
+- It states the answer for both directions. For example: *“Answer 242 W
+  because that is the point where the import avoided plus the exported surplus
+  exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
+  surplus is 3 A but charging starts at ≥8 A, where the stored energy is worth
+  19.5p against 19.2p exported.”*
+- It lists the assumptions: whole half-hour slots, the measured
+  current-dependent efficiency model, the configured minimum margin, the
+  ledger (or its off-peak fallback), the Wallbox minimum output, and the
+  no-negative-margin policy.
+
+The page is specific to `IOCTGO_AGILEOUT`, which records the snapshot. Other
+tariffs show a short “this tariff does not record a decision explanation”
+message rather than failing.
+
 ##### Supplier energy sessions
 
 Utilities occasionally offer a whole half-hour settlement period on special
