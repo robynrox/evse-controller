@@ -294,6 +294,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
     }
+    .ioctgo-decision-line .ioctgo-explain {
+        color: #0b5cad;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+    .ioctgo-decision-line .ioctgo-explain:hover { text-decoration: underline; }
     @media (max-width: 700px) {
         .ioctgo-decision-line { font-size: 11px; gap: 2px 8px; }
     }
@@ -2438,6 +2445,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f'<span class="{saved_class}" title="{title}">'
             f"saved today {saved}{rate_html}</span>"
         )
+        parts.append(
+            '<a class="ioctgo-explain" href="/decision" '
+            'title="Open the frozen calculation behind this decision">'
+            "Explanation →</a>"
+        )
 
         detail_attr = ""
         if snapshot.detail:
@@ -2728,7 +2740,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if current_harvest is not None:
                 observed.append(f"{current_harvest:.0f} A harvest estimate")
             if current_surplus is not None:
-                observed.append(surplus_text(current_surplus))
+                surplus_label = surplus_text(current_surplus)
+                if surplus_label is not None:
+                    observed.append(surplus_label)
             observed_text = (
                 " and ".join(observed) if observed else "no live power sample"
             )
@@ -3252,12 +3266,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 }
             )
         if snap.surplus_w is not None:
-            state.append(
-                {
-                    "label": "Grid balance",
-                    "value": surplus_text(snap.surplus_w),
-                }
-            )
+            grid_balance = surplus_text(snap.surplus_w)
+            if grid_balance is not None:
+                state.append(
+                    {
+                        "label": "Grid balance",
+                        "value": grid_balance,
+                    }
+                )
         state.append(
             {
                 "label": "Stored energy cost",

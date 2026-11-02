@@ -143,8 +143,9 @@ completed fixes.
   forecast/DP roadmap (`53f8bfa`, `f051dcf`), `2d23873` (fixed modes
   reassert their current range), and `fa2d5f0` (say "not yet" when the armed
   charge floor is above the live surplus).
-- The dashboard links to a separate **Why this decision?** page (`/decision`).
-  It deep-copies the latest decision snapshot when rendered and deliberately
+- The dashboard links to a separate **Why this decision?** page (`/decision`),
+  from both the decision line (`Explanation →`) and the navigation. It
+  deep-copies the latest decision snapshot when rendered and deliberately
   does not auto-refresh, so the reader can study it. It states the state at
   decision time, then walks through the shortfall, export-worth, self-use,
   later-sale, break-even, reachability and discharge-activation checks with the

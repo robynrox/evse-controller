@@ -1606,6 +1606,10 @@ class TestDecisionExplanation:
         assert "Tier" not in text
         assert "tier" not in text
 
+        dashboard_html = agile_tariff.get_dashboard_html()
+        assert 'href="/decision"' in dashboard_html
+        assert "Explanation" in dashboard_html
+
     def test_explanation_is_a_frozen_copy(self, agile_tariff, monkeypatch):
         explanation = self._run_2229(agile_tariff, monkeypatch)
         original_mode = explanation["mode"]

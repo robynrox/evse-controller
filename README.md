@@ -419,8 +419,9 @@ cell on a phone, where the badge alone is too small to rely on.
 ##### Why this decision? page (`/decision`)
 
 The dashboard's decision line answers *what* the controller is doing. The
-**Why this decision?** link beside it opens a separate page that answers *why*,
-in plain language and with the exact numbers the control loop used:
+**Explanation →** link on that line — and in the dashboard navigation — opens
+a separate page that answers *why*, in plain language and with the exact
+numbers the control loop used:
 
 - It freezes the latest decision snapshot when the page is loaded. There is no
   auto-refresh and no polling: the reader can take as long as they need. A
