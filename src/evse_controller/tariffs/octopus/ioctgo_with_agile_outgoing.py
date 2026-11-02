@@ -2984,8 +2984,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
                 return (
                     ControlState.CHARGE,
-                    None,
-                    None,
+                    self.MAX_CHARGE_CURRENT,
+                    self.MAX_CHARGE_CURRENT,
                     f"IOCTGO_AGILEOUT {session.label}: charge at max rate",
                 )
             self._record_decision(
@@ -3045,7 +3045,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
                 )
-                return ControlState.CHARGE, None, None, "IOCTGO_AGILEOUT Off-peak: CHARGE AT MAX RATE (priority)"
+                return (
+                    ControlState.CHARGE,
+                    self.MAX_CHARGE_CURRENT,
+                    self.MAX_CHARGE_CURRENT,
+                    "IOCTGO_AGILEOUT Off-peak: CHARGE AT MAX RATE (priority)",
+                )
             else:
                 self._record_decision(
                     mode=f"Idle — SoC at {cap:.0f}% cap",
@@ -3198,7 +3203,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
             )
-            return ControlState.DISCHARGE, None, None, f"IOCTGO_AGILEOUT Export slot (max discharge)"
+            return (
+                ControlState.DISCHARGE,
+                self.MAX_DISCHARGE_CURRENT,
+                self.MAX_DISCHARGE_CURRENT,
+                "IOCTGO_AGILEOUT Export slot (max discharge)",
+            )
 
         # Energy shortfall: conserve energy for the house rather than exporting.
         # Stay bidirectional so surplus solar can still be absorbed, but use

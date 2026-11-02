@@ -1170,14 +1170,38 @@ class EvseController(PowerMonitorObserver):
                 self._setCurrent(desiredEvseCurrent)
 
     def setControlState(self, state: ControlState):
-        """Set the control state and log the transition."""
-        if state != self.state:
+        """Set the control state and apply its canonical current ranges.
+
+        The ranges of fixed modes (CHARGE, DISCHARGE, DORMANT) are applied on
+        **every** call, not only when the state changes.  Such a mode must
+        reassert ``min == max`` each time: the controller can already be in
+        CHARGE with a narrower range left over from the SoC-unknown branch
+        (3 A), and a state that does not change would otherwise never widen
+        it again.  That is exactly how a "charge at max" decision can end up
+        commanding 3 A, and it applies to off-peak and free-energy charging
+        alike.
+
+        Load-following ranges are only re-applied on a transition, because
+        the tariff refines them immediately afterwards in
+        ``set_home_demand_levels()``; widening them here on every cycle would
+        briefly expose the default range to the control thread.
+        """
+        changed = state != self.state
+        if changed:
             info(f"CONTROL Setting control state to {state}")
             # If we're transitioning from FREERUN state to any other state,
             # we need to send a command to the Wallbox thread to take control
             transitioning_from_freerun = (self.state == ControlState.FREERUN)
-            
             self.state = state
+        else:
+            transitioning_from_freerun = False
+
+        reassert_range = changed or state in (
+            ControlState.CHARGE,
+            ControlState.DISCHARGE,
+            ControlState.DORMANT,
+        )
+        if reassert_range:
             match state:
                 case ControlState.DORMANT:
                     self.minDischargeCurrent = 0
@@ -1205,18 +1229,19 @@ class EvseController(PowerMonitorObserver):
                     # In FREERUN state, we don't set any current ranges
                     # The EVSE operates independently
                     pass
-            
-            # If we're transitioning from FREERUN state, send a command to take control
-            if transitioning_from_freerun and state != ControlState.FREERUN:
-                # Send a CLEAR_FREERUN command to the Wallbox thread
-                try:
-                    cmd = EvseCommandData(command=EvseCommand.CLEAR_FREERUN)
-                    if not self.evse.send_command(cmd):
-                        raise RuntimeError("Failed to send CLEAR_FREERUN command to EVSE thread")
-                    info("Sent CLEAR_FREERUN command to Wallbox thread")
-                except Exception as e:
-                    error(f"Failed to send CLEAR_FREERUN command: {e}")
-            
+
+        # If we're transitioning from FREERUN state, send a command to take control
+        if transitioning_from_freerun and state != ControlState.FREERUN:
+            # Send a CLEAR_FREERUN command to the Wallbox thread
+            try:
+                cmd = EvseCommandData(command=EvseCommand.CLEAR_FREERUN)
+                if not self.evse.send_command(cmd):
+                    raise RuntimeError("Failed to send CLEAR_FREERUN command to EVSE thread")
+                info("Sent CLEAR_FREERUN command to Wallbox thread")
+            except Exception as e:
+                error(f"Failed to send CLEAR_FREERUN command: {e}")
+
+        if changed:
             if state != ControlState.FREERUN:
                 info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
             else:

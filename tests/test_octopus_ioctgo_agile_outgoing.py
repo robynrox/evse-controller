@@ -1146,10 +1146,16 @@ class TestDecisionSnapshot:
         self._set_time(agile_tariff, 23, 45)
         state = create_test_state(50)
 
-        control_state, _, _, _ = agile_tariff.get_control_state(state, 23 * 60 + 45)
+        control_state, min_current, max_current, _ = agile_tariff.get_control_state(
+            state, 23 * 60 + 45
+        )
 
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.CHARGE
+        # The range must be explicit so a stale 3 A range from the SoC-unknown
+        # branch cannot survive a repeated CHARGE decision.
+        assert min_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert max_current == agile_tariff.MAX_CHARGE_CURRENT
         assert snapshot.mode.startswith("Max charge")
         assert "charging to the" in snapshot.reason
         assert snapshot.efficiency_label == "charge"
@@ -2219,12 +2225,16 @@ class TestEnergySessions:
         store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
         agile_tariff.set_time_functions(datetime_func=lambda: start)
 
-        control_state, _, _, reason = agile_tariff.get_control_state(
+        control_state, min_current, max_current, reason = agile_tariff.get_control_state(
             create_test_state(79), 12 * 60
         )
 
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.CHARGE
+        # Explicit max range: the free session must not inherit whatever
+        # narrower range the previous mode left behind.
+        assert min_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert max_current == agile_tariff.MAX_CHARGE_CURRENT
         assert snapshot.mode.startswith("Free energy 12:00–13:00")
         assert "free energy" in reason.lower()
         assert snapshot.current_rate_p == pytest.approx(0.0)
