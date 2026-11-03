@@ -84,6 +84,15 @@ class DecisionSnapshot:
     charge_cap_percent: Optional[float] = None
     stored_cost_p: Optional[float] = None
     voltage_v: Optional[float] = None
+    # Ledger at decision time.  Captured automatically by _record_decision so
+    # the explanation page can show what produced stored_cost_p.
+    ledger_dc_kwh: Optional[float] = None
+    ledger_cost_gbp: Optional[float] = None
+    ledger_stored_cost_p: Optional[float] = None
+    ledger_delivered_cost_p: Optional[float] = None
+    ledger_basis: str = ""
+    ledger_seeded: bool = False
+    ledger_saved_today_gbp: Optional[float] = None
 
 
 class IOctGoWithAgileOutgoingTariff(Tariff):
@@ -2141,6 +2150,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         voltage_v: Optional[float] = None,
     ) -> DecisionSnapshot:
         """Record the decision the dashboard should display."""
+        ledger_stored_cost_p = self._stored_cost_per_dc_kwh_p()
         snapshot = DecisionSnapshot(
             updated_at=self.get_current_datetime(),
             mode=mode,
@@ -2172,6 +2182,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             charge_cap_percent=charge_cap_percent,
             stored_cost_p=stored_cost_p,
             voltage_v=voltage_v,
+            ledger_dc_kwh=float(self._bank_dc_kwh),
+            ledger_cost_gbp=float(self._bank_cost_gbp),
+            ledger_stored_cost_p=ledger_stored_cost_p,
+            ledger_delivered_cost_p=(
+                stored_cost_p
+                if stored_cost_p is not None
+                else self._delivered_cost_per_kwh_p()
+            ),
+            ledger_basis=self._stored_cost_basis(),
+            ledger_seeded=bool(self._bank_seeded),
+            ledger_saved_today_gbp=float(self._saved_today_gbp),
         )
         self._decision_snapshot = snapshot
         self._log_decision_summary(snapshot)
@@ -2459,6 +2480,341 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             + "".join(parts)
             + "</div>"
         )
+
+    def _ledger_explanation(self, snap: DecisionSnapshot) -> dict:
+        """Explain the stored-energy ledger that priced this decision.
+
+        The snapshot captures the ledger at the decision instant, so the
+        figures here match ``stored_cost_p``.  Older snapshots fall back to the
+        live ledger and say so.
+        """
+        timing = "decision time" if snap.ledger_dc_kwh is not None else "page load"
+        dc_kwh = (
+            snap.ledger_dc_kwh
+            if snap.ledger_dc_kwh is not None
+            else float(self._bank_dc_kwh)
+        )
+        cost_gbp = (
+            snap.ledger_cost_gbp
+            if snap.ledger_cost_gbp is not None
+            else float(self._bank_cost_gbp)
+        )
+        stored_p = (
+            snap.ledger_stored_cost_p
+            if snap.ledger_stored_cost_p is not None
+            else self._stored_cost_per_dc_kwh_p()
+        )
+        delivered_p = (
+            snap.ledger_delivered_cost_p
+            if snap.ledger_delivered_cost_p is not None
+            else self._delivered_cost_per_kwh_p()
+        )
+        basis = snap.ledger_basis or self._stored_cost_basis()
+        seeded = snap.ledger_seeded
+        saved_today = (
+            snap.ledger_saved_today_gbp
+            if snap.ledger_saved_today_gbp is not None
+            else float(self._saved_today_gbp)
+        )
+        min_basis = self.MIN_LEDGER_BASIS_KWH
+        trusted = dc_kwh >= min_basis
+        fallback_p = self._bank_fallback_cost_per_dc_kwh() * 100.0
+        min_discharge_a = float(self.MIN_DISCHARGE_CURRENT)
+        max_discharge_a = float(self.MAX_DISCHARGE_CURRENT)
+        discharge_at_min = self.EFFICIENCY_MODEL.discharge_efficiency(
+            min_discharge_a
+        )
+        discharge_at_max = self.EFFICIENCY_MODEL.discharge_efficiency(
+            max_discharge_a
+        )
+        delivered_at_max = stored_p / max(discharge_at_max, 1e-6)
+        charge_reference_a = float(self.GRID_CHARGE_REFERENCE_CURRENT)
+        charge_reference_eff = self.EFFICIENCY_MODEL.charge_efficiency(
+            charge_reference_a
+        )
+
+        def money(value: float) -> str:
+            sign = "-" if value < 0 else ""
+            return f"{sign}£{abs(value):.4f}"
+
+        rows = [
+            {
+                "label": "Energy in the ledger (DC)",
+                "value": f"{dc_kwh:.2f} kWh",
+            },
+            {
+                "label": "Cost booked",
+                "value": (
+                    f"£{cost_gbp:.4f}"
+                    if abs(cost_gbp) < 10
+                    else f"£{cost_gbp:.2f}"
+                ),
+            },
+            {
+                "label": "Stored-energy cost (in pack)",
+                "value": f"{stored_p:.1f}p/kWh",
+            },
+            {
+                "label": f"Delivered at {min_discharge_a:.0f} A",
+                "value": (
+                    f"{delivered_p:.1f}p/kWh "
+                    f"({discharge_at_min:.0%} discharge)"
+                ),
+            },
+            {
+                "label": f"Delivered at {max_discharge_a:.0f} A",
+                "value": (
+                    f"{delivered_at_max:.1f}p/kWh "
+                    f"({discharge_at_max:.0%} discharge)"
+                ),
+            },
+            {
+                "label": "Basis",
+                "value": (
+                    basis
+                    if trusted
+                    else (
+                        f"Off-peak fallback — ledger {dc_kwh:.2f} kWh is "
+                        f"below the {min_basis:.2f} kWh trust floor"
+                    )
+                ),
+            },
+            {
+                "label": "Seeded from SoC at startup",
+                "value": "Yes" if seeded else "No",
+            },
+            {
+                "label": "Saved today",
+                "value": money(saved_today),
+            },
+            {
+                "label": "SOC capacity used",
+                "value": f"{self.SOC_CAPACITY_KWH:.2f} kWh",
+            },
+        ]
+
+        steps = [
+            {
+                "title": "What is in the ledger?",
+                "question": (
+                    "The ledger holds energy that has passed through the "
+                    "EVSE in DC pack terms, and what that energy cost."
+                ),
+                "calculation": (
+                    f"{cost_gbp:.4f} ÷ {dc_kwh:.2f} kWh = "
+                    f"{stored_p:.1f}p/kWh in the pack."
+                    if trusted and dc_kwh > 0
+                    else (
+                        f"The ledger is below the {min_basis:.2f} kWh trust "
+                        f"floor, so the off-peak fallback "
+                        f"({config.IMPORT_LOW:.1f}p/kWh ÷ "
+                        f"{charge_reference_eff:.0%} charge efficiency at "
+                        f"{charge_reference_a:.0f} A) gives "
+                        f"{fallback_p:.1f}p/kWh in the pack."
+                    )
+                ),
+                "result": (
+                    f"{dc_kwh:.2f} kWh at {stored_p:.1f}p/kWh in the pack."
+                ),
+                "conclusion": (
+                    "This is the cost basis for every discharge decision. "
+                    "It is an average, so older and newer energy blend."
+                ),
+            },
+            {
+                "title": "How does charging add to the ledger?",
+                "question": (
+                    "Charging adds DC energy and the money paid for it; "
+                    "surplus solar is charged at the export revenue it "
+                    "displaced."
+                ),
+                "calculation": (
+                    "DC added = AC energy × charge efficiency at the actual "
+                    "current. Cost added = grid kWh × import price + solar "
+                    "kWh × export price. Solar is capped at the live surplus; "
+                    "only the rest is paid import."
+                ),
+                "result": (
+                    f"At the {charge_reference_a:.0f} A grid-charge reference "
+                    f"the model stores {charge_reference_eff:.0%} of AC "
+                    f"energy."
+                ),
+                "conclusion": (
+                    "A charge does not create a saving yet. The saving is "
+                    "booked when the energy is discharged."
+                ),
+            },
+            {
+                "title": "How does discharging release it?",
+                "question": (
+                    "Discharging drains DC energy and removes the matching "
+                    "share of the ledger cost."
+                ),
+                "calculation": (
+                    f"DC drained = AC delivered ÷ discharge efficiency. "
+                    f"Released cost = DC drained × {stored_p:.1f}p/kWh. "
+                    f"The delivered cost is the in-pack cost divided by the "
+                    f"discharge efficiency."
+                ),
+                "result": (
+                    f"At {min_discharge_a:.0f} A: {stored_p:.1f}p/kWh ÷ "
+                    f"{discharge_at_min:.0%} = {delivered_p:.1f}p/kWh "
+                    f"delivered. At {max_discharge_a:.0f} A: "
+                    f"{delivered_at_max:.1f}p/kWh."
+                ),
+                "conclusion": (
+                    "The same stored energy is worth less at low current "
+                    "because a larger share is lost on the way out. That is "
+                    "why the discharge break-even uses the 3 A figure."
+                ),
+            },
+            {
+                "title": "What happens when the ledger is empty or too small?",
+                "question": (
+                    "After a restart the pack may hold charge bought before "
+                    "the ledger existed, or the ledger may be only metering "
+                    "noise."
+                ),
+                "calculation": (
+                    f"Below {min_basis:.2f} kWh the ledger is not trusted as "
+                    f"a price basis. Existing charge is seeded at the "
+                    f"off-peak replacement price: {config.IMPORT_LOW:.1f}p/kWh "
+                    f"÷ {charge_reference_eff:.0%} = {fallback_p:.1f}p/kWh DC."
+                ),
+                "result": (
+                    f"Fallback in-pack cost = {fallback_p:.1f}p/kWh."
+                ),
+                "conclusion": (
+                    "This keeps the estimate conservative rather than "
+                    "reporting free energy, and a tiny sample cannot become "
+                    "the price of the whole pack."
+                ),
+            },
+            {
+                "title": "What does 'saved today' mean?",
+                "question": (
+                    "The saving is measured against not cycling the battery, "
+                    "not against the price of the hardware."
+                ),
+                "calculation": (
+                    "On discharge: avoided import (or export revenue) minus "
+                    "the released ledger cost. The daily total resets at "
+                    "local midnight; the ledger itself carries over."
+                ),
+                "result": f"Saved today: {money(saved_today)}.",
+                "conclusion": (
+                    "A negative figure is a real loss or forgone export "
+                    "revenue, not a capital-cost estimate."
+                ),
+            },
+        ]
+
+        return {
+            "timing": timing,
+            "rows": rows,
+            "steps": steps,
+        }
+
+    def _efficiency_explanation(self) -> dict:
+        """Build the current-dependent efficiency table for the page.
+
+        Rows are charge currents (AC → pack), columns are discharge currents
+        (pack → AC), and each cell is the product.  Header cells show the
+        single-direction efficiency at that current.
+        """
+        model = self.EFFICIENCY_MODEL
+        min_charge = max(1, int(round(config.WALLBOX_MIN_CHARGE_CURRENT)))
+        max_charge = max(
+            min_charge, int(round(config.WALLBOX_MAX_CHARGE_CURRENT))
+        )
+        min_discharge = max(1, int(round(config.WALLBOX_MIN_DISCHARGE_CURRENT)))
+        max_discharge = max(
+            min_discharge, int(round(config.WALLBOX_MAX_DISCHARGE_CURRENT))
+        )
+        charge_reference = round(self.GRID_CHARGE_REFERENCE_CURRENT)
+        export_reference = round(self.EXPORT_REFERENCE_CURRENT)
+
+        charge_rows = []
+        for current in range(min_charge, max_charge + 1):
+            efficiency = model.charge_efficiency(float(current))
+            charge_rows.append(
+                {
+                    "current": f"{current} A",
+                    "efficiency": f"{efficiency * 100:.0f}%",
+                    "is_reference": current == charge_reference,
+                }
+            )
+
+        discharge_columns = []
+        for current in range(min_discharge, max_discharge + 1):
+            efficiency = model.discharge_efficiency(float(current))
+            discharge_columns.append(
+                {
+                    "current": f"{current} A",
+                    "efficiency": f"{efficiency * 100:.0f}%",
+                    "is_reference": current == export_reference,
+                }
+            )
+
+        matrix = []
+        for charge_current in range(min_charge, max_charge + 1):
+            row = []
+            charge_eff = model.charge_efficiency(float(charge_current))
+            for discharge_current in range(min_discharge, max_discharge + 1):
+                discharge_eff = model.discharge_efficiency(
+                    float(discharge_current)
+                )
+                round_trip = charge_eff * discharge_eff
+                pct = round_trip * 100.0
+                if pct < 50:
+                    band = "low"
+                elif pct < 65:
+                    band = "mid"
+                elif pct < 75:
+                    band = "good"
+                else:
+                    band = "high"
+                row.append(
+                    {
+                        "value": f"{pct:.0f}%",
+                        "exact": (
+                            f"{charge_current} A × {discharge_current} A: "
+                            f"{charge_eff * 100:.1f}% × "
+                            f"{discharge_eff * 100:.1f}% = {pct:.1f}%"
+                        ),
+                        "band": band,
+                        "diagonal": charge_current == discharge_current,
+                    }
+                )
+            matrix.append(row)
+
+        measured_max = model.max_current_a
+        configured_max = max(max_charge, max_discharge)
+        note = (
+            f"The model is measured from {model.min_current_a:.0f} A to "
+            f"{measured_max:.0f} A. The table follows the configured limits "
+            f"({max_charge} A charge, {max_discharge} A discharge)."
+        )
+        if configured_max > measured_max:
+            note += (
+                f" Above {measured_max:.0f} A the efficiency is held at the "
+                f"{measured_max:.0f} A measurement; AC power still scales "
+                "with current, but the extra cells are planning values, not "
+                "new measurements."
+            )
+
+        return {
+            "charge_rows": charge_rows,
+            "discharge_columns": discharge_columns,
+            "matrix": matrix,
+            "note": note,
+            "measured_min_a": model.min_current_a,
+            "measured_max_a": measured_max,
+            "max_charge_a": max_charge,
+            "max_discharge_a": max_discharge,
+            "charge_reference_a": charge_reference,
+            "export_reference_a": export_reference,
+        }
 
     def get_decision_explanation(self) -> dict:
         """Return a frozen, plain-language explanation of the last decision.
@@ -3366,6 +3722,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "reason": snap.reason,
             "detail": snap.detail,
             "state": state,
+            "ledger": self._ledger_explanation(snap),
+            "efficiency": self._efficiency_explanation(),
             "steps": steps,
             "answer": answer,
             "assumptions": assumptions,

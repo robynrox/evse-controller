@@ -1559,6 +1559,21 @@ class TestDecisionExplanation:
                     explanation["answer"][key]["because"],
                 )
             )
+        ledger = explanation.get("ledger") or {}
+        for row in ledger.get("rows", []):
+            parts.extend((row["label"], row["value"]))
+        for step in ledger.get("steps", []):
+            parts.extend(
+                (
+                    step["title"],
+                    step["question"],
+                    step["calculation"],
+                    step["result"],
+                    step["conclusion"],
+                )
+            )
+        efficiency = explanation.get("efficiency") or {}
+        parts.append(efficiency.get("note", ""))
         parts.extend(explanation.get("assumptions", []))
         return " ".join(str(part) for part in parts)
 
@@ -1662,6 +1677,98 @@ class TestDecisionExplanation:
             explanation["answer"]["charge"]["headline"]
         )
 
+    def test_ledger_explanation_matches_the_decision_snapshot(
+        self, agile_tariff
+    ):
+        """The ledger shown must be the one that priced the decision.
+
+        Mutating the live ledger after the decision must not change the page.
+        """
+        TestDecisionSnapshot._set_time(agile_tariff, 10, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 20, 80)
+        agile_tariff._bank_dc_kwh = 10.0
+        agile_tariff._bank_cost_gbp = 0.8
+        agile_tariff._bank_seeded = True
+
+        agile_tariff.get_control_state(create_test_state(80), 10 * 60)
+
+        # A later control cycle has moved the live ledger on.
+        agile_tariff._bank_dc_kwh = 40.0
+        agile_tariff._bank_cost_gbp = 4.0
+
+        explanation = agile_tariff.get_decision_explanation()
+        ledger = explanation["ledger"]
+        rows = {row["label"]: row["value"] for row in ledger["rows"]}
+        text = self._flat(explanation)
+
+        assert ledger["timing"] == "decision time"
+        assert rows["Energy in the ledger (DC)"] == "10.00 kWh"
+        assert rows["Cost booked"] == "£0.8000"
+        assert rows["Stored-energy cost (in pack)"] == "8.0p/kWh"
+        assert rows["Basis"] == "ledger of 10.0 kWh"
+        assert rows["Seeded from SoC at startup"] == "Yes"
+        # Delivered cost divides by the measured 3 A discharge efficiency.
+        delivered = 8.0 / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(3)
+        assert f"{delivered:.1f}p/kWh" in rows["Delivered at 3 A"]
+        assert "8.0p/kWh in the pack" in text
+        assert "How does charging add to the ledger?" in text
+        assert "How does discharging release it?" in text
+
+    def test_efficiency_matrix_uses_the_configured_limits(self, agile_tariff):
+        efficiency = agile_tariff._efficiency_explanation()
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        min_charge = max(1, round(config.WALLBOX_MIN_CHARGE_CURRENT))
+        max_charge = max(min_charge, round(config.WALLBOX_MAX_CHARGE_CURRENT))
+        min_discharge = max(
+            1, round(config.WALLBOX_MIN_DISCHARGE_CURRENT)
+        )
+        max_discharge = max(
+            min_discharge, round(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        )
+
+        assert len(efficiency["charge_rows"]) == max_charge - min_charge + 1
+        assert len(efficiency["discharge_columns"]) == (
+            max_discharge - min_discharge + 1
+        )
+        assert efficiency["charge_rows"][0]["current"] == f"{min_charge} A"
+        assert efficiency["charge_rows"][-1]["current"] == f"{max_charge} A"
+        assert efficiency["discharge_columns"][-1]["current"] == (
+            f"{max_discharge} A"
+        )
+        assert len(efficiency["matrix"]) == len(efficiency["charge_rows"])
+        assert all(
+            len(row) == len(efficiency["discharge_columns"])
+            for row in efficiency["matrix"]
+        )
+
+        charge_3 = model.charge_efficiency(3)
+        discharge_3 = model.discharge_efficiency(3)
+        assert efficiency["charge_rows"][0]["efficiency"] == (
+            f"{charge_3 * 100:.0f}%"
+        )
+        assert efficiency["discharge_columns"][0]["efficiency"] == (
+            f"{discharge_3 * 100:.0f}%"
+        )
+        assert efficiency["matrix"][0][0]["value"] == (
+            f"{charge_3 * discharge_3 * 100:.0f}%"
+        )
+
+        # Above the measured ceiling the model holds the last efficiency, so
+        # a 32 A row/column is a planning value, not a new measurement.
+        measured_max = round(model.max_current_a)
+        assert f"measured from {model.min_current_a:.0f} A to " in (
+            efficiency["note"]
+        )
+        if max(max_charge, max_discharge) > measured_max:
+            assert (
+                f"Above {measured_max} A the efficiency is held"
+                in efficiency["note"]
+            )
+            assert model.charge_efficiency(max_charge) == (
+                model.charge_efficiency(measured_max)
+            )
+
     def test_decision_template_renders_without_auto_refresh(
         self, agile_tariff, monkeypatch
     ):
@@ -1685,6 +1792,9 @@ class TestDecisionExplanation:
         assert "Refresh snapshot" in html
         assert "19.5p" in html
         assert "19.2p" in html
+        assert "The stored-energy ledger" in html
+        assert "How the ledger is calculated" in html
+        assert "Efficiency at each current" in html
         assert 'http-equiv="refresh"' not in html
         assert "setInterval" not in html
         assert "Tier" not in html

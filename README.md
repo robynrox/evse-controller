@@ -439,7 +439,21 @@ numbers the control loop used:
   exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
   surplus is 3 A but charging starts at ≥8 A, where the stored energy is worth
   19.5p against 19.2p exported.”*
-- It lists the assumptions: whole half-hour slots, the measured
+- It shows the **stored-energy ledger** captured at the decision instant:
+  DC energy, cost booked, average in-pack cost, delivered cost at the 3 A
+  minimum and at the configured maximum, whether the ledger or the off-peak
+  fallback is the basis, the startup seed and the saved-today total. A second
+  set of steps explains charging (AC × charge efficiency; grid import priced
+  at the import rate, surplus solar at the displaced export price), discharging
+  (AC ÷ discharge efficiency; cost released at the in-pack average), the
+  empty-ledger fallback, and what “saved today” counts.
+- It shows the **efficiency table** at every whole-amp current up to the
+  configured limits. Rows are charge current (AC → pack), columns are discharge
+  current (pack → AC), the header cells show the single-direction efficiency,
+  and each cell is the round-trip product. The measured range stops at 16 A;
+  above that the model holds the 16 A efficiency while AC power still scales
+  with current, and the page says so.
+- It closes with the assumptions: whole half-hour slots, the measured
   current-dependent efficiency model, the configured minimum margin, the
   ledger (or its off-peak fallback), the Wallbox minimum output, and the
   no-negative-margin policy.

@@ -154,7 +154,16 @@ completed fixes.
   (`decision_tier`, `store_decision`, `shortfall`, `import_rate_p`,
   `house_floor_soc`, `charge_cap_percent`, `stored_cost_p`, `voltage_v`). The
   page avoids internal tier names. `get_decision_explanation()` on the tariff
-  builds it from the same helpers as the control loop.
+  builds it from the same helpers as the control loop. The ledger and
+  efficiency table follow the checks, before the closing assumptions. It also
+  shows the
+  stored-energy ledger captured in the snapshot (DC energy, booked cost,
+  in-pack and delivered cost, basis, seed, saved today) with a plain-language
+  breakdown of how charging and discharging update it, plus a two-dimensional
+  efficiency table: charge current × discharge current, header cells for the
+  single-direction efficiencies, and a round-trip percentage in every cell.
+  The table follows the configured current limits; above the 16 A measured
+  ceiling the model holds the last measured efficiency, which the page states.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -214,7 +223,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **453 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **455 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
