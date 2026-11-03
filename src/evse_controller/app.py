@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_from_directory
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, send_from_directory, Response, abort
 from flask_restx import Api, Resource, fields
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -7,7 +7,7 @@ from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.utils.config import config
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from evse_controller.utils.logging_config import info, error, debug
 
 # Ensure data directories exist before anything else
@@ -24,6 +24,7 @@ from evse_controller.smart_evse_controller import (
 )
 
 from evse_controller.event_bus import EventBus, EventType
+from evse_controller.daily_report import daily_log, to_csv
 from evse_controller.energy_sessions import (
     FREE_IMPORT,
     GRID_SUPPORT,
@@ -56,6 +57,43 @@ VALID_COMMANDS = {
 def _slot_label(slot: int) -> str:
     """Clock label for a half-hour slot index."""
     return f"{slot // 2:02d}:{(slot % 2) * 30:02d}"
+
+
+def _fmt_energy(value) -> str:
+    """A kWh value, or an em dash when the meter did not report."""
+    return "—" if value is None else f"{value:.3f}"
+
+
+def _fmt_price(value) -> str:
+    """A p/kWh price, or an em dash when it is unknown."""
+    return "—" if value is None else f"{value:.1f}"
+
+
+def _fmt_pence(value) -> str:
+    """Small money, shown in pence so a slot is readable."""
+    if value is None:
+        return "—"
+    sign = "−" if value < 0 else ""
+    return f"{sign}{abs(value) * 100:.1f}p"
+
+
+def _fmt_gbp(value) -> str:
+    """Accumulated money, shown in pounds."""
+    if value is None:
+        return "—"
+    sign = "−" if value < 0 else ""
+    return f"{sign}£{abs(value):.2f}"
+
+
+def _fmt_soc(value) -> str:
+    return "—" if value is None else f"{value}%"
+
+
+def _report_date_or_404(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        abort(404)
 
 
 def _today_slot_rates() -> list[dict]:
@@ -912,6 +950,61 @@ def get_tariff_dashboard_html():
         return jsonify({'html': html})
     except Exception as e:
         return jsonify({'html': '', 'error': str(e)})
+
+
+def _render_daily_report(day: date, is_today: bool):
+    snapshot = daily_log.snapshot_for(day)
+    return render_template(
+        'daily_report.html',
+        day=snapshot,
+        selected_date=day,
+        is_today=is_today,
+        available_days=daily_log.available_days(),
+        fmt_energy=_fmt_energy,
+        fmt_price=_fmt_price,
+        fmt_pence=_fmt_pence,
+        fmt_gbp=_fmt_gbp,
+        fmt_soc=_fmt_soc,
+        slot_label=_slot_label,
+    )
+
+
+@app.route('/reports/daily')
+def daily_report_today():
+    """Today's half-hour energy report, with a list of earlier days."""
+    today = datetime.now().date()
+    return _render_daily_report(today, is_today=True)
+
+
+@app.route('/reports/daily/<date_str>')
+def daily_report_page(date_str):
+    """A saved half-hour energy report for one local day."""
+    day = _report_date_or_404(date_str)
+    return _render_daily_report(day, is_today=day == datetime.now().date())
+
+
+@app.route('/api/reports/daily/<date_str>')
+def daily_report_api(date_str):
+    """The raw JSON for one local day."""
+    day = _report_date_or_404(date_str)
+    return jsonify(daily_log.snapshot_for(day))
+
+
+@app.route('/reports/daily/<date_str>.csv')
+def daily_report_csv(date_str):
+    """Download one local day as CSV."""
+    day = _report_date_or_404(date_str)
+    body = to_csv(daily_log.snapshot_for(day))
+    return Response(
+        body,
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': (
+                f'attachment; filename="energy-{day.isoformat()}.csv"'
+            )
+        },
+    )
+
 
 # Run the Flask app in a separate thread
 def run_flask(max_restarts=3):

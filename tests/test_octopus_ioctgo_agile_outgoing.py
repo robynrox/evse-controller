@@ -2283,6 +2283,88 @@ class TestDailySavings:
             )
         )
 
+    def test_saving_is_attributed_to_the_slot_it_happened_in(
+        self, agile_tariff
+    ):
+        """The report needs a per-slot split whose sum is the daily total."""
+        clock = self._start(agile_tariff, 2, 0)
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600, soc=50)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600, soc=50)
+
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+
+        saved = agile_tariff._saved_today_gbp
+        assert saved > 0
+        assert sum(agile_tariff._saved_by_slot_gbp) == pytest.approx(saved)
+        assert agile_tariff.saved_for_slot(clock[0].date(), 24) == pytest.approx(
+            saved
+        )
+        assert agile_tariff.saved_for_slot(clock[0].date(), 25) == pytest.approx(
+            0.0
+        )
+
+    def test_slot_savings_reset_at_midnight(self, agile_tariff):
+        old_day = datetime.now().replace(
+            hour=23, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
+        clock = [old_day]
+        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        agile_tariff.evseController = controller
+        controller.current_grid_power = Power(
+            ch1Watts=300, ch2Watts=0, voltage=240, soc=50
+        )
+
+        agile_tariff._savings_day = old_day.date()
+        agile_tariff._saved_today_gbp = 0.5
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+        agile_tariff._saved_by_slot_gbp[47] = 0.5
+        agile_tariff._savings_last_time = None
+        agile_tariff._accumulate_daily_savings()
+
+        clock[0] = old_day + timedelta(minutes=30)
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._saved_by_slot_gbp == [0.0] * 48
+        assert agile_tariff.saved_for_slot(old_day.date(), 47) is None
+
+    def test_last_slot_is_still_readable_just_after_midnight(
+        self, agile_tariff
+    ):
+        """The report closes the previous slot before the tariff resets."""
+        old_day = datetime.now().replace(
+            hour=23, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
+        # The clock has just passed midnight, but the tariff has not run its
+        # midnight reset yet.
+        now = old_day + timedelta(minutes=30, seconds=5)
+        agile_tariff.set_time_functions(datetime_func=lambda: now)
+        agile_tariff._savings_day = old_day.date()
+        agile_tariff._saved_today_gbp = 0.5
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+        agile_tariff._saved_by_slot_gbp[47] = 0.5
+
+        assert agile_tariff.saved_for_slot(old_day.date(), 47) == pytest.approx(
+            0.5
+        )
+        assert agile_tariff.saved_for_slot(now.date(), 47) is None
+
+    def test_no_accumulation_yet_is_a_zero_for_today(self, agile_tariff):
+        """An active tariff with no samples yet has saved nothing today."""
+        now = datetime.now()
+        agile_tariff.set_time_functions(datetime_func=lambda: now)
+        agile_tariff._savings_day = None
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+
+        assert agile_tariff.saved_for_slot(now.date(), 0) == 0.0
+        assert agile_tariff.saved_for_slot(
+            now.date() - timedelta(days=1), 0
+        ) is None
+
 
 class TestDashboardModeLine:
     """The compact decision line sits above the 48-slot strip."""
@@ -2520,6 +2602,8 @@ class TestStatePersistence:
         tariff._bank_seeded = True
         tariff._savings_day = now.date()
         tariff._saved_today_gbp = 0.34
+        tariff._saved_by_slot_gbp = [0.0] * 48
+        tariff._saved_by_slot_gbp[24] = 0.34
         tariff._savings_last_time = now
         tariff._savings_last_baseline_w = 120.0
         tariff._savings_last_evse_w = -240.0
@@ -2543,6 +2627,8 @@ class TestStatePersistence:
         assert second._bank_seeded is True
         assert second._savings_day == now.date()
         assert second._saved_today_gbp == pytest.approx(0.34)
+        assert second._saved_by_slot_gbp[24] == pytest.approx(0.34)
+        assert sum(second._saved_by_slot_gbp) == pytest.approx(0.34)
         assert second._exported_slots == [12, 34]
 
         # The interval across the switch must not be booked as if it had
@@ -2570,6 +2656,8 @@ class TestStatePersistence:
         assert data["ledger"]["seeded"] is True
         assert data["savings"]["day"] == now.date().isoformat()
         assert data["savings"]["saved_today_gbp"] == pytest.approx(0.34)
+        assert data["savings"]["saved_by_slot_gbp"][24] == pytest.approx(0.34)
+        assert sum(data["savings"]["saved_by_slot_gbp"]) == pytest.approx(0.34)
         assert data["exported_slots"] == [12, 34]
 
     def test_stale_saving_resets_but_the_ledger_survives(self, tmp_path):

@@ -127,6 +127,18 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "ioctgo_agile_outgoing_state.json"
 
+    @property
+    def DAILY_REPORT_DIR(self):
+        """Directory holding one JSON energy log per day."""
+        self._ensure_initialized()
+        return get_data_dir() / "reports" / "daily"
+
+    @property
+    def AGILE_RATES_DIR(self):
+        """Directory holding the per-day Agile Outgoing rate cache."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "agile_rates"
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         try:

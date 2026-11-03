@@ -45,7 +45,8 @@ version 1, so I would suggest installing as per the official instructions on the
 All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
-- `data/state/` - State files including schedule, supplier energy sessions and EVSE state
+- `data/state/` - State files including schedule, supplier energy sessions, EVSE state and the Agile rate cache
+- `data/reports/daily/` - One JSON half-hour energy report per day
 
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
 
@@ -502,6 +503,56 @@ but nothing links them automatically.
 On the tariff strip, session slots carry a blue bar (free import) or an amber
 bar (grid support) and appear in a legend below it, in addition to the mode and
 reason in the decision line.
+
+##### Daily energy report (`/reports/daily`)
+
+The **Energy Report →** link in the dashboard navigation opens one persistent
+report per local day. It has 48 half-hour rows and works from the minimum
+hardware: the grid CT clamp and the Wallbox. Every other configured, in-use
+Shelly channel is recorded as a named in/out meter; nothing assumes solar, a
+heat pump or a second battery.
+
+Each row records:
+
+- Grid **Imported** and **Exported** kWh.
+- EVSE AC **Charged** and **Discharged** kWh.
+- EV battery **DC In** and **Out** kWh, from `dc_voltage × dc_current`.
+- Every other in-use channel as **In** / **Out** kWh, labelled from config.
+- SoC at the start and end of the slot.
+- Import and export prices, estimated import cost, export revenue and net
+  cost.
+- The controller's stored-energy saving, as a separate attribution.
+
+Energy is integrated from instantaneous power, never from the Shelly
+cumulative counters: a Wi-Fi recovery power-cycle resets those counters and
+would book a large negative slot. An interval is split at a slot boundary, and
+a gap longer than 300 s adds no energy and reduces coverage. Anything not
+measured is `—`, never zero.
+
+Prices are frozen into the slot when it closes, so a historical report never
+recomputes with later rates. The estimate is for `IOCTGO + Agile Outgoing`:
+import is 0p in a free-import session, otherwise the configured low/high band;
+export is the day's Agile Outgoing rate. It excludes the standing charge, VAT
+and supplier adjustments. The controller saving is not added to or subtracted
+from the net cost: the actual import and export already include the
+controller's behaviour, and summing the two would double-count.
+
+One JSON file is written atomically per day to `data/reports/daily/`, with the
+slot in progress flushed about every minute. On restart the partial slot
+resumes without bridging the downtime. A clock-change day still has 48 local
+rows and is flagged: spring's missing hour has no coverage, and autumn's
+repeated hour lands in the same two rows. Daily totals remain correct because
+they sum measured energy.
+
+The same data is available as JSON at
+`/api/reports/daily/YYYY-MM-DD` and as a CSV download at
+`/reports/daily/YYYY-MM-DD.csv`. Today's page refreshes once a minute;
+historical pages are static.
+
+The Agile rate cache lives in `data/state/agile_rates/YYYY-MM-DD.json`. The
+tariff and the report share one fetch/parse implementation, so the report can
+still price a slot while the tariff is stopped. If the cache is absent, the
+report fetches the day once and writes it.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

@@ -54,3 +54,37 @@ def isolated_tariff_state(tmp_path, monkeypatch):
         tmp_path / "ioctgo_agile_outgoing_state.json",
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolated_daily_report(tmp_path):
+    """Keep the per-day energy log out of the live data directory.
+
+    The log is a process-wide singleton because the controller, the web UI
+    and the API must see the same day.  Tests point it at a temporary file and
+    reset its in-memory day between cases.
+    """
+    from evse_controller.daily_report import daily_log
+
+    daily_log.reset(tmp_path / "daily_reports")
+    try:
+        yield daily_log
+    finally:
+        daily_log.reset()
+        daily_log.set_directory(None)
+
+
+@pytest.fixture(autouse=True)
+def isolated_price_book(tmp_path, monkeypatch):
+    """Keep the Agile rate cache local and never hit the network in tests."""
+    from evse_controller import slot_prices
+
+    slot_prices.price_book.reset(tmp_path / "agile_rates")
+    monkeypatch.setattr(
+        slot_prices, "fetch_day_rates", lambda *args, **kwargs: []
+    )
+    try:
+        yield slot_prices.price_book
+    finally:
+        slot_prices.price_book.reset()
+        slot_prices.price_book.set_directory(None)

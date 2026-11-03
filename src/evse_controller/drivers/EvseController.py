@@ -1,4 +1,5 @@
 from enum import Enum
+from datetime import datetime
 import math
 import time
 from evse_controller.drivers.evse.async_interface import EvseState, EvseThreadInterface, EvseCommand, EvseCommandData
@@ -217,6 +218,15 @@ class EvseController(PowerMonitorObserver):
         # Subscribe to OCPP state change events to keep internal state synchronized
         EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
         EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+
+        # Publish the configured meters before the first power sample, so a
+        # report page opened straight after startup still knows the columns.
+        try:
+            from evse_controller.daily_report import configured_series, daily_log
+
+            daily_log.configure(configured_series())
+        except Exception as exc:
+            warning(f"DAILY_REPORT: Could not configure series: {exc}")
 
     @property
     def use_new_current_calculation(self) -> bool:
@@ -924,6 +934,148 @@ class EvseController(PowerMonitorObserver):
         evse_w = self._resolve_evse_watts(power)
         return self._normalised_power(grid_w, evse_w, power)
 
+    # How long a device's last reading is trusted by the daily report.  A
+    # device that stops reporting must become ``None`` rather than having its
+    # final reading integrated for the rest of the slot.
+    REPORT_DEVICE_STALE_SECONDS = 30.0
+    REPORT_EVSE_STALE_SECONDS = 60.0
+
+    def _feed_daily_report(self, monitor, power: Power) -> None:
+        """Hand the latest meter readings to the process-wide daily log.
+
+        This runs for both Shellys before ``update()`` returns early for the
+        non-grid device, so every channel is sampled at its own poll rate.
+        The log integrates power itself; the Shelly cumulative counters are
+        never read, because a Wi-Fi power-cycle resets them.
+        """
+        try:
+            from evse_controller.daily_report import configured_series, daily_log
+
+            device = None
+            pmon = getattr(self, "pmon", None)
+            pmon2 = getattr(self, "pmon2", None)
+            if monitor is not None and monitor is pmon:
+                device = "primary"
+            elif monitor is not None and monitor is pmon2:
+                device = "secondary"
+
+            now_mono = time.monotonic()
+            last_power = getattr(self, "_report_last_power", None)
+            if last_power is None:
+                last_power = {}
+                self._report_last_power = last_power
+            seen = getattr(self, "_report_device_seen", None)
+            if seen is None:
+                seen = {}
+                self._report_device_seen = seen
+            if device is not None:
+                last_power[device] = power
+                seen[device] = now_mono
+
+            evse_state = None
+            evse = getattr(self, "evse", None)
+            if evse is not None:
+                try:
+                    evse_state = evse.get_state()
+                except Exception as exc:  # a report must not break control
+                    debug(f"DAILY_REPORT: Could not read Wallbox state: {exc}")
+
+            specs = configured_series()
+            signature = tuple(
+                (spec.key, spec.label, spec.in_label, spec.out_label)
+                for spec in specs
+            )
+            if signature != getattr(self, "_report_spec_signature", None):
+                daily_log.configure(specs)
+                self._report_spec_signature = signature
+            values = {}
+            for spec in specs:
+                values[spec.key] = self._report_value(
+                    spec.key, last_power, seen, now_mono, evse_state,
+                )
+
+            soc = None
+            if evse_state is not None:
+                level = getattr(evse_state, "battery_level", -1)
+                if isinstance(level, int) and level >= 0:
+                    soc = level
+            daily_log.observe(datetime.now(), values, soc)
+        except Exception as exc:
+            # Reporting is best-effort: a broken report must never stop the
+            # controller from controlling.
+            debug(f"DAILY_REPORT: Feed failed: {exc}")
+
+    def _report_value(
+        self,
+        key: str,
+        last_power: dict,
+        seen: dict,
+        now_mono: float,
+        evse_state,
+    ):
+        """The current watts for one series, or ``None`` if it is stale."""
+        if key == "grid":
+            device = config.SHELLY_GRID_DEVICE
+            channel = config.SHELLY_GRID_CHANNEL
+            power = last_power.get(device)
+            if power is None or not self._device_is_fresh(device, seen, now_mono):
+                return None
+            return self._channel_watts(power, channel)
+
+        if key == "evse":
+            device = config.SHELLY_EVSE_DEVICE
+            channel = config.SHELLY_EVSE_CHANNEL
+            if device and channel in (1, 2):
+                power = last_power.get(device)
+                if power is None or not self._device_is_fresh(
+                    device, seen, now_mono
+                ):
+                    return None
+                return self._channel_watts(power, channel)
+            if not self._evse_is_fresh(evse_state):
+                return None
+            return float(getattr(evse_state, "ac_power", 0.0))
+
+        if key == "battery_dc":
+            if not self._evse_is_fresh(evse_state):
+                return None
+            voltage = float(getattr(evse_state, "dc_voltage", 0.0))
+            current = float(getattr(evse_state, "dc_current", 0.0))
+            return voltage * current
+
+        if key.startswith("shelly."):
+            _, device, channel_name = key.split(".", 2)
+            try:
+                channel = int(channel_name.replace("channel", ""))
+            except ValueError:
+                return None
+            power = last_power.get(device)
+            if power is None or not self._device_is_fresh(device, seen, now_mono):
+                return None
+            return self._channel_watts(power, channel)
+
+        return None
+
+    def _device_is_fresh(self, device, seen: dict, now_mono: float) -> bool:
+        last_seen = seen.get(device)
+        if last_seen is None:
+            return False
+        return (now_mono - last_seen) <= self.REPORT_DEVICE_STALE_SECONDS
+
+    def _evse_is_fresh(self, evse_state) -> bool:
+        if evse_state is None:
+            return False
+        last_update = getattr(evse_state, "last_update", 0)
+        try:
+            last_update = float(last_update)
+        except (TypeError, ValueError):
+            return False
+        # 0 means the state has never been filled in (e.g. a mock in a unit
+        # test); do not treat it as fresh and integrate a placeholder 0 W.
+        if last_update <= 0:
+            return False
+        return (time.time() - last_update) <= self.REPORT_EVSE_STALE_SECONDS
+
     def update(self, monitor, power):
         """Update controller state based on power monitor readings.
 
@@ -931,6 +1083,8 @@ class EvseController(PowerMonitorObserver):
             monitor: The Shelly power monitor that's reporting
             power: Power readings from the monitor
         """
+        self._feed_daily_report(monitor, power)
+
         # Determine if this update is from the grid monitoring device
         is_grid_monitor = (
             (monitor == self.pmon and config.SHELLY_GRID_DEVICE == "primary") or

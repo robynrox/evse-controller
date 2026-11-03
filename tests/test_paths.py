@@ -81,6 +81,9 @@ def test_ensure_data_dirs_creates_directories(temp_dir, temp_cwd):
     assert (temp_dir / "config").is_dir()
     assert (temp_dir / "logs").is_dir()
     assert (temp_dir / "state").is_dir()
+    assert (temp_dir / "state" / "agile_rates").is_dir()
+    assert (temp_dir / "reports" / "daily").is_dir()
+
 
 def test_ensure_data_dirs_handles_existing_directories(temp_dir, temp_cwd):
     """Test that ensure_data_dirs works even if directories already exist."""

@@ -1,4 +1,5 @@
 from ..base import Tariff
+from .agile_rates import fetch_day_rates
 from .battery_efficiency import BatteryEfficiencyModel, DASHBOARD_SOC_CAPACITY_KWH
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
@@ -16,7 +17,6 @@ import math
 import copy
 from collections import deque
 from typing import Optional
-import urllib.request
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -526,6 +526,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # GBP, reset at local midnight.
         self._savings_day = None
         self._saved_today_gbp = 0.0
+        # The same saving split by local half-hour slot.  It exists so the
+        # daily report can attribute the saving to the slot it happened in;
+        # sum(_saved_by_slot_gbp) always equals _saved_today_gbp.
+        self._saved_by_slot_gbp = [0.0] * 48
         self._savings_last_time = None
         self._savings_last_baseline_w = 0.0
         self._savings_last_evse_w = 0.0
@@ -1246,6 +1250,31 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 continue
             if 0 <= value < 48:
                 exported_slots.append(value)
+        saved_by_slot = []
+        for value in self._saved_by_slot_gbp[:48]:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = 0.0
+            if not math.isfinite(number):
+                number = 0.0
+            saved_by_slot.append(number)
+        saved_by_slot.extend([0.0] * (48 - len(saved_by_slot)))
+        total_by_slot = sum(saved_by_slot)
+        if saved_today == 0.0:
+            saved_by_slot = [0.0] * 48
+        elif not math.isclose(total_by_slot, saved_today, abs_tol=1e-9):
+            # Keep the persisted invariant even if the array was damaged or
+            # came from an older file.  Attribute the residual to the last
+            # slot that already holds a saving, or to the current slot.
+            target = next(
+                (i for i in range(47, -1, -1) if saved_by_slot[i] != 0.0),
+                None,
+            )
+            if target is None:
+                now = self.get_current_datetime()
+                target = now.hour * 2 + (1 if now.minute >= 30 else 0)
+            saved_by_slot[target] += saved_today - total_by_slot
         return {
             "version": self.STATE_VERSION,
             "saved_at": self.get_current_datetime().isoformat(),
@@ -1257,6 +1286,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "savings": {
                 "day": savings_day.isoformat() if savings_day else None,
                 "saved_today_gbp": saved_today,
+                "saved_by_slot_gbp": saved_by_slot,
             },
             "exported_slots": sorted(set(exported_slots)),
         }
@@ -1366,6 +1396,37 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         same_day = saved_day == today
         self._savings_day = today
         self._saved_today_gbp = saved_today if same_day else 0.0
+
+        self._saved_by_slot_gbp = [0.0] * 48
+        if same_day and self._saved_today_gbp != 0.0:
+            raw_by_slot = savings.get("saved_by_slot_gbp")
+            restored_by_slot = []
+            if isinstance(raw_by_slot, (list, tuple)) and len(raw_by_slot) == 48:
+                for raw_value in raw_by_slot:
+                    try:
+                        value = float(raw_value)
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    restored_by_slot.append(value if math.isfinite(value) else 0.0)
+            if restored_by_slot and math.isclose(
+                sum(restored_by_slot), self._saved_today_gbp, abs_tol=1e-9
+            ):
+                self._saved_by_slot_gbp = restored_by_slot
+            else:
+                # An older state file (or a damaged array) has a daily total
+                # but no trustworthy split.  Keep the invariant that the
+                # slots sum to the total by putting the remainder in the most
+                # recent slot we can identify.
+                slot = 0
+                saved_at = data.get("saved_at")
+                if isinstance(saved_at, str):
+                    try:
+                        stamp = datetime.fromisoformat(saved_at)
+                    except ValueError:
+                        stamp = None
+                    if stamp is not None and stamp.date() == today:
+                        slot = stamp.hour * 2 + (1 if stamp.minute >= 30 else 0)
+                self._saved_by_slot_gbp[min(slot, 47)] = self._saved_today_gbp
 
         restored_slots = []
         if same_day:
@@ -1679,6 +1740,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if self._savings_day != today:
             self._savings_day = today
             self._saved_today_gbp = 0.0
+            self._saved_by_slot_gbp = [0.0] * 48
             self._savings_last_time = None
             self._savings_last_baseline_w = 0.0
             self._savings_last_evse_w = 0.0
@@ -1778,6 +1840,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
 
                 self._saved_today_gbp += avoided - released_cost
+                self._saved_by_slot_gbp[current_slot] += avoided - released_cost
                 self._bank_dc_kwh = max(0.0, self._bank_dc_kwh - from_bank)
                 self._bank_cost_gbp = max(
                     0.0, self._bank_cost_gbp - bank_cost_used
@@ -1787,6 +1850,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._savings_last_baseline_w = power["baseline_w"]
         self._savings_last_evse_w = power["evse_w"]
         self._record_savings_rate(now)
+
+    def saved_for_slot(self, day: date, slot: int) -> Optional[float]:
+        """Return the saving booked in a local half-hour slot.
+
+        ``0.0`` means the slot was monitored and nothing was saved; ``None``
+        means the tariff has no data for that day.  The daily report uses
+        ``None`` itself when no suitable tariff was active.
+        """
+        if not (0 <= slot < 48):
+            return None
+        if self._savings_day is None:
+            # Nothing has been accumulated yet.  The tariff is still active,
+            # so today's slots are a genuine zero rather than "unknown".
+            return (
+                0.0
+                if day == self.get_current_datetime().date()
+                else None
+            )
+        # Compare with the day the array belongs to, not the wall clock: the
+        # report closes the previous day's last slot on the first sample after
+        # midnight, which is still before the tariff resets its array.
+        if day != self._savings_day:
+            return None
+        return float(self._saved_by_slot_gbp[slot])
 
     def _estimate_solar_harvest_current(self) -> float:
         """Estimate the charge current the load-following loop will use.
@@ -2249,71 +2336,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             List of dicts with 'start', 'end', 'rate' keys
         """
         today = datetime.now()
-        tariff_id = f"E-1R-{self.tariff_code}-{self.region}"
-        base_url = f"https://api.octopus.energy/v1/products/{self.tariff_code}/electricity-tariffs/{tariff_id}"
-        
-        # Fetch today's rates
-        start = today.strftime('%Y-%m-%dT00:00:00Z')
-        end = (today + timedelta(days=1)).strftime('%Y-%m-%dT00:00:00Z')
-        url = f"{base_url}/standard-unit-rates/?period__started_at__gte={start}&period__started_at__lt={end}"
-        
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'EVSE-Controller/1.0'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode())
-            
-            rates = []
-            for result in data.get('results', []):
-                valid_from = result.get('valid_from')
-                valid_to = result.get('valid_to')
-                rate_inc = result.get('value_inc_vat')
+        day = today.date()
+        rates = fetch_day_rates(
+            self.region, day, tariff_code=self.tariff_code
+        )
+        if rates:
+            # Publish to the shared price book so the daily report can still
+            # price a slot after this tariff has been stopped.
+            from evse_controller.slot_prices import price_book
 
-                if not all([valid_from, valid_to, rate_inc is not None]):
-                    continue
-
-                start_dt = datetime.fromisoformat(valid_from.replace('Z', '+00:00'))
-                end_dt = datetime.fromisoformat(valid_to.replace('Z', '+00:00'))
-
-                # Convert UTC times to local time for correct slot index calculation
-                # This is critical on DST transition days when UTC hour != local hour
-                start_dt = start_dt.astimezone()
-                end_dt = end_dt.astimezone()
-
-                rates.append({
-                    'start': start_dt,
-                    'end': end_dt,
-                    'rate': round(rate_inc, 2)
-                })
-            
-            # Sort by start time
-            rates.sort(key=lambda r: r['start'])
-
-            # Filter to today only (using local date after timezone conversion)
-            # On DST transition days, this correctly handles the missing hour
-            today_date = datetime.now().date()
-            
-            # Use dict to remove duplicates (key by start time)
-            unique_rates = {}
-            for r in rates:
-                # Check if this rate's start date matches today (in local time)
-                if r['start'].date() == today_date:
-                    # Create a key from the start time (rounded to minute)
-                    key = r['start'].strftime('%Y-%m-%d %H:%M')
-                    # Keep the first occurrence (or could keep latest if API returns updates)
-                    if key not in unique_rates:
-                        unique_rates[key] = r
-
-            # Convert back to list and sort
-            rates = sorted(unique_rates.values(), key=lambda r: r['start'])
-            
-            # Verify we have expected number of slots (46 or 48 is normal, depends on GMT/BST in use)
-            if len(rates) != 46 and len(rates) != 48:
-                warning(f"IOCTGO_AGILEOUT: Expected 46 or 48 slots, got {len(rates)}.")
-            
-            return rates
-        except Exception as e:
-            error(f"IOCTGO_AGILEOUT: API fetch failed: {e}")
-            return []
+            price_book.update_rates(day, rates)
+        return rates
 
     def _record_decision(
         self,

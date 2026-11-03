@@ -220,6 +220,27 @@ completed fixes.
   manual command still outranks them; overlapping windows are rejected.
   Free-import slots are excluded from the export plan. The tariff strip marks
   each session slot with a coloured bar and a legend entry.
+- **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
+  local day in `data/reports/daily/`, fed from `EvseController.update()` on
+  every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It
+  integrates instantaneous power (never the reset-prone Shelly counters),
+  splits intervals at slot boundaries, caps a gap at 300 s and records
+  per-series coverage. `grid` and `evse` are the only semantic series; every
+  other in-use channel is a named in/out meter, and `battery_dc` comes from
+  Wallbox `dc_voltage × dc_current`. Missing data is `null`, never zero.
+  Import and export prices are frozen into each slot when it closes; the
+  shared `slot_prices.price_book` reads or fetches the Agile cache in
+  `data/state/agile_rates/YYYY-MM-DD.json`. `slot_prices` replicates the
+  tariff's 23:30–05:30 band and free-import override. The tariff publishes
+  its fetched rates to the same book and exposes `saved_for_slot(day, slot)`
+  from a persisted `[48]` array whose sum always equals `saved_today_gbp`;
+  `TariffManager` registers that provider only while a suitable tariff is
+  active, so the report shows `—` rather than £0 when no tariff is running.
+  The page is `/reports/daily` (today and earlier days), with JSON at
+  `/api/reports/daily/<date>` and CSV at `/reports/daily/<date>.csv`.
+  Today's page refreshes once a minute; historical pages are static. Clock
+  change days keep 48 local rows and are flagged. The controller saving is a
+  separate attribution and is never folded into net cost.
 - **Fixed modes own their current range.** `setControlState(CHARGE)` and
   `setControlState(DISCHARGE)` reassert `min = max` on every call, not only
   when the state changes, and every max-rate decision returns its range
@@ -230,10 +251,12 @@ completed fixes.
   because `set_home_demand_levels()` refines them immediately afterwards.
 - Deferred: prefer the Wallbox Modbus `ac_power` as the EVSE term (guard on a
   fresh `last_update` and exclude `COMMS_FAILURE`), with the configured Shelly
-  channel and power model as fallbacks. Not implemented.
+  channel and power model as fallbacks. Not implemented for control. The daily
+  report already uses the configured Shelly EVSE channel when present and the
+  fresh Wallbox `ac_power` otherwise.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **466 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **503 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
