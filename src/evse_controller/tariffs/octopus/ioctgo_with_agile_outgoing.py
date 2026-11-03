@@ -1369,7 +1369,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         restored_slots = []
         if same_day:
-            for raw_slot in data.get("exported_slots") or []:
+            raw_slots = data.get("exported_slots")
+            if not isinstance(raw_slots, (list, tuple, set)):
+                raw_slots = []
+            for raw_slot in raw_slots:
                 try:
                     slot = int(raw_slot)
                 except (TypeError, ValueError):
