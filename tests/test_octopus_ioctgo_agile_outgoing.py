@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
+import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from evse_controller.energy_sessions import (
     FREE_IMPORT,
@@ -68,7 +69,7 @@ def create_mock_agile_rates():
     return rates
 
 
-def _build_tariff() -> IOctGoWithAgileOutgoingTariff:
+def _build_tariff(state_path=None) -> IOctGoWithAgileOutgoingTariff:
     """Create a tariff instance with the Wallbox thread mocked out."""
     mock_thread = Mock()
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
@@ -76,7 +77,7 @@ def _build_tariff() -> IOctGoWithAgileOutgoingTariff:
 
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
                return_value=mock_thread):
-        tariff = IOctGoWithAgileOutgoingTariff()
+        tariff = IOctGoWithAgileOutgoingTariff(state_path=state_path)
     tariff.agile_rates = create_mock_agile_rates()
     tariff._planned_export_slots = []  # No planned exports for these tests
     return tariff
@@ -2506,6 +2507,165 @@ class TestDecisionLog:
 
             assert log_info.call_count == 2
             assert "Harvest 6 A" in log_info.call_args[0][0]
+
+
+class TestStatePersistence:
+    """The ledger and today's saving survive a restart or a tariff switch."""
+
+    @staticmethod
+    def _populate(tariff, now):
+        tariff.set_time_functions(datetime_func=lambda: now)
+        tariff._bank_dc_kwh = 9.5
+        tariff._bank_cost_gbp = 0.76
+        tariff._bank_seeded = True
+        tariff._savings_day = now.date()
+        tariff._saved_today_gbp = 0.34
+        tariff._savings_last_time = now
+        tariff._savings_last_baseline_w = 120.0
+        tariff._savings_last_evse_w = -240.0
+        tariff._ledger_direction = -1
+        tariff._ledger_settle_until = now + timedelta(seconds=20)
+        tariff._savings_rate_history.append((now, 0.34))
+        tariff._savings_rate_gbp_per_hour = 0.12
+        tariff._exported_slots = [34, 12, 34, 99]
+
+    def test_save_then_load_restores_ledger_and_saving(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        first = _build_tariff(state_path=state_path)
+        self._populate(first, now)
+
+        assert first.save_state() is True
+
+        second = _build_tariff(state_path=state_path)
+        assert second._bank_dc_kwh == pytest.approx(9.5)
+        assert second._bank_cost_gbp == pytest.approx(0.76)
+        assert second._bank_seeded is True
+        assert second._savings_day == now.date()
+        assert second._saved_today_gbp == pytest.approx(0.34)
+        assert second._exported_slots == [12, 34]
+
+        # The interval across the switch must not be booked as if it had
+        # just happened: the next control sample starts a fresh baseline.
+        assert second._savings_last_time is None
+        assert second._savings_last_baseline_w == 0.0
+        assert second._savings_last_evse_w == 0.0
+        assert second._ledger_direction == 0
+        assert second._ledger_settle_until is None
+        assert second._savings_rate_gbp_per_hour == 0.0
+        assert list(second._savings_rate_history) == []
+
+    def test_cleanup_saves_state(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        tariff = _build_tariff(state_path=state_path)
+        self._populate(tariff, now)
+
+        tariff.cleanup()
+
+        data = json.loads(state_path.read_text())
+        assert data["version"] == tariff.STATE_VERSION
+        assert data["ledger"]["dc_kwh"] == pytest.approx(9.5)
+        assert data["ledger"]["cost_gbp"] == pytest.approx(0.76)
+        assert data["ledger"]["seeded"] is True
+        assert data["savings"]["day"] == now.date().isoformat()
+        assert data["savings"]["saved_today_gbp"] == pytest.approx(0.34)
+        assert data["exported_slots"] == [12, 34]
+
+    def test_stale_saving_resets_but_the_ledger_survives(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        yesterday = datetime.now().date() - timedelta(days=1)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "saved_at": f"{yesterday.isoformat()}T23:59:00",
+                    "ledger": {
+                        "dc_kwh": 7.25,
+                        "cost_gbp": 0.58,
+                        "seeded": True,
+                    },
+                    "savings": {
+                        "day": yesterday.isoformat(),
+                        "saved_today_gbp": 0.41,
+                    },
+                    "exported_slots": [30, 31],
+                }
+            )
+        )
+
+        tariff = _build_tariff(state_path=state_path)
+
+        # The ledger deliberately crosses midnight, so it is kept.
+        assert tariff._bank_dc_kwh == pytest.approx(7.25)
+        assert tariff._bank_cost_gbp == pytest.approx(0.58)
+        assert tariff._bank_seeded is True
+        # Today's total and today's export markers start clean.
+        assert tariff._savings_day == datetime.now().date()
+        assert tariff._saved_today_gbp == 0.0
+        assert tariff._exported_slots == []
+
+    def test_restored_ledger_is_not_seeded_again(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        first = _build_tariff(state_path=state_path)
+        self._populate(first, now)
+        first.save_state()
+
+        second = _build_tariff(state_path=state_path)
+        before_dc = second._bank_dc_kwh
+        before_cost = second._bank_cost_gbp
+
+        second._seed_bank_from_soc(80)
+
+        assert second._bank_dc_kwh == pytest.approx(before_dc)
+        assert second._bank_cost_gbp == pytest.approx(before_cost)
+
+    def test_corrupt_state_is_ignored(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        state_path.write_text("{this is not json")
+
+        tariff = _build_tariff(state_path=state_path)
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_cost_gbp == 0.0
+        assert tariff._bank_seeded is False
+        assert tariff._saved_today_gbp == 0.0
+
+    def test_negative_or_invalid_ledger_values_are_ignored(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "ledger": {
+                        "dc_kwh": -2.0,
+                        "cost_gbp": "not a number",
+                        "seeded": True,
+                    },
+                    "savings": {
+                        "day": datetime.now().date().isoformat(),
+                        "saved_today_gbp": 0.12,
+                    },
+                }
+            )
+        )
+
+        tariff = _build_tariff(state_path=state_path)
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_cost_gbp == 0.0
+        # The invalid ledger allows the startup SoC seed to run again.
+        assert tariff._bank_seeded is False
+        # The ledger is bad, but a valid today's saving is still usable.
+        assert tariff._saved_today_gbp == pytest.approx(0.12)
+
+    def test_missing_state_file_leaves_defaults(self, tmp_path):
+        tariff = _build_tariff(state_path=tmp_path / "absent.json")
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_seeded is False
+        assert tariff._saved_today_gbp == 0.0
 
 
 class TestRateFetchState:

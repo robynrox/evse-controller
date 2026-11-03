@@ -288,3 +288,47 @@ class TestTariffManagerCommandQueuePropagation:
             # Switch to a different tariff
             manager.set_tariff('OCTGO')
             assert manager.current_tariff.command_queue is mock_command_queue
+
+
+class TestTariffManagerStatePersistence:
+    """The manager owns the save hook used on a clean shutdown."""
+
+    def test_save_state_delegates_to_the_active_tariff(self):
+        from evse_controller.tariffs.manager import TariffManager
+
+        manager = TariffManager.__new__(TariffManager)
+        manager.current_tariff = Mock()
+
+        manager.save_state()
+
+        manager.current_tariff.save_state.assert_called_once_with()
+
+    def test_save_state_is_a_no_op_without_a_tariff(self):
+        from evse_controller.tariffs.manager import TariffManager
+
+        manager = TariffManager.__new__(TariffManager)
+        manager.current_tariff = None
+
+        manager.save_state()  # Must not raise.
+
+    def test_save_state_swallows_errors_during_shutdown(self):
+        from evse_controller.tariffs.manager import TariffManager
+
+        manager = TariffManager.__new__(TariffManager)
+        manager.current_tariff = Mock()
+        manager.current_tariff.save_state.side_effect = OSError("disk gone")
+
+        manager.save_state()  # A failed save must not abort shutdown.
+
+    def test_stopping_the_tariff_runs_its_cleanup_hook(self):
+        """Switching away must give the tariff the chance to save."""
+        from evse_controller.tariffs.manager import TariffManager
+
+        manager = TariffManager.__new__(TariffManager)
+        tariff = Mock()
+        manager.current_tariff = tariff
+
+        manager.stop_tariff()
+
+        tariff.cleanup.assert_called_once_with()
+        assert manager.current_tariff is None

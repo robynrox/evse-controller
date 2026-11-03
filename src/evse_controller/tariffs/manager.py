@@ -6,7 +6,7 @@ from .octopus.ioctgo import IntelligentOctopusGoTariff
 from .octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from .base import Tariff
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseState
-from evse_controller.utils.logging_config import debug
+from evse_controller.utils.logging_config import debug, error
 
 class TariffManager:
     def __init__(self, command_queue):
@@ -55,6 +55,20 @@ class TariffManager:
         if self.current_tariff is not None:
             self.current_tariff.cleanup()
         self.current_tariff = None
+
+    def save_state(self):
+        """Persist the active tariff's state on a clean shutdown.
+
+        Switching tariffs already goes through ``cleanup()``, which saves.
+        This explicit hook covers the process exiting while a tariff is still
+        active, without requiring the caller to tear the tariff down.
+        """
+        if self.current_tariff is None:
+            return
+        try:
+            self.current_tariff.save_state()
+        except Exception as exc:
+            error(f"TariffManager: Failed to save tariff state: {exc}")
 
     def get_control_state(self, dayMinute):
         """Get control state from current tariff.

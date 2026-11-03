@@ -393,11 +393,18 @@ cell on a phone, where the badge alone is too small to rely on.
   cost including the round-trip loss. So an off-peak charge at 7.62p that later
   displaces 32.26p daytime import books `32.26p − 7.62p / η_rt` per kWh
   delivered. It resets at local midnight, but the stored-energy ledger carries
-  over, so energy bought yesterday is priced with yesterday's cost. At startup
-  the charge already in the pack is seeded at the off-peak fallback price, and
-  a ledger below 0.05 kWh is treated as metering noise rather than a price
-  basis. After the EVSE changes direction, the ledger also ignores power for
-  the Wallbox's start/stop settling time (21.9 s from idle, 10.9 s back to
+  over, so energy bought yesterday is priced with yesterday's cost. The ledger
+  and today's saving are also written to
+  `data/state/ioctgo_agile_outgoing_state.json` on a clean shutdown and when
+  switching away from the tariff, then restored when it starts again. The
+  ledger always carries over; today's saving and the export markers are kept
+  only if the saved day is today, and the interval baseline restarts so time
+  spent away is not booked as a saving. A corrupt or unreadable state file is
+  ignored, leaving the off-peak fallback and startup SoC seed in charge. At
+  startup the charge already in the pack is seeded at the off-peak fallback
+  price, and a ledger below 0.05 kWh is treated as metering noise rather than a
+  price basis. After the EVSE changes direction, the ledger also ignores power
+  for the Wallbox's start/stop settling time (21.9 s from idle, 10.9 s back to
   idle), because the unit draws ~200 W while it powers up or down; current
   changes within an active direction are booked immediately. Export
   prices are only ever numerators. A 0p price makes the controller store rather

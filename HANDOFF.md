@@ -141,8 +141,10 @@ completed fixes.
   `033e88f` (sessions page and JSON API), `ff5776e` (session markers on the
   strip), `1b1fc94` (wrap the session strip instead of clipping it), the
   forecast/DP roadmap (`53f8bfa`, `f051dcf`), `2d23873` (fixed modes
-  reassert their current range), and `fa2d5f0` (say "not yet" when the armed
-  charge floor is above the live surplus).
+  reassert their current range), `fa2d5f0` (say "not yet" when the armed
+  charge floor is above the live surplus), `58d10a2` (ledger and efficiency
+  details on the explanation page), and `97e88ac` (persist the ledger across
+  restarts and tariff switches).
 - The dashboard links to a separate **Why this decision?** page (`/decision`),
   from both the decision line (`Explanation →`) and the navigation. It
   deep-copies the latest decision snapshot when rendered and deliberately
@@ -164,6 +166,14 @@ completed fixes.
   single-direction efficiencies, and a round-trip percentage in every cell.
   The table follows the configured current limits; above the 16 A measured
   ceiling the model holds the last measured efficiency, which the page states.
+- The tariff's stored-energy ledger and today's saving persist in
+  `data/state/ioctgo_agile_outgoing_state.json`. `save_state()` writes them on
+  a clean shutdown (through `TariffManager.save_state()`) and `cleanup()`
+  writes them when switching away; the constructor restores them. The ledger
+  crosses midnight and restarts; the daily saving and exported-slot markers
+  are kept only when the saved day is today. The interval baseline is not
+  restored, so the inactive gap cannot be booked as a saving. Invalid or
+  unreadable files fall back to the off-peak price and a fresh SoC seed.
 - Two 180-day reports have been generated on the production machine and
   reviewed in `reports/efficiency/REVIEW.md`. The static model in
   `battery_efficiency.py` matches the second run (48.292 kWh / 0.1395 kW).
@@ -223,7 +233,7 @@ completed fixes.
   channel and power model as fallbacks. Not implemented.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **455 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **466 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

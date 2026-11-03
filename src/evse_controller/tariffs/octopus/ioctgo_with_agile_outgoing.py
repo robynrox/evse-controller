@@ -19,7 +19,8 @@ from typing import Optional
 import urllib.request
 import json
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 import html as html_module
 
 
@@ -247,6 +248,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     # is used instead.
     MIN_LEDGER_BASIS_KWH = 0.05
 
+    # Version of the on-disk state.  Bump when a field changes meaning so a
+    # future loader can migrate rather than silently misread old data.
+    STATE_VERSION = 1
+
+    # Test hook: point persistence at a temporary file.  Production uses
+    # config.IOCTGO_AGILE_STATE_FILE.
+    STATE_PATH = None
+
     # Ledger settling after a direction change.  The Wallbox powers up or down
     # before it reaches the commanded current and draws roughly 200 W while it
     # does so.  These are the delays already used by the Wallbox thread
@@ -317,9 +326,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     """
 
     def __init__(self, command_queue: Optional[queue.Queue] = None, battery_capacity_kwh=None,
-                 bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
+                 bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None,
+                 state_path=None):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
+
+        # Where the ledger and today's saving are kept between runs.  Tests
+        # pass a temporary file; production uses config.IOCTGO_AGILE_STATE_FILE.
+        self._state_path_override = Path(state_path) if state_path else None
 
         # Supplier-requested half-hour windows.  The shared store means the web
         # UI can add one and this running tariff sees it immediately.  Tests
@@ -519,6 +533,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # the daily total is moving.  Only the control thread mutates this.
         self._savings_rate_history = deque(maxlen=240)
         self._savings_rate_gbp_per_hour = 0.0
+
+        # Bring back the ledger, today's saving and the export markers from a
+        # previous run.  Interval tracking is deliberately not restored: the
+        # first sample after a switch or restart establishes a new baseline,
+        # so the time spent away cannot be booked as if it had just happened.
+        self._load_persisted_state()
 
         # Ensure OCPP is off
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
@@ -1197,6 +1217,182 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 existing_dc_kwh * self._bank_fallback_cost_per_dc_kwh()
             )
         self._bank_seeded = True
+
+    def _state_file_path(self) -> Optional[Path]:
+        """Where this tariff's persistent state lives, or None to disable it."""
+        if self._state_path_override is not None:
+            return self._state_path_override
+        if self.STATE_PATH is not None:
+            return Path(self.STATE_PATH)
+        return config.IOCTGO_AGILE_STATE_FILE
+
+    def _persisted_state(self) -> dict:
+        """The small amount of state worth carrying across a restart."""
+        savings_day = self._savings_day
+        dc_kwh = float(self._bank_dc_kwh)
+        cost_gbp = float(self._bank_cost_gbp)
+        saved_today = float(self._saved_today_gbp)
+        if not math.isfinite(dc_kwh) or dc_kwh < 0:
+            dc_kwh = 0.0
+        if not math.isfinite(cost_gbp) or cost_gbp < 0:
+            cost_gbp = 0.0
+        if not math.isfinite(saved_today):
+            saved_today = 0.0
+        exported_slots = []
+        for slot in self._exported_slots:
+            try:
+                value = int(slot)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value < 48:
+                exported_slots.append(value)
+        return {
+            "version": self.STATE_VERSION,
+            "saved_at": self.get_current_datetime().isoformat(),
+            "ledger": {
+                "dc_kwh": dc_kwh,
+                "cost_gbp": cost_gbp,
+                "seeded": bool(self._bank_seeded),
+            },
+            "savings": {
+                "day": savings_day.isoformat() if savings_day else None,
+                "saved_today_gbp": saved_today,
+            },
+            "exported_slots": sorted(set(exported_slots)),
+        }
+
+    def save_state(self) -> bool:
+        """Write the ledger and daily saving to disk.
+
+        Called when the tariff is switched away from and on a clean shutdown.
+        A failed write must never take the controller down, so errors are
+        logged and the in-memory state is left untouched.
+        """
+        path = self._state_file_path()
+        if path is None:
+            return False
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(
+                json.dumps(self._persisted_state(), indent=2) + "\n"
+            )
+            temporary.replace(path)
+            debug(
+                f"IOCTGO_AGILEOUT: Saved tariff state to {path} "
+                f"(ledger {self._bank_dc_kwh:.2f} kWh, "
+                f"saved today £{self._saved_today_gbp:.4f})"
+            )
+            return True
+        except (OSError, TypeError, ValueError) as exc:
+            error(f"IOCTGO_AGILEOUT: Failed to save tariff state: {exc}")
+            return False
+
+    def _load_persisted_state(self) -> None:
+        """Restore the ledger and today's saving, if a valid file exists.
+
+        Only the ledger day's saving is kept.  A file from an earlier day
+        restores the ledger (which deliberately carries over midnight) but
+        starts today's saving at zero, matching ``_accumulate_daily_savings``.
+        """
+        path = self._state_file_path()
+        if path is None or not path.exists():
+            return
+
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            warning(
+                f"IOCTGO_AGILEOUT: Ignoring unreadable tariff state at "
+                f"{path}: {exc}"
+            )
+            return
+        if not isinstance(data, dict):
+            warning(
+                f"IOCTGO_AGILEOUT: Ignoring tariff state at {path}: "
+                "not a JSON object"
+            )
+            return
+
+        ledger = data.get("ledger")
+        if not isinstance(ledger, dict):
+            ledger = {}
+        ledger_usable = True
+        try:
+            dc_kwh = float(ledger.get("dc_kwh", 0.0))
+            cost_gbp = float(ledger.get("cost_gbp", 0.0))
+        except (TypeError, ValueError):
+            warning(
+                f"IOCTGO_AGILEOUT: Ignoring invalid ledger in {path}; "
+                "using the off-peak fallback"
+            )
+            dc_kwh = 0.0
+            cost_gbp = 0.0
+            ledger_usable = False
+        if not math.isfinite(dc_kwh) or dc_kwh < 0:
+            dc_kwh = 0.0
+            ledger_usable = False
+        if not math.isfinite(cost_gbp) or cost_gbp < 0:
+            cost_gbp = 0.0
+            ledger_usable = False
+
+        self._bank_dc_kwh = dc_kwh
+        self._bank_cost_gbp = cost_gbp
+        # An unusable ledger must not claim the pack has already been valued,
+        # otherwise the startup SoC seed would be skipped and the fallback
+        # price would never be applied.
+        self._bank_seeded = bool(
+            ledger.get("seeded", False)
+        ) and ledger_usable
+
+        today = self.get_current_datetime().date()
+        savings = data.get("savings")
+        if not isinstance(savings, dict):
+            savings = {}
+        saved_day = None
+        raw_day = savings.get("day")
+        if isinstance(raw_day, str):
+            try:
+                saved_day = date.fromisoformat(raw_day)
+            except ValueError:
+                saved_day = None
+        try:
+            saved_today = float(savings.get("saved_today_gbp", 0.0))
+        except (TypeError, ValueError):
+            saved_today = 0.0
+        if not math.isfinite(saved_today):
+            saved_today = 0.0
+
+        same_day = saved_day == today
+        self._savings_day = today
+        self._saved_today_gbp = saved_today if same_day else 0.0
+
+        restored_slots = []
+        if same_day:
+            for raw_slot in data.get("exported_slots") or []:
+                try:
+                    slot = int(raw_slot)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= slot < 48:
+                    restored_slots.append(slot)
+        self._exported_slots = sorted(set(restored_slots))
+
+        # The gap while the tariff was inactive must not be charged to the
+        # first control cycle as if it had just happened.
+        self._savings_last_time = None
+        self._savings_last_baseline_w = 0.0
+        self._savings_last_evse_w = 0.0
+        self._savings_rate_history.clear()
+        self._savings_rate_gbp_per_hour = 0.0
+        self._ledger_direction = 0
+        self._ledger_settle_until = None
+
+        info(
+            f"IOCTGO_AGILEOUT: Restored tariff state from {path} "
+            f"(ledger {self._bank_dc_kwh:.2f} kWh, "
+            f"saved today £{self._saved_today_gbp:.4f})"
+        )
 
     @classmethod
     def _ledger_direction_for(cls, evse_w: float) -> int:
@@ -5268,7 +5464,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
     def cleanup(self):
-        """Restore original calculation mode."""
+        """Persist the ledger, then restore the original calculation mode."""
+        self.save_state()
         if hasattr(self, 'original_calculation_method') and hasattr(self, 'evseController'):
             self.evseController.use_new_current_calculation = self.original_calculation_method
 

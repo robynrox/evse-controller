@@ -34,3 +34,23 @@ def isolated_energy_sessions(tmp_path):
     finally:
         session_store.path = original_path
         session_store.sessions = original_sessions
+
+
+@pytest.fixture(autouse=True)
+def isolated_tariff_state(tmp_path, monkeypatch):
+    """Keep a live tariff state file out of unit tests.
+
+    The tariff restores its stored-energy ledger on construction.  Without
+    this, running the controller on the same machine and then running the
+    tests would silently change the ledger and savings the tests start with.
+    """
+    from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
+        IOctGoWithAgileOutgoingTariff,
+    )
+
+    monkeypatch.setattr(
+        IOctGoWithAgileOutgoingTariff,
+        "STATE_PATH",
+        tmp_path / "ioctgo_agile_outgoing_state.json",
+    )
+    yield

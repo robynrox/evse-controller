@@ -116,6 +116,17 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "sessions.json"
 
+    @property
+    def IOCTGO_AGILE_STATE_FILE(self):
+        """Path to the IOCTGO + Agile Outgoing tariff's saved state.
+
+        Holds the stored-energy ledger and today's saving so a restart or a
+        switch to another controller state does not forget what the battery
+        has already earned.
+        """
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "ioctgo_agile_outgoing_state.json"
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         try:
