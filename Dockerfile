@@ -1,4 +1,4 @@
-FROM python:3
+FROM python:3.12
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV POETRY_VIRTUALENVS_CREATE=false \
