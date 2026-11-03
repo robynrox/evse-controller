@@ -144,7 +144,8 @@ completed fixes.
   reassert their current range), `fa2d5f0` (say "not yet" when the armed
   charge floor is above the live surplus), `58d10a2` (ledger and efficiency
   details on the explanation page), `5ca9e14` (persist the ledger across
-  restarts and tariff switches), and `7daec77` (daily half-hour energy report).
+  restarts and tariff switches), `7daec77` (daily half-hour energy report),
+  and `2177cbd` (extract the report routes so they test without the controller).
 - The dashboard links to a separate **Why this decision?** page (`/decision`),
   from both the decision line (`Explanation →`) and the navigation. It
   deep-copies the latest decision snapshot when rendered and deliberately
@@ -258,7 +259,7 @@ completed fixes.
   fresh Wallbox `ac_power` otherwise.
 - The DP planner has **not** been started. That is the next piece of work
   (sections 5–7).
-- Local full test suite: **503 passed, 4 skipped, 10 subtests passed**.
+- Local full test suite: **511 passed, 4 skipped, 10 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
