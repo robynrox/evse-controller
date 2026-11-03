@@ -185,14 +185,18 @@ class Tariff:
         # Default impl does nothing
         pass
 
-    def save_state(self):
+    def save_state(self) -> bool:
         """Persist state that should survive a restart or tariff switch.
 
         The base tariff has no state to keep.  Subclasses with a ledger or a
         daily total override this; the tariff manager calls it on a clean
         shutdown and when switching away from the tariff.
+
+        Returns:
+            bool: True when a subclass wrote state; the base tariff has no
+            state and returns False.
         """
-        pass
+        return False
 
     def get_dashboard_html(self) -> str:
         """Return HTML for dashboard display area.
