@@ -1,6 +1,12 @@
 #!/bin/sh
 # Script for Linux/MacOS (bash/zsh)
 
+# Poetry is the only supported install path, so fail early with a useful hint.
+if ! command -v poetry >/dev/null 2>&1; then
+    echo "Poetry is required. Install it from https://python-poetry.org/docs/#installation" >&2
+    exit 1
+fi
+
 # Create virtual environment if it doesn't exist
 if [ ! -d ".venv" ]; then
     echo "Setting up virtual environment..."
@@ -8,18 +14,10 @@ if [ ! -d ".venv" ]; then
 fi
 
 # Activate virtual environment
-source .venv/bin/activate
+. .venv/bin/activate
 
-# Check if Poetry is available
-if command -v poetry >/dev/null 2>&1; then
-    echo "Installing with Poetry..."
-    poetry install
-else
-    echo "Installing with pip..."
-    if [ ! -d ".venv/lib/python*/site-packages/pymodbus" ]; then
-        pip install -r requirements.txt
-    fi
-fi
+echo "Installing with Poetry..."
+poetry install
 
 # Run discovery
 python -m evse_discovery

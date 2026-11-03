@@ -530,8 +530,9 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
 - `pandas` is **not** installed locally; the efficiency tool deliberately avoids
   it and uses the standard library plus `influxdb-client` only for live queries.
 - Project dependencies are in `pyproject.toml` / `poetry.lock`, and Poetry is the
-  only install path for the controller. The discovery subproject keeps its own
-  hand-maintained `requirements.txt` for its scripts. `influxdb-client ~= 1.36.0`.
+  only install path for the controller. The discovery subproject is a separate
+  Poetry project with its own lock, installed by its helper scripts.
+  `influxdb-client ~= 1.36.0`.
 - `data/` is gitignored (config, logs, state). `reports/` is not ignored.
 - Production uses Poetry. The working invocation is
   `poetry run python -m evse_controller.tools.analyse_efficiency ...`.
