@@ -1,4 +1,5 @@
 from enum import Enum
+from datetime import datetime
 import math
 import time
 from evse_controller.drivers.evse.async_interface import EvseState, EvseThreadInterface, EvseCommand, EvseCommandData
@@ -217,6 +218,15 @@ class EvseController(PowerMonitorObserver):
         # Subscribe to OCPP state change events to keep internal state synchronized
         EventBus().subscribe(EventType.OCPP_ENABLED, self._handle_ocpp_enabled)
         EventBus().subscribe(EventType.OCPP_DISABLED, self._handle_ocpp_disabled)
+
+        # Publish the configured meters before the first power sample, so a
+        # report page opened straight after startup still knows the columns.
+        try:
+            from evse_controller.daily_report import configured_series, daily_log
+
+            daily_log.configure(configured_series())
+        except Exception as exc:
+            warning(f"DAILY_REPORT: Could not configure series: {exc}")
 
     @property
     def use_new_current_calculation(self) -> bool:
@@ -872,6 +882,200 @@ class EvseController(PowerMonitorObserver):
         """
         return channel_name.lower().replace(' ', '_')
 
+    @staticmethod
+    def _channel_watts(power: Power, channel) -> float:
+        """Read the configured channel from a Shelly reading."""
+        return power.ch1Watts if channel == 1 else power.ch2Watts
+
+    def _resolve_evse_watts(self, grid_power: Power) -> float:
+        """EVSE AC power from the configured channel, or the power model.
+
+        The EVSE is not tied to channel 2 of the grid device: it may be on
+        either channel of either Shelly, or not monitored at all.  When it is
+        monitored on the other device, ``auxpower`` holds that device's most
+        recent reading.
+        """
+        device = config.SHELLY_EVSE_DEVICE
+        channel = config.SHELLY_EVSE_CHANNEL
+        if not device or channel not in (1, 2):
+            self.evse_power_model.set_voltage(grid_power.voltage)
+            return self.evse_power_model.get_power()
+
+        if device == config.SHELLY_GRID_DEVICE:
+            return self._channel_watts(grid_power, channel)
+
+        aux_power = getattr(self, "auxpower", None)
+        if aux_power is None:
+            return 0.0
+        return self._channel_watts(aux_power, channel)
+
+    @staticmethod
+    def _normalised_power(
+        grid_w: float, evse_w: float, source: Power
+    ) -> Power:
+        """Return a ch1 = grid, ch2 = EVSE view of *source*.
+
+        ``Power.getHomeWatts()`` and the tariff ledgers both assume that
+        ordering.  The Shelly channel assignment is configuration, so resolve
+        it once and hand every consumer the same view rather than letting
+        each one guess which channel is which.
+        """
+        return Power(
+            ch1Watts=grid_w,
+            ch2Watts=evse_w,
+            voltage=source.voltage,
+            unixtime=source.unixtime,
+            soc=source.soc,
+        )
+
+    def _normalise_grid_power(self, power: Power) -> Power:
+        """Resolve the configured grid and EVSE channels for *power*."""
+        grid_w = self._channel_watts(power, config.SHELLY_GRID_CHANNEL)
+        evse_w = self._resolve_evse_watts(power)
+        return self._normalised_power(grid_w, evse_w, power)
+
+    # How long a device's last reading is trusted by the daily report.  A
+    # device that stops reporting must become ``None`` rather than having its
+    # final reading integrated for the rest of the slot.
+    REPORT_DEVICE_STALE_SECONDS = 30.0
+    REPORT_EVSE_STALE_SECONDS = 60.0
+
+    def _feed_daily_report(self, monitor, power: Power) -> None:
+        """Hand the latest meter readings to the process-wide daily log.
+
+        This runs for both Shellys before ``update()`` returns early for the
+        non-grid device, so every channel is sampled at its own poll rate.
+        The log integrates power itself; the Shelly cumulative counters are
+        never read, because a Wi-Fi power-cycle resets them.
+        """
+        try:
+            from evse_controller.daily_report import configured_series, daily_log
+
+            device = None
+            pmon = getattr(self, "pmon", None)
+            pmon2 = getattr(self, "pmon2", None)
+            if monitor is not None and monitor is pmon:
+                device = "primary"
+            elif monitor is not None and monitor is pmon2:
+                device = "secondary"
+
+            now_mono = time.monotonic()
+            last_power = getattr(self, "_report_last_power", None)
+            if last_power is None:
+                last_power = {}
+                self._report_last_power = last_power
+            seen = getattr(self, "_report_device_seen", None)
+            if seen is None:
+                seen = {}
+                self._report_device_seen = seen
+            if device is not None:
+                last_power[device] = power
+                seen[device] = now_mono
+
+            evse_state = None
+            evse = getattr(self, "evse", None)
+            if evse is not None:
+                try:
+                    evse_state = evse.get_state()
+                except Exception as exc:  # a report must not break control
+                    debug(f"DAILY_REPORT: Could not read Wallbox state: {exc}")
+
+            specs = configured_series()
+            signature = tuple(
+                (spec.key, spec.label, spec.in_label, spec.out_label)
+                for spec in specs
+            )
+            if signature != getattr(self, "_report_spec_signature", None):
+                daily_log.configure(specs)
+                self._report_spec_signature = signature
+            values = {}
+            for spec in specs:
+                values[spec.key] = self._report_value(
+                    spec.key, last_power, seen, now_mono, evse_state,
+                )
+
+            soc = None
+            if evse_state is not None:
+                level = getattr(evse_state, "battery_level", -1)
+                if isinstance(level, int) and level >= 0:
+                    soc = level
+            daily_log.observe(datetime.now(), values, soc)
+        except Exception as exc:
+            # Reporting is best-effort: a broken report must never stop the
+            # controller from controlling.
+            debug(f"DAILY_REPORT: Feed failed: {exc}")
+
+    def _report_value(
+        self,
+        key: str,
+        last_power: dict,
+        seen: dict,
+        now_mono: float,
+        evse_state,
+    ):
+        """The current watts for one series, or ``None`` if it is stale."""
+        if key == "grid":
+            device = config.SHELLY_GRID_DEVICE
+            channel = config.SHELLY_GRID_CHANNEL
+            power = last_power.get(device)
+            if power is None or not self._device_is_fresh(device, seen, now_mono):
+                return None
+            return self._channel_watts(power, channel)
+
+        if key == "evse":
+            device = config.SHELLY_EVSE_DEVICE
+            channel = config.SHELLY_EVSE_CHANNEL
+            if device and channel in (1, 2):
+                power = last_power.get(device)
+                if power is None or not self._device_is_fresh(
+                    device, seen, now_mono
+                ):
+                    return None
+                return self._channel_watts(power, channel)
+            if not self._evse_is_fresh(evse_state):
+                return None
+            return float(getattr(evse_state, "ac_power", 0.0))
+
+        if key == "battery_dc":
+            if not self._evse_is_fresh(evse_state):
+                return None
+            voltage = float(getattr(evse_state, "dc_voltage", 0.0))
+            current = float(getattr(evse_state, "dc_current", 0.0))
+            return voltage * current
+
+        if key.startswith("shelly."):
+            _, device, channel_name = key.split(".", 2)
+            try:
+                channel = int(channel_name.replace("channel", ""))
+            except ValueError:
+                return None
+            power = last_power.get(device)
+            if power is None or not self._device_is_fresh(device, seen, now_mono):
+                return None
+            return self._channel_watts(power, channel)
+
+        return None
+
+    def _device_is_fresh(self, device, seen: dict, now_mono: float) -> bool:
+        last_seen = seen.get(device)
+        if last_seen is None:
+            return False
+        return (now_mono - last_seen) <= self.REPORT_DEVICE_STALE_SECONDS
+
+    def _evse_is_fresh(self, evse_state) -> bool:
+        if evse_state is None:
+            return False
+        last_update = getattr(evse_state, "last_update", 0)
+        try:
+            last_update = float(last_update)
+        except (TypeError, ValueError):
+            return False
+        # 0 means the state has never been filled in (e.g. a mock in a unit
+        # test); do not treat it as fresh and integrate a placeholder 0 W.
+        if last_update <= 0:
+            return False
+        return (time.time() - last_update) <= self.REPORT_EVSE_STALE_SECONDS
+
     def update(self, monitor, power):
         """Update controller state based on power monitor readings.
 
@@ -879,6 +1083,8 @@ class EvseController(PowerMonitorObserver):
             monitor: The Shelly power monitor that's reporting
             power: Power readings from the monitor
         """
+        self._feed_daily_report(monitor, power)
+
         # Determine if this update is from the grid monitoring device
         is_grid_monitor = (
             (monitor == self.pmon and config.SHELLY_GRID_DEVICE == "primary") or
@@ -926,25 +1132,6 @@ class EvseController(PowerMonitorObserver):
             return
 
         # From here on, we're handling the grid monitor update
-        # Use configured channels instead of fixed assignments
-        grid_channel = config.SHELLY_GRID_CHANNEL
-        evse_channel = config.SHELLY_EVSE_CHANNEL if config.SHELLY_EVSE_DEVICE else None
-
-        # Get EVSE power - either from monitoring or model
-        if evse_channel is not None:
-            if config.SHELLY_EVSE_DEVICE == config.SHELLY_GRID_DEVICE:
-                # EVSE is on same device as grid
-                evse_power = power.ch1Watts if evse_channel == 1 else power.ch2Watts
-            else:
-                # EVSE is on the other device
-                evse_power = self.auxpower.ch1Watts if evse_channel == 1 and hasattr(self, 'auxpower') and self.auxpower else 0.0
-                if evse_channel == 2 and hasattr(self, 'auxpower') and self.auxpower:
-                    evse_power = self.auxpower.ch2Watts
-        else:
-            # No EVSE monitoring configured, use power model
-            self.evse_power_model.set_voltage(power.voltage)
-            evse_power = self.evse_power_model.get_power()
-
         # Get EVSE state once at the start
         evse_state = self.evse.get_state()
         self.evseCurrent = evse_state.current
@@ -1003,9 +1190,14 @@ class EvseController(PowerMonitorObserver):
                 info(f"DELTA {power.getEnergyDelta(self.powerAtLastHalfHourlyLog)}")
             self.powerAtLastHalfHourlyLog = power
 
+        # Resolve the configured channels into the ch1 = grid, ch2 = EVSE
+        # view that the current calculation and the tariff ledgers assume.
+        normalised_power = self._normalise_grid_power(power)
+        evse_power = normalised_power.ch2Watts
+
         # Calculate desired current based on latest reading
-        desiredEvseCurrent = self.calculateTargetCurrent(power)
-        self.current_grid_power = power
+        desiredEvseCurrent = self.calculateTargetCurrent(normalised_power)
+        self.current_grid_power = normalised_power
 
         # Get the current power values from the monitors
         # We already have these from earlier in the method
@@ -1022,19 +1214,6 @@ class EvseController(PowerMonitorObserver):
         # Build structured measurements data and publish via event bus
         measurements_data = self._build_measurements_data(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
         EventBus().publish(EventType.MEASUREMENTS_UPDATE, measurements_data)
-
-        # Get grid power for InfluxDB (needed later)
-        grid_device = config.SHELLY_GRID_DEVICE
-        grid_channel = config.SHELLY_GRID_CHANNEL
-        gridPower = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
-
-        # Get EVSE power for InfluxDB (needed later)
-        if config.SHELLY_EVSE_DEVICE and config.SHELLY_EVSE_CHANNEL:
-            evse_device = config.SHELLY_EVSE_DEVICE
-            evse_channel = config.SHELLY_EVSE_CHANNEL
-            evsePower = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
-        else:
-            evsePower = round(evse_power)
 
         if power.soc != self.batteryChargeLevel and self._is_valid_soc(power.soc):
             if self.powerAtBatteryChargeLevel is not None:
@@ -1145,14 +1324,38 @@ class EvseController(PowerMonitorObserver):
                 self._setCurrent(desiredEvseCurrent)
 
     def setControlState(self, state: ControlState):
-        """Set the control state and log the transition."""
-        if state != self.state:
+        """Set the control state and apply its canonical current ranges.
+
+        The ranges of fixed modes (CHARGE, DISCHARGE, DORMANT) are applied on
+        **every** call, not only when the state changes.  Such a mode must
+        reassert ``min == max`` each time: the controller can already be in
+        CHARGE with a narrower range left over from the SoC-unknown branch
+        (3 A), and a state that does not change would otherwise never widen
+        it again.  That is exactly how a "charge at max" decision can end up
+        commanding 3 A, and it applies to off-peak and free-energy charging
+        alike.
+
+        Load-following ranges are only re-applied on a transition, because
+        the tariff refines them immediately afterwards in
+        ``set_home_demand_levels()``; widening them here on every cycle would
+        briefly expose the default range to the control thread.
+        """
+        changed = state != self.state
+        if changed:
             info(f"CONTROL Setting control state to {state}")
             # If we're transitioning from FREERUN state to any other state,
             # we need to send a command to the Wallbox thread to take control
             transitioning_from_freerun = (self.state == ControlState.FREERUN)
-            
             self.state = state
+        else:
+            transitioning_from_freerun = False
+
+        reassert_range = changed or state in (
+            ControlState.CHARGE,
+            ControlState.DISCHARGE,
+            ControlState.DORMANT,
+        )
+        if reassert_range:
             match state:
                 case ControlState.DORMANT:
                     self.minDischargeCurrent = 0
@@ -1180,18 +1383,19 @@ class EvseController(PowerMonitorObserver):
                     # In FREERUN state, we don't set any current ranges
                     # The EVSE operates independently
                     pass
-            
-            # If we're transitioning from FREERUN state, send a command to take control
-            if transitioning_from_freerun and state != ControlState.FREERUN:
-                # Send a CLEAR_FREERUN command to the Wallbox thread
-                try:
-                    cmd = EvseCommandData(command=EvseCommand.CLEAR_FREERUN)
-                    if not self.evse.send_command(cmd):
-                        raise RuntimeError("Failed to send CLEAR_FREERUN command to EVSE thread")
-                    info("Sent CLEAR_FREERUN command to Wallbox thread")
-                except Exception as e:
-                    error(f"Failed to send CLEAR_FREERUN command: {e}")
-            
+
+        # If we're transitioning from FREERUN state, send a command to take control
+        if transitioning_from_freerun and state != ControlState.FREERUN:
+            # Send a CLEAR_FREERUN command to the Wallbox thread
+            try:
+                cmd = EvseCommandData(command=EvseCommand.CLEAR_FREERUN)
+                if not self.evse.send_command(cmd):
+                    raise RuntimeError("Failed to send CLEAR_FREERUN command to EVSE thread")
+                info("Sent CLEAR_FREERUN command to Wallbox thread")
+            except Exception as e:
+                error(f"Failed to send CLEAR_FREERUN command: {e}")
+
+        if changed:
             if state != ControlState.FREERUN:
                 info(f"CONTROL Setting control state to {state}: minDischargeCurrent: {self.minDischargeCurrent}, maxDischargeCurrent: {self.maxDischargeCurrent}, minChargeCurrent: {self.minChargeCurrent}, maxChargeCurrent: {self.maxChargeCurrent}")
             else:

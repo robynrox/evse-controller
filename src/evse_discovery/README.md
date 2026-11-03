@@ -18,11 +18,12 @@ git clone https://github.com/robynrox/evse-discovery.git
 cd evse-discovery
 
 # Install dependencies using Poetry
+# (https://python-poetry.org/docs/#installation)
 poetry install
-
-# Or using pip
-pip install -r requirements.txt
 ```
+
+Poetry is required; the helper scripts below check for it and stop with a
+pointer to the install instructions if it is missing.
 
 ## Usage
 

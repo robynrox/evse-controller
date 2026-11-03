@@ -26,6 +26,8 @@ def ensure_data_dirs():
     (data_dir / "config").mkdir(parents=True, exist_ok=True)
     (data_dir / "logs").mkdir(parents=True, exist_ok=True)
     (data_dir / "state").mkdir(parents=True, exist_ok=True)
+    (data_dir / "state" / "agile_rates").mkdir(parents=True, exist_ok=True)
+    (data_dir / "reports" / "daily").mkdir(parents=True, exist_ok=True)
 
 def get_config_file(require_exists: bool = True) -> Path:
     """Get the configuration file path.

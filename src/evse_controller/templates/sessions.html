@@ -1,0 +1,669 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Energy Sessions</title>
+<style>
+    .intro {
+        max-width: 780px;
+        color: #444;
+        line-height: 1.5;
+    }
+
+    .session-form {
+        margin-top: 20px;
+        padding: 20px;
+        background: #f5f5f5;
+        border-radius: 4px;
+    }
+
+    .scheduled-events {
+        margin-top: 20px;
+        padding: 20px;
+        background: #f5f5f5;
+        border-radius: 4px;
+    }
+
+    .kind-picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .kind-option {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 14px;
+        background: #fff;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        max-width: 360px;
+    }
+
+    .kind-option input {
+        margin-top: 4px;
+    }
+
+    .kind-option.checked {
+        border-color: #28a745;
+        box-shadow: 0 0 0 1px #28a745 inset;
+    }
+
+    .kind-title {
+        font-weight: bold;
+    }
+
+    .kind-detail {
+        display: block;
+        font-size: 12px;
+        color: #666;
+        margin-top: 2px;
+    }
+
+    /* Rate strip: all 48 half-hour cells, wrapped into rows that fit the
+       available width so no slot can be clipped out of view. */
+    .strip-wrap {
+        overflow-x: auto;
+        padding-bottom: 8px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .strip {
+        display: grid;
+        /* Twelve cells per row, so all 48 half-hours fit without horizontal
+           scrolling.  Dragging still spans rows because the slot index, not
+           the visual position, defines the range. */
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 3px;
+        max-width: 900px;
+        touch-action: pan-y;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    /* Narrow screens: fewer, wider cells rather than clipped or tiny ones. */
+    @media (max-width: 560px) {
+        .strip {
+            grid-template-columns: repeat(8, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 380px) {
+        .strip {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+    }
+
+    .cell {
+        position: relative;
+        box-sizing: border-box;
+        min-height: 46px;
+        padding-top: 5px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border-radius: 3px;
+        cursor: pointer;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .cell.hour-start {
+        border-left: 2px solid #c7c7c7;
+    }
+
+    .cell-time {
+        font-size: 9px;
+        line-height: 1.1;
+        color: #333;
+    }
+
+    .cell-rate {
+        font-size: 8px;
+        line-height: 1.1;
+        color: #555;
+    }
+
+    .cell.now {
+        outline: 2px dashed #333;
+        outline-offset: -2px;
+    }
+
+    /* Session markers stay visible over the selection highlight. */
+    .cell.session-free::before,
+    .cell.session-grid::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 5px;
+        border-radius: 3px 3px 0 0;
+    }
+
+    .cell.session-free::before {
+        background: #2563eb;
+    }
+
+    .cell.session-grid::before {
+        background: #d97706;
+    }
+
+    .cell.selected {
+        background: #28a745 !important;
+    }
+
+    .cell.selected .cell-time,
+    .cell.selected .cell-rate {
+        color: #fff;
+    }
+
+    .readout {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-top: 12px;
+    }
+
+    #selection {
+        flex-grow: 1;
+        font-weight: bold;
+        min-width: 220px;
+    }
+
+    .readout button,
+    .toggle-btn,
+    .delete-btn {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        min-width: 70px;
+        height: 38px;
+        font-size: 14px;
+        line-height: 20px;
+    }
+
+    #clear {
+        background: #6c757d;
+        color: #fff;
+    }
+
+    #add {
+        background: #28a745;
+        color: #fff;
+    }
+
+    button:disabled {
+        opacity: 0.6;
+        cursor: default;
+    }
+
+    .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-top: 12px;
+        font-size: 12px;
+        color: #555;
+    }
+
+    .legend span::before {
+        content: '';
+        display: inline-block;
+        width: 14px;
+        height: 10px;
+        margin-right: 5px;
+        vertical-align: middle;
+        border-radius: 2px;
+    }
+
+    .legend .swatch-free::before {
+        background: #2563eb;
+    }
+
+    .legend .swatch-grid::before {
+        background: #d97706;
+    }
+
+    .legend .swatch-selected::before {
+        background: #28a745;
+    }
+
+    .legend .swatch-now::before {
+        background: #eee;
+        outline: 2px dashed #333;
+        outline-offset: -2px;
+    }
+
+    .error {
+        margin-top: 12px;
+        padding: 10px 12px;
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 4px;
+        color: #721c24;
+    }
+
+    .sessions-list {
+        list-style: none;
+        padding: 0;
+        margin-top: 12px;
+    }
+
+    .session-item {
+        background: #fff;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .session-main {
+        flex-grow: 1;
+        min-width: 240px;
+    }
+
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        margin-right: 8px;
+        border-radius: 10px;
+        color: #fff;
+        font-size: 12px;
+    }
+
+    .badge-free_import {
+        background: #2563eb;
+    }
+
+    .badge-grid_support {
+        background: #d97706;
+    }
+
+    .muted {
+        color: #666;
+        font-size: 12px;
+        margin-left: 8px;
+    }
+
+    .session-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .toggle-btn.enabled {
+        background-color: #28a745;
+        color: #fff;
+    }
+
+    .toggle-btn.disabled {
+        background-color: #6c757d;
+        color: #fff;
+    }
+
+    .delete-btn {
+        background-color: #dc3545;
+        color: #fff;
+    }
+
+    .empty {
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="nav-links">
+    <a href="/">← Back to Dashboard</a>
+    <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
+</div>
+
+<h1>Energy Sessions</h1>
+
+<p class="intro">
+    Your supplier occasionally asks for a whole half-hour period of either free
+    import or reduced grid demand. Select one or more slots below and add the
+    matching session. Sessions only apply while the controller is in
+    <strong>smart</strong> mode and the <strong>IOCTGO + Agile Outgoing</strong>
+    tariff is active; a manual command still takes priority.
+</p>
+
+<div class="session-form">
+    <h2>Select a window</h2>
+
+    <div class="kind-picker">
+        <label class="kind-option checked">
+            <input type="radio" name="kind" value="{{ free_kind }}" checked>
+            <span>
+                <span class="kind-title">Free Energy Session</span>
+                <span class="kind-detail">
+                    Import costs 0p for the window, so the pack is bulk charged
+                    up to its charge cap. The energy is booked at 0p.
+                </span>
+            </span>
+        </label>
+        <label class="kind-option">
+            <input type="radio" name="kind" value="{{ grid_kind }}">
+            <span>
+                <span class="kind-title">Save Energy Session</span>
+                <span class="kind-detail">
+                    Your supplier has asked for grid support, so the pack
+                    exports at maximum for the window, above the battery
+                    protection reserve.
+                </span>
+            </span>
+        </label>
+    </div>
+
+    <div class="strip-wrap">
+        <div id="strip" class="strip">
+            {% for slot in slots %}
+            <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
+                 data-slot="{{ slot.slot }}"
+                 style="background: {{ slot.colour }}"
+                 title="{{ slot.time }}{% if slot.rate is not none %} · {{ '%.1f'|format(slot.rate) }}p export{% endif %}">
+                <span class="cell-time">{{ slot.time }}</span>
+                <span class="cell-rate">
+                    {%- if slot.rate is not none -%}
+                        {{ '%.1f'|format(slot.rate) }}p
+                    {%- else -%}
+                        —
+                    {%- endif -%}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="readout">
+        <span id="selection">No slots selected — click a slot, or drag across several.</span>
+        <button type="button" id="clear">Clear</button>
+        <button type="button" id="add">Add session</button>
+    </div>
+
+    <div id="error" class="error" hidden></div>
+
+    <div class="legend">
+        <span class="swatch-free">Free Energy Session</span>
+        <span class="swatch-grid">Save Energy Session</span>
+        <span class="swatch-selected">Selected</span>
+        <span class="swatch-now">Now</span>
+    </div>
+</div>
+
+<div class="scheduled-events">
+    <h2>Upcoming sessions</h2>
+    {% if sessions %}
+    <ul id="session-list" class="sessions-list">
+        {% for session in sessions %}
+        <li class="session-item"
+            data-id="{{ session.id }}"
+            data-enabled="{{ 'true' if session.enabled else 'false' }}">
+            <div class="session-main">
+                <span class="badge badge-{{ session.kind }}">{{ session.label }}</span>
+                <strong>{{ session.start.strftime('%a %d %b %H:%M') }}–{{ session.end.strftime('%H:%M') }}</strong>
+                <span class="muted">
+                    {{ ((session.end - session.start).total_seconds() // 1800)|int }}
+                    slot{{ '' if (session.end - session.start).total_seconds() == 1800 else 's' }}
+                </span>
+                {% if not session.enabled %}
+                <span class="muted">(disabled)</span>
+                {% endif %}
+            </div>
+            <div class="session-actions">
+                <button type="button"
+                        class="toggle-btn {{ 'enabled' if session.enabled else 'disabled' }}"
+                        data-toggle="{{ session.id }}"
+                        data-enabled="{{ 'true' if session.enabled else 'false' }}">
+                    {{ 'Enabled' if session.enabled else 'Disabled' }}
+                </button>
+                <button type="button" class="delete-btn" data-delete="{{ session.id }}">
+                    Delete
+                </button>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No upcoming sessions.</p>
+    {% endif %}
+</div>
+
+<script>
+(function () {
+    const strip = document.getElementById('strip');
+    const cells = Array.from(strip.querySelectorAll('.cell'));
+    const readout = document.getElementById('selection');
+    const errorBox = document.getElementById('error');
+    const addButton = document.getElementById('add');
+    const clearButton = document.getElementById('clear');
+
+    let anchor = null;
+    let focus = null;
+    let dragging = false;
+    // On touch, the first tap sets one end and the second tap sets the other.
+    // Dragging is reserved for a mouse or trackpad so a finger can still
+    // scroll the strip.
+    let touchAnchor = null;
+
+    function slotLabel(slot) {
+        const hour = String(Math.floor(slot / 2)).padStart(2, '0');
+        return hour + (slot % 2 ? ':30' : ':00');
+    }
+
+    function selectedRange() {
+        if (anchor === null || focus === null) {
+            return null;
+        }
+        return [Math.min(anchor, focus), Math.max(anchor, focus)];
+    }
+
+    function paint() {
+        const range = selectedRange();
+        for (const cell of cells) {
+            const slot = Number(cell.dataset.slot);
+            cell.classList.toggle(
+                'selected',
+                range !== null && slot >= range[0] && slot <= range[1]
+            );
+        }
+        if (range === null) {
+            readout.textContent =
+                'No slots selected — click a slot, or drag across several.';
+            return;
+        }
+        const end = range[1] + 1;
+        const count = end - range[0];
+        const endLabel = end === 48 ? '00:00 (midnight)' : slotLabel(end);
+        readout.textContent =
+            slotLabel(range[0]) + '–' + endLabel +
+            ' · ' + count + (count === 1 ? ' slot' : ' slots');
+    }
+
+    function showError(message) {
+        errorBox.textContent = message;
+        errorBox.hidden = false;
+    }
+
+    function clearError() {
+        errorBox.hidden = true;
+    }
+
+    strip.addEventListener('pointerdown', function (event) {
+        const cell = event.target.closest('.cell');
+        if (!cell) {
+            return;
+        }
+        const slot = Number(cell.dataset.slot);
+
+        if (event.pointerType === 'touch') {
+            if (touchAnchor === null) {
+                touchAnchor = slot;
+                anchor = slot;
+                focus = slot;
+            } else {
+                anchor = touchAnchor;
+                focus = slot;
+                touchAnchor = null;
+            }
+            paint();
+            return;
+        }
+
+        event.preventDefault();
+        anchor = slot;
+        focus = slot;
+        dragging = true;
+        if (strip.setPointerCapture) {
+            strip.setPointerCapture(event.pointerId);
+        }
+        paint();
+    });
+
+    strip.addEventListener('pointermove', function (event) {
+        if (!dragging || event.pointerType === 'touch') {
+            return;
+        }
+        const element = document.elementFromPoint(
+            event.clientX, event.clientY
+        );
+        const cell = element && element.closest('.cell');
+        if (!cell) {
+            return;
+        }
+        focus = Number(cell.dataset.slot);
+        paint();
+    });
+
+    function endDrag(event) {
+        if (event.pointerType === 'touch') {
+            return;
+        }
+        dragging = false;
+        if (strip.releasePointerCapture) {
+            try {
+                strip.releasePointerCapture(event.pointerId);
+            } catch (err) {
+                /* pointer already released */
+            }
+        }
+    }
+
+    strip.addEventListener('pointerup', endDrag);
+    strip.addEventListener('pointercancel', function () {
+        dragging = false;
+    });
+
+    clearButton.addEventListener('click', function () {
+        anchor = null;
+        focus = null;
+        touchAnchor = null;
+        clearError();
+        paint();
+    });
+
+    document.querySelectorAll('input[name="kind"]').forEach(function (input) {
+        input.addEventListener('change', function () {
+            document.querySelectorAll('.kind-option').forEach(function (label) {
+                const choice = label.querySelector('input[name="kind"]');
+                label.classList.toggle('checked', choice && choice.checked);
+            });
+        });
+    });
+
+    async function post(url, body) {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body || {})
+        });
+        const data = await response.json().catch(function () {
+            return {};
+        });
+        if (!response.ok) {
+            throw new Error(data.error || 'Request failed');
+        }
+        return data;
+    }
+
+    addButton.addEventListener('click', async function () {
+        const range = selectedRange();
+        if (range === null) {
+            showError('Select one or more half-hour slots first.');
+            return;
+        }
+        clearError();
+        addButton.disabled = true;
+        try {
+            await post('/api/sessions', {
+                kind: document.querySelector('input[name="kind"]:checked').value,
+                start_slot: range[0],
+                end_slot: range[1] + 1
+            });
+            window.location.reload();
+        } catch (error) {
+            showError(error.message);
+            addButton.disabled = false;
+        }
+    });
+
+    const list = document.getElementById('session-list');
+    if (list) {
+        list.addEventListener('click', async function (event) {
+            const toggle = event.target.closest('[data-toggle]');
+            const remove = event.target.closest('[data-delete]');
+
+            if (toggle) {
+                toggle.disabled = true;
+                try {
+                    await post(
+                        '/api/sessions/' + toggle.dataset.toggle + '/toggle',
+                        {enabled: toggle.dataset.enabled !== 'true'}
+                    );
+                    window.location.reload();
+                } catch (error) {
+                    showError(error.message);
+                    toggle.disabled = false;
+                }
+                return;
+            }
+
+            if (remove) {
+                if (!window.confirm('Delete this session?')) {
+                    return;
+                }
+                remove.disabled = true;
+                try {
+                    const response = await fetch(
+                        '/api/sessions/' + remove.dataset.delete,
+                        {method: 'DELETE'}
+                    );
+                    if (!response.ok) {
+                        const data = await response.json().catch(function () {
+                            return {};
+                        });
+                        throw new Error(data.error || 'Request failed');
+                    }
+                    window.location.reload();
+                } catch (error) {
+                    showError(error.message);
+                    remove.disabled = false;
+                }
+            }
+        });
+    }
+
+    paint();
+})();
+</script>
+{% endblock %}

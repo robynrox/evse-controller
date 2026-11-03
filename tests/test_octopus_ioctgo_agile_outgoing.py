@@ -3,10 +3,18 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
+import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
-from evse_controller.drivers.EvseController import ControlState
+from evse_controller.energy_sessions import (
+    FREE_IMPORT,
+    GRID_SUPPORT,
+    EnergySession,
+    SessionStore,
+)
+from evse_controller.drivers.EvseController import ControlState, EvseController
+from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
-from evse_controller.utils.config import config
+from evse_controller.utils.config import config, Config
 
 
 def create_test_state(battery_level: int, current: float = 0.0) -> EvseAsyncState:
@@ -61,20 +69,24 @@ def create_mock_agile_rates():
     return rates
 
 
-@pytest.fixture
-def agile_tariff():
-    """Create tariff instance with mocked Agile rates."""
+def _build_tariff(state_path=None) -> IOctGoWithAgileOutgoingTariff:
+    """Create a tariff instance with the Wallbox thread mocked out."""
     mock_thread = Mock()
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
     mock_thread.get_state = Mock(return_value={})
-    
+
     with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
                return_value=mock_thread):
-        tariff = IOctGoWithAgileOutgoingTariff()
-        # Inject mock rates
-        tariff.agile_rates = create_mock_agile_rates()
-        tariff._planned_export_slots = []  # No planned exports for these tests
-        yield tariff
+        tariff = IOctGoWithAgileOutgoingTariff(state_path=state_path)
+    tariff.agile_rates = create_mock_agile_rates()
+    tariff._planned_export_slots = []  # No planned exports for these tests
+    return tariff
+
+
+@pytest.fixture
+def agile_tariff():
+    """Create tariff instance with mocked Agile rates."""
+    yield _build_tariff()
 
 
 class TestStorageFloorThreshold:
@@ -113,10 +125,10 @@ class TestStorageFloorThreshold:
 
 
 class TestSelfUseValueThreshold:
-    """Test Tier 2: Self-Use Value (5p-15.71p/kWh with dynamic SoC threshold)."""
+    """Test Tier 2: Self-Use Value (5p-SELF_USE_VALUE_THRESHOLD_P/kWh with dynamic SoC threshold)."""
 
     def test_rate_below_self_use_with_low_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC below dynamic threshold, should store for self-use."""
+        """When 5p < rate < SELF_USE_VALUE_THRESHOLD_P and SoC below dynamic threshold, should store for self-use."""
         # Rate of 10p, low SoC (30%)
         # At slot 20 (10:00), remaining slots = 47 - 20 = 27
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
@@ -126,10 +138,10 @@ class TestSelfUseValueThreshold:
             current_export_rate_p=10.0,
             soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "Should store when rate < self-use value (15.71p) and SoC below dynamic threshold"
+        assert result is True, "Should store when rate < self-use value (SELF_USE_VALUE_THRESHOLD_P) and SoC below dynamic threshold"
 
     def test_rate_below_self_use_with_high_soc(self, agile_tariff):
-        """When 5p < rate < 15.71p and SoC above dynamic threshold, fall through to Tier 3."""
+        """When 5p < rate < SELF_USE_VALUE_THRESHOLD_P and SoC above dynamic threshold, fall through to Tier 3."""
         # Rate of 10p at slot 20 (10:00)
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
         # SoC 90% > 87%, should fall through to Tier 3
@@ -142,7 +154,7 @@ class TestSelfUseValueThreshold:
         assert result is True, "Should store when future rate justifies (Tier 3)"
 
     def test_rate_at_self_use_boundary_low_soc(self, agile_tariff):
-        """Test behavior at 15.71p boundary with low SoC."""
+        """Test behavior at SELF_USE_VALUE_THRESHOLD_P boundary with low SoC."""
         # Rate of 15.5p (just below self-use threshold), low SoC
         # At slot 32 (16:00), remaining slots = 47 - 32 = 15
         # Dynamic threshold = 60% + (15 × 1.0%) = 75%
@@ -152,10 +164,10 @@ class TestSelfUseValueThreshold:
             current_export_rate_p=15.5,
             soc_percent=30
         )
-        assert result is True, "Should store when rate < 15.71p and SoC below dynamic threshold"
+        assert result is True, "Should store when rate < SELF_USE_VALUE_THRESHOLD_P and SoC below dynamic threshold"
 
     def test_rate_above_self_use_threshold(self, agile_tariff):
-        """When rate > 15.71p, only Tier 3 applies."""
+        """When rate > SELF_USE_VALUE_THRESHOLD_P, only Tier 3 applies."""
         # Rate of 20p (above self-use threshold)
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=35,  # 17:30-18:00, peak rate
@@ -229,6 +241,186 @@ class TestFutureExportOptimization:
         assert result is True
 
 
+class TestHarvestCurrentDecision:
+    """The store/export decision is costed at the current solar will use."""
+
+    def test_strong_surplus_stores_where_3a_would_export(self, agile_tariff):
+        """At 22p with a 35p future: 3 A exports, a 6 A harvest stores.
+
+        35p x 0.547 = 19.1p < 22p (export), but 35p x 0.734 = 25.7p > 22p
+        (store).  This is the case the old fixed-3-A assumption got wrong.
+        """
+        kicker = dict(
+            current_slot=33,  # 16:30, next peak is 35p at 18:00
+            current_export_rate_p=22.0,
+            soc_percent=80,
+        )
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=3
+        ) is False
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=6
+        ) is True
+
+    def test_self_use_threshold_moves_with_harvest_current(self, agile_tariff):
+        """15p is above the 3 A self-use value but below the 6 A one."""
+        kicker = dict(
+            current_slot=39,  # 19:30, best remaining future is 15p
+            current_export_rate_p=15.0,
+            soc_percent=30,  # below the 60% + 8 slots dynamic threshold
+        )
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=3
+        ) is False
+        assert agile_tariff._should_use_bidirectional_mode(
+            **kicker, harvest_current_a=6
+        ) is True
+
+    def test_default_harvest_current_is_minimum(self, agile_tariff):
+        """Without a surplus estimate the conservative 3 A assumption holds."""
+        assert agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT == pytest.approx(3)
+        assert agile_tariff.solar_export_round_trip() == pytest.approx(
+            agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(3, 32)
+        )
+
+
+class TestPlannedExportSlotExplanation:
+    """A committed export slot is not a sale price for extra solar.
+
+    At a high SoC the export plan already spends the pack's spare capacity on
+    the best slot of the day.  Solar stored now can only be sold in the next
+    unused slot, so ``no store`` is the right decision even with a strong
+    surplus.  The reason must say that, because naming only the unused rate
+    looks like the planner has missed the good price.
+    """
+
+    @staticmethod
+    def _set_two_peak_rates(tariff, now_slot=24, now_rate=21.4, later_slot=32,
+                            later_rate=30.5, default=5.0):
+        base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        rates = []
+        for slot in range(48):
+            start = base + timedelta(minutes=30 * slot)
+            rate = now_rate if slot == now_slot else (
+                later_rate if slot == later_slot else default
+            )
+            rates.append({"start": start, "end": start + timedelta(minutes=30),
+                          "rate": rate})
+        tariff.agile_rates = rates
+
+    def test_committed_slot_is_named_in_the_no_store_reason(self, agile_tariff):
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = [32]
+
+        decision = agile_tariff._evaluate_storage_decision(
+            24, 21.4, 90, harvest_current_a=6
+        )
+
+        assert decision.use_bidirectional is False
+        # 30.5p is in the plan, so the marginal sale is the next unused slot.
+        assert decision.future_rate_p == pytest.approx(21.4)
+        assert "30.5p at 16:00–16:30 is already committed" in decision.reason
+        assert "best unused slot is 21.4p" in decision.reason
+        assert "15.5p after the 73% round trip" in decision.reason
+        assert "no future slot beats" not in decision.reason
+
+    def test_unplanned_slot_still_stores(self, agile_tariff):
+        """Without the commitment the same surplus stores at 30.5p."""
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = []
+
+        decision = agile_tariff._evaluate_storage_decision(
+            24, 21.4, 80, harvest_current_a=6
+        )
+
+        assert decision.use_bidirectional is True
+        assert decision.target_slot == 32
+        assert "storing solar" in decision.reason
+
+    def test_higher_unused_slot_is_valued_not_denied(self, agile_tariff):
+        """A 30.5p slot is not "no future slot" just because 3 A loses 45%.
+
+        This is the 09:30 case: no solar surplus, 19.9p now, 30.5p later, and
+        a 3 A harvest.  (30.5 - 0.3) x 0.547 = 16.5p, so exporting now wins.
+        """
+        self._set_two_peak_rates(agile_tariff, now_slot=19, now_rate=19.9)
+        agile_tariff._planned_export_slots = []
+
+        decision = agile_tariff._evaluate_storage_decision(
+            19, 19.9, 78, harvest_current_a=3
+        )
+
+        assert decision.use_bidirectional is False
+        assert "future 30.5p at 16:00–16:30" in decision.reason
+        assert "30.2p × 55% = 16.5p ≤ 19.9p now" in decision.reason
+        assert "no future slot beats" not in decision.reason
+
+    def test_best_planned_rate_ignores_past_slots(self, agile_tariff):
+        self._set_two_peak_rates(agile_tariff)
+        agile_tariff._planned_export_slots = [20, 32, 47]
+
+        slot, rate = agile_tariff._best_planned_export_slot_rate(24)
+
+        assert slot == 32
+        assert rate == pytest.approx(30.5)
+
+    def test_no_planned_slots_returns_nothing(self, agile_tariff):
+        agile_tariff._planned_export_slots = []
+
+        assert agile_tariff._best_planned_export_slot_rate(24) == (None, 0.0)
+
+
+class TestSolarHarvestCurrentEstimate:
+    """Estimate the load-following charge current from the live surplus."""
+
+    @staticmethod
+    def _attach(tariff, surplus_w, voltage=240.0, bias=-0.5):
+        controller = Mock()
+        controller.chargeCurrentBias = bias
+        # getHomeWatts() = ch1 - ch2, and -getHomeWatts() is the solar surplus.
+        controller.current_grid_power = Power(
+            ch1Watts=0, ch2Watts=surplus_w, voltage=voltage
+        )
+        tariff.evseController = controller
+        return controller
+
+    def test_uses_surplus_and_snaps_up_to_measured_point(self, agile_tariff):
+        # 1680 W / 240 V = 7 A, -0.5 A bias = 6.5 A -> 7 A measured point.
+        self._attach(agile_tariff, 1680)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(7)
+
+    def test_fractional_surplus_rounds_up(self, agile_tariff):
+        # 1320 W / 240 V = 5.5 A -> 6 A, not 5 A.  Efficiency improves with
+        # current, so rounding down would understate a store that pays.
+        self._attach(agile_tariff, 1320, bias=0.0)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(6)
+
+    def test_surplus_at_a_measured_point_stays_there(self, agile_tariff):
+        # 1200 W / 240 V = 5 A, -0.5 A bias = 4.5 A -> 5 A.
+        self._attach(agile_tariff, 1200)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(5)
+
+    def test_weak_surplus_stays_at_minimum(self, agile_tariff):
+        # 720 W / 240 V = 3 A, bias takes it to 2.5 A -> clamped to 3 A.
+        self._attach(agile_tariff, 720)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(3)
+
+    def test_huge_surplus_clamps_to_measured_model(self, agile_tariff):
+        """Efficiency is flat above 16 A, so the estimate stops there."""
+        self._attach(agile_tariff, 20000)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(16)
+
+    def test_no_power_reading_falls_back_to_minimum(self, agile_tariff):
+        agile_tariff.evseController = None
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(3)
+
+    def test_missing_voltage_uses_nominal(self, agile_tariff):
+        self._attach(agile_tariff, 1680, voltage=0)
+        assert agile_tariff._estimate_solar_harvest_current() == pytest.approx(7)
+
+
 class TestExampleScenarios:
     """Test the example scenarios from the docstring."""
 
@@ -251,7 +443,7 @@ class TestExampleScenarios:
             current_export_rate_p=6.0,
             soc_percent=30  # Low SoC (below dynamic threshold)
         )
-        assert result is True, "STORE: self-use value (6p < 15.71p, SoC below dynamic threshold)"
+        assert result is True, "STORE: self-use value (6p < SELF_USE_VALUE_THRESHOLD_P, SoC below dynamic threshold)"
 
     def test_scenario_3_low_rate_high_soc(self, agile_tariff):
         """Example 3: 6p/kWh current, 8p/kWh future, high SoC → Tier 3 evaluation."""
@@ -387,9 +579,123 @@ class TestConstants:
     def test_storage_thresholds(self, agile_tariff):
         """Test storage decision thresholds."""
         assert agile_tariff.STORAGE_FLOOR_THRESHOLD_P == config.IMPORT_LOW
-        # Self-use value = peak import × bidirectional efficiency
-        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == config.IMPORT_HIGH * 0.50
-        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == 0.50
+        # Reference round trip: minimum harvest current -> export current.
+        solar_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
+            agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
+            agile_tariff.EXPORT_REFERENCE_CURRENT,
+        )
+        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY_BIDIRECTIONAL == pytest.approx(
+            solar_round_trip
+        )
+        # The self-use value discharge is at ~3 A, not the export current, and
+        # the avoided import price is reduced by the minimum profit margin.
+        self_use_round_trip = agile_tariff.EFFICIENCY_MODEL.round_trip_efficiency(
+            agile_tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
+            agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
+        )
+        assert agile_tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT == pytest.approx(3)
+        assert agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH == pytest.approx(0.3)
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(
+            (config.IMPORT_HIGH - agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH)
+            * self_use_round_trip
+        )
+        assert agile_tariff.SELF_USE_VALUE_THRESHOLD_P == pytest.approx(12.64, abs=0.05)
+
+    def test_self_use_value_rises_with_harvest_current(self, agile_tariff):
+        """A strong surplus harvest is worth more than a 3 A trickle."""
+        assert agile_tariff.self_use_value_threshold_p(3) == pytest.approx(
+            12.64, abs=0.05
+        )
+        assert agile_tariff.self_use_value_threshold_p(6) == pytest.approx(
+            16.96, abs=0.1
+        )
+        assert agile_tariff.self_use_value_threshold_p(6) > (
+            agile_tariff.self_use_value_threshold_p(3)
+        )
+
+    def test_export_min_rate_includes_margin(self, agile_tariff):
+        """Cheap grid -> export must cover the round trip plus the margin."""
+        assert agile_tariff.export_min_rate_p() == pytest.approx(12.3, abs=0.05)
+
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0.0
+        assert agile_tariff.export_min_rate_p() == pytest.approx(12.0, abs=0.05)
+
+    def test_margin_suppresses_a_marginal_cycle(self, agile_tariff):
+        """A 35p future justifies 18.5p at 3 A only without a margin."""
+        kicker = dict(
+            current_slot=33,  # best remaining future is 35p at 18:00
+            current_export_rate_p=18.5,
+            soc_percent=80,  # above the Tier 2 dynamic threshold
+            harvest_current_a=3,
+        )
+
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0.0
+        assert agile_tariff._should_use_bidirectional_mode(**kicker) is True
+
+        agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 2.0
+        assert agile_tariff._should_use_bidirectional_mode(**kicker) is False
+
+    def test_round_trips_are_current_dependent(self, agile_tariff):
+        """A blanket 50% is wrong at both ends of the current range."""
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        assert model.round_trip_efficiency(3, 16) == pytest.approx(0.547, abs=0.002)
+        assert model.round_trip_efficiency(16, 16) == pytest.approx(0.833, abs=0.002)
+        assert model.round_trip_efficiency(3, 3) == pytest.approx(0.426, abs=0.002)
+        assert agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY == pytest.approx(0.833, abs=0.002)
+
+    def test_export_power_and_soc_drop_follow_configured_current(self, agile_tariff):
+        """A 32 A default plans the extrapolated power, not the derated limit."""
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        # The committed config defaults to 32 A, so export is planned at the
+        # extrapolated 32 A AC power (~7.07 kW), capped by MAX_EXPORT_POWER_KW.
+        assert agile_tariff.EXPORT_REFERENCE_CURRENT == 32
+        assert agile_tariff.EXPORT_POWER_KW == pytest.approx(7.068, abs=0.002)
+        assert agile_tariff.STORED_TO_AC_EFFICIENCY == pytest.approx(0.943, abs=0.002)
+        # 7.068 AC / 0.943 / 48.292 kWh × 0.5 h × 100 = ~7.76 %/slot
+        expected_drop = (
+            agile_tariff.EXPORT_POWER_KW
+            / agile_tariff.STORED_TO_AC_EFFICIENCY
+            * 0.5
+            / agile_tariff.SOC_CAPACITY_KWH
+            * 100
+        )
+        assert expected_drop == pytest.approx(7.76, abs=0.1)
+        # And the model itself still honours the measured 16 A point.
+        assert model.discharge_ac_power_kw(16) == pytest.approx(3.534, abs=0.002)
+
+    def test_derated_16a_site_plans_measured_limit(self):
+        """A physically derated unit should plan at its configured 16 A."""
+        with patch.object(Config, "WALLBOX_MAX_DISCHARGE_CURRENT", 16):
+            tariff = _build_tariff()
+
+        assert tariff.EXPORT_REFERENCE_CURRENT == 16
+        assert tariff.EXPORT_POWER_KW == pytest.approx(3.534, abs=0.002)
+        expected_drop = (
+            tariff.EXPORT_POWER_KW
+            / tariff.STORED_TO_AC_EFFICIENCY
+            * 0.5
+            / tariff.SOC_CAPACITY_KWH
+            * 100
+        )
+        assert expected_drop == pytest.approx(3.88, abs=0.1)
+
+    def test_bulk_discharge_current_uses_measured_soc_rate(self, agile_tariff):
+        """The old 0.46 %/h/A fudge is replaced by the measured curve."""
+        # 67% -> 60% over 3 hours is 2.33 %/h, between the 3 A and 4 A points.
+        current = agile_tariff.calculate_target_discharge_current(67, 960)
+        assert current == pytest.approx(3.57, abs=0.1)
+
+        # 90% -> 60% over 3 hours needs 10 %/h, above the 16 A measured rate
+        # (~7.8 %/h), so it scales into the extrapolated range but stays within
+        # the configured 32 A limit.
+        current = agile_tariff.calculate_target_discharge_current(90, 960)
+        assert current == pytest.approx(20.62, abs=0.1)
+        assert current <= agile_tariff.MAX_DISCHARGE_CURRENT
+
+        # A tiny difference below the 3 A minimum is not worth discharging.
+        assert agile_tariff.calculate_target_discharge_current(60.2, 960) == 0
 
 
 class TestEnergyShortfall:
@@ -402,19 +708,58 @@ class TestEnergyShortfall:
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
 
-    def test_shortfall_true_when_projection_below_target(self, agile_tariff):
+    def test_shortfall_true_when_projection_below_house_floor(self, agile_tariff):
         """At 12:00, 23 slots remain, so 23% is lost at 1%/slot."""
         self._set_time(agile_tariff, 12, 0)
-        # 80% - 23% = 57%, below the 60% target
-        assert agile_tariff._update_energy_shortfall(80) is True
+        # 77% - 23% = 54%, below the 55% house floor (60% target - 5%).
+        assert agile_tariff._update_energy_shortfall(77) is True
         assert agile_tariff._energy_shortfall is True
 
-    def test_no_shortfall_when_projection_meets_target(self, agile_tariff):
+    def test_no_shortfall_when_projection_meets_house_floor(self, agile_tariff):
         """At 22:00 only 3 slots remain, so 3% is lost."""
         self._set_time(agile_tariff, 22, 0)
-        # 70% - 3% = 67%, above the 60% target
+        # 70% - 3% = 67%, above the 55% house floor.
         assert agile_tariff._update_energy_shortfall(70) is False
         assert agile_tariff._energy_shortfall is False
+
+    def test_projection_at_house_floor_is_not_shortfall(self, agile_tariff):
+        """The comparison is strict: exactly on the floor stays aggressive."""
+        self._set_time(agile_tariff, 12, 0)
+        # 78% - 23% = 55%, exactly the floor.
+        assert agile_tariff._update_energy_shortfall(78) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_target_headroom_does_not_force_conservative(self, agile_tariff):
+        """A projection between the floor and the target stays aggressive."""
+        self._set_time(agile_tariff, 12, 0)
+        # 80% - 23% = 57%: below the 60% bulk target but above the 55% floor.
+        assert agile_tariff._update_energy_shortfall(80) is False
+        assert agile_tariff._energy_shortfall is False
+
+    def test_house_floor_can_be_configured(self, agile_tariff, monkeypatch):
+        """The margin is configuration, not a hidden constant."""
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 10)
+        # 59% - 3% = 56%, below the 60% target but above the 50% floor.
+        self._set_time(agile_tariff, 22, 0)
+        assert agile_tariff._house_load_floor_soc() == 50
+        assert agile_tariff._update_energy_shortfall(59) is False
+
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 0)
+        assert agile_tariff._house_load_floor_soc() == 60
+        assert agile_tariff._update_energy_shortfall(59) is True
+
+    def test_house_floor_never_enters_the_protection_reserve(
+        self, agile_tariff, monkeypatch
+    ):
+        """A low target plus a large margin must not floor below the reserve."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 25)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 10)
+        assert agile_tariff._house_load_floor_soc() == 26
+
+    def test_negative_margin_is_treated_as_zero(self, agile_tariff, monkeypatch):
+        """Bad configuration must not raise the floor above the target."""
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", -5)
+        assert agile_tariff._house_load_floor_soc() == 60
 
     def test_unknown_soc_clears_shortfall(self, agile_tariff):
         """An unknown SoC should not leave a stale shortfall flag."""
@@ -425,8 +770,21 @@ class TestEnergyShortfall:
     def test_plan_recalculation_updates_shortfall(self, agile_tariff):
         """The flag is refreshed whenever the export plan is calculated."""
         self._set_time(agile_tariff, 12, 0)
-        agile_tariff.calculate_export_plan(80)
+        agile_tariff.calculate_export_plan(77)
         assert agile_tariff._energy_shortfall is True
+
+    def test_export_planning_still_uses_the_bulk_target(
+        self, agile_tariff, monkeypatch
+    ):
+        """The flexibility margin must not add export slots."""
+        self._set_time(agile_tariff, 12, 0)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 0)
+        target_plan = agile_tariff.calculate_export_plan(100)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 50)
+        flexible_plan = agile_tariff.calculate_export_plan(100)
+
+        assert target_plan
+        assert flexible_plan == target_plan
 
     def test_get_control_state_bidirectional_in_shortfall(self, agile_tariff):
         """Shortfall should force bidirectional mode, even if export is otherwise better."""
@@ -438,16 +796,21 @@ class TestEnergyShortfall:
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
         assert "Shortfall" in reason
 
-    def test_get_control_state_uses_tier_logic_when_not_shortfall(self, agile_tariff):
-        """Outside shortfall, the existing tier logic still applies."""
+    def test_get_control_state_stays_bidirectional_when_not_shortfall(self, agile_tariff):
+        """Outside shortfall the self-use branch still allows solar charging."""
         self._set_time(agile_tariff, 22, 0)
         state = create_test_state(80)
 
         control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
 
-        # At 22:00 with 11p current and 10p best future, 10p × 0.5 < 11p,
-        # so the tier logic chooses load-follow discharge.
-        assert control_state == ControlState.LOAD_FOLLOW_DISCHARGE
+        # At 22:00 with 11p current and 10p best future, 10p × solar round trip
+        # (~0.547) < 11p, so storing for a later sale is not worth it.  The
+        # pack still covers the house, and 11p is below the 12.6p self-use
+        # value at 3 A, so surplus solar is worth keeping.
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.mode.startswith("Charge from surplus ≥3 A")
+        assert snapshot.charge_min_a == pytest.approx(3.0)
 
     def test_shortfall_configures_conservative_discharge(self, agile_tariff):
         """Shortfall must use 720W activation and -0.5A bias."""
@@ -464,32 +827,269 @@ class TestEnergyShortfall:
         mock_controller.setChargeCurrentBias.assert_called_with(-0.5)
 
     def test_no_shortfall_configures_aggressive_discharge(self, agile_tariff):
-        """Outside shortfall the aggressive discharge settings are used."""
+        """Outside shortfall the aggressive bias is used, at the break-even."""
         mock_controller = Mock()
         mock_controller.use_new_current_calculation = False
         state = create_test_state(80)
 
+        # Slot 24 (12:00) exports at 9p.  The activation must be the
+        # break-even load, not the old blanket 1 W.
+        expected = agile_tariff.discharge_activation_threshold_w(9.0)
+
         agile_tariff._energy_shortfall = False
         agile_tariff.set_home_demand_levels(mock_controller, state, 12 * 60)
 
-        mock_controller.setDischargeActivationPower.assert_called_with(1)
+        assert 0 < expected < 720
+        mock_controller.setDischargeActivationPower.assert_called_with(expected)
         mock_controller.setDischargeCurrentBias.assert_called_with(0.5)
+
+
+class TestDischargeActivation:
+    """The discharge activation threshold is the economic break-even load.
+
+    The Wallbox cannot discharge below 3 A (~720 W).  Starting for a small
+    house load therefore exports the difference, so the activation must be
+    high enough that the avoided import pays for the forced export.
+    """
+
+    @staticmethod
+    def _ledger(tariff, dc_kwh, cost_gbp):
+        tariff._bank_dc_kwh = dc_kwh
+        tariff._bank_cost_gbp = cost_gbp
+
+    def test_threshold_matches_the_break_even_formula(self, agile_tariff):
+        # 1 GBP for 10 DC kWh = 10p per DC kWh.
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)
+        delivered_p = 10.0 / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        hurdle_p = delivered_p + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        expected = round(
+            720.0 * (hurdle_p - 5.0) / (30.0 - 5.0)
+        )
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0
+        ) == pytest.approx(expected, abs=1)
+
+    def test_any_import_starts_when_export_covers_the_hurdle(self, agile_tariff):
+        """If the forced export alone clears the hurdle, do not wait."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.0)  # free energy
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            1.0, import_rate_p=30.0
+        ) == 0
+
+    def test_never_starts_when_stored_energy_costs_more_than_import(
+        self, agile_tariff
+    ):
+        # 50p per DC kWh, before discharge losses and margin.
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.50)
+
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+
+        assert threshold == agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        assert agile_tariff._activation_note(threshold).startswith("will not run")
+
+    def test_expensive_stored_energy_raises_the_threshold(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.10)
+        cheap = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.20)
+        dear = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+
+        assert dear > cheap
+
+    def test_export_price_lowers_the_threshold(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
+        at_zero = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        at_eight = agile_tariff.discharge_activation_threshold_w(
+            8.0, import_rate_p=30.0
+        )
+
+        assert 0 < at_eight < at_zero < 720
+
+    def test_negative_export_price_raises_the_threshold(self, agile_tariff):
+        """Paying to export means the forced excess hurts more, not less."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
+        at_zero = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        at_minus_five = agile_tariff.discharge_activation_threshold_w(
+            -5.0, import_rate_p=30.0
+        )
+
+        assert at_minus_five > at_zero
+
+    def test_bias_region_raises_the_break_even(self, agile_tariff):
+        """Once +0.5 A exports, the extra 120 W must clear the hurdle too."""
+        efficiency = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        target_hurdle_p = 27.3
+        dc_cost_p = (
+            target_hurdle_p - agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        ) * efficiency
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=dc_cost_p / 100.0)
+
+        hurdle_p = (
+            agile_tariff._delivered_cost_per_kwh_p()
+            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+        clamped = 720.0 * hurdle_p / 30.0
+        biased = 240.0 * hurdle_p / (30.0 - hurdle_p)
+        assert clamped > 600
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        ) == pytest.approx(round(biased), abs=1)
+
+    def test_unaffordable_stored_energy_never_load_follows(self, agile_tariff):
+        """H above import is a job for the export planner, not load-following."""
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.50)
+
+        assert agile_tariff.discharge_activation_threshold_w(
+            45.0, import_rate_p=30.0
+        ) == agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+
+    def test_conservative_mode_never_starts_below_the_minimum(
+        self, agile_tariff
+    ):
+        """Conservative mode refuses to force an export at the threshold."""
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)
+        aggressive = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0, aggressive=True
+        )
+        conservative = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0, aggressive=False
+        )
+
+        assert aggressive < 720
+        assert conservative == 720
+
+    def test_voltage_scales_the_minimum_output(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.10)
+        at_240 = agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0, voltage=240.0
+        )
+        at_230 = agile_tariff.discharge_activation_threshold_w(
+            5.0, import_rate_p=30.0, voltage=230.0
+        )
+
+        assert at_230 == pytest.approx(at_240 * 230.0 / 240.0, abs=1)
+
+    def test_small_load_stays_off_and_affordable_load_starts(
+        self, agile_tariff
+    ):
+        """End-to-end with the controller's own activation comparison."""
+        self._ledger(agile_tariff, dc_kwh=0.0, cost_gbp=0.0)
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        assert 0 < threshold < 720
+
+        def current_for(house_w):
+            return EvseController._compute_wallbox_current(
+                home_power=house_w,
+                discharge_current_min=3,
+                discharge_current_max=32,
+                minimum_discharge_activation_power=threshold,
+                discharge_current_bias=0.5,
+                charge_current_min=3,
+                charge_current_max=16,
+                minimum_charge_activation_power=720,
+                charge_current_bias=-0.5,
+                grid_voltage=240,
+            )
+
+        # A 30 W base load must not force the 3 A minimum and export 690 W.
+        assert current_for(30) == 0
+        assert current_for(threshold - 1) == 0
+        # Above the break-even the clamp to 3 A is economic.
+        assert current_for(threshold + 1) == -3
+        assert current_for(480) == -3
 
 
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
     
     def test_no_agile_rates(self, agile_tariff):
-        """Test behavior when no Agile rates are available."""
+        """No rates means every export price is 0p, so the normal tier logic stores."""
         agile_tariff.agile_rates = []
-        
+
+        # The rate lookup itself defaults to 0p; there is no special branch.
+        assert agile_tariff._current_export_rate_p(20) == 0.0
+        assert agile_tariff._get_best_unused_export_rate(20) == 0.0
+
         result = agile_tariff._should_use_bidirectional_mode(
             current_slot=20,
-            current_export_rate_p=10.0,
+            current_export_rate_p=agile_tariff._current_export_rate_p(20),
             soc_percent=50
         )
-        
-        assert result is False, "Should export when no rate data available"
+
+        assert result is True, "0p export price should store via Tier 1"
+
+    def test_stale_rates_are_treated_as_zero_price(self, agile_tariff):
+        """Yesterday's prices must not be used after a failed fetch."""
+        yesterday = datetime.now() - timedelta(days=1)
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['start'] = rate_data['start'].replace(
+                year=yesterday.year, month=yesterday.month, day=yesterday.day
+            )
+            rate_data['end'] = rate_data['end'].replace(
+                year=yesterday.year, month=yesterday.month, day=yesterday.day
+            )
+
+        assert agile_tariff._today_rates() == []
+        assert agile_tariff._current_export_rate_p(20) == 0.0
+        assert agile_tariff._should_use_bidirectional_mode(
+            current_slot=20,
+            current_export_rate_p=0.0,
+            soc_percent=50
+        ) is True
+
+    def test_no_rates_plans_no_exports(self, agile_tariff):
+        """The export planner sees 0p everywhere, so no slot is profitable."""
+        agile_tariff.agile_rates = []
+        assert agile_tariff.calculate_export_plan(80) == []
+
+    def test_no_rates_stores_instead_of_exporting(self, agile_tariff):
+        """An API outage must not silently put the controller into export."""
+        fixed = datetime.now().replace(hour=22, minute=0, second=0, microsecond=0)
+        agile_tariff.set_time_functions(datetime_func=lambda: fixed)
+        agile_tariff.agile_rates = []
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
+
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+
+    def test_negative_export_prices_store_and_plan_nothing(self, agile_tariff):
+        """Agile can go negative; paying to export must never be chosen."""
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = -5.0
+
+        assert agile_tariff._should_use_bidirectional_mode(
+            current_slot=20, current_export_rate_p=-5.0, soc_percent=50
+        ) is True
+        assert agile_tariff.calculate_export_plan(80) == []
+
+    def test_dashboard_renders_with_flat_zero_rates(self, agile_tariff):
+        """All-zero rates collapse the colour range; that must not divide by 0."""
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "agile-rate-strip" in html
+        assert "ioctgo-decision-line" in html
     
     def test_all_slots_already_exporting(self, agile_tariff):
         """Test when all future slots are already planned for export."""
@@ -504,7 +1104,7 @@ class TestEdgeCases:
 
         # At slot 20, remaining slots = 47 - 20 = 27
         # Dynamic threshold = 60% + (27 × 1.0%) = 87%
-        # SoC 50% < 87%, and rate 10p < 15.71p (self-use threshold)
+        # SoC 50% < 87%, and rate 10p < SELF_USE_VALUE_THRESHOLD_P (self-use threshold)
         # So Tier 2 applies - should store even if all slots are exporting
         # (the plan should be recalculated)
         assert result is True, "Should store via Tier 2 when SoC below dynamic threshold"
@@ -520,3 +1120,1859 @@ class TestEdgeCases:
         
         # All future rates are lower, so export now
         assert result is False, "Should export when current rate is best"
+
+
+class TestDecisionSnapshot:
+    """The dashboard snapshot must explain the mode and the reason."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    @staticmethod
+    def _pin_plan(tariff, slot, soc, shortfall=False):
+        """Stop get_control_state() recalculating the plan for this test."""
+        tariff._last_plan_slot = slot
+        tariff._last_plan_soc = soc
+        tariff._prev_battery_level = soc
+        tariff._planned_export_slots = []
+        tariff._plan_cache = []
+        tariff._energy_shortfall = shortfall
+
+    def test_off_peak_charges_to_the_effective_cap(self, agile_tariff):
+        self._set_time(agile_tariff, 23, 45)
+        state = create_test_state(50)
+
+        control_state, min_current, max_current, _ = agile_tariff.get_control_state(
+            state, 23 * 60 + 45
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.CHARGE
+        # The range must be explicit so a stale 3 A range from the SoC-unknown
+        # branch cannot survive a repeated CHARGE decision.
+        assert min_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert max_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert snapshot.mode.startswith("Max charge")
+        assert "charging to the" in snapshot.reason
+        assert snapshot.efficiency_label == "charge"
+        assert snapshot.min_gain_p == pytest.approx(
+            agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+
+        # The displayed gain is the policy spread, not the larger
+        # efficiency-adjusted break-even spread on the input price.
+        assert agile_tariff.minimum_round_trip_saving_grid_p() > snapshot.min_gain_p
+        html = agile_tariff.get_dashboard_html()
+        assert "min gain 0.3p/kWh" in html
+        assert "min gain 2.3p/kWh" not in html
+
+    def test_off_peak_idles_at_the_cap(self, agile_tariff):
+        self._set_time(agile_tariff, 23, 45)
+        state = create_test_state(95)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 23 * 60 + 45)
+
+        assert control_state == ControlState.DORMANT
+        assert "cap" in agile_tariff._decision_snapshot.mode
+
+    def test_unknown_soc_mode(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        state = create_test_state(-1)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.CHARGE
+        assert agile_tariff._decision_snapshot.mode == "Charge at 3 A (SoC unknown)"
+
+    def test_depleted_battery_mode(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        state = create_test_state(20)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.DORMANT
+        assert agile_tariff._decision_snapshot.mode == "Idle — battery protection"
+
+    def test_export_slot_mode_is_aggressive(self, agile_tariff):
+        self._set_time(agile_tariff, 18, 0)
+        self._pin_plan(agile_tariff, 36, 80)
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 18 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.mode.startswith("Max discharge")
+        assert "aggressive" in snapshot.mode
+        assert "18:00–18:30" in snapshot.reason
+        assert snapshot.efficiency_label == "discharge"
+
+    def test_shortfall_mode_is_conservative(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        state = create_test_state(30)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "conservative discharge" in snapshot.mode
+        assert "conserving" in snapshot.reason
+        assert snapshot.discharge_aggressive is False
+        assert snapshot.discharge_activation_w == 720
+
+    def test_dashboard_shows_the_discharge_activation(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        html = agile_tariff.get_dashboard_html()
+
+        assert "discharge ≥720 W" in html
+
+    def test_conservative_reason_names_the_house_floor(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        agile_tariff._projected_soc_at_2330 = 54
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert "55% house floor" in snapshot.reason
+        assert "60% bulk target" in snapshot.detail
+        assert "5% flexibility" in snapshot.detail
+
+    def test_conservative_reason_floors_the_projection(self, agile_tariff):
+        """44.6% must read as 44% against a 45% floor, not 45% vs 45%."""
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        agile_tariff._projected_soc_at_2330 = 54.6
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert "54% < 55% house floor" in snapshot.reason
+        assert "55% < 55%" not in snapshot.reason
+        assert "projected 23:30 SoC 54%" in snapshot.detail
+
+    def test_bidirectional_mode_is_aggressive(self, agile_tariff):
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 80)
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 10 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "aggressive discharge" in snapshot.mode
+        assert snapshot.discharge_aggressive is True
+        assert snapshot.efficiency_label in ("round trip", "solar → house")
+
+    def test_self_use_mode_charges_above_the_efficiency_floor(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 22 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert snapshot.mode.startswith("Charge from surplus ≥3 A")
+        assert "aggressive discharge ≥3 A" in snapshot.mode
+        assert snapshot.charge_min_a == pytest.approx(3.0)
+        assert snapshot.discharge_min_a == pytest.approx(3.0)
+
+    def test_charge_floor_follows_the_efficiency_curve(self, agile_tariff):
+        """The floor is the first measured current that beats export now.
+
+        Efficiency rises with current, so the hurdle is monotonic.  These
+        values come from the measured Leaf/Quasar table at the configured
+        30p peak import price, not from a fixed constant.
+        """
+        assert agile_tariff._minimum_harvest_charge_current_a(11.0) == pytest.approx(3.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(13.0) == pytest.approx(4.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(18.0) == pytest.approx(8.0)
+        assert agile_tariff._minimum_harvest_charge_current_a(19.0) == pytest.approx(12.0)
+        # The best measured point is worth ~19.25p, so a 19.9p export wins.
+        assert agile_tariff._minimum_harvest_charge_current_a(19.9) is None
+
+    def test_self_use_charge_range_is_computed_for_the_case(self, agile_tariff):
+        """A 13p export sets a 4 A floor; it is not the old 3 A default."""
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=24, now_rate=13.0,
+            later_slot=32, later_rate=5.0, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 24, 88)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(88)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_called_with(
+            4.0, agile_tariff.MAX_CHARGE_CURRENT
+        )
+        controller.setChargeActivationPower.assert_called_with(4.0 * 240)
+        assert agile_tariff._decision_snapshot.charge_min_a == pytest.approx(4.0)
+
+    def test_no_suitable_current_closes_the_charge_range(self, agile_tariff):
+        """No stale charge range: when export wins, the range is set to zero."""
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=24, now_rate=19.9,
+            later_slot=32, later_rate=5.0, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 24, 88)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(88)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_called_with(0.0, 0.0)
+        controller.setChargeActivationPower.assert_called_with(0.0)
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        assert snapshot.charge_max_a == pytest.approx(0.0)
+
+    def test_no_store_detail_names_the_committed_slot(self, agile_tariff):
+        """The hover text explains why a strong surplus was not stored."""
+        self._set_time(agile_tariff, 12, 0)
+        self._pin_plan(agile_tariff, 24, 88)
+        agile_tariff._planned_export_slots = [32]
+        agile_tariff._plan_cache = [32]
+        TestPlannedExportSlotExplanation._set_two_peak_rates(agile_tariff)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=-1440, ch2Watts=0, voltage=240
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(88)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert snapshot.mode.startswith("Do not charge — surplus worth more exported")
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        assert snapshot.charge_max_a == pytest.approx(0.0)
+        assert "30.5p" in snapshot.reason
+        assert "committed" in snapshot.reason
+        assert "harvest estimate 6 A" in snapshot.detail
+        assert "30.5p 16:00–16:30 slot is already committed" in snapshot.detail
+        assert "best unused slot 21.4p" in snapshot.detail
+
+    def test_floor_gates_charge_activation_instead_of_importing(
+        self, agile_tariff, monkeypatch
+    ):
+        """The 09:30 case: 19.8p now, 30.4p later, 32.26p peak import.
+
+        Charging can pay off either by keeping the solar for the house or by
+        storing it for the 30.4p slot.  The self-use floor alone is 9 A, but
+        the store break-even is 5 A, so 5 A is the effective onset.  A 3 A
+        surplus must not activate a 5 A charge and import the difference at
+        the peak price.
+        """
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=19, now_rate=19.8,
+            later_slot=36, later_rate=30.4, default=5.0,
+        )
+        self._pin_plan(agile_tariff, 19, 79)
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=85, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(79)
+
+        agile_tariff.get_control_state(state, 9 * 60 + 30)
+
+        snapshot = agile_tariff._decision_snapshot
+        # The floor is armed at 5 A, but the live 3 A surplus cannot reach it,
+        # so the dashboard must not imply the car is charging now.
+        assert snapshot.mode.startswith(
+            "Do not charge yet — will charge from ≥5 A surplus"
+        )
+        assert snapshot.charge_min_a == pytest.approx(5.0)
+        assert snapshot.charge_activation_w == pytest.approx(5 * 240)
+        assert "Below 5 A the surplus is worth more exported" in snapshot.detail
+        # The components are still reported/derivable independently.
+        assert agile_tariff._minimum_harvest_charge_current_a(19.8) == pytest.approx(9.0)
+        assert agile_tariff._minimum_store_harvest_current_a(30.4, 19.8) == pytest.approx(5.0)
+
+        def charge_at(home_power):
+            return EvseController._compute_wallbox_current(
+                home_power=home_power,
+                discharge_current_min=3,
+                discharge_current_max=16,
+                minimum_discharge_activation_power=0,
+                discharge_current_bias=0.5,
+                charge_current_min=5,
+                charge_current_max=16,
+                minimum_charge_activation_power=snapshot.charge_activation_w,
+                charge_current_bias=-0.5,
+                grid_voltage=240,
+            )
+
+        # A 3 A surplus is below the floor, so charging stays off.
+        assert charge_at(-750) == 0
+        # A surplus at the floor charges at it without importing.
+        assert charge_at(-1200) == pytest.approx(5.0)
+
+    def test_armed_floor_says_not_yet_when_the_surplus_is_below_it(
+        self, agile_tariff, monkeypatch
+    ):
+        """The 22:29 case: 19.2p now, 19.8p later, 3 A surplus, 52% SoC.
+
+        Keeping an 8 A surplus for the house is worth 19.5p after the round
+        trip, beating the 19.2p export, so the floor stays armed at 8 A.  But
+        the live surplus is only 3 A, so the dashboard must say "not yet"
+        rather than implying the car is charging now.
+        """
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=44, now_rate=19.2,
+            later_slot=45, later_rate=19.8, default=5.0,
+        )
+        self._set_time(agile_tariff, 22, 29)
+        self._pin_plan(agile_tariff, 44, 52)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=370, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(52)
+
+        agile_tariff.get_control_state(state, 22 * 60 + 29)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.mode.startswith(
+            "Do not charge yet — will charge from ≥8 A surplus"
+        )
+        assert snapshot.charge_min_a == pytest.approx(8.0)
+        assert snapshot.charge_activation_w == pytest.approx(8 * 240)
+        # The tooltip explains both sides of the 8 A threshold in plain words.
+        assert "Below 8 A the surplus is worth more exported" in snapshot.detail
+        assert "19.5p" in snapshot.detail
+        assert "19.2p" in snapshot.detail
+        # No internal tier names in anything the user can see.
+        for text in (snapshot.mode, snapshot.reason, snapshot.detail):
+            assert "Tier" not in text
+            assert "tier" not in text
+
+    def test_aggressive_reason_includes_the_break_even(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        agile_tariff._current_discharge_activation_w = Mock(return_value=250)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 22 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "starts at ≥250 W house import" in reason
+        assert "3 A minimum would export more than it saves" in reason
+
+    def test_aggressive_reason_explains_a_zero_break_even(self, agile_tariff):
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 80)
+        agile_tariff._current_discharge_activation_w = Mock(return_value=0)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 10 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "Any import starts discharge" in reason
+        assert "export alone clears the stored cost" in reason
+
+    def test_aggressive_reason_explains_a_disabled_discharge(self, agile_tariff):
+        self._set_time(agile_tariff, 22, 0)
+        self._pin_plan(agile_tariff, 44, 80)
+        agile_tariff._current_discharge_activation_w = Mock(
+            return_value=agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        )
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 22 * 60)
+
+        reason = agile_tariff._decision_snapshot.reason
+        assert "Discharge is disabled" in reason
+        assert "stored energy costs more" in reason
+
+    def test_soc_at_cap_stops_solar_charging(self, agile_tariff):
+        """At the cap the mode says so, and no charge range is offered."""
+        self._set_time(agile_tariff, 10, 0)
+        self._pin_plan(agile_tariff, 20, 95)
+        state = create_test_state(95)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 10 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "SoC at" in snapshot.mode
+        assert "cap" in snapshot.mode
+        assert snapshot.charge_min_a == 0
+        assert snapshot.charge_max_a == 0
+
+
+class TestDecisionExplanation:
+    """The /decision data must teach the calculation, not ask for trust."""
+
+    @staticmethod
+    def _flat(explanation):
+        parts = [explanation.get("mode", ""), explanation.get("reason", "")]
+        parts.append(explanation.get("detail", ""))
+        for row in explanation.get("state", []):
+            parts.extend((row["label"], row["value"]))
+        for step in explanation.get("steps", []):
+            parts.extend(
+                (
+                    step["title"],
+                    step["question"],
+                    step["calculation"],
+                    step["result"],
+                    step["conclusion"],
+                )
+            )
+        for key in ("heading", "summary"):
+            parts.append(explanation["answer"][key])
+        for key in ("charge", "discharge"):
+            parts.extend(
+                (
+                    explanation["answer"][key]["headline"],
+                    explanation["answer"][key]["because"],
+                )
+            )
+        ledger = explanation.get("ledger") or {}
+        for row in ledger.get("rows", []):
+            parts.extend((row["label"], row["value"]))
+        for step in ledger.get("steps", []):
+            parts.extend(
+                (
+                    step["title"],
+                    step["question"],
+                    step["calculation"],
+                    step["result"],
+                    step["conclusion"],
+                )
+            )
+        efficiency = explanation.get("efficiency") or {}
+        parts.append(efficiency.get("note", ""))
+        parts.extend(explanation.get("assumptions", []))
+        return " ".join(str(part) for part in parts)
+
+    def _run_2229(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.26)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        TestPlannedExportSlotExplanation._set_two_peak_rates(
+            agile_tariff, now_slot=44, now_rate=19.2,
+            later_slot=45, later_rate=19.8, default=5.0,
+        )
+        TestDecisionSnapshot._set_time(agile_tariff, 22, 29)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 44, 52)
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        controller.current_grid_power = Power(
+            ch1Watts=370, ch2Watts=0, voltage=243
+        )
+        agile_tariff.evseController = controller
+        state = create_test_state(52)
+        agile_tariff.get_control_state(state, 22 * 60 + 29)
+        return agile_tariff.get_decision_explanation()
+
+    def test_2229_explanation_names_both_sides_of_the_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        """8 A is armed because self-use is worth 19.5p vs 19.2p exported.
+
+        The live 3 A surplus is below the floor, so the answer must say the
+        car is not charging yet.  No internal tier language may leak out.
+        """
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        text = self._flat(explanation)
+
+        assert explanation["available"] is True
+        assert explanation["slot_label"] == "22:00–22:30"
+        assert explanation["answer"]["heading"] == (
+            "Do not charge yet; sell the current surplus"
+        )
+        assert "≥8 A" in explanation["answer"]["charge"]["headline"]
+        assert "Not yet" in explanation["answer"]["charge"]["headline"]
+        assert "19.5p" in text
+        assert "19.2p" in text
+        assert "Answer" in text and "W" in text
+        assert "Tier" not in text
+        assert "tier" not in text
+
+        dashboard_html = agile_tariff.get_dashboard_html()
+        assert 'href="/decision"' in dashboard_html
+        assert "Explanation" in dashboard_html
+
+    def test_explanation_is_a_frozen_copy(self, agile_tariff, monkeypatch):
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        original_mode = explanation["mode"]
+
+        agile_tariff._decision_snapshot.mode = "A newer decision"
+
+        assert explanation["mode"] == original_mode
+        assert explanation["mode"] != "A newer decision"
+
+    def test_store_decision_explains_the_house_value(self, agile_tariff):
+        TestDecisionSnapshot._set_time(agile_tariff, 10, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 20, 80)
+        state = create_test_state(80)
+
+        agile_tariff.get_control_state(state, 10 * 60)
+        assert agile_tariff._decision_snapshot.store_decision is True
+
+        explanation = agile_tariff.get_decision_explanation()
+        text = self._flat(explanation)
+
+        assert explanation["answer"]["heading"] == "Store the solar for later"
+        assert (
+            "What is the surplus worth if the house uses it later?"
+            in text
+        )
+        assert "Charge from surplus at ≥3 A" in (
+            explanation["answer"]["charge"]["headline"]
+        )
+        assert "Tier" not in text
+        assert "tier" not in text
+
+    def test_shortfall_explanation_names_the_house_floor(self, agile_tariff):
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        TestDecisionSnapshot._pin_plan(
+            agile_tariff, 24, 30, shortfall=True
+        )
+        agile_tariff._projected_soc_at_2330 = 54
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        text = self._flat(explanation)
+
+        assert explanation["answer"]["heading"] == (
+            "Conserve energy for the house"
+        )
+        assert "Will the battery last until 23:30?" in text
+        assert "55% house floor" in text
+        assert "Charge from surplus solar only" in (
+            explanation["answer"]["charge"]["headline"]
+        )
+
+    def test_ledger_explanation_matches_the_decision_snapshot(
+        self, agile_tariff
+    ):
+        """The ledger shown must be the one that priced the decision.
+
+        Mutating the live ledger after the decision must not change the page.
+        """
+        TestDecisionSnapshot._set_time(agile_tariff, 10, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 20, 80)
+        agile_tariff._bank_dc_kwh = 10.0
+        agile_tariff._bank_cost_gbp = 0.8
+        agile_tariff._bank_seeded = True
+
+        agile_tariff.get_control_state(create_test_state(80), 10 * 60)
+
+        # A later control cycle has moved the live ledger on.
+        agile_tariff._bank_dc_kwh = 40.0
+        agile_tariff._bank_cost_gbp = 4.0
+
+        explanation = agile_tariff.get_decision_explanation()
+        ledger = explanation["ledger"]
+        rows = {row["label"]: row["value"] for row in ledger["rows"]}
+        text = self._flat(explanation)
+
+        assert ledger["timing"] == "decision time"
+        assert rows["Energy in the ledger (DC)"] == "10.00 kWh"
+        assert rows["Cost booked"] == "£0.8000"
+        assert rows["Stored-energy cost (in pack)"] == "8.0p/kWh"
+        assert rows["Basis"] == "ledger of 10.0 kWh"
+        assert rows["Seeded from SoC at startup"] == "Yes"
+        # Delivered cost divides by the measured 3 A discharge efficiency.
+        delivered = 8.0 / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(3)
+        assert f"{delivered:.1f}p/kWh" in rows["Delivered at 3 A"]
+        assert "8.0p/kWh in the pack" in text
+        assert "How does charging add to the ledger?" in text
+        assert "How does discharging release it?" in text
+
+    def test_efficiency_matrix_uses_the_configured_limits(self, agile_tariff):
+        efficiency = agile_tariff._efficiency_explanation()
+        model = agile_tariff.EFFICIENCY_MODEL
+
+        min_charge = max(1, round(config.WALLBOX_MIN_CHARGE_CURRENT))
+        max_charge = max(min_charge, round(config.WALLBOX_MAX_CHARGE_CURRENT))
+        min_discharge = max(
+            1, round(config.WALLBOX_MIN_DISCHARGE_CURRENT)
+        )
+        max_discharge = max(
+            min_discharge, round(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        )
+
+        assert len(efficiency["charge_rows"]) == max_charge - min_charge + 1
+        assert len(efficiency["discharge_columns"]) == (
+            max_discharge - min_discharge + 1
+        )
+        assert efficiency["charge_rows"][0]["current"] == f"{min_charge} A"
+        assert efficiency["charge_rows"][-1]["current"] == f"{max_charge} A"
+        assert efficiency["discharge_columns"][-1]["current"] == (
+            f"{max_discharge} A"
+        )
+        assert len(efficiency["matrix"]) == len(efficiency["charge_rows"])
+        assert all(
+            len(row) == len(efficiency["discharge_columns"])
+            for row in efficiency["matrix"]
+        )
+
+        charge_3 = model.charge_efficiency(3)
+        discharge_3 = model.discharge_efficiency(3)
+        assert efficiency["charge_rows"][0]["efficiency"] == (
+            f"{charge_3 * 100:.0f}%"
+        )
+        assert efficiency["discharge_columns"][0]["efficiency"] == (
+            f"{discharge_3 * 100:.0f}%"
+        )
+        assert efficiency["matrix"][0][0]["value"] == (
+            f"{charge_3 * discharge_3 * 100:.0f}%"
+        )
+
+        # Above the measured ceiling the model holds the last efficiency, so
+        # a 32 A row/column is a planning value, not a new measurement.
+        measured_max = round(model.max_current_a)
+        assert f"measured from {model.min_current_a:.0f} A to " in (
+            efficiency["note"]
+        )
+        if max(max_charge, max_discharge) > measured_max:
+            assert (
+                f"Above {measured_max} A the efficiency is held"
+                in efficiency["note"]
+            )
+            assert model.charge_efficiency(max_charge) == (
+                model.charge_efficiency(measured_max)
+            )
+
+    def test_decision_template_renders_without_auto_refresh(
+        self, agile_tariff, monkeypatch
+    ):
+        from pathlib import Path
+        from jinja2 import Environment, FileSystemLoader
+
+        explanation = self._run_2229(agile_tariff, monkeypatch)
+        templates = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "evse_controller"
+            / "templates"
+        )
+        env = Environment(
+            loader=FileSystemLoader(str(templates)), autoescape=True
+        )
+        env.globals["url_for"] = lambda endpoint, **kwargs: f"/{endpoint}"
+        html = env.get_template("decision.html").render(**explanation)
+
+        assert "Frozen at 22:29:00" in html
+        assert "Refresh snapshot" in html
+        assert "19.5p" in html
+        assert "19.2p" in html
+        assert "The stored-energy ledger" in html
+        assert "How the ledger is calculated" in html
+        assert "Efficiency at each current" in html
+        assert 'http-equiv="refresh"' not in html
+        assert "setInterval" not in html
+        assert "Tier" not in html
+
+
+class TestChargeCap:
+    """Charging cannot exceed 97% even if the config asks for more."""
+
+    def test_cap_is_limited_to_97(self):
+        original = config.MAX_CHARGE_PERCENT
+        try:
+            config.MAX_CHARGE_PERCENT = 100
+            tariff = _build_tariff()
+            assert tariff.charge_cap_percent() == 97
+        finally:
+            config.MAX_CHARGE_PERCENT = original
+
+    def test_cap_can_be_lowered_by_config(self):
+        original = config.MAX_CHARGE_PERCENT
+        try:
+            config.MAX_CHARGE_PERCENT = 80
+            tariff = _build_tariff()
+            assert tariff.charge_cap_percent() == 80
+        finally:
+            config.MAX_CHARGE_PERCENT = original
+
+    def test_solar_charge_range_stops_at_cap(self, agile_tariff):
+        """Surplus solar must not keep charging a pack that is at the cap."""
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff._planned_export_slots = []
+        agile_tariff._energy_shortfall = False
+
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(50), 10 * 60
+        )
+        controller.setChargeCurrentRange.assert_called_with(
+            3, agile_tariff.MAX_CHARGE_CURRENT
+        )
+
+        controller.reset_mock()
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(95), 10 * 60
+        )
+        controller.setChargeCurrentRange.assert_called_with(0, 0)
+
+    def test_shortfall_charge_range_stops_at_cap(self, agile_tariff):
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff._planned_export_slots = []
+        agile_tariff._energy_shortfall = True
+
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(95), 12 * 60
+        )
+
+        controller.setChargeCurrentRange.assert_called_with(0, 0)
+
+
+class TestMinimumRoundTripSaving:
+    """The tooltip can state the efficiency-adjusted break-even spread.
+
+    This is the extra spread needed on the input price to cover the
+    round-trip loss and still earn the configured margin.  It is not the
+    displayed ``min gain``, which is the margin itself.
+    """
+
+    def test_grid_spread_includes_efficiency_and_margin(self, agile_tariff):
+        expected = (
+            config.IMPORT_LOW / agile_tariff.BATTERY_ROUND_TRIP_EFFICIENCY
+            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+            - config.IMPORT_LOW
+        )
+        assert agile_tariff.minimum_round_trip_saving_grid_p() == pytest.approx(
+            expected
+        )
+        assert agile_tariff.minimum_round_trip_saving_grid_p() == pytest.approx(
+            2.3, abs=0.05
+        )
+
+    def test_solar_spread_is_just_the_margin(self, agile_tariff):
+        assert agile_tariff.minimum_round_trip_saving_solar_p() == pytest.approx(
+            agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+
+
+class TestDailySavings:
+    """Saved today is the price spread captured by cycling stored energy."""
+
+    @staticmethod
+    def _start(tariff, hour, minute=0):
+        clock = [datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )]
+        tariff.set_time_functions(datetime_func=lambda: clock[0])
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        tariff.evseController = controller
+        return clock
+
+    @staticmethod
+    def _prime(tariff, clock, ch1, ch2, soc=None):
+        power = Power(ch1Watts=ch1, ch2Watts=ch2, voltage=240)
+        if soc is not None:
+            power.soc = soc
+        tariff.evseController.current_grid_power = power
+        tariff._savings_last_time = None
+        tariff._accumulate_daily_savings()
+
+    @staticmethod
+    def _run(tariff, clock, minutes, ch1, ch2, soc=None):
+        power = Power(ch1Watts=ch1, ch2Watts=ch2, voltage=240)
+        if soc is not None:
+            power.soc = soc
+        tariff.evseController.current_grid_power = power
+        clock[0] = clock[0] + timedelta(minutes=minutes)
+        tariff._accumulate_daily_savings()
+
+    def test_off_peak_charge_then_daytime_discharge(self, agile_tariff):
+        """A 7.62p charge displacing 32.26p import saves the difference/η."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        # House 300 W plus 3.6 kW charging, for 30 minutes.
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh > 0
+
+        # Midday: the EVSE covers the whole 300 W house load for one minute.
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            3600 / 240.0
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - config.IMPORT_LOW / (eta_chg * eta_dis)
+        ) / 100.0
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, rel=0.01
+        )
+
+    def test_charge_is_booked_when_the_energy_is_used(self, agile_tariff):
+        """Charging is an asset, not a loss, until the energy comes back out."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_cost_gbp > 0
+
+    def test_solar_basis_is_the_export_price(self, agile_tariff):
+        """Harvested solar is costed at what exporting it would have earned."""
+        clock = self._start(agile_tariff, 12, 0)
+        current_slot = 24
+
+        # 2 kW surplus, charging at 1 kW for two minutes.
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=1000)
+        self._run(agile_tariff, clock, 2, ch1=-1000, ch2=1000)
+
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        export_rate_p = agile_tariff._current_export_rate_p(current_slot)
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            1000 / 240.0
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - export_rate_p / (eta_chg * eta_dis)
+        ) / 100.0
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, rel=0.01
+        )
+
+    def test_export_beyond_the_house_earns_the_agile_rate(self, agile_tariff):
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+        cost_per_dc_kwh = (
+            agile_tariff._bank_cost_gbp / agile_tariff._bank_dc_kwh
+        )
+
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-3300, ch2=-3600)
+        self._run(agile_tariff, clock, 1, ch1=-3300, ch2=-3600)
+
+        export_rate_p = agile_tariff._current_export_rate_p(36)
+        delivered_kwh = 3.6 / 60.0
+        house_kwh = 0.3 / 60.0
+        avoided = (
+            house_kwh * config.IMPORT_HIGH
+            + (delivered_kwh - house_kwh) * export_rate_p
+        ) / 100.0
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            3600 / 240.0
+        )
+        released_cost = delivered_kwh / eta_dis * cost_per_dc_kwh
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            avoided - released_cost, rel=0.01
+        )
+
+    def test_solar_at_zero_price_is_worth_nothing_to_export(self, agile_tariff):
+        """Zero-price solar exported at zero price must book exactly £0.
+
+        No cash changed hands, so there is no operational loss: the ledger
+        cost is zero because the displaced export was worth zero.
+        """
+        clock = self._start(agile_tariff, 12, 0)
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        # 2 kW surplus, charging at 1 kW for five minutes.
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=1000)
+        self._run(agile_tariff, clock, 5, ch1=-1000, ch2=1000)
+        assert agile_tariff._bank_cost_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh > 0.03
+
+        # Export 1 kW at 0p for one minute, with no house load to offset.
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-1000, ch2=-1000)
+        self._run(agile_tariff, clock, 1, ch1=-1000, ch2=-1000)
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+
+    def test_zero_export_price_books_a_loss_on_export(self, agile_tariff):
+        """Exporting bought energy at 0p loses the money spent on it."""
+        clock = self._start(agile_tariff, 2, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
+        for rate_data in agile_tariff.agile_rates:
+            rate_data['rate'] = 0.0
+
+        clock[0] = clock[0].replace(hour=18, minute=0)
+        self._prime(agile_tariff, clock, ch1=-3300, ch2=-3600)
+        self._run(agile_tariff, clock, 1, ch1=-3300, ch2=-3600)
+
+        assert agile_tariff._saved_today_gbp < 0
+
+    def test_saved_today_rate_tracks_recent_discharge(self, agile_tariff):
+        """The dashboard can show how fast saved-today is moving."""
+        clock = self._start(agile_tariff, 2, 0)
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        saved_before = agile_tariff._saved_today_gbp
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        gained = agile_tariff._saved_today_gbp - saved_before
+        assert gained > 0
+        assert agile_tariff._savings_rate_gbp_per_hour == pytest.approx(
+            gained * 60.0, rel=0.01
+        )
+        assert agile_tariff._format_savings_rate().startswith("↑")
+
+    def test_ledger_survives_midnight_but_daily_total_resets(self, agile_tariff):
+        clock = self._start(agile_tariff, 23, 0)
+
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600)
+        bank_dc = agile_tariff._bank_dc_kwh
+        bank_cost = agile_tariff._bank_cost_gbp
+        assert bank_dc > 0
+
+        clock[0] = clock[0] + timedelta(days=1)
+        agile_tariff._savings_last_time = None
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_dc)
+        assert agile_tariff._bank_cost_gbp == pytest.approx(bank_cost)
+
+    def test_first_discharge_prices_unknown_energy_at_off_peak(
+        self, agile_tariff
+    ):
+        """Energy already in the pack has no purchase price.
+
+        It is not treated as free: the ledger falls back to the off-peak
+        rate, so the first discharge books the import it avoids minus that
+        conservative cost.  At 30p import that is still a saving, but a
+        smaller one than a charge the ledger actually saw.
+        """
+        clock = self._start(agile_tariff, 12, 0)
+        assert agile_tariff._bank_dc_kwh == 0.0
+
+        # The EVSE covers the whole 300 W house load for one minute.
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300)
+
+        delivered_kwh = 0.3 / 60.0
+        eta_chg = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            agile_tariff.GRID_CHARGE_REFERENCE_CURRENT
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            300 / 240.0
+        )
+        expected = delivered_kwh * (
+            config.IMPORT_HIGH - config.IMPORT_LOW / (eta_chg * eta_dis)
+        ) / 100.0
+        assert agile_tariff._saved_today_gbp == pytest.approx(
+            expected, rel=0.01
+        )
+        # The cost basis is the fallback, not zero.
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            config.IMPORT_LOW / (eta_chg * eta_dis), rel=0.01
+        )
+
+    def test_startup_transient_is_not_booked(self, agile_tariff):
+        """The Wallbox's power-up draw is not priced into the ledger."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        bank_before = agile_tariff._bank_dc_kwh
+        saved_before = agile_tariff._saved_today_gbp
+
+        # It powers up drawing ~200 W before it can discharge.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_before)
+        assert agile_tariff._saved_today_gbp == pytest.approx(saved_before)
+        assert (
+            agile_tariff.discharge_activation_threshold_w(
+                8.0, import_rate_p=config.IMPORT_HIGH
+            )
+            < agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        )
+
+    def test_steady_operation_is_booked_after_startup(self, agile_tariff):
+        """Once the settle window has passed, normal charging is recorded."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        bank_before = agile_tariff._bank_dc_kwh
+
+        # First sample starts the 21.9 s window and is discarded.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+        # Thirty seconds later the Wallbox is active and the energy counts.
+        self._run(agile_tariff, clock, 0.5, ch1=500, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh > bank_before
+
+    def test_shutdown_transient_is_not_booked(self, agile_tariff):
+        """The power-down draw is not booked as a charge."""
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        # Move past the startup settle so the discharge is recorded.
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+        bank_after = agile_tariff._bank_dc_kwh
+        saved_after = agile_tariff._saved_today_gbp
+
+        # Stopping draws ~200 W the other way for a few seconds.
+        self._run(agile_tariff, clock, 0.1, ch1=300, ch2=200, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(bank_after)
+        assert agile_tariff._saved_today_gbp == pytest.approx(saved_after)
+
+    def test_current_change_within_a_direction_is_not_delayed(
+        self, agile_tariff
+    ):
+        """A larger discharge while already discharging books immediately."""
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+        bank_after = agile_tariff._bank_dc_kwh
+
+        self._run(agile_tariff, clock, 0.5, ch1=0, ch2=-700, soc=50)
+
+        assert agile_tariff._bank_dc_kwh < bank_after
+
+    def test_startup_and_shutdown_use_the_wallbox_delays(self, agile_tariff):
+        clock = self._start(agile_tariff, 12, 0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=0, soc=50)
+
+        self._run(agile_tariff, clock, 0.1, ch1=0, ch2=-700, soc=50)
+        assert (
+            agile_tariff._ledger_settle_until - clock[0]
+        ).total_seconds() == pytest.approx(
+            agile_tariff.LEDGER_STARTUP_SETTLE_SECONDS
+        )
+
+        # Move past the startup window, then stop.
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-700, soc=50)
+        self._run(agile_tariff, clock, 0.1, ch1=0, ch2=0, soc=50)
+        assert (
+            agile_tariff._ledger_settle_until - clock[0]
+        ).total_seconds() == pytest.approx(
+            agile_tariff.LEDGER_SHUTDOWN_SETTLE_SECONDS
+        )
+
+    def test_pack_energy_at_restart_is_valued_at_the_fallback(
+        self, agile_tariff
+    ):
+        """A restart does not make the existing charge look free or dear."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+
+        assert agile_tariff._bank_dc_kwh == pytest.approx(
+            0.5 * agile_tariff.SOC_CAPACITY_KWH
+        )
+        eta_dis = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+            agile_tariff.MIN_DISCHARGE_CURRENT
+        )
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            agile_tariff._bank_fallback_cost_per_dc_kwh() * 100.0 / eta_dis
+        )
+
+    def test_stored_cost_reports_pack_and_delivered_basis(
+        self, agile_tariff
+    ):
+        """The pack cost and the delivered cost are both shown.
+
+        A 7.6p/kWh charge at 88% charge efficiency puts energy in the pack at
+        about 8.6p/kWh.  The discharge threshold needs the cost per kWh
+        delivered, which adds the discharge loss on top.
+        """
+        agile_tariff._bank_dc_kwh = 20.0
+        agile_tariff._bank_cost_gbp = 20.0 * 0.086
+        low_p, high_p = agile_tariff._delivered_cost_range_per_kwh_p()
+
+        assert agile_tariff._stored_cost_per_dc_kwh_p() == pytest.approx(8.6)
+        assert low_p < high_p
+        assert high_p == pytest.approx(
+            8.6
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                agile_tariff.MIN_DISCHARGE_CURRENT
+            )
+        )
+        assert low_p == pytest.approx(
+            8.6
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                config.WALLBOX_MAX_DISCHARGE_CURRENT
+            )
+        )
+        assert agile_tariff._format_stored_cost() == (
+            f"stored 8.6p/kWh ({low_p:.1f}–{high_p:.1f}p delivered)"
+        )
+
+    def test_tiny_high_price_sample_does_not_disable_discharge(
+        self, agile_tariff
+    ):
+        """Regression: a transient charge must not become the whole basis.
+
+        A 2 W positive EVSE reading for 30 s at the 30p import rate used to
+        set the cost of the entire pack to ~70p/kWh delivered, so the very
+        next control cycle disabled discharge even though the pack had been
+        charged long before the process started.
+        """
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=50)
+        self._run(agile_tariff, clock, 0.5, ch1=302, ch2=2, soc=50)
+
+        threshold = agile_tariff.discharge_activation_threshold_w(
+            8.0, import_rate_p=config.IMPORT_HIGH
+        )
+
+        assert threshold < agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        assert "disabled" not in agile_tariff._activation_explanation(
+            threshold
+        )
+
+    def test_unknown_soc_noise_keeps_the_fallback_basis(self, agile_tariff):
+        """With no SoC to seed from, a sub-threshold ledger is still noise."""
+        clock = self._start(agile_tariff, 22, 40)
+        self._prime(agile_tariff, clock, ch1=300, ch2=0, soc=-1)
+        self._run(agile_tariff, clock, 0.5, ch1=302, ch2=2, soc=-1)
+
+        assert agile_tariff._bank_dc_kwh < agile_tariff.MIN_LEDGER_BASIS_KWH
+        assert agile_tariff._delivered_cost_per_kwh_p() == pytest.approx(
+            agile_tariff._bank_fallback_cost_per_dc_kwh()
+            * 100.0
+            / agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
+                agile_tariff.MIN_DISCHARGE_CURRENT
+            )
+        )
+
+    def test_saving_is_attributed_to_the_slot_it_happened_in(
+        self, agile_tariff
+    ):
+        """The report needs a per-slot split whose sum is the daily total."""
+        clock = self._start(agile_tariff, 2, 0)
+        self._prime(agile_tariff, clock, ch1=3900, ch2=3600, soc=50)
+        self._run(agile_tariff, clock, 30, ch1=3900, ch2=3600, soc=50)
+
+        clock[0] = clock[0].replace(hour=12, minute=0)
+        self._prime(agile_tariff, clock, ch1=0, ch2=-300, soc=50)
+        self._run(agile_tariff, clock, 1, ch1=0, ch2=-300, soc=50)
+
+        saved = agile_tariff._saved_today_gbp
+        assert saved > 0
+        assert sum(agile_tariff._saved_by_slot_gbp) == pytest.approx(saved)
+        assert agile_tariff.saved_for_slot(clock[0].date(), 24) == pytest.approx(
+            saved
+        )
+        assert agile_tariff.saved_for_slot(clock[0].date(), 25) == pytest.approx(
+            0.0
+        )
+
+    def test_slot_savings_reset_at_midnight(self, agile_tariff):
+        old_day = datetime.now().replace(
+            hour=23, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
+        clock = [old_day]
+        agile_tariff.set_time_functions(datetime_func=lambda: clock[0])
+        controller = Mock()
+        controller.chargeCurrentBias = -0.5
+        agile_tariff.evseController = controller
+        controller.current_grid_power = Power(
+            ch1Watts=300, ch2Watts=0, voltage=240, soc=50
+        )
+
+        agile_tariff._savings_day = old_day.date()
+        agile_tariff._saved_today_gbp = 0.5
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+        agile_tariff._saved_by_slot_gbp[47] = 0.5
+        agile_tariff._savings_last_time = None
+        agile_tariff._accumulate_daily_savings()
+
+        clock[0] = old_day + timedelta(minutes=30)
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._saved_today_gbp == pytest.approx(0.0)
+        assert agile_tariff._saved_by_slot_gbp == [0.0] * 48
+        assert agile_tariff.saved_for_slot(old_day.date(), 47) is None
+
+    def test_last_slot_is_still_readable_just_after_midnight(
+        self, agile_tariff
+    ):
+        """The report closes the previous slot before the tariff resets."""
+        old_day = datetime.now().replace(
+            hour=23, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
+        # The clock has just passed midnight, but the tariff has not run its
+        # midnight reset yet.
+        now = old_day + timedelta(minutes=30, seconds=5)
+        agile_tariff.set_time_functions(datetime_func=lambda: now)
+        agile_tariff._savings_day = old_day.date()
+        agile_tariff._saved_today_gbp = 0.5
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+        agile_tariff._saved_by_slot_gbp[47] = 0.5
+
+        assert agile_tariff.saved_for_slot(old_day.date(), 47) == pytest.approx(
+            0.5
+        )
+        assert agile_tariff.saved_for_slot(now.date(), 47) is None
+
+    def test_no_accumulation_yet_is_a_zero_for_today(self, agile_tariff):
+        """An active tariff with no samples yet has saved nothing today."""
+        now = datetime.now()
+        agile_tariff.set_time_functions(datetime_func=lambda: now)
+        agile_tariff._savings_day = None
+        agile_tariff._saved_by_slot_gbp = [0.0] * 48
+
+        assert agile_tariff.saved_for_slot(now.date(), 0) == 0.0
+        assert agile_tariff.saved_for_slot(
+            now.date() - timedelta(days=1), 0
+        ) is None
+
+
+class TestDashboardModeLine:
+    """The compact decision line sits above the 48-slot strip."""
+
+    def test_mode_line_precedes_the_strip(self, agile_tariff):
+        agile_tariff._record_decision(
+            mode="Harvest 5 A · aggressive discharge",
+            reason="future 24.6p at 16:30–17:00 × 73% = 17.7p now",
+            soc_percent=47,
+            efficiency_pct=73,
+            efficiency_label="round trip",
+            min_gain_p=0.3,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        mode_pos = html.find("ioctgo-decision-line")
+        strip_pos = html.find("agile-rate-strip")
+        assert mode_pos != -1
+        assert strip_pos != -1
+        assert mode_pos < strip_pos
+        assert "Harvest 5 A" in html
+        assert "round trip" in html
+        assert "min gain 0.3p/kWh" in html
+        assert "min gain 0.3p/kWh (" not in html
+        assert "saved today" in html
+
+    def test_mode_line_shows_stored_energy_cost(self, agile_tariff):
+        agile_tariff._bank_dc_kwh = 10.0
+        agile_tariff._bank_cost_gbp = 1.0
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        low_p, high_p = agile_tariff._delivered_cost_range_per_kwh_p()
+        assert (
+            f"stored {agile_tariff._stored_cost_per_dc_kwh_p():.1f}p/kWh" in html
+        )
+        assert f"({low_p:.1f}–{high_p:.1f}p delivered)" in html
+        assert "ledger of 10.0 kWh" in html
+
+    def test_zero_activation_does_not_repeat_the_chip(self, agile_tariff):
+        """The reason already says that any import starts discharge."""
+        agile_tariff._record_decision(
+            mode="Harvest ≥3 A · aggressive discharge",
+            reason=(
+                "Any import starts discharge because the export alone clears "
+                "the stored cost."
+            ),
+            soc_percent=47,
+            discharge_activation_w=0,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert html.count("Any import starts discharge") == 1
+        assert "discharge on any import" not in html
+
+    def test_mode_line_marks_the_fallback_cost_basis(self, agile_tariff):
+        agile_tariff._bank_dc_kwh = 0.0
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "off-peak fallback" in html
+
+    def test_saved_today_shows_finer_resolution(self, agile_tariff):
+        agile_tariff._saved_today_gbp = 0.0243
+        assert agile_tariff._format_saved_today() == "£0.0243"
+
+        agile_tariff._saved_today_gbp = -0.0243
+        assert agile_tariff._format_saved_today() == "-£0.0243"
+
+        agile_tariff._saved_today_gbp = 12.3456
+        assert agile_tariff._format_saved_today() == "£12.35"
+
+    def test_savings_rate_is_hidden_while_flat(self, agile_tariff):
+        agile_tariff._savings_rate_gbp_per_hour = 0.0
+        assert agile_tariff._format_savings_rate() == ""
+
+        agile_tariff._savings_rate_gbp_per_hour = 0.224
+        assert agile_tariff._format_savings_rate() == "↑22.4p/h"
+
+        agile_tariff._savings_rate_gbp_per_hour = -0.224
+        assert agile_tariff._format_savings_rate() == "↓22.4p/h"
+
+    def test_mode_line_shows_the_savings_rate_when_moving(self, agile_tariff):
+        agile_tariff._record_decision(
+            mode="Harvest 5 A · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+        agile_tariff._saved_today_gbp = 0.0243
+        agile_tariff._savings_rate_gbp_per_hour = 0.224
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "saved today £0.0243" in html
+        assert "↑22.4p/h" in html
+
+    def test_strip_has_room_for_the_rate_and_badge(self, agile_tariff):
+        """The strip must not be squeezed: the EX badge sits above the rate."""
+        agile_tariff._record_decision(
+            mode="Idle — battery protection",
+            reason="SoC at the reserve",
+            soc_percent=20,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert 'class="agile-rate-strip" style="height:40px' in html
+        assert ".agile-rate-cell .agile-rate-badge" in html
+
+    def test_export_plan_is_named_in_text(self, agile_tariff):
+        """A planned slot is marked on the strip and named in words."""
+        agile_tariff._planned_export_slots = [32, 34]
+        agile_tariff._record_decision(
+            mode="Do not charge · aggressive discharge",
+            reason="covering the house",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert 'class="agile-rate-badge"' in html
+        assert ">EX</span>" in html
+        assert "Export plan: 16:00–16:30 @ 18.0p" in html
+        assert "17:00–17:30 @ 28.0p" in html
+
+    def test_empty_export_plan_is_stated(self, agile_tariff):
+        agile_tariff._planned_export_slots = []
+        agile_tariff._record_decision(
+            mode="Harvest 6 A · aggressive discharge",
+            reason="storing solar",
+            soc_percent=47,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "Export plan: none planned" in html
+        assert ">EX</span>" not in html
+
+    def test_mode_line_still_shows_while_rates_load(self, agile_tariff):
+        agile_tariff.agile_rates = []
+        agile_tariff._record_decision(
+            mode="Max charge (32 A)",
+            reason="off-peak",
+            soc_percent=50,
+        )
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "ioctgo-decision-line" in html
+        assert "Max charge (32 A)" in html
+        assert "Loading Agile Outgoing rates" in html
+
+
+
+class TestDecisionLog:
+    """The compact decision line is written to the log once per minute."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute, second=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    def test_decision_summary_logs_once_per_minute(self, agile_tariff):
+        self._set_time(agile_tariff, 12, 0, second=5)
+        target = (
+            "evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing.info"
+        )
+
+        with patch(target) as log_info:
+            agile_tariff._record_decision(
+                mode="Harvest 5 A · aggressive discharge",
+                reason="storing solar",
+                soc_percent=47,
+                efficiency_pct=73,
+                efficiency_label="round trip",
+                min_gain_p=0.3,
+                harvest_current_a=6,
+                discharge_activation_w=250,
+            )
+            # A second control cycle in the same minute must not repeat it.
+            agile_tariff._record_decision(
+                mode="Harvest 6 A · aggressive discharge",
+                reason="still storing solar",
+                soc_percent=47,
+            )
+
+            assert log_info.call_count == 1
+            message = log_info.call_args[0][0]
+            assert message.startswith("IOCTGO_AGILEOUT: Decision: ")
+            assert "Harvest 5 A" in message
+            assert "storing solar" in message
+            assert "η 73% round trip" in message
+            assert "min gain 0.3p/kWh" in message
+            assert "min gain 0.3p/kWh (" not in message
+            assert "harvest 6 A" in message
+            assert "discharge ≥250 W" in message
+            assert "stored " in message
+            assert "saved today" in message
+
+            # The next minute logs again, with the current decision.
+            self._set_time(agile_tariff, 12, 1)
+            agile_tariff._record_decision(
+                mode="Harvest 6 A · aggressive discharge",
+                reason="still storing solar",
+                soc_percent=47,
+            )
+
+            assert log_info.call_count == 2
+            assert "Harvest 6 A" in log_info.call_args[0][0]
+
+
+class TestStatePersistence:
+    """The ledger and today's saving survive a restart or a tariff switch."""
+
+    @staticmethod
+    def _populate(tariff, now):
+        tariff.set_time_functions(datetime_func=lambda: now)
+        tariff._bank_dc_kwh = 9.5
+        tariff._bank_cost_gbp = 0.76
+        tariff._bank_seeded = True
+        tariff._savings_day = now.date()
+        tariff._saved_today_gbp = 0.34
+        tariff._saved_by_slot_gbp = [0.0] * 48
+        tariff._saved_by_slot_gbp[24] = 0.34
+        tariff._savings_last_time = now
+        tariff._savings_last_baseline_w = 120.0
+        tariff._savings_last_evse_w = -240.0
+        tariff._ledger_direction = -1
+        tariff._ledger_settle_until = now + timedelta(seconds=20)
+        tariff._savings_rate_history.append((now, 0.34))
+        tariff._savings_rate_gbp_per_hour = 0.12
+        tariff._exported_slots = [34, 12, 34, 99]
+
+    def test_save_then_load_restores_ledger_and_saving(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        first = _build_tariff(state_path=state_path)
+        self._populate(first, now)
+
+        assert first.save_state() is True
+
+        second = _build_tariff(state_path=state_path)
+        assert second._bank_dc_kwh == pytest.approx(9.5)
+        assert second._bank_cost_gbp == pytest.approx(0.76)
+        assert second._bank_seeded is True
+        assert second._savings_day == now.date()
+        assert second._saved_today_gbp == pytest.approx(0.34)
+        assert second._saved_by_slot_gbp[24] == pytest.approx(0.34)
+        assert sum(second._saved_by_slot_gbp) == pytest.approx(0.34)
+        assert second._exported_slots == [12, 34]
+
+        # The interval across the switch must not be booked as if it had
+        # just happened: the next control sample starts a fresh baseline.
+        assert second._savings_last_time is None
+        assert second._savings_last_baseline_w == 0.0
+        assert second._savings_last_evse_w == 0.0
+        assert second._ledger_direction == 0
+        assert second._ledger_settle_until is None
+        assert second._savings_rate_gbp_per_hour == 0.0
+        assert list(second._savings_rate_history) == []
+
+    def test_cleanup_saves_state(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        tariff = _build_tariff(state_path=state_path)
+        self._populate(tariff, now)
+
+        tariff.cleanup()
+
+        data = json.loads(state_path.read_text())
+        assert data["version"] == tariff.STATE_VERSION
+        assert data["ledger"]["dc_kwh"] == pytest.approx(9.5)
+        assert data["ledger"]["cost_gbp"] == pytest.approx(0.76)
+        assert data["ledger"]["seeded"] is True
+        assert data["savings"]["day"] == now.date().isoformat()
+        assert data["savings"]["saved_today_gbp"] == pytest.approx(0.34)
+        assert data["savings"]["saved_by_slot_gbp"][24] == pytest.approx(0.34)
+        assert sum(data["savings"]["saved_by_slot_gbp"]) == pytest.approx(0.34)
+        assert data["exported_slots"] == [12, 34]
+
+    def test_stale_saving_resets_but_the_ledger_survives(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        yesterday = datetime.now().date() - timedelta(days=1)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "saved_at": f"{yesterday.isoformat()}T23:59:00",
+                    "ledger": {
+                        "dc_kwh": 7.25,
+                        "cost_gbp": 0.58,
+                        "seeded": True,
+                    },
+                    "savings": {
+                        "day": yesterday.isoformat(),
+                        "saved_today_gbp": 0.41,
+                    },
+                    "exported_slots": [30, 31],
+                }
+            )
+        )
+
+        tariff = _build_tariff(state_path=state_path)
+
+        # The ledger deliberately crosses midnight, so it is kept.
+        assert tariff._bank_dc_kwh == pytest.approx(7.25)
+        assert tariff._bank_cost_gbp == pytest.approx(0.58)
+        assert tariff._bank_seeded is True
+        # Today's total and today's export markers start clean.
+        assert tariff._savings_day == datetime.now().date()
+        assert tariff._saved_today_gbp == 0.0
+        assert tariff._exported_slots == []
+
+    def test_restored_ledger_is_not_seeded_again(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        now = datetime.now().replace(microsecond=0)
+        first = _build_tariff(state_path=state_path)
+        self._populate(first, now)
+        first.save_state()
+
+        second = _build_tariff(state_path=state_path)
+        before_dc = second._bank_dc_kwh
+        before_cost = second._bank_cost_gbp
+
+        second._seed_bank_from_soc(80)
+
+        assert second._bank_dc_kwh == pytest.approx(before_dc)
+        assert second._bank_cost_gbp == pytest.approx(before_cost)
+
+    def test_corrupt_state_is_ignored(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        state_path.write_text("{this is not json")
+
+        tariff = _build_tariff(state_path=state_path)
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_cost_gbp == 0.0
+        assert tariff._bank_seeded is False
+        assert tariff._saved_today_gbp == 0.0
+
+    def test_negative_or_invalid_ledger_values_are_ignored(self, tmp_path):
+        state_path = tmp_path / "tariff-state.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "ledger": {
+                        "dc_kwh": -2.0,
+                        "cost_gbp": "not a number",
+                        "seeded": True,
+                    },
+                    "savings": {
+                        "day": datetime.now().date().isoformat(),
+                        "saved_today_gbp": 0.12,
+                    },
+                }
+            )
+        )
+
+        tariff = _build_tariff(state_path=state_path)
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_cost_gbp == 0.0
+        # The invalid ledger allows the startup SoC seed to run again.
+        assert tariff._bank_seeded is False
+        # The ledger is bad, but a valid today's saving is still usable.
+        assert tariff._saved_today_gbp == pytest.approx(0.12)
+
+    def test_missing_state_file_leaves_defaults(self, tmp_path):
+        tariff = _build_tariff(state_path=tmp_path / "absent.json")
+
+        assert tariff._bank_dc_kwh == 0.0
+        assert tariff._bank_seeded is False
+        assert tariff._saved_today_gbp == 0.0
+
+
+class TestRateFetchState:
+    """The rate cache must be usable before the first successful fetch."""
+
+    def test_complete_rates_check_before_first_fetch(self):
+        """A fresh process has no _last_fetch_date until a fetch stores one.
+
+        The check short-circuits on an empty rate list today, but the
+        attribute must still exist so externally supplied rates or a future
+        reordering cannot raise AttributeError.
+        """
+        mock_thread = Mock()
+        mock_thread.getBatteryChargeLevel = Mock(return_value=75)
+        mock_thread.get_state = Mock(return_value={})
+
+        with patch.object(
+            IOctGoWithAgileOutgoingTariff, "_fetch_rates_async"
+        ), patch(
+            'evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
+            return_value=mock_thread,
+        ):
+            tariff = IOctGoWithAgileOutgoingTariff()
+
+        tariff.agile_rates = create_mock_agile_rates()
+
+        assert tariff._last_fetch_date is None
+        assert tariff._have_complete_rates_for_date(datetime.now().date()) is False
+
+
+class TestEnergySessions:
+    """Supplier-requested half-hour windows change the control mode."""
+
+    @staticmethod
+    def _fixed(hour, minute=0):
+        return datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+
+    @staticmethod
+    def _set_up_store(tariff, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        tariff.session_store = store
+        return store
+
+    def test_free_session_charges_at_max(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, min_current, max_current, reason = agile_tariff.get_control_state(
+            create_test_state(79), 12 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.CHARGE
+        # Explicit max range: the free session must not inherit whatever
+        # narrower range the previous mode left behind.
+        assert min_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert max_current == agile_tariff.MAX_CHARGE_CURRENT
+        assert snapshot.mode.startswith("Free energy 12:00–13:00")
+        assert "free energy" in reason.lower()
+        assert snapshot.current_rate_p == pytest.approx(0.0)
+
+    def test_free_session_respects_the_charge_cap(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(98), 12 * 60
+        )
+
+        assert control_state == ControlState.DORMANT
+        assert "cap" in agile_tariff._decision_snapshot.mode.lower()
+
+    def test_free_session_sets_the_import_price_to_zero(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        assert agile_tariff._current_import_rate_p(12 * 60) == pytest.approx(0.0)
+        # Outside the window the normal peak band applies.
+        assert agile_tariff._current_import_rate_p(14 * 60) == pytest.approx(
+            config.IMPORT_HIGH
+        )
+
+    def test_free_session_books_zero_import_cost(self, agile_tariff, tmp_path):
+        """The ledger must agree with the decision, not just the dashboard."""
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+
+        controller = Mock()
+        controller.current_grid_power = Power(
+            ch1Watts=3456, ch2Watts=3456, voltage=240, soc=50
+        )
+        agile_tariff.evseController = controller
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+        agile_tariff._savings_day = start.date()
+        agile_tariff._savings_last_time = start - timedelta(seconds=60)
+        agile_tariff._savings_last_baseline_w = 0.0
+        agile_tariff._savings_last_evse_w = 0.0
+        agile_tariff._ledger_settle_until = None
+        agile_tariff._ledger_direction = 1
+        agile_tariff._bank_dc_kwh = 0.0
+        agile_tariff._bank_cost_gbp = 0.0
+        agile_tariff._bank_seeded = True
+
+        agile_tariff._accumulate_daily_savings()
+
+        assert agile_tariff._bank_dc_kwh > 0
+        assert agile_tariff._bank_cost_gbp == pytest.approx(0.0)
+
+    def test_free_slot_is_excluded_from_the_export_plan(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        # 18:00–19:00 carries the best rate of the day (35p).
+        store.add(
+            EnergySession(
+                FREE_IMPORT, self._fixed(18), self._fixed(19)
+            )
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        slot, rate = agile_tariff._get_best_unused_export_slot_rate(24)
+
+        assert slot != 36
+        assert slot == 35
+        assert rate == pytest.approx(32.0)
+
+    def test_grid_support_exports_at_max_regardless_of_price(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+        # Even a 0p export price must not stop a support request.
+        for rate_data in agile_tariff.agile_rates:
+            if rate_data["start"].hour == 12:
+                rate_data["rate"] = 0.0
+
+        control_state, _, _, reason = agile_tariff.get_control_state(
+            create_test_state(79), 12 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.mode.startswith("Save Energy Session 12:00–13:00")
+        assert "grid support" in snapshot.reason.lower()
+        assert "Save Energy Session" in reason
+        assert snapshot.discharge_min_a == pytest.approx(
+            agile_tariff.MAX_DISCHARGE_CURRENT
+        )
+
+    def test_grid_support_stops_at_the_protection_reserve(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(agile_tariff.BATTERY_PROTECTION_RESERVE_SOC),
+            12 * 60,
+        )
+
+        assert control_state == ControlState.DORMANT
+
+    def test_sessions_skip_load_follow_configuration(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(EnergySession(FREE_IMPORT, start, start + timedelta(hours=1)))
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(79)
+        agile_tariff.get_control_state(state, 12 * 60)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+
+        controller.setChargeCurrentRange.assert_not_called()
+        controller.setDischargeCurrentRange.assert_not_called()
+        controller.setChargeActivationPower.assert_not_called()
+
+    def test_dashboard_marks_session_slots(self, agile_tariff, tmp_path):
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(
+                FREE_IMPORT, self._fixed(18), self._fixed(19)
+            )
+        )
+        store.add(
+            EnergySession(
+                GRID_SUPPORT, self._fixed(20), self._fixed(20, 30)
+            )
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        html = agile_tariff.get_dashboard_html()
+
+        assert "FREE ENERGY SESSION" in html
+        assert "SAVE ENERGY SESSION (grid support)" in html
+        assert "box-shadow:inset 0 4px 0 #2563eb;" in html
+        assert "box-shadow:inset 0 4px 0 #d97706;" in html
+        assert "Free Energy Session" in html  # legend

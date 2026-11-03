@@ -15,7 +15,8 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.13'
+        # pyproject supports >=3.12,<3.13 and production runs 3.12.x.
+        python-version: '3.12'
     - name: Install Poetry
       run: |
         curl -sSL https://install.python-poetry.org | python3 -

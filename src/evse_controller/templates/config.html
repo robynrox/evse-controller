@@ -331,12 +331,12 @@
         <div class="form-group">
             <label for="max_charge_percent">Maximum Charge Percentage:</label>
             <input type="number" id="max_charge_percent" name="charging[max_charge_percent]"
-                value="{{ config.charging.max_charge_percent }}" min="0" max="100" required>
+                value="{{ config.charging.max_charge_percent }}" min="0" max="100" step="1" required>
         </div>
         <div class="form-group">
             <label for="solar_period_max_charge">Solar Period Maximum Charge:</label>
             <input type="number" id="solar_period_max_charge" name="charging[solar_period_max_charge]"
-                value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" required>
+                value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" step="1" required>
         </div>
         <div class="form-group">
             <label for="startup_state">Smart Tariff In Use:</label>
@@ -407,8 +407,14 @@
         <div class="form-group">
             <label for="min_agile_discharge_soc">Target SoC for Agile Discharge (%):</label>
             <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
-                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100">
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100" step="1">
             <small>SoC to target near the end of the day. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
+        </div>
+        <div class="form-group">
+            <label for="house_load_margin_percent">House-load flexibility below the target (%):</label>
+            <input type="number" id="house_load_margin_percent" name="tariffs.ioctgo[house_load_margin_percent]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('house_load_margin_percent', 5) }}" min="0" max="50" step="1">
+            <small>House-load discharge stays aggressive until the projected 23:30 SoC would fall this far below the target. Bulk export planning still uses the target itself. The floor never enters the 25% protection reserve.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
@@ -427,6 +433,12 @@
             <input type="number" id="non_export_slot_soc_loss_percent" name="tariffs.ioctgo[non_export_slot_soc_loss_percent]"
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('non_export_slot_soc_loss_percent', 1.0) }}" min="0" max="10" step="0.1">
             <small>State of charge loss percentage during load-following (non-export) slots. Used to project available SoC for export planning.</small>
+        </div>
+        <div class="form-group">
+            <label for="min_profit_margin_p_per_kwh">Minimum Profit Margin (p/kWh):</label>
+            <input type="number" id="min_profit_margin_p_per_kwh" name="tariffs.ioctgo[min_profit_margin_p_per_kwh]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_profit_margin_p_per_kwh', 0.3) }}" min="0" max="10" step="0.1">
+            <small>Minimum margin required before cycling the battery or exporting. Covers marginal wear and unmodelled overheads; set 0 to optimise purely on measured efficiency.</small>
         </div>
     </div>
 
@@ -462,26 +474,26 @@
         <div class="form-group">
             <label for="ioctgo_target_soc_at_bulk_discharge_end">Target SoC at Bulk Discharge End Time (%):</label>
             <input type="number" id="ioctgo_target_soc_at_bulk_discharge_end" name="tariffs.ioctgo[target_soc_at_bulk_discharge_end]" 
-                   value="{{ config.tariffs.ioctgo.target_soc_at_bulk_discharge_end }}" min="0" max="100">
+                   value="{{ config.tariffs.ioctgo.target_soc_at_bulk_discharge_end }}" min="0" max="100" step="1">
             <small>Target state of charge at end of bulk discharge period.</small>
         </div>
 
         <div class="form-group">
             <label for="ioctgo_soc_threshold_strategy">SoC Threshold for Strategy (%):</label>
             <input type="number" id="ioctgo_soc_threshold_strategy" name="tariffs.ioctgo[soc_threshold_for_strategy]" 
-                   value="{{ config.tariffs.ioctgo.soc_threshold_for_strategy }}" min="0" max="100">
+                   value="{{ config.tariffs.ioctgo.soc_threshold_for_strategy }}" min="0" max="100" step="1">
             <small>Battery state of charge threshold for switching between discharge strategies</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_grid_import_threshold_high_soc">Grid Import Threshold - High SoC (W):</label>
             <input type="number" id="ioctgo_grid_import_threshold_high_soc" name="tariffs.ioctgo[grid_import_threshold_high_soc]" 
-                   value="{{ config.tariffs.ioctgo.grid_import_threshold_high_soc }}" min="0" max="5000">
+                   value="{{ config.tariffs.ioctgo.grid_import_threshold_high_soc }}" min="0" max="5000" step="1">
             <small>When SoC >= threshold, grid import level greater than this amount starts load following. The system aims to cover the house load completely.</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_grid_import_threshold_low_soc">Grid Import Threshold - Low SoC (W):</label>
             <input type="number" id="ioctgo_grid_import_threshold_low_soc" name="tariffs.ioctgo[grid_import_threshold_low_soc]" 
-                   value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000">
+                   value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000" step="1">
             <small>When SoC < threshold, grid import level greater than this amount starts load following. The system aims to cover most of the house load with a small amount coming from the grid.</small>
         </div>
         <div class="form-group">
@@ -505,13 +517,13 @@
         <div class="form-group">
             <label for="ioctgo_ocpp_enable_soc_threshold">OCPP Enable SoC Threshold (%):</label>
             <input type="number" id="ioctgo_ocpp_enable_soc_threshold" name="tariffs.ioctgo[ocpp_enable_soc_threshold]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_enable_soc_threshold }}" min="0" max="100">
+                   value="{{ config.tariffs.ioctgo.ocpp_enable_soc_threshold }}" min="0" max="100" step="1">
             <small>Enable OCPP when SoC drops below this level</small>
         </div>
         <div class="form-group">
             <label for="ioctgo_ocpp_disable_soc_threshold">OCPP Disable SoC Threshold (%):</label>
             <input type="number" id="ioctgo_ocpp_disable_soc_threshold" name="tariffs.ioctgo[ocpp_disable_soc_threshold]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_disable_soc_threshold }}" min="0" max="100">
+                   value="{{ config.tariffs.ioctgo.ocpp_disable_soc_threshold }}" min="0" max="100" step="1">
             <small>Disable OCPP in the next half hour slot when SoC rises to this level</small>
         </div>
         <div class="form-group">

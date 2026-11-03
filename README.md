@@ -10,9 +10,11 @@ monitors and I have implemented these for the following devices:
 
 * [Wallbox Quasar](https://wallbox.com/en_ca/quasar-dc-charger) for EV charging and discharging (V2G)
 * [Shelly EM](https://shellystore.co.uk/product/shelly-em/) for energy monitoring enabling solar energy capture (like S2V)
-  and load following (like V2H); here it is assumed that grid power is monitored through channel 0 and EVSE power through
-  channel 1. The EVSE channel is only used for monitoring and reporting and could be substituted with the solar power, for
-  example.
+  and load following (like V2H). The grid and EVSE channels are configured under
+  `shelly.grid` and `shelly.evse` and may be either channel of either device; the
+  controller resolves them into a normalised grid-on-ch1, EVSE-on-ch2 view for
+  both control and savings accounting. The EVSE feed is used for load following
+  and for the stored-energy ledger.
 
 There's also a complete project that uses those libraries to provide V2X
 functions along with logging, scheduled events, and web or console control
@@ -43,7 +45,8 @@ version 1, so I would suggest installing as per the official instructions on the
 All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
-- `data/state/` - State files including schedule and EVSE state
+- `data/state/` - State files including schedule, supplier energy sessions, EVSE state and the Agile rate cache
+- `data/reports/daily/` - One JSON half-hour energy report per day
 
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
 
@@ -183,7 +186,8 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     tariffs:
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
-        target_soc_at_cheap_start: 54  # Target SoC at start of cheap rate period (23:30)
+        min_agile_discharge_soc: 60     # Bulk-export SoC floor and 23:30 target
+        house_load_margin_percent: 5   # Flexibility below the target before conservative
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
         soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
@@ -225,8 +229,8 @@ Detailed explanation of each configuration option:
 - `username`: Your Wallbox account email (optional, for auto-restart feature)
 - `password`: Your Wallbox account password (optional, for auto-restart feature)
 - `serial`: Your Wallbox serial number (optional, for auto-restart feature)
-- `max_charge_current`: Maximum charging current, integer between 3-32 (amperes)
-- `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes)
+- `max_charge_current`: Maximum charging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
+- `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
 
 #### Shelly Section
 - `primary_url`: IP address or hostname of your primary Shelly EM
@@ -239,7 +243,7 @@ Detailed explanation of each configuration option:
 - `org`: Organization name for InfluxDB
 
 #### Charging Section
-- `max_charge_percent`: Maximum battery charge percentage (0-100)
+- `max_charge_percent`: Maximum battery charge percentage (0-100). The IOCTGO_AGILEOUT tariff hard-limits the effective ceiling to **97%** even if this is set higher, leaving headroom at the top of the pack; set a lower value to stop earlier. The ceiling applies to solar charging too, not just off-peak grid charging — at or above it the charge range is set to zero and the dashboard says `Do not charge — SoC at N% cap`
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
 
@@ -247,7 +251,9 @@ Detailed explanation of each configuration option:
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. These parameters **cannot be configured using the interactive text-based configuration tool** and must be edited directly in `config.yaml` when using that approach instead of the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
-- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (0-100)
+- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
+- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, 0-100). Export slots are planned down to this figure
+- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -259,7 +265,294 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")
 - `ocpp_disable_time`: Time to disable OCPP even if the SoC does not rise to the desired level in "HH:MM" format (default "11:00")
 - `export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during bulk export (0 = use calculated value based on export power). Set this to your measured value for more accurate export planning
+- `max_export_power_kw`: Upper bound on export power in kW (default 7.2, the non-derated Wallbox limit). The planner also caps this at the measured AC power for the configured discharge current (~3.53 kW at 16 A, ~7.07 kW at 32 A)
 - `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
+- `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure
+
+##### IOCTGO_AGILEOUT dashboard
+
+The tariff dashboard shows a compact decision line above the 48-slot Agile
+Outgoing rate strip. It states the current mode, the reason for it, the
+efficiency actually used for the decision, the configured minimum profit
+spread, and an estimate of the cost saved today:
+
+```
+Harvest 5 A · aggressive discharge   future 24.6p at 16:30–17:00 × 73% − 0.3p margin = 17.7p > 8.1p now — storing solar   η 73% round trip   min gain 0.3p/kWh   harvest 5 A   discharge ≥250 W   stored 8.0p/kWh (8.5–10.9p delivered)   saved today £0.4200 ↑12.3p/h
+```
+
+The same decision line is written to the log at INFO once per minute, on the
+first control cycle in that minute, with `|` separators.
+
+The strip below the line is 48 half-hour cells, coloured red→green by rate.
+A slot the planner will bulk-export in carries an orange border and an `EX`
+badge (lowercase `e` for the slot likely to be only partly filled, a green
+border and `✓` for one already exported). The plan is also listed in words
+under the strip — `Export plan: 16:00–16:30 @ 30.5p · …`, or
+`Export plan: none planned` — because a 48-cell strip is only a few pixels per
+cell on a phone, where the badge alone is too small to rely on.
+
+- **Mode** uses the actual Wallbox ranges after load-follow configuration, not
+  the min/max returned by `get_control_state()` (which load-follow states
+  override). When the system is not charging it always states the discharge
+  capability, and labels discharge **aggressive** (+0.5 A bias, activation at
+  the calculated break-even load) or **conservative** (−0.5 A bias, activation
+  floored at the 3 A Wallbox minimum, ~720 W).
+- **Discharge ≥N W** is the house import at which discharging starts. A
+  load-following discharge cannot go below 3 A (~720 W), so starting for a
+  smaller load exports the difference at the current Agile price and can lose
+  money. `N` is the break-even load:
+  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `H` is the
+  stored cost per delivered kWh plus the profit margin. It rises when the
+  stored energy was expensive and falls when the export it displaces is worth
+  more. If the export price alone clears `H`, any import starts it; if `H`
+  exceeds the import price, it never starts.
+- **Min gain N.Np/kWh** is the configured profit spread
+  (`min_profit_margin_p_per_kwh`, 0.3p by default), not a figure derived from
+  it. Control applies this margin to the future price before the round-trip
+  efficiency, so a later sale must beat the current price by at least this
+  much. Covering the round-trip loss needs a larger spread on the input price
+  (about 1.8–2.3p/kWh for cheap grid charging, depending on the modelled
+  efficiency); hover the chip for that break-even figure. Free solar has no
+  input price to recover, so its break-even spread is the margin itself.
+- **Stored N.Np/kWh (L–Hp delivered)** shows both cost bases. `N` is the
+  money paid for the energy in the ledger (or the Agile export value forgone
+  when it was stored) per kWh actually in the pack, divided by the measured
+  charge efficiency. The delivered cost depends on discharge current, so `L`
+  is the cost at maximum current and `H` at the 3 A minimum, where the
+  discharge loss is greatest. The activation threshold uses the 3 A figure
+  because a load-following discharge starts at the minimum output; actual
+  savings use the measured current throughout. Energy already in the pack when
+  the controller starts is valued at the off-peak replacement price, not zero.
+  That existing charge is seeded into the ledger at startup, so a momentary
+  charging blip cannot become the price of the whole pack. Hover for the ledger
+  size and whether the figure comes from the ledger or the fallback.
+- **Reason** comes from the same branch that made the decision. In the
+  aggressive house-load modes it also states the discharge trigger and why:
+  `Discharge starts at ≥N W house import; below that the 3 A minimum would
+  export more than it saves`, `Any import starts discharge because the export
+  alone clears the stored cost`, or `Discharge is disabled because stored
+  energy costs more than the import it avoids`. Detailed SoC projections and
+  slot analysis remain in the text log; hover the line for a fuller
+  explanation.
+- **Aggressive vs conservative** is decided against a house-load floor, not the
+  bulk-export target. Bulk export slots are planned down to
+  `min_agile_discharge_soc`; the house-load strategy stays aggressive until the
+  projected 23:30 SoC would fall below that target minus
+  `house_load_margin_percent` (default 5%, clamped above the 25% reserve). A
+  bulk export that finishes at the target therefore does not by itself force
+  conservative mode.
+- **Efficiency** is the measured value actually used for this decision
+  (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
+  current-dependent, so there is no single global minimum figure. The solar
+  harvest current is estimated from the live surplus and rounded **up** to a
+  measured point: efficiency improves with current, so rounding down would
+  understate the round trip and can reject a store that pays.
+- **Harvest N A** is the charge current the estimator used, from the live
+  surplus, so a decision can be checked against what the car is actually
+  drawing. It is absent when the branch made no solar decision.
+- **A planned export slot is already sold to the pack.** The export plan spends
+  the pack's spare SoC on the best slots of the day, so a marginal kWh of solar
+  stored now can only be sold in the next *unused* slot. When the best rate is
+  already committed, the surplus is exported now even with a strong harvest,
+  and the reason says which slot is committed and what the next unused rate
+  would yield. `Do not charge` does not mean the day has no higher price left.
+- **The charge floor and its activation are calculated, not fixed.** When the
+  decision is not to store for a later sale, the controller stays in
+  `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
+  can still absorb a surplus. Charging may pay off either by keeping the solar
+  for the house or by storing it for the best unused slot, so the onset is the
+  **lower** of the two break-evens:
+
+  - self-use: smallest measured current where
+    `(IMPORT_HIGH − margin) × η_chg(I) × η_dis(3 A)` beats the export price now;
+  - store: smallest measured current where
+    `(future − margin) × η_chg(I) × η_dis(export)` beats the export price now.
+
+  Efficiency rises with current, so each floor moves with the price. With a
+  30p peak and 0.3p margin the self-use floor is 3 A at 11p, 4 A at 13p, 8 A at
+  18p and 12 A at 19p; at 19.8p now and 30.4p later the self-use floor is 9 A
+  but the store break-even is 5 A, so charging starts at 5 A. If neither floor
+  exists, the charge range is explicitly set to 0 A and the mode reads
+  `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`.
+  When a floor is armed but the live surplus is below it, the mode reads
+  `Do not charge yet — will charge from ≥N A surplus · aggressive discharge
+  ≥3 A`: below the floor exporting pays more, and charging begins only when
+  the surplus reaches it. The charge and discharge ranges are independent, so
+  a strong surplus can charge while the house is still covered at 3 A. 6 A is
+  an illustrative break-even point, not a policy constant.
+- **The charge floor also gates activation.** `LOAD_FOLLOW_BIDIRECTIONAL`
+  treats the charge minimum as a floor and tops up from the grid once charging
+  starts, so the activation power is set to `floor × 240 W` rather than the
+  fixed 720 W. A 3 A surplus therefore cannot trigger a 5 A charge and import
+  the other 2 A at the peak price; only the ~0.5 A bias rounding remains at the
+  boundary.
+- **Saved today** is the money actually captured by cycling stored energy. A
+  charge is booked at the price paid (grid) or at the Agile export price it
+  displaced (surplus solar), and no saving is shown yet. The saving appears
+  when the energy is discharged: it earns the import price it avoids, or the
+  Agile export price for anything beyond the house load, minus the stored
+  cost including the round-trip loss. So an off-peak charge at 7.62p that later
+  displaces 32.26p daytime import books `32.26p − 7.62p / η_rt` per kWh
+  delivered. It resets at local midnight, but the stored-energy ledger carries
+  over, so energy bought yesterday is priced with yesterday's cost. The ledger
+  and today's saving are also written to
+  `data/state/ioctgo_agile_outgoing_state.json` on a clean shutdown and when
+  switching away from the tariff, then restored when it starts again. The
+  ledger always carries over; today's saving and the export markers are kept
+  only if the saved day is today, and the interval baseline restarts so time
+  spent away is not booked as a saving. A corrupt or unreadable state file is
+  ignored, leaving the off-peak fallback and startup SoC seed in charge. At
+  startup the charge already in the pack is seeded at the off-peak fallback
+  price, and a ledger below 0.05 kWh is treated as metering noise rather than a
+  price basis. After the EVSE changes direction, the ledger also ignores power
+  for the Wallbox's start/stop settling time (21.9 s from idle, 10.9 s back to
+  idle), because the unit draws ~200 W while it powers up or down; current
+  changes within an active direction are booked immediately. Export
+  prices are only ever numerators. A 0p price makes the controller store rather
+  than export; solar that was worth 0p when stored and is exported at 0p books
+  £0. A negative figure means either bought energy was sold for less than it
+  cost, or stored solar displaced a positive export price and was sold for
+  less — forgone revenue, not a running cost. Solar is costed at the export it
+  displaced, not at the panel's capital cost; no capital is amortised anywhere
+  in this figure. Below £10 the total is shown to four decimal places so small
+  changes are visible; when it is moving, a small `↑N.Np/h` or `↓N.Np/h`
+  suffix shows the recent rate over the last couple of minutes and is hidden
+  while the total is flat.
+- **Channels** are resolved from `shelly.grid` and `shelly.evse` before the
+  baseline, surplus and ledger are calculated. The controller hands control and
+  accounting the same normalised grid/EVSE view, so moving a CT to the other
+  channel of the same or the other Shelly does not invert the home power or
+  mis-book energy.
+
+##### Why this decision? page (`/decision`)
+
+The dashboard's decision line answers *what* the controller is doing. The
+**Explanation →** link on that line — and in the dashboard navigation — opens
+a separate page that answers *why*, in plain language and with the exact
+numbers the control loop used:
+
+- It freezes the latest decision snapshot when the page is loaded. There is no
+  auto-refresh and no polling: the reader can take as long as they need. A
+  **Refresh snapshot** link deliberately requests a new copy.
+- It declares the state at the moment of the decision: time and half-hour
+  slot, SoC, charge cap, import and export prices, the best later export slot,
+  harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
+  output, the projected 23:30 SoC and the house floor where relevant.
+- It walks through the checks in order: whether the pack will last to 23:30,
+  what the surplus is worth exported now, what it is worth kept for the house,
+  what it is worth stored for a later sale, where each break-even lies, whether
+  today's surplus can reach the charge floor, and where discharge starts.
+- It states the answer for both directions. For example: *“Answer 242 W
+  because that is the point where the import avoided plus the exported surplus
+  exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
+  surplus is 3 A but charging starts at ≥8 A, where the stored energy is worth
+  19.5p against 19.2p exported.”*
+- It shows the **stored-energy ledger** captured at the decision instant:
+  DC energy, cost booked, average in-pack cost, delivered cost at the 3 A
+  minimum and at the configured maximum, whether the ledger or the off-peak
+  fallback is the basis, the startup seed and the saved-today total. A second
+  set of steps explains charging (AC × charge efficiency; grid import priced
+  at the import rate, surplus solar at the displaced export price), discharging
+  (AC ÷ discharge efficiency; cost released at the in-pack average), the
+  empty-ledger fallback, and what “saved today” counts.
+- It shows the **efficiency table** at every whole-amp current up to the
+  configured limits. Rows are charge current (AC → pack), columns are discharge
+  current (pack → AC), the header cells show the single-direction efficiency,
+  and each cell is the round-trip product. The measured range stops at 16 A;
+  above that the model holds the 16 A efficiency while AC power still scales
+  with current, and the page says so.
+- It closes with the assumptions: whole half-hour slots, the measured
+  current-dependent efficiency model, the configured minimum margin, the
+  ledger (or its off-peak fallback), the Wallbox minimum output, and the
+  no-negative-margin policy.
+
+The page is specific to `IOCTGO_AGILEOUT`, which records the snapshot. Other
+tariffs show a short “this tariff does not record a decision explanation”
+message rather than failing.
+
+##### Supplier energy sessions
+
+Utilities occasionally offer a whole half-hour settlement period on special
+terms. Two kinds are supported, named for what they do rather than for one
+supplier's marketing:
+
+- **Free Energy Session** (`free_import`): import costs 0p for the window. The
+  controller charges at maximum up to the 97% charge cap, the import price used
+  by both the decision logic and the savings ledger becomes 0p, and the energy
+  is therefore booked at what it actually cost. Free slots are excluded from
+  the export plan, because charging at 0p is worth more than selling stored
+  energy and the Wallbox cannot do both.
+- **Save Energy Session** (`grid_support`): the supplier has asked for less
+  grid demand. For a battery-backed installation the useful response is maximum
+  export for the window, regardless of the quoted export price, down to the 25%
+  battery protection reserve. The supplier's reward is not a price the tariff
+  can see, so it is deliberately not modelled or booked; the dashboard says the
+  request is the reason for exporting.
+
+Both kinds are selected on the **Energy Sessions** page (`/sessions`, linked
+from the dashboard and the schedule page). Click a half-hour cell, or drag
+across several, choose the kind, and add the window. On a touch screen, tap one
+end and then the other. Selections are quantised to half-hour slots — `start`
+is floored and the exclusive `end` is ceiled — because utilities settle on
+half-hour periods. Overlapping windows are rejected rather than resolved.
+Sessions persist in `data/state/sessions.json`, only apply while the controller
+is in smart mode, and a manual command still takes priority. Sessions may be
+conceptually related (for example, two saving sessions earning a free hour),
+but nothing links them automatically.
+
+On the tariff strip, session slots carry a blue bar (free import) or an amber
+bar (grid support) and appear in a legend below it, in addition to the mode and
+reason in the decision line.
+
+##### Daily energy report (`/reports/daily`)
+
+The **Energy Report →** link in the dashboard navigation opens one persistent
+report per local day. It has 48 half-hour rows and works from the minimum
+hardware: the grid CT clamp and the Wallbox. Every other configured, in-use
+Shelly channel is recorded as a named in/out meter; nothing assumes solar, a
+heat pump or a second battery.
+
+Each row records:
+
+- Grid **Imported** and **Exported** kWh.
+- EVSE AC **Charged** and **Discharged** kWh.
+- EV battery **DC In** and **Out** kWh, from `dc_voltage × dc_current`.
+- Every other in-use channel as **In** / **Out** kWh, labelled from config.
+- SoC at the start and end of the slot.
+- Import and export prices, estimated import cost, export revenue and net
+  cost.
+- The controller's stored-energy saving, as a separate attribution.
+
+Energy is integrated from instantaneous power, never from the Shelly
+cumulative counters: a Wi-Fi recovery power-cycle resets those counters and
+would book a large negative slot. An interval is split at a slot boundary, and
+a gap longer than 300 s adds no energy and reduces coverage. Anything not
+measured is `—`, never zero.
+
+Prices are frozen into the slot when it closes, so a historical report never
+recomputes with later rates. The estimate is for `IOCTGO + Agile Outgoing`:
+import is 0p in a free-import session, otherwise the configured low/high band;
+export is the day's Agile Outgoing rate. It excludes the standing charge, VAT
+and supplier adjustments. The controller saving is not added to or subtracted
+from the net cost: the actual import and export already include the
+controller's behaviour, and summing the two would double-count.
+
+One JSON file is written atomically per day to `data/reports/daily/`, with the
+slot in progress flushed about every minute. On restart the partial slot
+resumes without bridging the downtime. A clock-change day still has 48 local
+rows and is flagged: spring's missing hour has no coverage, and autumn's
+repeated hour lands in the same two rows. Daily totals remain correct because
+they sum measured energy.
+
+The same data is available as JSON at
+`/api/reports/daily/YYYY-MM-DD` and as a CSV download at
+`/reports/daily/YYYY-MM-DD.csv`. Today's page refreshes once a minute;
+historical pages are static.
+
+The Agile rate cache lives in `data/state/agile_rates/YYYY-MM-DD.json`. The
+tariff and the report share one fetch/parse implementation, so the report can
+still price a slot while the tariff is stopped. If the cache is absent, the
+report fetches the day once and writes it.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -343,6 +636,7 @@ If using VS Code (recommended):
 ## Roadmap
 
 * Work on a general smart tariff driver that would minimise costs for any tariff.
+* A forecast layer and dynamic-programming planner are designed in [`reports/dp/ROADMAP.md`](reports/dp/ROADMAP.md).
 
 ## Explanatory video
 

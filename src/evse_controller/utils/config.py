@@ -77,9 +77,11 @@ class Config:
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
+                                'house_load_margin_percent': 5,
                                 'max_export_power_kw': 7.2,
                                 'export_slot_soc_loss_percent': 0,
                                 'non_export_slot_soc_loss_percent': 1.0,
+                                'min_profit_margin_p_per_kwh': 0.3,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
                                 'smart_ocpp_operation': True,
@@ -103,6 +105,39 @@ class Config:
             self.HISTORY_FILE = data_dir / "state" / "history.json"
             self.EVSE_STATE_FILE = data_dir / "state" / "evse_state.json"
             self.LOG_DIR = data_dir / "logs"
+
+    @property
+    def SESSIONS_FILE(self):
+        """Path to the supplier-session store.
+
+        A property rather than a plain attribute so importing the store before
+        any other config value has been read still triggers initialisation.
+        """
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "sessions.json"
+
+    @property
+    def IOCTGO_AGILE_STATE_FILE(self):
+        """Path to the IOCTGO + Agile Outgoing tariff's saved state.
+
+        Holds the stored-energy ledger and today's saving so a restart or a
+        switch to another controller state does not forget what the battery
+        has already earned.
+        """
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "ioctgo_agile_outgoing_state.json"
+
+    @property
+    def DAILY_REPORT_DIR(self):
+        """Directory holding one JSON energy log per day."""
+        self._ensure_initialized()
+        return get_data_dir() / "reports" / "daily"
+
+    @property
+    def AGILE_RATES_DIR(self):
+        """Directory holding the per-day Agile Outgoing rate cache."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "agile_rates"
 
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -201,6 +236,30 @@ class Config:
         # Set the final value
         config_ref[all_keys[-1]] = value
 
+    @staticmethod
+    def _as_int(value: Any, default: int) -> int:
+        """Coerce a setting to a whole number.
+
+        SoC targets, thresholds and margin sizes are whole percentages.  The
+        web form only submits integers, but the YAML can be edited by hand, so
+        coercion here keeps a fractional value from leaking into the decision
+        line (where ``44.6%`` used to render as "45% < 45%").
+        """
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _get_config_int(self, section: str, key: str, default: int) -> int:
+        """Read a whole-number setting, coercing a hand-edited float."""
+        return self._as_int(self._get_config_value(section, key, default), default)
+
+    def _set_config_int(self, section: str, key: str, value: Any, default: int) -> int:
+        """Store a whole-number setting and return the coerced value."""
+        coerced = self._as_int(value, default)
+        self._set_config_value(section, key, coerced)
+        return coerced
+
     # Charging section properties
     STARTUP_STATE = property(
         lambda self: self._get_config_value("charging", "startup_state", "FREERUN"),
@@ -208,13 +267,13 @@ class Config:
     )
 
     MAX_CHARGE_PERCENT = property(
-        lambda self: self._get_config_value("charging", "max_charge_percent", 90),
-        lambda self, value: self._set_config_value("charging", "max_charge_percent", value)
+        lambda self: self._get_config_int("charging", "max_charge_percent", 90),
+        lambda self, value: self._set_config_int("charging", "max_charge_percent", value, 90)
     )
 
     SOLAR_PERIOD_MAX_CHARGE = property(
-        lambda self: self._get_config_value("charging", "solar_period_max_charge", 80),
-        lambda self, value: self._set_config_value("charging", "solar_period_max_charge", value)
+        lambda self: self._get_config_int("charging", "solar_period_max_charge", 80),
+        lambda self, value: self._set_config_int("charging", "solar_period_max_charge", value, 80)
     )
 
     # Logging section properties
@@ -276,13 +335,13 @@ class Config:
     )
 
     IOCTGO_TARGET_SOC_AT_CHEAP_START = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_cheap_start", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", value, 54)
     )
 
     IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value, 60)
     )
 
     IOCTGO_BULK_DISCHARGE_START_TIME = property(
@@ -306,18 +365,18 @@ class Config:
     )
 
     IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "soc_threshold_for_strategy", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "soc_threshold_for_strategy", 50),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "soc_threshold_for_strategy", value, 50)
     )
 
     IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", 0),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_high_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "grid_import_threshold_high_soc", 0),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "grid_import_threshold_high_soc", value, 0)
     )
 
     IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", 720),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "grid_import_threshold_low_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "grid_import_threshold_low_soc", 720),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "grid_import_threshold_low_soc", value, 720)
     )
 
     IOCTGO_SMART_OCPP_OPERATION = property(
@@ -326,13 +385,13 @@ class Config:
     )
 
     IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", 30),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_enable_soc_threshold", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "ocpp_enable_soc_threshold", 30),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "ocpp_enable_soc_threshold", value, 30)
     )
 
     IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", 95),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "ocpp_disable_soc_threshold", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "ocpp_disable_soc_threshold", 95),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "ocpp_disable_soc_threshold", value, 95)
     )
 
     IOCTGO_OCPP_ENABLE_TIME = property(
@@ -351,13 +410,24 @@ class Config:
         lambda self, value: self._set_config_value("octopus", "region", value)
     )
 
-    # Minimum SoC for Agile Outgoing discharge
+    # Minimum SoC for Agile Outgoing discharge.  This is the bulk-export
+    # target: export slots are planned down to it.
     MIN_AGILE_DISCHARGE_SOC = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "min_agile_discharge_soc", 60),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_agile_discharge_soc", value)
+        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 60),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 60)
     )
 
-    # Maximum export power for Agile Outgoing (kW)
+    # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
+    # house-load decision.  Bulk export planning still uses the target itself.
+    HOUSE_LOAD_MARGIN_PERCENT = property(
+        lambda self: self._get_config_int("tariffs.ioctgo", "house_load_margin_percent", 5),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "house_load_margin_percent", value, 5)
+    )
+
+    # Maximum export power for Agile Outgoing (kW).  Default is the non-derated
+    # Wallbox nameplate (7.2 kW).  The export decision is additionally capped by
+    # the measured AC power at the configured discharge current, so a derated
+    # 16 A unit plans ~3.534 kW while a 32 A unit plans ~7.07 kW.
     MAX_EXPORT_POWER_KW = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "max_export_power_kw", 7.2),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "max_export_power_kw", value)
@@ -373,6 +443,21 @@ class Config:
     IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", 1.0),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
+    )
+
+    # Minimum profit margin, p/kWh delivered, required before the controller
+    # will cycle the battery or export.  This is a policy hurdle, not a
+    # measured degradation figure: it covers marginal wear plus unmodelled
+    # actuation/forecast overheads.  The DP will use the same value as a
+    # provision in its arc cost.  Set to 0 to optimise purely on the measured
+    # efficiency model.
+    IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = property(
+        lambda self: self._get_config_value(
+            "tariffs.ioctgo", "min_profit_margin_p_per_kwh", 0.3
+        ),
+        lambda self, value: self._set_config_value(
+            "tariffs.ioctgo", "min_profit_margin_p_per_kwh", value
+        )
     )
 
     # Wallbox simulator properties
@@ -591,9 +676,11 @@ class Config:
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'house_load_margin_percent': self.HOUSE_LOAD_MARGIN_PERCENT,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'min_profit_margin_p_per_kwh': self.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
                     'smart_ocpp_operation': self.IOCTGO_SMART_OCPP_OPERATION,

@@ -1,0 +1,6 @@
+direction,bin_low,bin_high,n_segments,median_implied_capacity_kwh,mean_dc_power_kw,mean_current_a,mean_abs_soc_delta,mean_duration_s
+charge,12.0,13.0,1,41.804,2.8025,12.765,10.0,5370.0
+charge,13.0,14.0,5,49.552,3.0059,13.6,19.8,11926.0
+charge,14.0,15.0,1,41.049,3.0382,14.152,18.0,8755.0
+charge,16.0,17.0,186,50.711,2.9238,16.0,32.46,20128.9
+discharge,16.0,17.0,161,46.498,3.6162,16.0,22.14,10319.0

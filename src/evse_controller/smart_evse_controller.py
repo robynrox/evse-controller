@@ -325,6 +325,7 @@ def signal_handler(signum, frame):
     info("Shutting down gracefully...")
 
     try:
+        tariffManager.save_state()  # Persist the ledger and today's saving
         evseController.stop()  # Stop the controller first
         mqttManager.shutdown() # Stop the MQTT manager
 
