@@ -240,7 +240,9 @@ completed fixes.
   `/api/reports/daily/<date>` and CSV at `/reports/daily/<date>.csv`.
   Today's page refreshes once a minute; historical pages are static. Clock
   change days keep 48 local rows and are flagged. The controller saving is a
-  separate attribution and is never folded into net cost.
+  separate attribution and is never folded into net cost. The routes live in
+  `web/daily_report_routes.py`, so they are tested with a plain Flask client
+  without starting the controller or its meter threads.
 - **Fixed modes own their current range.** `setControlState(CHARGE)` and
   `setControlState(DISCHARGE)` reassert `min = max` on every call, not only
   when the state changes, and every max-rate decision returns its range
