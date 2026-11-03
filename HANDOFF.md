@@ -143,7 +143,7 @@ completed fixes.
   forecast/DP roadmap (`53f8bfa`, `f051dcf`), `2d23873` (fixed modes
   reassert their current range), `fa2d5f0` (say "not yet" when the armed
   charge floor is above the live surplus), `58d10a2` (ledger and efficiency
-  details on the explanation page), and `97e88ac` (persist the ledger across
+  details on the explanation page), and `5ca9e14` (persist the ledger across
   restarts and tariff switches).
 - The dashboard links to a separate **Why this decision?** page (`/decision`),
   from both the decision line (`Explanation →`) and the navigation. It
