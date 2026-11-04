@@ -214,6 +214,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             delivered, required before cycling the battery or exporting
     """
 
+    #: Export prices come from the fetched Agile Outgoing series, not the
+    #: fixed ``time_of_use`` bands.
+    dynamic_export = True
+
     # Agile Outgoing tariff codes by region
     AGILE_TARIFF_CODES = {
         'A': 'AGILE-OUTGOING-19-05-13',
@@ -783,6 +787,23 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if slot_idx == current_slot:
                 return rate_data['rate']
         return 0.0
+
+    def export_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Agile Outgoing price for one slot on *day*, or ``None``.
+
+        Unlike ``_current_export_rate_p`` this is not tied to today and does
+        not collapse "no rate" into 0p.  The live control logic keeps its
+        existing 0p fallback until the planner takes over pricing.
+        """
+        match = None
+        for rate_data in self.agile_rates:
+            start = rate_data['start']
+            if start.date() != day:
+                continue
+            slot_idx = start.hour * 2 + (1 if start.minute >= 30 else 0)
+            if slot_idx == slot:
+                match = rate_data
+        return None if match is None else float(match['rate'])
 
     def export_min_rate_p(self) -> float:
         """Minimum export price covering cheap import and the profit margin.

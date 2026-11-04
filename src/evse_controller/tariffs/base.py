@@ -1,8 +1,19 @@
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 import queue
 from typing import Optional
+
+
+def _slot_start(day: date, slot: int) -> datetime:
+    """Local wall-clock start of a half-hour slot.
+
+    Tariff days are always 48 local rows, so this deliberately uses naive local
+    datetimes: a fixed 30-minute pair with UTC offsets would run backwards on a
+    spring-forward day.
+    """
+    return datetime.combine(day, time()) + timedelta(minutes=30 * slot)
+
 
 class Tariff:
     """Base class for implementing electricity tariff logic.
@@ -23,6 +34,12 @@ class Tariff:
             }
         command_queue (queue.Queue): Queue for sending control commands to the EVSE controller
     """
+
+    #: True when import prices come from a fetched series rather than fixed
+    #: time-of-use bands.  The source adapter exposes this to the planner.
+    dynamic_import = False
+    #: True when export prices change per slot beyond fixed bands.
+    dynamic_export = False
 
     def __init__(self, command_queue: Optional[queue.Queue] = None):
         """Initialize base tariff with default time-of-use rates.
@@ -124,6 +141,25 @@ class Tariff:
             if self.is_in_period(current_time, period["start"], period["end"]):
                 return period["export_rate"]
         return None
+
+    def import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Import price for one half-hour slot, in p/kWh.
+
+        This is the normalised form the planner and the daily report will use.
+        ``None`` means the tariff has no price for the slot; it is never
+        treated as zero.
+        """
+        rate = self.get_import_rate(_slot_start(day, slot))
+        return None if rate is None else rate * 100.0
+
+    def export_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Export price for one half-hour slot, in p/kWh, or ``None``.
+
+        Tariffs with a dynamic export series override this.  The default reads
+        the fixed time-of-use bands.
+        """
+        rate = self.get_export_rate(_slot_start(day, slot))
+        return None if rate is None else rate * 100.0
 
     def calculate_import_cost(self, kWh, timestamp):
         """Calculate import cost based on time of use rates"""
