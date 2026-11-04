@@ -116,7 +116,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     Before applying the storage/export logic, the tariff projects the SoC at
     23:30 slot by slot.  Ordinary slots lose
     NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import session slots gain the
-    full-charge rate and grid-support session slots lose the bulk-export rate.
+    full-charge rate, grid-support session slots lose the bulk-export rate and
+    planned EV-away slots are left out entirely.
     The bulk-export planner uses MIN_AGILE_DISCHARGE_SOC as its floor.  The
     aggressive/conservative house-load decision uses a lower floor,
     MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT (default 5%,
@@ -617,16 +618,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def _project_soc_at_2330(
         self, current_soc_percent: float, current_slot_idx: int
     ) -> float:
-        """Project the SoC at 23:30, including supplier-session slots.
+        """Project the SoC at 23:30, including session and EV-away slots.
 
         Every ordinary slot keeps the load-follow loss.  A free-import slot
         charges at full rate instead, and a grid-support slot exports at full
         rate, so those two session kinds replace the baseline with their own
-        per-slot change.  The free-import gain stops at the effective charge
-        cap, matching what the controller will actually do.
+        per-slot change.  An EV-away slot is skipped entirely: the pack is not
+        available, so it neither supplies the house nor charges.  The
+        free-import gain stops at the effective charge cap, matching what the
+        controller will actually do.
         """
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
+        away_slots = self._away_slots_today()
         non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         export_loss = self._export_slot_soc_loss_percent()
         full_charge_gain = self._full_charge_slot_soc_gain_percent()
@@ -634,6 +638,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         projected = current_soc_percent
         for slot in range(current_slot_idx, 47):
+            if slot in away_slots:
+                continue
             if slot in free_import_slots:
                 if projected < charge_cap:
                     projected = min(charge_cap, projected + full_charge_gain)
@@ -651,7 +657,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         above the 25% protection reserve.  The projection uses the same
         session-aware helper as calculate_export_plan(): ordinary slots lose
         NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import slots gain the
-        full-charge rate and grid-support slots lose the export rate.
+        full-charge rate, grid-support slots lose the export rate and planned
+        EV-away slots are skipped.
 
         The export planner itself still plans down to MIN_AGILE_DISCHARGE_SOC;
         only the aggressive/conservative house-load choice uses the lower floor.
@@ -694,12 +701,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Calculate which slots to use for export based on current SoC and rates.
 
         Uses a two-phase approach:
-        1. Project SoC to 23:30 including free-import and grid-support slots
+        1. Project SoC to 23:30 including energy-session slots and skipping
+           planned EV-away slots
         2. Select best export slots based on projected SoC and configured loss rates
 
         Grid-support slots already export at maximum regardless of the quoted
         price.  Their drain is included in phase 1 and they are excluded from
-        phase 2, so the same slot is never charged for export twice.
+        phase 2, so the same slot is never charged for export twice.  Planned
+        EV-away slots are not export targets either.
 
         Args:
             current_soc_percent: Current battery state of charge (%)
@@ -777,10 +786,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Missing slots are treated as unprofitable (not included)
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
+        away_slots = self._away_slots_today()
         slot_rates = []
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
+
+            # The EV is planned to be away: the slot is not in the projection
+            # and must not be selected as an export target either.
+            if slot_idx in away_slots:
+                debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} skipped - EV planned away")
+                continue
 
             # A free-import session owns the slot: charging at 0p is worth more
             # than selling stored energy, and the Wallbox cannot do both.
@@ -894,9 +910,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # - Are in the future (or current slot)
         # - Are NOT in the planned export slots
         # - Are NOT reserved for a free-import session
+        # - Are NOT planned EV-away slots
         # - Are before slot 47 (23:30-00:00, not available for export)
         unused_slot_rates = []
         free_import_slots = self._free_import_slots_today()
+        away_slots = self._away_slots_today()
 
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
@@ -904,6 +922,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             
             # Skip past slots
             if slot_idx < current_slot:
+                continue
+
+            # The car is not planned to be available for export.
+            if slot_idx in away_slots:
                 continue
 
             # A free-import slot cannot also be an export target.
@@ -1693,6 +1715,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return store.slots_for_kind(
             self.get_current_datetime().date(), GRID_SUPPORT
         )
+
+    def _away_slots_today(self) -> set[int]:
+        """Today's slots the EV is planned to be away for."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return set()
+        return store.away_slots(self.get_current_datetime().date())
 
     def _current_import_rate_p(self, day_minute: int) -> float:
         """Import price in force at *day_minute*, in p/kWh.
@@ -4147,8 +4176,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         red→green gradient coloring. Responsive design adapts to viewport width.
         Missing slots shown as grey placeholders.
         Planned export slots are highlighted with "EX" label.
-        Free Energy Session and Save Energy Session slots carry a coloured
-        bar and appear in the legend below the strip.
+        Free Energy Session, Save Energy Session and EV Away slots carry a
+        coloured bar and appear in the legend below the strip.
         """
         with self._rates_lock:
             mode_line = self._mode_line_html()
@@ -4185,6 +4214,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 store.slots_for_kind(now.date(), GRID_SUPPORT)
                 if store is not None
                 else set()
+            )
+            away_slots = (
+                store.away_slots(now.date()) if store is not None else set()
             )
 
             # Create a dict for quick lookup by slot index
@@ -4254,6 +4286,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 elif slot_idx in grid_support_slots:
                     session_style = "box-shadow:inset 0 4px 0 #d97706;"
                     session_tooltip = " - SAVE ENERGY SESSION (grid support)"
+                elif slot_idx in away_slots:
+                    session_style = "box-shadow:inset 0 4px 0 #6b7280;"
+                    session_tooltip = " - EV AWAY (excluded from projection)"
 
                 if slot_idx in rate_dict:
                     # Actual rate available
@@ -4399,7 +4434,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             html.append(time_axis)
             html.append('</div>')  # Close outer wrapper
 
-            if free_import_slots or grid_support_slots:
+            if free_import_slots or grid_support_slots or away_slots:
                 legend_items = []
                 if free_import_slots:
                     legend_items.append(
@@ -4414,6 +4449,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         'height:10px;background:#d97706;border-radius:2px;'
                         'margin-right:4px;vertical-align:middle;"></span>'
                         'Save Energy Session (grid support)</span>'
+                    )
+                if away_slots:
+                    legend_items.append(
+                        '<span><span style="display:inline-block;width:10px;'
+                        'height:10px;background:#6b7280;border-radius:2px;'
+                        'margin-right:4px;vertical-align:middle;"></span>'
+                        'EV Away (excluded from 23:30 projection)</span>'
                     )
                 html.append(
                     '<div style="display:flex;flex-wrap:wrap;gap:12px;'

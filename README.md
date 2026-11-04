@@ -45,7 +45,7 @@ version 1, so I would suggest installing as per the official instructions on the
 All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
-- `data/state/` - State files including schedule, supplier energy sessions, EVSE state and the Agile rate cache
+- `data/state/` - State files including schedule, supplier energy sessions and EV-availability windows, EVSE state and the Agile rate cache
 - `data/reports/daily/` - One JSON half-hour energy report per day
 
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
@@ -471,11 +471,12 @@ The page is specific to `IOCTGO_AGILEOUT`, which records the snapshot. Other
 tariffs show a short “this tariff does not record a decision explanation”
 message rather than failing.
 
-##### Supplier energy sessions
+##### Supplier energy sessions and EV availability
 
 Utilities occasionally offer a whole half-hour settlement period on special
-terms. Two kinds are supported, named for what they do rather than for one
-supplier's marketing:
+terms. The same page can also record when the EV is expected to be away. Three
+kinds are supported, named for what they do rather than for one supplier's
+marketing:
 
 - **Free Energy Session** (`free_import`): import costs 0p for the window. The
   controller charges at maximum up to the 97% charge cap, the import price used
@@ -489,21 +490,26 @@ supplier's marketing:
   battery protection reserve. The supplier's reward is not a price the tariff
   can see, so it is deliberately not modelled or booked; the dashboard says the
   request is the reason for exporting.
+- **EV Away** (`ev_away`): the EV is expected to be disconnected. These slots
+  are left out of the 23:30 SoC projection and the export plan, because the
+  pack cannot supply the house or charge. This is a planning assumption only:
+  if the EV is still connected, the normal heuristic keeps running and may
+  charge or discharge it until the plug is removed or the slot ends.
 
-Both kinds are selected on the **Energy Sessions** page (`/sessions`, linked
-from the dashboard and the schedule page). Click a half-hour cell, or drag
-across several, choose the kind, and add the window. On a touch screen, tap one
-end and then the other. Selections are quantised to half-hour slots — `start`
-is floored and the exclusive `end` is ceiled — because utilities settle on
-half-hour periods. Overlapping windows are rejected rather than resolved.
-Sessions persist in `data/state/sessions.json`, only apply while the controller
-is in smart mode, and a manual command still takes priority. Sessions may be
-conceptually related (for example, two saving sessions earning a free hour),
-but nothing links them automatically.
+All three kinds are selected on the **Energy Sessions & EV Availability** page
+(`/sessions`, linked from the dashboard and the schedule page). Click a
+half-hour cell, or drag across several, choose the kind, and add the window. On
+a touch screen, tap one end and then the other. Selections are quantised to
+half-hour slots — `start` is floored and the exclusive `end` is ceiled —
+because utilities settle on half-hour periods. Overlapping windows are rejected
+rather than resolved. Windows persist in `data/state/sessions.json`. Supplier
+sessions only apply while the controller is in smart mode, and a manual command
+still takes priority. Sessions may be conceptually related (for example, two
+saving sessions earning a free hour), but nothing links them automatically.
 
-On the tariff strip, session slots carry a blue bar (free import) or an amber
-bar (grid support) and appear in a legend below it, in addition to the mode and
-reason in the decision line.
+On the tariff strip, session slots carry a blue bar (free import), an amber bar
+(grid support) or a grey bar (EV away) and appear in a legend below it, in
+addition to the mode and reason in the decision line.
 
 ##### Daily energy report (`/reports/daily`)
 

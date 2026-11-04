@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
 from evse_controller.energy_sessions import (
+    EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
     EnergySession,
@@ -1015,6 +1016,73 @@ class TestSessionAwareSocProjection:
         # export for grid support and their drain is in the projection.
         assert 36 not in plan
         assert 37 not in plan
+
+    def test_away_slots_are_left_out_of_the_projection(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                EV_AWAY,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+
+        # 23 remaining slots minus the two away slots still lose 1% each.
+        expected = 77 - 21 * agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            expected
+        )
+        # Without the away window the projection is 54%, below the 55% floor.
+        assert agile_tariff._update_energy_shortfall(77) is False
+        assert agile_tariff._projected_soc_at_2330 == pytest.approx(expected)
+
+    def test_away_slots_are_not_export_targets(self, agile_tariff, tmp_path):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                EV_AWAY,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 2.0
+
+        plan = agile_tariff.calculate_export_plan(100)
+        slot, rate = agile_tariff._get_best_unused_export_slot_rate(24)
+
+        assert plan
+        # 18:00–19:00 carries the best rates, but the EV is planned away.
+        assert 36 not in plan
+        assert 37 not in plan
+        assert slot != 36
+        assert slot == 35
+        assert rate == pytest.approx(32.0)
+
+    def test_away_slot_does_not_override_the_normal_heuristic(
+        self, agile_tariff, tmp_path
+    ):
+        """Away is a planning hint; connected control still runs normally."""
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(EnergySession(EV_AWAY, start, start + timedelta(hours=1)))
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(79), 12 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert agile_tariff._session_at(start).kind == EV_AWAY
+        assert snapshot.decision_tier not in ("free", "grid_support")
+        # The import price is the normal band, not the free-session 0p.
+        assert agile_tariff._current_import_rate_p(12 * 60) == pytest.approx(
+            config.IMPORT_HIGH
+        )
+        assert control_state is not None
 
 
 class TestDischargeActivation:
@@ -3140,12 +3208,20 @@ class TestEnergySessions:
                 GRID_SUPPORT, self._fixed(20), self._fixed(20, 30)
             )
         )
+        store.add(
+            EnergySession(
+                EV_AWAY, self._fixed(21), self._fixed(21, 30)
+            )
+        )
         agile_tariff.set_time_functions(datetime_func=lambda: start)
 
         html = agile_tariff.get_dashboard_html()
 
         assert "FREE ENERGY SESSION" in html
         assert "SAVE ENERGY SESSION (grid support)" in html
+        assert "EV AWAY (excluded from projection)" in html
         assert "box-shadow:inset 0 4px 0 #2563eb;" in html
         assert "box-shadow:inset 0 4px 0 #d97706;" in html
+        assert "box-shadow:inset 0 4px 0 #6b7280;" in html
         assert "Free Energy Session" in html  # legend
+        assert "EV Away (excluded from 23:30 projection)" in html

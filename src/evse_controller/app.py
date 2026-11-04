@@ -29,6 +29,7 @@ from evse_controller.web.daily_report_routes import (
     slot_label as _slot_label,
 )
 from evse_controller.energy_sessions import (
+    EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
     SLOTS_PER_DAY,
@@ -401,8 +402,10 @@ def sessions_page():
         labels=SESSION_LABELS,
         free_kind=FREE_IMPORT,
         grid_kind=GRID_SUPPORT,
+        away_kind=EV_AWAY,
         free_slots=session_store.slots_for_kind(today, FREE_IMPORT),
         grid_slots=session_store.slots_for_kind(today, GRID_SUPPORT),
+        away_slots=session_store.away_slots(today),
         now_slot=now.hour * 2 + (1 if now.minute >= 30 else 0),
         now=now,
     )
