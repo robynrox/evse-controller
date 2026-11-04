@@ -289,6 +289,28 @@ class TestTariffManagerCommandQueuePropagation:
             manager.set_tariff('OCTGO')
             assert manager.current_tariff.command_queue is mock_command_queue
 
+    def test_manager_publishes_and_clears_the_report_price_source(
+        self, mock_command_queue, mock_wallbox
+    ):
+        from evse_controller.daily_report import daily_log
+        from evse_controller.tariffs.source import TariffSourceAdapter
+
+        with patch('evse_controller.tariffs.manager.config') as mock_config:
+            mock_config.STARTUP_STATE = 'OCTGO'
+            from evse_controller.tariffs.manager import TariffManager
+
+            manager = TariffManager(mock_command_queue)
+
+            source = daily_log.price_source
+            assert isinstance(source, TariffSourceAdapter)
+            assert source.tariff is manager.current_tariff
+
+            manager.set_tariff('COSY')
+            assert daily_log.price_source.tariff is manager.current_tariff
+
+            manager.stop_tariff()
+            assert daily_log.price_source is None
+
 
 class TestTariffManagerStatePersistence:
     """The manager owns the save hook used on a clean shutdown."""

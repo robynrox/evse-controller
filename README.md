@@ -635,7 +635,7 @@ If using VS Code (recommended):
 
 ## Roadmap
 
-* Work on a general **smart tariff** driver that would minimise costs for any tariff. The price/session contract and migration plan are in [`reports/smart-tariff/SPEC.md`](reports/smart-tariff/SPEC.md).
+* Work on a general **smart tariff** driver that would minimise costs for any tariff. The price/session contract and migration plan are in [`reports/smart-tariff/SPEC.md`](reports/smart-tariff/SPEC.md); the daily report now prices through that contract.
 * A forecast layer and dynamic-programming planner are designed in [`reports/dp/ROADMAP.md`](reports/dp/ROADMAP.md).
 
 ## Explanatory video

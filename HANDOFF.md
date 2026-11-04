@@ -489,8 +489,10 @@ plan for steps 6–8 and supersedes the sketch in section 6 where they differ.
 The price/session side is starting first, because the planner must not depend on
 the tariff class. The normalised contract, its adapter and the deprecation
 sequence are in [`reports/smart-tariff/SPEC.md`](reports/smart-tariff/SPEC.md).
-Phase 0 (contract plus golden tests against all five tariffs) is implemented;
-the tariff control logic is deliberately unchanged.
+Phase 0 (contract plus golden tests against all five tariffs) and Phase 1 (the
+daily report priced through the contract, with a price-book fallback while no
+tariff is running) are implemented; the tariff control logic is deliberately
+unchanged.
 
 1. Decide the one remaining modelling approximation, or accept it
    explicitly:

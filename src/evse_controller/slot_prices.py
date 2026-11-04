@@ -171,17 +171,30 @@ class SlotPriceBook:
 
     # -- pricing ---------------------------------------------------------
 
-    def import_price_p(self, day: date, slot: int) -> float:
-        """Import price in p/kWh, including a free-import session."""
-        slot_start = _slot_start(day, slot)
-        session = session_store.active(slot_start)
-        if session is not None and session.kind == FREE_IMPORT:
-            return 0.0
+    def raw_import_price_p(self, day: date, slot: int) -> float:
+        """Import price in p/kWh before any session overlay.
+
+        The daily report applies free-import sessions itself, so this stays
+        the supplier band and never collapses to zero.
+        """
         return (
             config.IMPORT_LOW
             if _is_off_peak(slot * SLOT_MINUTES)
             else config.IMPORT_HIGH
         )
+
+    def import_price_p(self, day: date, slot: int) -> float:
+        """Import price in p/kWh, including a free-import session.
+
+        This is the convenience form for callers that want a final price.  The
+        normalised report path uses :meth:`raw_import_price_p` plus the session
+        overlay instead.
+        """
+        slot_start = _slot_start(day, slot)
+        session = session_store.active(slot_start)
+        if session is not None and session.kind == FREE_IMPORT:
+            return 0.0
+        return self.raw_import_price_p(day, slot)
 
     def export_price_p(self, day: date, slot: int) -> Optional[float]:
         """Export price in p/kWh, or None when the rate is not known."""
@@ -192,22 +205,6 @@ class SlotPriceBook:
                 # later one is the second occurrence, so prefer it.
                 match = rate
         return float(match["rate"]) if match is not None else None
-
-    def prices_for(self, day: date, slot: int) -> tuple:
-        """Return ``(import_p, export_p, session_kind)`` for a slot."""
-        slot_start = _slot_start(day, slot)
-        session = session_store.active(slot_start)
-        session_kind = session.kind if session is not None else None
-        import_p = (
-            0.0
-            if session_kind == FREE_IMPORT
-            else (
-                config.IMPORT_LOW
-                if _is_off_peak(slot * SLOT_MINUTES)
-                else config.IMPORT_HIGH
-            )
-        )
-        return import_p, self.export_price_p(day, slot), session_kind
 
 
 price_book = SlotPriceBook()

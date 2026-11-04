@@ -41,6 +41,23 @@ def slot_start(day: date, slot: int) -> datetime:
     return datetime.combine(day, time()) + timedelta(minutes=SLOT_MINUTES * slot)
 
 
+def sessions_for_day(day: date, store=None) -> list[EnergySession]:
+    """Enabled sessions that overlap the local day *day*.
+
+    Sessions are deliberately kept out of the price rows.  Consumers that need
+    a zero import price (or a reserved export slot) apply the session overlay
+    themselves, so the raw supplier price remains visible.
+    """
+    store = session_store if store is None else store
+    day_start = datetime.combine(day, time())
+    day_end = day_start + timedelta(days=1)
+    return [
+        session
+        for session in store.sessions
+        if session.enabled and session.start < day_end and session.end > day_start
+    ]
+
+
 @dataclass(frozen=True)
 class SlotRate:
     """One half-hour of prices, in p/kWh.
@@ -123,15 +140,52 @@ class TariffSourceAdapter:
         return rates
 
     def sessions_for_day(self, day: date) -> list[EnergySession]:
-        store = (
-            self._session_store
-            if self._session_store is not None
-            else session_store
-        )
-        day_start = datetime.combine(day, time())
-        day_end = day_start + timedelta(days=1)
-        return [
-            session
-            for session in store.sessions
-            if session.enabled and session.start < day_end and session.end > day_start
-        ]
+        return sessions_for_day(day, self._session_store)
+
+
+class SlotPriceBookSource:
+    """The offline fallback source used while no tariff is active.
+
+    The daily report runs in SMART, FREERUN, PAUSE and OCPP alike.  When a
+    tariff is stopped there is still a price book to value the slot: the fixed
+    import band and the Agile Outgoing rate cache the report has always used.
+    This adapter exposes that book through the same :class:`TariffSource`
+    contract, so the report has one pricing path whether a tariff is running or
+    not.
+
+    The import band is deliberately *raw*: a free-import session is a separate
+    session row, and the consumer applies it.  That keeps the fallback
+    equivalent to a tariff source, where the supplier price and the session
+    overlay are also distinct.
+    """
+
+    name = "SlotPriceBook"
+    dynamic_import = False
+    # The export side is the fetched Agile Outgoing series.
+    dynamic_export = True
+
+    def __init__(self, book=None, session_store=None):
+        if book is None:
+            # Imported lazily so this module does not depend on the report.
+            from evse_controller.slot_prices import price_book
+
+            book = price_book
+        self._book = book
+        self._session_store = session_store
+
+    def rates_for_day(self, day: date) -> list[SlotRate]:
+        rates = []
+        for slot in range(SLOTS_PER_DAY):
+            start = slot_start(day, slot)
+            rates.append(
+                SlotRate(
+                    start=start,
+                    end=start + timedelta(minutes=SLOT_MINUTES),
+                    import_p=self._book.raw_import_price_p(day, slot),
+                    export_p=self._book.export_price_p(day, slot),
+                )
+            )
+        return rates
+
+    def sessions_for_day(self, day: date) -> list[EnergySession]:
+        return sessions_for_day(day, self._session_store)

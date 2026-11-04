@@ -55,6 +55,16 @@ def test_free_import_session_overrides_the_band():
     assert price_book.import_price_p(DAY, 26) == pytest.approx(config.IMPORT_HIGH)
 
 
+def test_raw_import_band_stays_visible_under_a_free_session():
+    session_store.add(
+        EnergySession("free_import", _at(12, 0), _at(13, 0))
+    )
+    assert price_book.raw_import_price_p(DAY, 24) == pytest.approx(
+        config.IMPORT_HIGH
+    )
+    assert price_book.import_price_p(DAY, 24) == 0.0
+
+
 def test_off_peak_band_matches_the_tariff():
     assert price_book.import_price_p(DAY, 0) == pytest.approx(config.IMPORT_LOW)
     assert price_book.import_price_p(DAY, 47) == pytest.approx(config.IMPORT_LOW)

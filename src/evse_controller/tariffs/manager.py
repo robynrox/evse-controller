@@ -29,6 +29,7 @@ class TariffManager:
             self.current_tariff = None
             self.tariff_name = None
         self._sync_report_savings_provider()
+        self._sync_report_price_source()
 
     def _sync_report_savings_provider(self) -> None:
         """Tell the daily report which tariff can attribute slot savings.
@@ -42,6 +43,23 @@ class TariffManager:
         provider = getattr(self.current_tariff, "saved_for_slot", None)
         daily_log.set_savings_provider(provider if callable(provider) else None)
 
+    def _sync_report_price_source(self) -> None:
+        """Publish the active tariff through the normalised source contract.
+
+        The report keeps its price-book fallback for FREERUN, PAUSE and OCPP.
+        When a tariff is active its adapter is authoritative, so every tariff
+        prices the report through the same 48-row contract.
+        """
+        from evse_controller.daily_report import daily_log
+        from evse_controller.tariffs.source import TariffSourceAdapter
+
+        source = (
+            TariffSourceAdapter(self.current_tariff)
+            if self.current_tariff is not None
+            else None
+        )
+        daily_log.set_price_source(source)
+
     def set_tariff(self, tariff_name):
         if tariff_name in self.tariff_classes:
             self.stop_tariff()
@@ -50,6 +68,7 @@ class TariffManager:
             # The initialization now happens in the tariff's constructor
             self.tariff_name = tariff_name
             self._sync_report_savings_provider()
+            self._sync_report_price_source()
             return True
         return False
     
@@ -70,6 +89,7 @@ class TariffManager:
             self.current_tariff.cleanup()
         self.current_tariff = None
         self._sync_report_savings_provider()
+        self._sync_report_price_source()
 
     def save_state(self):
         """Persist the active tariff's state on a clean shutdown.

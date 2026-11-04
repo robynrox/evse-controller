@@ -15,18 +15,22 @@ from __future__ import annotations
 
 import copy
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 import io
 import json
 import os
 import threading
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
-from evse_controller.slot_prices import SLOT_MINUTES, price_book
+from evse_controller.energy_sessions import FREE_IMPORT
+from evse_controller.slot_prices import SLOT_MINUTES
 from evse_controller.utils.config import config
 from evse_controller.utils.logging_config import debug, warning
+
+if TYPE_CHECKING:
+    from evse_controller.tariffs.source import TariffSource
 
 
 SLOTS_PER_DAY = 48
@@ -132,6 +136,9 @@ class DailyEnergyLog:
         self._dir_override: Optional[Path] = None
         self._specs: dict[str, SeriesSpec] = {}
         self._savings_provider: Optional[Callable[[int], Optional[float]]] = None
+        # The active tariff source, or None to value slots from the price book.
+        self._price_source: Optional["TariffSource"] = None
+        self._fallback_source = None
         self._day: Optional[date] = None
         self._day_data: Optional[dict] = None
         self._slots: list = []
@@ -164,6 +171,8 @@ class DailyEnergyLog:
             self._last_values = {}
             self._last_soc = None
             self._last_write = None
+            self._price_source = None
+            self._fallback_source = None
 
     def configure(self, specs) -> None:
         """Set the series to record.  Safe to call more than once."""
@@ -178,6 +187,22 @@ class DailyEnergyLog:
         """Provide the controller's saving for a day and slot, or None."""
         with self._lock:
             self._savings_provider = provider
+
+    def set_price_source(self, source: Optional["TariffSource"]) -> None:
+        """Use *source* for new slot prices, or None for the price book.
+
+        Prices already frozen into a closed slot are never rewritten.  The
+        manager sets the active tariff's adapter here and clears it when the
+        tariff stops, so FREERUN and PAUSE keep the report's historical
+        fallback pricing.
+        """
+        with self._lock:
+            self._price_source = source
+
+    @property
+    def price_source(self) -> Optional["TariffSource"]:
+        """The active source, or None when the price book is the fallback."""
+        return self._price_source
 
     # -- paths ----------------------------------------------------------
 
@@ -358,14 +383,92 @@ class DailyEnergyLog:
         self._recompute_totals()
         self._write(force=True)
 
+    def _fallback_source_for_day(self):
+        """The price-book adapter, created once on first use."""
+        fallback = self._fallback_source
+        if fallback is None:
+            from evse_controller.tariffs.source import SlotPriceBookSource
+
+            fallback = SlotPriceBookSource()
+            self._fallback_source = fallback
+        return fallback
+
+    def _fallback_rate(self, index: int):
+        """The price book's row for *index*, or None."""
+        if self._day is None:
+            return None
+        rates = self._fallback_source_for_day().rates_for_day(self._day)
+        if 0 <= index < len(rates):
+            return rates[index]
+        return None
+
+    def _rate_for_slot(self, index: int):
+        """Return ``(source, SlotRate)`` for *index*.
+
+        The active tariff source is authoritative for every price it supplies.
+        A price it reports as ``None`` is filled from the price book when the
+        book knows it, because that cache is what keeps a late previous-day
+        slot priced after the Agile tariff has replaced its series for the new
+        day.  When neither source knows the price it stays unknown, never zero.
+        """
+        if self._day is None:
+            return None, None
+
+        source = self._price_source
+        if source is not None:
+            try:
+                rates = source.rates_for_day(self._day)
+            except Exception as exc:  # A report must not break the control loop.
+                warning(f"DAILY_REPORT: price source failed: {exc}")
+                rates = []
+            if 0 <= index < len(rates) and rates[index] is not None:
+                rate = rates[index]
+                if rate.import_p is None or rate.export_p is None:
+                    fallback = self._fallback_rate(index)
+                    if fallback is not None:
+                        rate = replace(
+                            rate,
+                            import_p=(
+                                fallback.import_p
+                                if rate.import_p is None
+                                else rate.import_p
+                            ),
+                            export_p=(
+                                fallback.export_p
+                                if rate.export_p is None
+                                else rate.export_p
+                            ),
+                        )
+                return source, rate
+
+        fallback = self._fallback_rate(index)
+        return self._fallback_source_for_day(), fallback
+
     def _price_slot(self, slot: dict) -> None:
-        import_p, export_p, session = price_book.prices_for(
-            self._day, slot["index"]
-        )
+        source, rate = self._rate_for_slot(slot["index"])
+        import_p = export_p = session_kind = None
+
+        if rate is not None:
+            session = None
+            if source is not None:
+                try:
+                    windows = source.sessions_for_day(self._day)
+                except Exception as exc:  # A report must not break control.
+                    warning(f"DAILY_REPORT: session source failed: {exc}")
+                    windows = []
+                for window in windows:
+                    if window.covers(rate.start):
+                        session = window
+                        break
+            session_kind = session.kind if session is not None else None
+            # Sessions are a separate overlay on the raw supplier price.
+            import_p = 0.0 if session_kind == FREE_IMPORT else rate.import_p
+            export_p = rate.export_p
+
         slot["prices"] = {
             "import_p": import_p,
             "export_p": export_p,
-            "session": session,
+            "session": session_kind,
         }
 
         grid = slot["energy"].get("grid") or {}

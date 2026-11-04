@@ -26,6 +26,7 @@ from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
 from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
 from evse_controller.tariffs.source import (
     SLOTS_PER_DAY,
+    SlotPriceBookSource,
     TariffSourceAdapter,
     slot_start,
 )
@@ -230,3 +231,48 @@ def test_adapter_exposes_the_wrapped_tariff():
 
     assert source.tariff is tariff
     assert source.name == "CosyOctopusTariff"
+
+
+def test_price_book_source_returns_raw_band_and_cached_export(tmp_path):
+    from evse_controller.slot_prices import SlotPriceBook
+
+    book = SlotPriceBook(tmp_path / "rates")
+    book.update_rates(
+        DAY,
+        [
+            {
+                "start": slot_start(DAY, 0),
+                "end": slot_start(DAY, 0) + timedelta(minutes=30),
+                "rate": 5.5,
+            }
+        ],
+    )
+    source = SlotPriceBookSource(book)
+
+    rates = source.rates_for_day(DAY)
+
+    assert len(rates) == SLOTS_PER_DAY
+    assert rates[0].import_p == pytest.approx(config.IMPORT_LOW)
+    assert rates[11].import_p == pytest.approx(config.IMPORT_HIGH)
+    assert rates[0].export_p == pytest.approx(5.5)
+    assert rates[1].export_p is None
+
+
+def test_price_book_source_keeps_free_sessions_out_of_the_raw_price(tmp_path):
+    store = SessionStore(tmp_path / "sessions.json")
+    midnight = datetime.combine(DAY, time())
+    session = store.add(
+        EnergySession(
+            FREE_IMPORT,
+            midnight + timedelta(hours=12),
+            midnight + timedelta(hours=13),
+        )
+    )
+    source = SlotPriceBookSource(session_store=store)
+
+    rates = source.rates_for_day(DAY)
+
+    assert rates[24].import_p == pytest.approx(config.IMPORT_HIGH)
+    assert [window.id for window in source.sessions_for_day(DAY)] == [
+        session.id
+    ]
