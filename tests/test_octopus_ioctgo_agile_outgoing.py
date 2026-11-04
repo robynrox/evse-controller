@@ -790,12 +790,32 @@ class TestEnergyShortfall:
     def test_get_control_state_bidirectional_in_shortfall(self, agile_tariff):
         """Shortfall should force bidirectional mode, even if export is otherwise better."""
         self._set_time(agile_tariff, 12, 0)
-        state = create_test_state(30)
+        # 50% - 23 remaining slots = 27%: below the 55% house floor but above
+        # the 25% absolute minimum, so this is conservative rather than
+        # inhibited.
+        state = create_test_state(50)
 
         control_state, _, _, reason = agile_tariff.get_control_state(state, 12 * 60)
 
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
         assert "Shortfall" in reason
+
+    def test_get_control_state_inhibits_discharge_below_absolute_floor(
+        self, agile_tariff
+    ):
+        """A projection below the absolute minimum stops discharge entirely."""
+        self._set_time(agile_tariff, 12, 0)
+        # 30% - 23 remaining slots = 7%, below the 25% absolute minimum.
+        state = create_test_state(30)
+
+        control_state, _, _, reason = agile_tariff.get_control_state(state, 12 * 60)
+
+        assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
+        assert "absolute minimum" in reason.lower()
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.decision_tier == "absolute_floor"
+        assert snapshot.discharge_min_a == 0
+        assert snapshot.discharge_max_a == 0
 
     def test_get_control_state_stays_bidirectional_when_not_shortfall(self, agile_tariff):
         """Outside shortfall the self-use branch still allows solar charging."""
@@ -1439,7 +1459,7 @@ class TestDecisionSnapshot:
         assert control_state == ControlState.DORMANT
         assert agile_tariff._decision_snapshot.mode == "Idle — battery protection"
 
-    def test_export_slot_mode_is_aggressive(self, agile_tariff):
+    def test_export_slot_mode_is_export_priority(self, agile_tariff):
         self._set_time(agile_tariff, 18, 0)
         self._pin_plan(agile_tariff, 36, 80)
         agile_tariff._planned_export_slots = [36]
@@ -1451,9 +1471,25 @@ class TestDecisionSnapshot:
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.DISCHARGE
         assert snapshot.mode.startswith("Max discharge")
-        assert "aggressive" in snapshot.mode
+        assert "export priority" in snapshot.mode
+        assert snapshot.decision_tier == "export_priority"
+        assert "clears the" in snapshot.reason
         assert "18:00–18:30" in snapshot.reason
         assert snapshot.efficiency_label == "discharge"
+
+    def test_export_slot_below_break_even_is_not_priority(self, agile_tariff):
+        self._set_time(agile_tariff, 19, 30)
+        self._pin_plan(agile_tariff, 39, 80)
+        agile_tariff._planned_export_slots = [39]
+        agile_tariff._plan_cache = [39]
+        state = create_test_state(80)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(state, 19 * 60 + 30)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert "aggressive" in snapshot.mode
+        assert snapshot.decision_tier == "planned_export"
 
     def test_shortfall_mode_is_conservative(self, agile_tariff):
         self._set_time(agile_tariff, 12, 0)
@@ -3225,3 +3261,265 @@ class TestEnergySessions:
         assert "box-shadow:inset 0 4px 0 #6b7280;" in html
         assert "Free Energy Session" in html  # legend
         assert "EV Away (excluded from 23:30 projection)" in html
+
+
+class TestBreakEvenExportPriority:
+    """Bulk export is preferred when it beats offsetting house load."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    @staticmethod
+    def _store(tariff, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        tariff.session_store = store
+        return store
+
+    def test_break_even_is_the_discharge_efficiency_ratio(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 32.3)
+        ratio = (
+            agile_tariff.self_use_discharge_efficiency()
+            / agile_tariff.export_discharge_efficiency()
+        )
+
+        assert ratio == pytest.approx(0.7784, abs=1e-3)
+        assert agile_tariff.export_house_break_even_p() == pytest.approx(
+            ratio * 32.3
+        )
+        assert agile_tariff.export_house_break_even_p(30.0) == pytest.approx(
+            ratio * 30.0
+        )
+        assert agile_tariff.export_house_break_even_p() == pytest.approx(
+            25.14, abs=0.05
+        )
+
+    def test_priority_slots_are_the_rates_above_break_even(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 12, 0)
+
+        qualifying = agile_tariff._export_priority_slots(24)
+
+        # 16:30 is 22p (<23.35p), 17:00-19:00 are 28-35p, 19:30 is 20p.
+        assert qualifying == {34, 35, 36, 37, 38}
+
+    def test_free_import_slots_are_not_export_priority(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                FREE_IMPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+
+        qualifying = agile_tariff._export_priority_slots(24)
+
+        assert 36 not in qualifying
+        assert 37 not in qualifying
+        assert 38 in qualifying
+
+    def test_plan_selects_the_highest_priced_priority_slot_first(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 17, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 10.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.0
+
+        # 17:00 starts at 92%.  The 23:30 projection is 79%, leaving 19% above
+        # the 60% target, so two 9%-extra export slots fit.  17:00-17:30
+        # (28p), 17:30-18:00 (32p) and 18:00-18:30 (35p) qualify; the two
+        # highest are chosen.
+        plan = agile_tariff.calculate_export_plan(92)
+
+        assert plan == [35, 36]
+
+
+class TestThreeBandDischargePolicy:
+    """The house-load mode follows the projected 23:30 SoC."""
+
+    def test_aggressive_above_the_house_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+
+        assert agile_tariff._apply_discharge_policy(70) == "aggressive"
+        assert agile_tariff._energy_shortfall is False
+        assert agile_tariff._discharge_inhibited is False
+
+    def test_conservative_between_absolute_and_house_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+
+        assert agile_tariff._apply_discharge_policy(50) == "conservative"
+        assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_inhibited is False
+
+    def test_inhibited_below_the_absolute_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+
+        assert agile_tariff._apply_discharge_policy(20) == "inhibited"
+        assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_inhibited is True
+
+    def test_house_floor_never_falls_below_the_absolute_minimum(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 65)
+
+        assert agile_tariff._house_load_floor_soc() == 65
+
+    def test_absolute_minimum_cannot_go_below_the_physical_reserve(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 10)
+
+        assert agile_tariff.absolute_min_soc_percent() == 25
+
+    def test_projection_uses_the_export_loss_for_planned_slots(
+        self, agile_tariff
+    ):
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 5.0
+        baseline = agile_tariff._project_soc_at_2330(77, 24)
+        with_export = agile_tariff._project_soc_at_2330(
+            77, 24, export_slots={36}
+        )
+
+        assert baseline == pytest.approx(54.0)
+        assert with_export == pytest.approx(
+            baseline
+            - (5.0 - agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
+        )
+
+    def test_inhibited_discharge_closes_the_range_and_keeps_charging(
+        self, agile_tariff
+    ):
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff._energy_shortfall = True
+        agile_tariff._discharge_inhibited = True
+
+        agile_tariff.set_home_demand_levels(
+            controller, create_test_state(80), 12 * 60
+        )
+
+        controller.setDischargeCurrentRange.assert_called_with(0, 0)
+        controller.setChargeCurrentRange.assert_called_with(
+            3, agile_tariff.MAX_CHARGE_CURRENT
+        )
+
+
+class TestAbsoluteMinimumSocControl:
+    """The configured floor applies to house load and grid support."""
+
+    @staticmethod
+    def _fixed(hour, minute=0):
+        return datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+
+    @staticmethod
+    def _set_up_store(tariff, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        tariff.session_store = store
+        return store
+
+    def test_grid_support_exports_just_above_the_configured_floor(
+        self, agile_tariff, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(45), 12 * 60
+        )
+
+        assert control_state == ControlState.DISCHARGE
+
+    def test_grid_support_stops_at_the_configured_floor(
+        self, agile_tariff, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        store = self._set_up_store(agile_tariff, tmp_path)
+        start = self._fixed(12)
+        store.add(
+            EnergySession(GRID_SUPPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: start)
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(40), 12 * 60
+        )
+
+        assert control_state == ControlState.DORMANT
+        assert (
+            agile_tariff._decision_snapshot.decision_tier == "absolute_floor"
+        )
+
+    def test_export_priority_explanation_names_the_break_even(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        TestDecisionSnapshot._set_time(agile_tariff, 18, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 36, 80)
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+
+        agile_tariff.get_control_state(create_test_state(80), 18 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+
+        labels = [row["label"] for row in explanation["state"]]
+        text = " ".join(
+            [explanation["answer"]["heading"]]
+            + [step["calculation"] for step in explanation["steps"]]
+            + [step["result"] for step in explanation["steps"]]
+        )
+        assert "House-offset break-even" in labels
+        assert explanation["answer"]["heading"] == (
+            "Export beats offsetting the house"
+        )
+        assert "Break-even" in text
+        assert "23.4p" in text
+
+    def test_absolute_floor_explanation_stops_discharge(
+        self, agile_tariff
+    ):
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        # No pinned plan: 30% - 23 remaining slots projects below the 25% floor.
+        agile_tariff.get_control_state(create_test_state(30), 12 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+
+        labels = [row["label"] for row in explanation["state"]]
+        assert explanation["answer"]["heading"] == "Hold at the absolute minimum"
+        assert "Absolute minimum" in labels
+        assert explanation["answer"]["discharge"]["headline"] == (
+            "Do not discharge"
+        )

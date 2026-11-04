@@ -755,6 +755,7 @@ class TestWholeNumberSocSettings:
         ("IOCTGO_OCPP_ENABLE_SOC_THRESHOLD", 29.6, 30),
         ("IOCTGO_OCPP_DISABLE_SOC_THRESHOLD", 94.6, 95),
         ("MIN_AGILE_DISCHARGE_SOC", 59.6, 60),
+        ("IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 39.6, 40),
         ("HOUSE_LOAD_MARGIN_PERCENT", 4.6, 5),
     ]
 
@@ -776,6 +777,31 @@ class TestWholeNumberSocSettings:
         ] = 4.6
 
         assert config.HOUSE_LOAD_MARGIN_PERCENT == 5
+
+    def test_absolute_minimum_defaults_to_the_physical_reserve(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {}).pop(
+            "absolute_min_soc_percent", None
+        )
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+
+    def test_absolute_minimum_cannot_be_set_below_the_physical_reserve(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 10
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+
+    def test_absolute_minimum_is_capped_at_one_hundred(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 120
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 100
 
     def test_non_numeric_value_falls_back_to_the_default(self):
         config = Config()

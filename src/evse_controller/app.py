@@ -592,6 +592,13 @@ def config_page():
             if min_agile_soc is not None:
                 config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
 
+            # Hard floor for discharge and export
+            absolute_min_soc = request.form.get(
+                'tariffs.ioctgo[absolute_min_soc_percent]'
+            )
+            if absolute_min_soc is not None:
+                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = int(absolute_min_soc)
+
             # Flexibility below the bulk-export target for house-load mode
             house_load_margin = request.form.get('tariffs.ioctgo[house_load_margin_percent]')
             if house_load_margin is not None:

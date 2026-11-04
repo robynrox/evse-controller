@@ -77,6 +77,7 @@ class Config:
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
                                 'min_agile_discharge_soc': 60,
+                                'absolute_min_soc_percent': 25,
                                 'house_load_margin_percent': 5,
                                 'max_export_power_kw': 7.2,
                                 'export_slot_soc_loss_percent': 0,
@@ -418,6 +419,29 @@ class Config:
         lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 60)
     )
 
+    # Absolute lower SoC limit for discharge and export.  This is the hard
+    # floor: the controller will not go below it, regardless of export price.
+    # It cannot be set below the 25% physical protection reserve, and it can be
+    # raised (for example to 40%) to avoid draining the pack every winter day.
+    # Default 25 preserves the previous protection-reserve behaviour.
+    IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = property(
+        lambda self: max(
+            25,
+            min(
+                100,
+                self._get_config_int(
+                    "tariffs.ioctgo", "absolute_min_soc_percent", 25
+                ),
+            ),
+        ),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "absolute_min_soc_percent",
+            max(25, min(100, self._as_int(value, 25))),
+            25,
+        ),
+    )
+
     # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
     # house-load decision.  Bulk export planning still uses the target itself.
     HOUSE_LOAD_MARGIN_PERCENT = property(
@@ -684,6 +708,7 @@ class Config:
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'absolute_min_soc_percent': self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT,
                     'house_load_margin_percent': self.HOUSE_LOAD_MARGIN_PERCENT,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,

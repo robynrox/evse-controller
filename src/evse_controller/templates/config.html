@@ -411,10 +411,16 @@
             <small>SoC to target near the end of the day. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
         </div>
         <div class="form-group">
+            <label for="absolute_min_soc_percent">Absolute minimum SoC for discharge and export (%):</label>
+            <input type="number" id="absolute_min_soc_percent" name="tariffs.ioctgo[absolute_min_soc_percent]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('absolute_min_soc_percent', 25) }}" min="25" max="100" step="1">
+            <small>Hard floor for discharge and export, including Save Energy sessions. Defaults to 25%, the physical protection reserve. Raise it (for example to 40%) to avoid draining the pack on winter days. Surplus solar can still charge the pack below this level.</small>
+        </div>
+        <div class="form-group">
             <label for="house_load_margin_percent">House-load flexibility below the target (%):</label>
             <input type="number" id="house_load_margin_percent" name="tariffs.ioctgo[house_load_margin_percent]"
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('house_load_margin_percent', 5) }}" min="0" max="50" step="1">
-            <small>House-load discharge stays aggressive until the projected 23:30 SoC would fall this far below the target. Bulk export planning still uses the target itself. The floor never enters the 25% protection reserve.</small>
+            <small>House-load discharge stays aggressive until the projected 23:30 SoC would fall this far below the target. Between that floor and the absolute minimum it discharges conservatively; below the absolute minimum it stops. Bulk export planning still uses the target itself.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>

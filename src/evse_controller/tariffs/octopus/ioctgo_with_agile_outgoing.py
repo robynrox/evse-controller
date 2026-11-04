@@ -496,11 +496,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._plan_cache = []
         self._prev_battery_level = -1
 
-        # True when the projected SoC at 23:30 is below the house-load floor
-        # (target less the configured flexibility), meaning energy should be
-        # conserved rather than exported. Updated whenever the export plan is
-        # recalculated so the two stay in step.
+        # House-load discharge policy, derived from the projected 23:30 SoC:
+        # ``aggressive`` above the house floor, ``conservative`` between the
+        # house floor and the absolute minimum, and ``inhibited`` below the
+        # absolute minimum.  Updated whenever the export plan is recalculated
+        # so the projection and the configured demand levels stay in step.
         self._energy_shortfall = False
+        self._discharge_policy = "aggressive"
+        self._discharge_inhibited = False
         self._projected_soc_at_2330 = None
 
         # Dashboard snapshot of the last control decision.  Written by the
@@ -565,14 +568,35 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         hours, minutes = map(int, time_str.split(":"))
         return hours * 60 + minutes
 
+    def absolute_min_soc_percent(self) -> float:
+        """Hard lower SoC limit for discharge and export.
+
+        The configured value can raise the 25% physical protection reserve
+        (for example to 40% in winter), but it cannot lower it.  A value above
+        100 is clamped to 100.
+        """
+        try:
+            configured = float(config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT)
+        except (TypeError, ValueError):
+            configured = float(self.BATTERY_PROTECTION_RESERVE_SOC)
+        return max(
+            float(self.BATTERY_PROTECTION_RESERVE_SOC),
+            min(100.0, configured),
+        )
+
     def _house_load_floor_soc(self) -> float:
         """SoC floor for the aggressive/conservative house-load decision.
 
-        Bulk export planning keeps using MIN_AGILE_DISCHARGE_SOC as its floor.
-        House load is allowed a little of the same headroom before it becomes
-        conservative, so a bulk export that finishes at the target does not
-        immediately force conservative mode.  The margin is clamped at zero and
-        the result never enters the 25% protection reserve.
+        Above this floor the pack may cover the house aggressively.  Between
+        it and :meth:`absolute_min_soc_percent` it discharges conservatively,
+        and below the absolute minimum it stops discharging altogether.  The
+        floor is the normal bulk target less the configured house-load
+        flexibility, raised if necessary to the absolute minimum and never
+        below the physical protection reserve.
+
+        Bulk export planning keeps using MIN_AGILE_DISCHARGE_SOC as its floor,
+        raised to the absolute minimum if that is higher; the flexibility only
+        applies to the house-load choice.
         """
         try:
             margin = float(config.HOUSE_LOAD_MARGIN_PERCENT)
@@ -582,7 +606,83 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return max(
             self.BATTERY_PROTECTION_RESERVE_SOC + 1,
             config.MIN_AGILE_DISCHARGE_SOC - margin,
+            self.absolute_min_soc_percent(),
         )
+
+    def self_use_discharge_efficiency(self) -> float:
+        """Pack-to-AC efficiency at the ~3 A house-load reference."""
+        return self.EFFICIENCY_MODEL.discharge_efficiency(
+            self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
+        )
+
+    def export_discharge_efficiency(self) -> float:
+        """Pack-to-AC efficiency at the maximum export current."""
+        return self.EFFICIENCY_MODEL.discharge_efficiency(
+            self.EXPORT_REFERENCE_CURRENT
+        )
+
+    def export_house_break_even_p(
+        self, import_price_p: float | None = None
+    ) -> float:
+        """Export price at which bulk export beats offsetting house load.
+
+        The charge efficiency is sunk for energy already in the pack, so only
+        the two discharge efficiencies matter::
+
+            break_even = eta_house / eta_export * import_price
+
+        At the measured 3 A (73.4%) and 16 A (94.3%) points this is 77.8% of
+        the import price.  No profit margin is added: both options are ways of
+        using the same stored energy, and the controller has already decided
+        to use it rather than leave it in the pack.
+        """
+        export_eff = self.export_discharge_efficiency()
+        if export_eff <= 0:
+            return float("inf")
+        price = (
+            config.IMPORT_HIGH
+            if import_price_p is None
+            else import_price_p
+        )
+        return self.self_use_discharge_efficiency() / export_eff * float(price)
+
+    def _export_priority_slots(
+        self, current_slot: int | None = None
+    ) -> set[int]:
+        """Future slots where bulk export beats offsetting house load.
+
+        A slot qualifies when its export price is at or above
+        :meth:`export_house_break_even_p` for the import price in force, and
+        it is not already marked as free-import, grid-support or EV-away.
+        Off-peak slots are excluded because the car is charging then.
+
+        The export plan still stops at MIN_AGILE_DISCHARGE_SOC.  Qualification
+        is a priority and an explanation, not permission to spend the house
+        reserve.
+        """
+        if current_slot is None:
+            now = self.get_current_datetime()
+            current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        marked = (
+            self._free_import_slots_today()
+            | self._grid_support_slots_today()
+            | self._away_slots_today()
+        )
+        qualifying = set()
+        for rate_data in self._today_rates():
+            slot = rate_data['start'].hour * 2 + (
+                1 if rate_data['start'].minute == 30 else 0
+            )
+            if slot < current_slot or slot >= 47 or slot in marked:
+                continue
+            if self.is_off_peak(slot * 30):
+                continue
+            break_even = self.export_house_break_even_p(
+                self._current_import_rate_p(slot * 30)
+            )
+            if rate_data['rate'] >= break_even:
+                qualifying.add(slot)
+        return qualifying
 
     def _export_slot_soc_loss_percent(self) -> float:
         """SoC lost by one half-hour of bulk export.
@@ -616,21 +716,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return stored_kw * 0.5 / self.SOC_CAPACITY_KWH * 100
 
     def _project_soc_at_2330(
-        self, current_soc_percent: float, current_slot_idx: int
+        self,
+        current_soc_percent: float,
+        current_slot_idx: int,
+        *,
+        export_slots: set[int] | None = None,
     ) -> float:
-        """Project the SoC at 23:30, including session and EV-away slots.
+        """Project the SoC at 23:30, including session, away and export slots.
 
         Every ordinary slot keeps the load-follow loss.  A free-import slot
         charges at full rate instead, and a grid-support slot exports at full
         rate, so those two session kinds replace the baseline with their own
         per-slot change.  An EV-away slot is skipped entirely: the pack is not
-        available, so it neither supplies the house nor charges.  The
-        free-import gain stops at the effective charge cap, matching what the
-        controller will actually do.
+        available, so it neither supplies the house nor charges.  Slots in
+        ``export_slots`` also lose the export rate, because the plan has
+        committed that energy to the grid.  The free-import gain stops at the
+        effective charge cap, matching what the controller will actually do.
         """
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
         away_slots = self._away_slots_today()
+        planned_export_slots = set(export_slots or ())
         non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         export_loss = self._export_slot_soc_loss_percent()
         full_charge_gain = self._full_charge_slot_soc_gain_percent()
@@ -645,27 +751,57 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     projected = min(charge_cap, projected + full_charge_gain)
             elif slot in grid_support_slots:
                 projected -= export_loss
+            elif slot in planned_export_slots:
+                projected -= export_loss
             else:
                 projected -= non_export_loss
         return projected
 
+    def _apply_discharge_policy(self, projected_soc: float) -> str:
+        """Choose the house-load discharge policy from the 23:30 projection.
+
+        Three bands, outermost first:
+
+        * below ``absolute_min_soc_percent``: fully inhibited, no discharge;
+        * below the house floor: conservative, cover most of the house load;
+        * otherwise: aggressive load-following.
+
+        Returns the policy name and updates the flags read by
+        ``get_control_state()`` and ``set_home_demand_levels()``.
+        """
+        floor_soc = self._house_load_floor_soc()
+        absolute_floor = self.absolute_min_soc_percent()
+        if projected_soc < absolute_floor:
+            policy = "inhibited"
+        elif projected_soc < floor_soc:
+            policy = "conservative"
+        else:
+            policy = "aggressive"
+
+        self._projected_soc_at_2330 = projected_soc
+        self._discharge_policy = policy
+        self._discharge_inhibited = policy == "inhibited"
+        self._energy_shortfall = policy != "aggressive"
+
+        debug(
+            f"IOCTGO_AGILEOUT: Projected SoC at 23:30={projected_soc:.1f}% "
+            f"(target {config.MIN_AGILE_DISCHARGE_SOC}%, house floor "
+            f"{floor_soc:.1f}%, absolute floor {absolute_floor:.1f}%), "
+            f"discharge policy={policy}"
+        )
+        return policy
+
     def _update_energy_shortfall(self, current_soc_percent: float) -> bool:
         """Update and return whether the day is projected to end in shortfall.
 
-        A shortfall means the SoC projected at 23:30 is below the house-load
-        floor: MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT, clamped
-        above the 25% protection reserve.  The projection uses the same
-        session-aware helper as calculate_export_plan(): ordinary slots lose
-        NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import slots gain the
-        full-charge rate, grid-support slots lose the export rate and planned
-        EV-away slots are skipped.
+        The projection uses the same session-aware helper as
+        ``calculate_export_plan()``, plus the currently planned export slots:
+        ordinary slots lose NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import slots
+        gain the full-charge rate, grid-support and planned export slots lose
+        the export rate, and planned EV-away slots are skipped.
 
-        The export planner itself still plans down to MIN_AGILE_DISCHARGE_SOC;
-        only the aggressive/conservative house-load choice uses the lower floor.
-
-        Called from calculate_export_plan(), so this state is refreshed at
-        exactly the same times as the export plan: at slot boundaries, on
-        significant SoC changes, and after a rate refresh.
+        The returned flag is True for both conservative and inhibited modes.
+        Use ``_discharge_inhibited`` to distinguish the hard floor.
 
         Args:
             current_soc_percent: Current battery state of charge (%), or -1
@@ -676,25 +812,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         if current_soc_percent < 0:
             self._energy_shortfall = False
+            self._discharge_policy = "aggressive"
+            self._discharge_inhibited = False
             self._projected_soc_at_2330 = None
             return False
 
         now = self.get_current_datetime()
         current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
         projected_soc_at_2330 = self._project_soc_at_2330(
-            current_soc_percent, current_slot_idx
+            current_soc_percent,
+            current_slot_idx,
+            export_slots=set(self._planned_export_slots),
         )
-        self._projected_soc_at_2330 = projected_soc_at_2330
-
-        target_soc = config.MIN_AGILE_DISCHARGE_SOC
-        floor_soc = self._house_load_floor_soc()
-        self._energy_shortfall = projected_soc_at_2330 < floor_soc
-
-        debug(
-            f"IOCTGO_AGILEOUT: Projected SoC at 23:30={projected_soc_at_2330:.1f}% "
-            f"(target {target_soc}%, house floor {floor_soc:.1f}%), "
-            f"shortfall={self._energy_shortfall}"
-        )
+        self._apply_discharge_policy(projected_soc_at_2330)
         return self._energy_shortfall
 
     def calculate_export_plan(self, current_soc_percent: float) -> list:
@@ -716,15 +846,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Returns:
             List of slot indices (0-47) planned for export
         """
-        # Keep the shortfall decision in step with the export plan. This is
-        # called whenever the plan is recalculated, including the significant
-        # SoC change resync and the post-fetch recalculation.
-        self._update_energy_shortfall(current_soc_percent)
-
         if current_soc_percent < 0:
+            self._update_energy_shortfall(current_soc_percent)
             return []
 
-        min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
+        min_soc_percent = max(
+            config.MIN_AGILE_DISCHARGE_SOC,
+            self.absolute_min_soc_percent(),
+        )
 
         export_slot_soc_loss = self._export_slot_soc_loss_percent()
         non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
@@ -743,6 +872,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         if slots_remaining <= 0:
             debug(f"IOCTGO_AGILEOUT: No slots remaining today")
+            self._apply_discharge_policy(current_soc_percent)
             return []
 
         # Phase 1: Project SoC at 23:30 with supplier sessions applied to the
@@ -761,6 +891,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         if available_soc_for_export <= 0:
             debug(f"IOCTGO_AGILEOUT: No SoC available for export after load-follow projection")
+            self._apply_discharge_policy(projected_soc_at_2330)
             return []
 
         # Calculate SoC cost per export slot
@@ -826,8 +957,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         debug(f"IOCTGO_AGILEOUT: Found {len(slot_rates)} profitable slots")
 
-        # Sort by rate (highest first)
-        slot_rates.sort(key=lambda x: x[1], reverse=True)
+        # Qualifying slots are those where bulk export beats offsetting the
+        # house at ~3 A.  Select them first, highest price first, so the pack
+        # is spent on the most profitable use.  The normal target still caps
+        # the plan: qualification is a priority, not permission to spend the
+        # house reserve.
+        priority_slots = self._export_priority_slots(current_slot_idx)
+        priority_rates = [
+            item for item in slot_rates if item[0] in priority_slots
+        ]
+        other_rates = [
+            item for item in slot_rates if item[0] not in priority_slots
+        ]
+        priority_rates.sort(key=lambda x: x[1], reverse=True)
+        other_rates.sort(key=lambda x: x[1], reverse=True)
+        slot_rates = priority_rates + other_rates
+        if priority_rates:
+            info(
+                f"IOCTGO_AGILEOUT: {len(priority_rates)} export-priority "
+                "slot(s) beat the house-offset break-even"
+            )
 
         # Phase 2: Select slots until we run out of available SoC
         planned_slots = []
@@ -848,6 +997,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         debug(f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} slots: {planned_slots}")
         info(f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} slots planned")
+
+        # Refresh the three-band house-load policy with the committed plan.
+        # The projection now includes the export drain, so a plan that uses
+        # the available headroom cannot leave the house mode over-optimistic.
+        self._apply_discharge_policy(
+            self._project_soc_at_2330(
+                current_soc_percent,
+                current_slot_idx,
+                export_slots=set(planned_slots),
+            )
+        )
 
         return planned_slots
 
@@ -3824,6 +3984,108 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
             }
 
+        elif snap.decision_tier == "absolute_floor":
+            absolute_floor = self.absolute_min_soc_percent()
+            projected = snap.projected_soc_at_2330
+            if snap.soc_percent <= absolute_floor:
+                comparison = (
+                    f"SoC {snap.soc_percent}% is at or below the "
+                    f"{absolute_floor:.0f}% absolute minimum."
+                )
+            elif projected is not None:
+                comparison = (
+                    f"Projected 23:30 SoC {math.floor(projected)}% is below "
+                    f"the {absolute_floor:.0f}% absolute minimum."
+                )
+            else:
+                comparison = (
+                    f"The pack is at or below the {absolute_floor:.0f}% "
+                    "absolute minimum."
+                )
+            add_step(
+                "Why is the pack not discharging?",
+                "Can the pack still cover the house or export today?",
+                comparison,
+                "Discharge is inhibited.",
+                "The absolute minimum is a hard floor: the controller stops "
+                "discharging and exporting there even when the price is "
+                "attractive. Surplus solar may still refill the pack.",
+            )
+            charge_answer = {
+                "headline": (
+                    "No charging — at the cap"
+                    if at_cap
+                    else "Charge from surplus solar only"
+                ),
+                "because": (
+                    "The pack is at its charge cap."
+                    if at_cap
+                    else "The absolute minimum only stops discharge; surplus "
+                    "solar may still refill the pack."
+                ),
+            }
+            discharge_answer = {
+                "headline": "Do not discharge",
+                "because": (
+                    f"The {absolute_floor:.0f}% absolute minimum is a hard "
+                    "floor for discharge and export, regardless of the "
+                    "quoted price."
+                ),
+            }
+            answer = {
+                "heading": "Hold at the absolute minimum",
+                "summary": comparison,
+                "charge": charge_answer,
+                "discharge": discharge_answer,
+            }
+
+        elif snap.decision_tier == "export_priority":
+            break_even_p = self.export_house_break_even_p(import_p)
+            self_use_eff = self.self_use_discharge_efficiency()
+            export_eff = self.export_discharge_efficiency()
+            ratio = self_use_eff / export_eff if export_eff > 0 else 0.0
+            add_step(
+                "Why export instead of offsetting house load?",
+                "Both options use the same stored energy. Which returns more "
+                "per kWh?",
+                f"Offsetting the house avoids {import_p:.1f}p of import "
+                f"through ~{self.SELF_USE_DISCHARGE_REFERENCE_CURRENT:.0f} A "
+                f"at {self_use_eff * 100:.1f}%. Exporting sells through "
+                f"{self.EXPORT_REFERENCE_CURRENT:.0f} A at "
+                f"{export_eff * 100:.1f}%. Break-even = "
+                f"{self_use_eff * 100:.1f}% ÷ {export_eff * 100:.1f}% × "
+                f"{import_p:.1f}p = {break_even_p:.1f}p.",
+                f"Export {export_p:.1f}p ≥ break-even {break_even_p:.1f}p.",
+                "Exporting returns more per stored kWh than offsetting the "
+                "house, so this slot is exported at maximum rate.",
+            )
+            answer = {
+                "heading": "Export beats offsetting the house",
+                "summary": (
+                    f"This slot pays {export_p:.1f}p/kWh, at or above the "
+                    f"{break_even_p:.1f}p break-even for using the same "
+                    "energy to avoid importing at the peak rate."
+                ),
+                "charge": {
+                    "headline": "No charging",
+                    "because": (
+                        "The controller is exporting at the maximum rate for "
+                        "this slot, so the charge range is closed."
+                    ),
+                },
+                "discharge": {
+                    "headline": (
+                        f"Export at maximum rate "
+                        f"({self.MAX_DISCHARGE_CURRENT:.0f} A)"
+                    ),
+                    "because": (
+                        "Exporting returns more than offsetting house load, "
+                        "so the stored energy is sold while the price clears "
+                        "the break-even."
+                    ),
+                },
+            }
+
         else:
             # Simple branches with a single reason: free energy, off-peak,
             # supplier support, protection, unknown SoC, or a planned export.
@@ -4001,6 +4263,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "value": f"{snap.house_floor_soc:.0f}%",
                 }
             )
+        state.append(
+            {
+                "label": "Absolute minimum",
+                "value": f"{self.absolute_min_soc_percent():.0f}%",
+            }
+        )
+        if snap.decision_tier in ("planned_export", "export_priority", "grid_support"):
+            break_even_p = self.export_house_break_even_p(import_p)
+            state.append(
+                {
+                    "label": "House-offset break-even",
+                    "value": f"{break_even_p:.1f}p/kWh",
+                }
+            )
         if snap.decision_tier in ("free", "off_peak"):
             charging_value = (
                 "None — at the charge cap"
@@ -4008,8 +4284,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 else f"Grid charge at "
                 f"{(charge_floor_a or self.MAX_CHARGE_CURRENT):.0f} A"
             )
-        elif snap.decision_tier in ("planned_export", "grid_support"):
+        elif snap.decision_tier in (
+            "planned_export", "export_priority", "grid_support"
+        ):
             charging_value = "None — exporting at maximum rate"
+        elif snap.decision_tier == "absolute_floor":
+            charging_value = (
+                "None — at the charge cap"
+                if at_cap
+                else "Surplus solar only (≥3 A)"
+            )
         elif snap.decision_tier == "protection":
             charging_value = "None — protection reserve"
         elif snap.decision_tier == "unknown_soc":
@@ -4053,6 +4337,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "discharge decision is a decision to start at that output.",
             "No negative-margin trade is accepted. Every action must cover "
             "its own cost plus the configured margin.",
+            "The house-offset break-even is a pure efficiency ratio: "
+            "η_house ÷ η_export × the import price. No profit margin is added, "
+            "because both options use energy that is already in the pack.",
+            "The absolute minimum SoC is a hard floor for discharge and "
+            "export. It can be raised above the 25% physical reserve but not "
+            "lowered.",
         ]
 
         return {
@@ -4890,12 +5180,87 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Battery depleted"
 
+        # Configured hard floor.  Discharge and export stop here even when the
+        # price is attractive; the physical 25% reserve above still wins if it
+        # is higher.  The floor applies both when the pack is already at the
+        # minimum and when the 23:30 projection is below it.  Charging from
+        # solar remains allowed, so this is not a DORMANT decision except for
+        # grid-support, which is an export mode.
+        absolute_floor = self.absolute_min_soc_percent()
+        at_absolute_floor = battery_level <= absolute_floor
+        discharge_inhibited = at_absolute_floor or self._discharge_inhibited
+        if discharge_inhibited:
+            self._discharge_policy = "inhibited"
+            self._discharge_inhibited = True
+            self._energy_shortfall = True
+        if at_absolute_floor:
+            floor_reason = (
+                f"SoC {battery_level}% is at or below the "
+                f"{absolute_floor:.0f}% absolute minimum"
+            )
+            floor_detail = (
+                f"SoC {battery_level}% has reached the configured "
+                f"{absolute_floor:.0f}% absolute minimum."
+            )
+        else:
+            floor_reason = (
+                "the projected 23:30 SoC would fall below the "
+                f"{absolute_floor:.0f}% absolute minimum"
+            )
+            floor_detail = (
+                f"The 23:30 projection is "
+                f"{math.floor(self._projected_soc_at_2330)}%, below the "
+                f"configured {absolute_floor:.0f}% absolute minimum."
+                if self._projected_soc_at_2330 is not None
+                else "The 23:30 projection is below the configured "
+                f"{absolute_floor:.0f}% absolute minimum."
+            )
+
         # Save Energy Session: the supplier has asked for reduced grid demand,
         # and for a battery-backed installation the useful response is to push
         # as much out as possible.  This sits above the export planner because
         # the reason for exporting is the request, not the quoted export price.
-        # The protection reserve above is the floor: at or below 25% the pack
-        # idles instead of exporting.
+        # The absolute floor is the limit: at or below it the pack idles
+        # instead of exporting, even though the mode is explicit.
+        if (
+            session is not None
+            and session.kind == GRID_SUPPORT
+            and at_absolute_floor
+        ):
+            self._record_decision(
+                mode=(
+                    f"Save Energy Session {session.start:%H:%M}–"
+                    f"{session.end:%H:%M} · export inhibited"
+                ),
+                reason=(
+                    f"{session.label} — SoC {battery_level}% is at or below "
+                    f"the {absolute_floor:.0f}% absolute minimum, so the pack "
+                    "will not export"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"{session.start:%H:%M}–{session.end:%H:%M} is a "
+                    "supplier-requested grid support window, but SoC "
+                    f"{battery_level}% has reached the configured "
+                    f"{absolute_floor:.0f}% absolute minimum. The pack idles "
+                    "instead of exporting. Raise absolute_min_soc_percent only "
+                    "after checking the battery reserve."
+                ),
+                current_rate_p=self._current_export_rate_p(current_slot),
+                discharge_min_a=0,
+                discharge_max_a=0,
+                discharge_aggressive=False,
+                decision_tier="absolute_floor",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
+            )
+            return (
+                ControlState.DORMANT,
+                None,
+                None,
+                "IOCTGO_AGILEOUT Grid support inhibited at absolute minimum SoC",
+            )
+
         if session is not None and session.kind == GRID_SUPPORT:
             export_rate_p = self._current_export_rate_p(current_slot)
             discharge_efficiency = (
@@ -4921,7 +5286,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{session.start:%H:%M}–{session.end:%H:%M} is a "
                     "supplier-requested grid support window. SoC "
                     f"{battery_level}% is above the "
-                    f"{self.BATTERY_PROTECTION_RESERVE_SOC}% reserve, so the "
+                    f"{absolute_floor:.0f}% absolute minimum, so the "
                     f"pack exports at {self.EXPORT_POWER_KW:.2f} kW. The quoted "
                     f"export price is {export_rate_p:.1f}p (expected "
                     f"£{expected_gbp:.2f} for the slot at "
@@ -4948,10 +5313,46 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"IOCTGO_AGILEOUT {session.label}: export at max rate",
             )
 
+        # Configured hard floor: no discharge or export, even at a good price.
+        # Charging from surplus solar is still allowed, so the pack can recover
+        # during the day without importing at the peak rate.
+        if discharge_inhibited:
+            self._record_decision(
+                mode="Idle — absolute minimum SoC",
+                reason=(
+                    f"{floor_reason}, so the pack will not discharge"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"{floor_detail} The pack will not discharge or export, "
+                    "even at an attractive price. Surplus solar may still "
+                    "charge it."
+                ),
+                current_rate_p=self._current_export_rate_p(current_slot),
+                discharge_min_a=0,
+                discharge_max_a=0,
+                discharge_aggressive=False,
+                discharge_activation_w=self.NEVER_DISCHARGE_ACTIVATION_W,
+                decision_tier="absolute_floor",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
+            )
+            return (
+                ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
+                None,
+                None,
+                "IOCTGO_AGILEOUT Absolute minimum SoC - discharge inhibited",
+            )
+
         # Check if current slot is a planned export slot
         if current_slot in self._planned_export_slots:
             # Export at maximum rate during planned slots
             export_rate_p = self._current_export_rate_p(current_slot)
+            import_price_p = self._current_import_rate_p(dayMinute)
+            break_even_p = self.export_house_break_even_p(import_price_p)
+            export_is_priority = (
+                current_slot in self._export_priority_slots(current_slot)
+            )
             discharge_efficiency = (
                 self.EFFICIENCY_MODEL.discharge_efficiency(
                     self.EXPORT_REFERENCE_CURRENT
@@ -4962,10 +5363,23 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             debug(f"IOCTGO_AGILEOUT: In export slot {current_slot}, commanding DISCHARGE")
             self._record_decision(
-                mode=f"Max discharge ({self.MAX_DISCHARGE_CURRENT:.0f} A) · aggressive",
+                mode=(
+                    f"Max discharge ({self.MAX_DISCHARGE_CURRENT:.0f} A) · "
+                    + (
+                        "export priority"
+                        if export_is_priority
+                        else "aggressive"
+                    )
+                ),
                 reason=(
                     f"planned export slot {self._slot_range_label(current_slot)} "
                     f"at {export_rate_p:.1f}p"
+                    + (
+                        f" — clears the {break_even_p:.1f}p house-offset "
+                        "break-even"
+                        if export_is_priority
+                        else ""
+                    )
                 ),
                 soc_percent=battery_level,
                 detail=(
@@ -4974,6 +5388,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"expected {expected_gbp:.2f} for the slot at "
                     f"{self.EXPORT_POWER_KW:.2f} kW, discharge efficiency "
                     f"{discharge_efficiency:.0f}%."
+                    + (
+                        f" The break-even against offsetting house load at "
+                        f"~{self.SELF_USE_DISCHARGE_REFERENCE_CURRENT:.0f} A "
+                        f"is {break_even_p:.1f}p "
+                        f"({self.self_use_discharge_efficiency() * 100:.0f}% "
+                        f"÷ {self.export_discharge_efficiency() * 100:.0f}% "
+                        f"× {import_price_p:.1f}p import), so this slot is "
+                        "given priority."
+                        if export_is_priority
+                        else ""
+                    )
                 ),
                 current_rate_p=export_rate_p,
                 target_rate_p=export_rate_p,
@@ -4984,8 +5409,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 discharge_min_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
-                decision_tier="planned_export",
-                import_rate_p=self._current_import_rate_p(dayMinute),
+                decision_tier=(
+                    "export_priority" if export_is_priority else "planned_export"
+                ),
+                import_rate_p=import_price_p,
                 charge_cap_percent=charge_cap,
             )
             return (
@@ -5481,6 +5908,36 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     self._exported_slots.append(current_slot)
                     info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
             return  # Don't configure load-following during export slots
+
+        # Absolute floor: close the discharge range entirely.  The pack may
+        # still absorb surplus solar, so charging stays available unless the
+        # battery is already at its cap.
+        if self._discharge_inhibited:
+            evseController.setDischargeActivationPower(
+                self.NEVER_DISCHARGE_ACTIVATION_W
+            )
+            evseController.setDischargeCurrentBias(0)
+            evseController.setDischargeCurrentRange(0, 0)
+            evseController.setChargeActivationPower(720)
+            evseController.setChargeCurrentBias(-0.5)
+            if charge_at_cap:
+                evseController.setChargeCurrentRange(0, 0)
+            else:
+                evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            self._update_snapshot_ranges(
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=0,
+                discharge_max_a=0,
+                discharge_aggressive=False,
+                discharge_activation_w=self.NEVER_DISCHARGE_ACTIVATION_W,
+            )
+            debug(
+                "IOCTGO_AGILEOUT: Absolute minimum SoC - discharge range "
+                "closed (0 A)"
+            )
+            return
 
         # Energy shortfall: conserve energy. Stay bidirectional so surplus
         # solar is still absorbed, but discharge conservatively - cover most

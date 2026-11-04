@@ -187,6 +187,7 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
         min_agile_discharge_soc: 60     # Bulk-export SoC floor and 23:30 target
+        absolute_min_soc_percent: 25   # Hard discharge/export floor (cannot be below 25)
         house_load_margin_percent: 5   # Flexibility below the target before conservative
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
@@ -253,7 +254,8 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
 - `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, 0-100). Export slots are planned down to this figure
-- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
+- `absolute_min_soc_percent`: Hard lower limit for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve, and it can be raised (for example to 40%) to avoid draining the pack on winter days. Surplus solar may still charge the pack below this level
+- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The house floor is clamped above both the 25% reserve and `absolute_min_soc_percent`, and bulk export planning still uses `min_agile_discharge_soc` itself unless the absolute minimum is higher
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -337,11 +339,22 @@ cell on a phone, where the badge alone is too small to rely on.
   explanation.
 - **Aggressive vs conservative** is decided against a house-load floor, not the
   bulk-export target. Bulk export slots are planned down to
-  `min_agile_discharge_soc`; the house-load strategy stays aggressive until the
-  projected 23:30 SoC would fall below that target minus
-  `house_load_margin_percent` (default 5%, clamped above the 25% reserve). A
-  bulk export that finishes at the target therefore does not by itself force
-  conservative mode.
+  `min_agile_discharge_soc`; the house-load strategy stays aggressive while the
+  projected 23:30 SoC remains above that target minus
+  `house_load_margin_percent` (default 5%). Between that floor and
+  `absolute_min_soc_percent` it discharges conservatively, and below the
+  absolute minimum it stops discharging altogether. A bulk export that
+  finishes at the target therefore does not by itself force conservative mode.
+- **Export priority** applies when the quoted export price clears the
+  house-offset break-even:
+  `η_house ÷ η_export × import price`, using the measured discharge
+  efficiencies at the ~3 A self-use reference and the export reference current
+  (about 77.8% of the import price at the default table). Both options consume
+  the same stored energy, so the ratio is a pure efficiency comparison and no
+  profit margin is added. Such a slot is exported at maximum rate and is
+  selected before ordinary export slots when energy is limited; it still stops
+  at the normal `min_agile_discharge_soc` target and never spends the house
+  reserve.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
   current-dependent, so there is no single global minimum figure. The solar
@@ -438,11 +451,15 @@ numbers the control loop used:
 - It declares the state at the moment of the decision: time and half-hour
   slot, SoC, charge cap, import and export prices, the best later export slot,
   harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
-  output, the projected 23:30 SoC and the house floor where relevant.
+  output, the projected 23:30 SoC, the house floor and the absolute minimum
+  where relevant.
 - It walks through the checks in order: whether the pack will last to 23:30,
   what the surplus is worth exported now, what it is worth kept for the house,
   what it is worth stored for a later sale, where each break-even lies, whether
-  today's surplus can reach the charge floor, and where discharge starts.
+  today's surplus can reach the charge floor, and where discharge starts. An
+  export-priority decision also shows the break-even arithmetic against
+  offsetting house load; an absolute-floor decision says that discharge and
+  export have stopped and that only surplus solar may charge.
 - It states the answer for both directions. For example: *“Answer 242 W
   because that is the point where the import avoided plus the exported surplus
   exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
@@ -486,10 +503,10 @@ marketing:
   energy and the Wallbox cannot do both.
 - **Save Energy Session** (`grid_support`): the supplier has asked for less
   grid demand. For a battery-backed installation the useful response is maximum
-  export for the window, regardless of the quoted export price, down to the 25%
-  battery protection reserve. The supplier's reward is not a price the tariff
-  can see, so it is deliberately not modelled or booked; the dashboard says the
-  request is the reason for exporting.
+  export for the window, regardless of the quoted export price, down to
+  `absolute_min_soc_percent` (25% by default). The supplier's reward is not a
+  price the tariff can see, so it is deliberately not modelled or booked; the
+  dashboard says the request is the reason for exporting.
 - **EV Away** (`ev_away`): the EV is expected to be disconnected. These slots
   are left out of the 23:30 SoC projection and the export plan, because the
   pack cannot supply the house or charge. This is a planning assumption only:
