@@ -62,7 +62,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 1), {"grid": 2000.0})
         log.observe(_at(DAY, 0, 2), {"grid": -1000.0})
 
-        slot = log.snapshot()["slots"][0]
+        slot = log.snapshot_for(DAY)["slots"][0]
         assert slot["energy"]["grid"]["in"] == pytest.approx(2000 * 60 / 3_600_000)
         assert slot["energy"]["grid"]["out"] == pytest.approx(1000 * 60 / 3_600_000)
         assert slot["coverage"]["grid"] == pytest.approx(120.0)
@@ -72,7 +72,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 0), {"grid": 1000.0, "evse": None})
         log.observe(_at(DAY, 0, 1), {"grid": 1000.0, "evse": None})
 
-        slot = log.snapshot()["slots"][0]
+        slot = log.snapshot_for(DAY)["slots"][0]
         assert slot["energy"]["grid"]["in"] == pytest.approx(1000 / 60 / 1000)
         assert slot["energy"]["evse"] == {"in": None, "out": None}
         assert slot["coverage"]["evse"] == 0.0
@@ -82,7 +82,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 0), {"grid": 0.0})
         log.observe(_at(DAY, 0, 1), {"grid": 0.0})
 
-        assert log.snapshot()["slots"][0]["energy"]["grid"] == {
+        assert log.snapshot_for(DAY)["slots"][0]["energy"]["grid"] == {
             "in": 0.0,
             "out": 0.0,
         }
@@ -95,7 +95,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 30), {"grid": 0.0})
         log.observe(_at(DAY, 0, 31), {"grid": 0.0})
 
-        snapshot = log.snapshot()
+        snapshot = log.snapshot_for(DAY)
         first, second = snapshot["slots"][0], snapshot["slots"][1]
         # Five completed five-minute intervals, then the previous reading
         # holds up to the boundary.  Nothing flows in the new slot.
@@ -110,7 +110,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 5), {"grid": 1000.0})
         log.observe(_at(DAY, 0, 16), {"grid": 1000.0})
 
-        snapshot = log.snapshot()
+        snapshot = log.snapshot_for(DAY)
         first = snapshot["slots"][0]
         assert first["coverage"]["grid"] == pytest.approx(600.0)
         assert first["energy"]["grid"]["in"] == pytest.approx(1000 * 600 / 3_600_000)
@@ -122,7 +122,7 @@ class TestAccumulation:
         log.observe(_at(DAY, 0, 20), {"grid": -1000.0})
         log.observe(_at(DAY, 0, 21), {"grid": -1000.0})
 
-        snapshot = log.snapshot()
+        snapshot = log.snapshot_for(DAY)
         slot = snapshot["slots"][0]
         # The backward jump is not booked.  Only the following minute counts,
         # rather than the ten minutes between 00:20 and 00:30.
@@ -136,16 +136,16 @@ class TestLifecycle:
         first = _log(tmp_path, GRID)
         first.observe(_at(DAY, 0, 0), {"grid": 2000.0})
         first.observe(_at(DAY, 0, 5), {"grid": 2000.0})
-        before = first.snapshot()["slots"][0]["energy"]["grid"]["in"]
+        before = first.snapshot_for(DAY)["slots"][0]["energy"]["grid"]["in"]
         assert before == pytest.approx(2000 * 300 / 3_600_000)
 
         second = _log(tmp_path, GRID)
         second.observe(_at(DAY, 1, 0), {"grid": 2000.0})
-        resumed = second.snapshot()
+        resumed = second.snapshot_for(DAY)
         assert resumed["slots"][0]["energy"]["grid"]["in"] == pytest.approx(before)
 
         second.observe(_at(DAY, 1, 1), {"grid": 2000.0})
-        assert second.snapshot()["slots"][2]["energy"]["grid"]["in"] == pytest.approx(
+        assert second.snapshot_for(DAY)["slots"][2]["energy"]["grid"]["in"] == pytest.approx(
             2000 * 60 / 3_600_000
         )
 
@@ -318,7 +318,7 @@ class TestControllerFeed:
             controller.pmon, Power(ch1Watts=1000, ch2Watts=0, voltage=240)
         )
 
-        slot = isolated_daily_report.snapshot()["slots"][0]
+        slot = isolated_daily_report.snapshot_for(DAY)["slots"][0]
         assert slot["energy"]["grid"]["in"] == pytest.approx(
             1000 * 60 / 3_600_000
         )
@@ -382,7 +382,7 @@ class TestControllerFeed:
             controller.pmon2, Power(ch1Watts=0, voltage=240)
         )
 
-        slot = isolated_daily_report.snapshot()["slots"][0]
+        slot = isolated_daily_report.snapshot_for(DAY)["slots"][0]
         assert slot["energy"]["grid"]["in"] is None
         assert slot["energy"]["evse"]["in"] is None
 
