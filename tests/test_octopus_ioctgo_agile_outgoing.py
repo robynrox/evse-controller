@@ -844,6 +844,179 @@ class TestEnergyShortfall:
         mock_controller.setDischargeCurrentBias.assert_called_with(0.5)
 
 
+class TestSessionAwareSocProjection:
+    """Session slots replace the load-follow baseline in the 23:30 projection."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    @staticmethod
+    def _store(tariff, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        tariff.session_store = store
+        return store
+
+    def test_projection_without_sessions_is_the_load_follow_baseline(
+        self, agile_tariff, tmp_path
+    ):
+        self._store(agile_tariff, tmp_path)
+        self._set_time(agile_tariff, 12, 0)
+
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            77 - 23 * agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        )
+
+    def test_free_import_slots_raise_the_projection(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                FREE_IMPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+        agile_tariff.FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 5.0
+
+        # Two free slots replace the 1% loss with a 5% gain each.
+        expected = 77 - 23 * 1.0 + 2 * (5.0 + 1.0)
+
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            expected
+        )
+        # Without the session 77% projects to 54%, below the 55% house floor.
+        assert agile_tariff._update_energy_shortfall(77) is False
+        assert agile_tariff._projected_soc_at_2330 == pytest.approx(expected)
+
+    def test_grid_support_slots_use_the_export_loss(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                GRID_SUPPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 5.0
+
+        # Two grid-support slots lose 5% each instead of the 1% baseline.
+        expected = 77 - 23 * 1.0 - 2 * (5.0 - 1.0)
+
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            expected
+        )
+        assert agile_tariff._update_energy_shortfall(77) is True
+
+    def test_mixed_sessions_combine_charge_and_export(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(FREE_IMPORT, start, start + timedelta(hours=1))
+        )
+        store.add(
+            EnergySession(
+                GRID_SUPPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+        agile_tariff.FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 4.0
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 5.0
+
+        expected = 77 - 23 * 1.0 + 2 * (4.0 + 1.0) - 2 * (5.0 - 1.0)
+
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            expected
+        )
+
+    def test_free_import_gain_is_derived_when_unset(self, agile_tariff):
+        agile_tariff.FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 0
+        current = agile_tariff.GRID_CHARGE_REFERENCE_CURRENT
+        stored_kw = (
+            agile_tariff.EFFICIENCY_MODEL.charge_ac_power_kw(current)
+            * agile_tariff.EFFICIENCY_MODEL.charge_efficiency(current)
+        )
+        expected = stored_kw * 0.5 / agile_tariff.SOC_CAPACITY_KWH * 100
+
+        assert agile_tariff._full_charge_slot_soc_gain_percent() == pytest.approx(
+            expected
+        )
+        assert expected > agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+    def test_free_import_gain_stops_at_the_charge_cap(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(FREE_IMPORT, start, start + timedelta(hours=1))
+        )
+        agile_tariff.FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 5.0
+        cap = agile_tariff.charge_cap_percent()
+
+        # The first free slot reaches the cap; the second cannot add more.
+        expected = cap - 21 * agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+        assert agile_tariff._project_soc_at_2330(cap - 2, 24) == pytest.approx(
+            expected
+        )
+
+    def test_export_plan_uses_the_session_aware_projection(
+        self, agile_tariff, tmp_path
+    ):
+        """A free session creates headroom that the planner can spend."""
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        agile_tariff.FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 5.0
+
+        # 83% - 23% = 60%, exactly the export floor, so no slot is available.
+        assert agile_tariff.calculate_export_plan(83) == []
+
+        store.add(
+            EnergySession(
+                FREE_IMPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+
+        assert agile_tariff.calculate_export_plan(83) != []
+
+    def test_grid_support_slots_are_not_planned_twice(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        store.add(
+            EnergySession(
+                GRID_SUPPORT,
+                start.replace(hour=18, minute=0),
+                start.replace(hour=19, minute=0),
+            )
+        )
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 2.0
+
+        plan = agile_tariff.calculate_export_plan(100)
+
+        assert plan
+        # 18:00–19:00 carries the best rates, but those two slots already
+        # export for grid support and their drain is in the projection.
+        assert 36 not in plan
+        assert 37 not in plan
+
+
 class TestDischargeActivation:
     """The discharge activation threshold is the economic break-even load.
 

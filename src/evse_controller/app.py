@@ -577,6 +577,9 @@ def config_page():
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
             if non_export_slot_loss is not None:
                 config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+            full_charge_gain = request.form.get('tariffs.ioctgo[full_charge_slot_soc_gain_percent]')
+            if full_charge_gain is not None:
+                config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = float(full_charge_gain)
             min_profit_margin = request.form.get('tariffs.ioctgo[min_profit_margin_p_per_kwh]')
             if min_profit_margin is not None:
                 config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = float(min_profit_margin)

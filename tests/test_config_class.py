@@ -793,6 +793,8 @@ class TestWholeNumberSocSettings:
 
         config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = 0.5
         config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.5
+        config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 6.5
 
         assert config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(0.5)
         assert config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(1.5)
+        assert config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT == pytest.approx(6.5)

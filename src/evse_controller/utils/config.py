@@ -81,6 +81,7 @@ class Config:
                                 'max_export_power_kw': 7.2,
                                 'export_slot_soc_loss_percent': 0,
                                 'non_export_slot_soc_loss_percent': 1.0,
+                                'full_charge_slot_soc_gain_percent': 0,
                                 'min_profit_margin_p_per_kwh': 0.3,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
@@ -445,6 +446,13 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
     )
 
+    # Agile Outgoing full-charge (free-import) slot SoC gain percentage (per
+    # 30-min slot, 0 = use calculated value from charge power and efficiency)
+    IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "full_charge_slot_soc_gain_percent", 0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "full_charge_slot_soc_gain_percent", value)
+    )
+
     # Minimum profit margin, p/kWh delivered, required before the controller
     # will cycle the battery or export.  This is a policy hurdle, not a
     # measured degradation figure: it covers marginal wear plus unmodelled
@@ -680,6 +688,7 @@ class Config:
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'full_charge_slot_soc_gain_percent': self.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT,
                     'min_profit_margin_p_per_kwh': self.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
