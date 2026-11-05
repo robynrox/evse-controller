@@ -200,6 +200,8 @@ migration map, keep one release of overlap, then remove the unused classes.
 - a free-import session zeroes the reported import price without changing the
   raw source price;
 - the price book is the fallback while no tariff is active;
+- a missing source price is filled from the price-book cache without overriding
+  a price the source supplied;
 - changing the source leaves an already-closed slot frozen.
 
 ## Non-goals

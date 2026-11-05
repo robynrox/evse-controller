@@ -140,6 +140,13 @@ class _MutableSource:
         return []
 
 
+class _NullExportSource(_MutableSource):
+    """A source that knows import but not export, like a failed Agile fetch."""
+
+    def __init__(self, import_p=10.0):
+        super().__init__(import_p=import_p, export_p=None)
+
+
 @pytest.mark.parametrize("tariff_class", STATIC_TARIFFS)
 def test_report_prices_match_each_tariff_contract(tariff_class, tmp_path):
     source = TariffSourceAdapter(_build(tariff_class))
@@ -195,6 +202,22 @@ def test_report_unknown_agile_export_is_unknown_not_zero(tmp_path):
     prices = _price_all(log)
 
     assert all(price["export_p"] is None for price in prices)
+
+
+def test_report_fills_a_missing_source_price_from_the_price_book(tmp_path):
+    # A dynamic tariff can lose yesterday's series at midnight.  The cached
+    # book still knows the price, and must fill only the missing half.
+    price_book.update_rates(DAY, [_rate(0, 5.0), _rate(1, 6.0)])
+    source = _NullExportSource(import_p=20.0)
+    log = _log(tmp_path)
+    log.set_price_source(source)
+
+    prices = _price_all(log)
+
+    assert prices[0]["import_p"] == pytest.approx(20.0)
+    assert prices[0]["export_p"] == pytest.approx(5.0)
+    assert prices[1]["export_p"] == pytest.approx(6.0)
+    assert prices[2]["export_p"] is None
 
 
 def test_report_applies_a_free_import_session_to_the_raw_price(tmp_path):
