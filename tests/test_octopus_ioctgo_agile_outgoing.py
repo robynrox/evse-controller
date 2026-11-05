@@ -702,6 +702,15 @@ class TestConstants:
 class TestEnergyShortfall:
     """Test the shortfall projection and conservative discharge mode."""
 
+    @pytest.fixture(autouse=True)
+    def _sixty_percent_target(self, monkeypatch):
+        """Pin the target these cases describe.
+
+        The shipped default is covered in test_config_class; keeping it out of
+        these examples preserves their 55% house-floor arithmetic.
+        """
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+
     @staticmethod
     def _set_time(tariff, hour, minute=0):
         fixed = datetime.now().replace(
@@ -867,6 +876,11 @@ class TestEnergyShortfall:
 
 class TestSessionAwareSocProjection:
     """Session slots replace the load-follow baseline in the 23:30 projection."""
+
+    @pytest.fixture(autouse=True)
+    def _sixty_percent_target(self, monkeypatch):
+        """Pin the 60% target used by these projection examples."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
@@ -1515,7 +1529,10 @@ class TestDecisionSnapshot:
 
         assert "discharge ≥720 W" in html
 
-    def test_conservative_reason_names_the_house_floor(self, agile_tariff):
+    def test_conservative_reason_names_the_house_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 12, 0)
         self._pin_plan(agile_tariff, 24, 30, shortfall=True)
         agile_tariff._projected_soc_at_2330 = 54
@@ -1528,8 +1545,11 @@ class TestDecisionSnapshot:
         assert "60% bulk target" in snapshot.detail
         assert "5% flexibility" in snapshot.detail
 
-    def test_conservative_reason_floors_the_projection(self, agile_tariff):
-        """44.6% must read as 44% against a 45% floor, not 45% vs 45%."""
+    def test_conservative_reason_floors_the_projection(
+        self, agile_tariff, monkeypatch
+    ):
+        """54.6% must read as 54% against a 55% floor, not 55% vs 55%."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 12, 0)
         self._pin_plan(agile_tariff, 24, 30, shortfall=True)
         agile_tariff._projected_soc_at_2330 = 54.6
@@ -1934,7 +1954,10 @@ class TestDecisionExplanation:
         assert "Tier" not in text
         assert "tier" not in text
 
-    def test_shortfall_explanation_names_the_house_floor(self, agile_tariff):
+    def test_shortfall_explanation_names_the_house_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
         TestDecisionSnapshot._pin_plan(
             agile_tariff, 24, 30, shortfall=True
@@ -3334,6 +3357,7 @@ class TestBreakEvenExportPriority:
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 17, 0)
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 10.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.0
@@ -3536,6 +3560,7 @@ class TestPlanExplanation:
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 17, 0)
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 10.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.0
@@ -3578,6 +3603,7 @@ class TestPlanExplanation:
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 12, 0)
 
         agile_tariff.get_control_state(create_test_state(80), 12 * 60)

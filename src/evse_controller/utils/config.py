@@ -76,7 +76,7 @@ class Config:
                                 'bulk_discharge_end_time': '19:00',
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
-                                'min_agile_discharge_soc': 60,
+                                'min_agile_discharge_soc': 50,
                                 'absolute_min_soc_percent': 25,
                                 'house_load_margin_percent': 5,
                                 'max_export_power_kw': 7.2,
@@ -415,8 +415,8 @@ class Config:
     # Minimum SoC for Agile Outgoing discharge.  This is the bulk-export
     # target: export slots are planned down to it.
     MIN_AGILE_DISCHARGE_SOC = property(
-        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 60),
-        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 60)
+        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 50),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 50)
     )
 
     # Absolute lower SoC limit for discharge and export.  This is the hard

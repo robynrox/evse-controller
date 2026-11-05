@@ -407,8 +407,8 @@
         <div class="form-group">
             <label for="min_agile_discharge_soc">Target SoC for Agile Discharge (%):</label>
             <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
-                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100" step="1">
-            <small>SoC to target near the end of the day. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 50) }}" min="0" max="100" step="1">
+            <small>SoC to target near the end of the day (default 50%). If there is plenty of charge available, bulk exporting is possible within slots to aim for this target. Raise it to keep more reserve; lower it to export more.</small>
         </div>
         <div class="form-group">
             <label for="absolute_min_soc_percent">Absolute minimum SoC for discharge and export (%):</label>

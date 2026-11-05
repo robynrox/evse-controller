@@ -206,6 +206,11 @@ completed fixes.
   (`house_load_margin_percent`, default 5%, clamped above the 25% protection
   reserve). This keeps aggressive mode after a bulk export reaches the target;
   only a projection below the lower floor becomes conservative.
+- The default `MIN_AGILE_DISCHARGE_SOC` / `min_agile_discharge_soc` is **50%**
+  (the 23:30 bulk-export target and export floor). The 25% absolute minimum
+  and the 5% house-load flexibility are unchanged. An existing `config.yaml`
+  with an explicit value keeps that value; change it there to adopt 50% on a
+  live system.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts

@@ -810,7 +810,7 @@ class TestWholeNumberSocSettings:
             "min_agile_discharge_soc"
         ] = "not a number"
 
-        assert config.MIN_AGILE_DISCHARGE_SOC == 60
+        assert config.MIN_AGILE_DISCHARGE_SOC == 50
 
     def test_per_slot_soc_loss_rates_stay_fractional(self):
         """These are rates, not thresholds, so 0.5%/slot must survive."""
