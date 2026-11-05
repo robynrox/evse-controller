@@ -60,6 +60,7 @@ class DecisionSnapshot:
     soc_percent: int = -1
     target_soc_percent: Optional[float] = None
     projected_soc_at_2330: Optional[float] = None
+    planned_export_slots: Optional[list] = None
     current_rate_p: Optional[float] = None
     target_rate_p: Optional[float] = None
     target_slot: Optional[int] = None
@@ -715,6 +716,43 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         return stored_kw * 0.5 / self.SOC_CAPACITY_KWH * 100
 
+    def _slot_soc_delta(
+        self,
+        slot: int,
+        projected_soc: float,
+        *,
+        free_import_slots: set[int],
+        grid_support_slots: set[int],
+        away_slots: set[int],
+        planned_export_slots: set[int],
+        charge_cap: float,
+        full_charge_gain: float,
+        export_loss: float,
+        non_export_loss: float,
+    ) -> tuple[float, str]:
+        """Return the SoC change and the reason for one planning slot.
+
+        This is the single per-slot model behind both the 23:30 projection and
+        the explanation page's half-hour table, so the two cannot disagree.
+        The returned kind is one of ``away``, ``free_import``,
+        ``grid_support``, ``planned_export`` or ``load_follow``.
+        """
+        if slot in away_slots:
+            return 0.0, "away"
+        if slot in free_import_slots:
+            if projected_soc < charge_cap:
+                return (
+                    min(charge_cap, projected_soc + full_charge_gain)
+                    - projected_soc,
+                    "free_import",
+                )
+            return 0.0, "free_import"
+        if slot in grid_support_slots:
+            return -export_loss, "grid_support"
+        if slot in planned_export_slots:
+            return -export_loss, "planned_export"
+        return -non_export_loss, "load_follow"
+
     def _project_soc_at_2330(
         self,
         current_soc_percent: float,
@@ -744,17 +782,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         projected = current_soc_percent
         for slot in range(current_slot_idx, 47):
-            if slot in away_slots:
-                continue
-            if slot in free_import_slots:
-                if projected < charge_cap:
-                    projected = min(charge_cap, projected + full_charge_gain)
-            elif slot in grid_support_slots:
-                projected -= export_loss
-            elif slot in planned_export_slots:
-                projected -= export_loss
-            else:
-                projected -= non_export_loss
+            delta, _ = self._slot_soc_delta(
+                slot,
+                projected,
+                free_import_slots=free_import_slots,
+                grid_support_slots=grid_support_slots,
+                away_slots=away_slots,
+                planned_export_slots=planned_export_slots,
+                charge_cap=charge_cap,
+                full_charge_gain=full_charge_gain,
+                export_loss=export_loss,
+                non_export_loss=non_export_loss,
+            )
+            projected += delta
         return projected
 
     def _apply_discharge_policy(self, projected_soc: float) -> str:
@@ -2661,6 +2701,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             soc_percent=soc_percent,
             target_soc_percent=target_soc_percent,
             projected_soc_at_2330=projected_soc_at_2330,
+            planned_export_slots=list(self._planned_export_slots),
             current_rate_p=current_rate_p,
             target_rate_p=target_rate_p,
             target_slot=target_slot,
@@ -3316,6 +3357,365 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "max_discharge_a": max_discharge,
             "charge_reference_a": charge_reference,
             "export_reference_a": export_reference,
+        }
+
+    def _plan_explanation(self, snap: DecisionSnapshot) -> dict:
+        """Build the remaining-day SoC projection and export-option tables.
+
+        The rows use the same per-slot model as
+        :meth:`_project_soc_at_2330`, including the committed export plan, so
+        the number at the bottom of the table is the number the controller
+        used.  Every future slot carries enough context to answer "why not?"
+        when it qualifies on price but the plan leaves it alone.
+        """
+        start_slot = snap.updated_at.hour * 2 + (
+            1 if snap.updated_at.minute >= 30 else 0
+        )
+        current_soc = (
+            float(snap.soc_percent)
+            if snap.soc_percent is not None and snap.soc_percent >= 0
+            else None
+        )
+
+        free_import_slots = self._free_import_slots_today()
+        grid_support_slots = self._grid_support_slots_today()
+        away_slots = self._away_slots_today()
+        planned_export_slots = set(
+            snap.planned_export_slots
+            if snap.planned_export_slots is not None
+            else self._planned_export_slots
+        )
+        exported_slots = set(self._exported_slots)
+        priority_slots = self._export_priority_slots(start_slot)
+
+        rate_by_slot: dict[int, float] = {}
+        for rate_data in self._today_rates():
+            slot = rate_data['start'].hour * 2 + (
+                1 if rate_data['start'].minute == 30 else 0
+            )
+            rate_by_slot[slot] = float(rate_data['rate'])
+
+        bulk_target_soc = float(config.MIN_AGILE_DISCHARGE_SOC)
+        absolute_min_soc = self.absolute_min_soc_percent()
+        target_soc = max(bulk_target_soc, absolute_min_soc)
+        house_floor_soc = self._house_load_floor_soc()
+        export_loss = self._export_slot_soc_loss_percent()
+        non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        full_charge_gain = self._full_charge_slot_soc_gain_percent()
+        charge_cap = self.charge_cap_percent()
+        slot_export_kwh = self.EXPORT_POWER_KW * 0.5
+        min_export_rate_p = self.export_min_rate_p()
+        default_break_even_p = self.export_house_break_even_p(config.IMPORT_HIGH)
+
+        if current_soc is None:
+            baseline_projection = None
+            plan_projection = None
+            headroom = None
+        else:
+            baseline_projection = self._project_soc_at_2330(
+                current_soc, start_slot
+            )
+            plan_projection = self._project_soc_at_2330(
+                current_soc,
+                start_slot,
+                export_slots=planned_export_slots,
+            )
+            headroom = baseline_projection - target_soc
+
+        rows: list[dict] = []
+        projected = current_soc
+        for slot in range(start_slot, 47):
+            delta, change_kind = self._slot_soc_delta(
+                slot,
+                projected if projected is not None else 0.0,
+                free_import_slots=free_import_slots,
+                grid_support_slots=grid_support_slots,
+                away_slots=away_slots,
+                planned_export_slots=planned_export_slots,
+                charge_cap=charge_cap,
+                full_charge_gain=full_charge_gain,
+                export_loss=export_loss,
+                non_export_loss=non_export_loss,
+            )
+            if projected is not None:
+                projected += delta
+
+            rate = rate_by_slot.get(slot)
+            import_price_p = self._current_import_rate_p(slot * 30)
+            break_even_p = self.export_house_break_even_p(import_price_p)
+            qualifies = slot in priority_slots
+            planned = slot in planned_export_slots
+            exported = slot in exported_slots
+            off_peak = self.is_off_peak(slot * 30)
+
+            revenue_gbp = None
+            gain_gbp = None
+            gain_p_per_kwh = None
+            if (
+                change_kind in ("load_follow", "planned_export")
+                and not off_peak
+                and rate is not None
+            ):
+                gain_p_per_kwh = rate - break_even_p
+                revenue_gbp = rate * slot_export_kwh / 100.0
+                gain_gbp = gain_p_per_kwh * slot_export_kwh / 100.0
+
+            if change_kind == "away":
+                status = "away"
+                status_label = "EV AWAY"
+                status_class = "status-session"
+                reason = (
+                    "EV planned away — the pack neither supplies nor charges, "
+                    "and the slot is not an export target."
+                )
+            elif change_kind == "free_import":
+                status = "free_import"
+                status_label = "FREE IMPORT"
+                status_class = "status-session"
+                if delta <= 0:
+                    reason = (
+                        "Free-import session — the pack is already at the "
+                        f"{charge_cap:.0f}% charge cap."
+                    )
+                else:
+                    reason = (
+                        "Free-import session — the pack charges at full rate. "
+                        "The Wallbox cannot import and export at the same time."
+                    )
+            elif change_kind == "grid_support":
+                status = "grid_support"
+                status_label = "GRID SUPPORT"
+                status_class = "status-session"
+                reason = (
+                    "Grid-support session — already exports at maximum. It is "
+                    "excluded from the export plan so its drain is not counted "
+                    "twice."
+                )
+            elif off_peak:
+                status = "off_peak"
+                status_label = "OFF-PEAK"
+                status_class = "status-session"
+                reason = (
+                    "Off-peak charging window — the car is charging and the "
+                    "slot is not available for export."
+                )
+            elif rate is None:
+                status = "no_price"
+                status_label = "NO PRICE"
+                status_class = "status-normal"
+                reason = "No export price is available for this slot."
+            elif exported:
+                status = "exported"
+                status_label = "EXPORTED"
+                status_class = "status-exported"
+                reason = "The controller exported in this slot."
+            elif planned:
+                status = "planned"
+                status_label = "PLANNED"
+                status_class = "status-planned"
+                if qualifies:
+                    reason = (
+                        f"Planned — {rate:.1f}p is "
+                        f"{rate - break_even_p:.1f}p above the "
+                        f"{break_even_p:.1f}p house-offset break-even."
+                    )
+                else:
+                    reason = (
+                        f"Planned — above the {min_export_rate_p:.1f}p export "
+                        "minimum, using spare headroom after the priority slots."
+                    )
+            elif qualifies:
+                status = "skipped"
+                status_label = "QUALIFIES"
+                status_class = "status-skipped"
+                if headroom is None:
+                    reason = (
+                        "Qualifies on price, but the battery state of charge "
+                        "is unknown, so no headroom can be committed."
+                    )
+                elif headroom <= 0:
+                    reason = (
+                        f"Qualifies at {rate:.1f}p, but the session-aware "
+                        f"23:30 projection ({baseline_projection:.0f}%) is at "
+                        f"or below the {target_soc:.0f}% export floor "
+                        f"(absolute minimum {absolute_min_soc:.0f}%), so "
+                        "there is no headroom."
+                    )
+                else:
+                    reason = (
+                        f"Qualifies at {rate:.1f}p, but the "
+                        f"{headroom:.1f}% headroom was used by higher-priced "
+                        "slots."
+                    )
+            else:
+                status = "not_selected"
+                status_label = "NOT SELECTED"
+                status_class = "status-normal"
+                if rate < min_export_rate_p:
+                    reason = (
+                        f"Below the {min_export_rate_p:.1f}p export minimum."
+                    )
+                elif headroom is None:
+                    reason = "The battery state of charge is unknown."
+                elif headroom <= 0:
+                    reason = (
+                        f"Not selected — the 23:30 projection is at or below "
+                        f"the {target_soc:.0f}% export floor."
+                    )
+                else:
+                    reason = (
+                        f"{rate:.1f}p is below the {break_even_p:.1f}p "
+                        "house-offset break-even; the spare headroom went to "
+                        "higher-priced priority slots."
+                    )
+
+            rows.append(
+                {
+                    "slot": slot,
+                    "time": self._slot_range_label(slot),
+                    "kind": change_kind,
+                    "kind_label": {
+                        "away": "EV away",
+                        "free_import": "Free import",
+                        "grid_support": "Grid support",
+                        "planned_export": "Export",
+                        "load_follow": "Normal",
+                    }.get(change_kind, change_kind),
+                    "status": status,
+                    "status_label": status_label,
+                    "status_class": status_class,
+                    "export_price_p": rate,
+                    "import_price_p": import_price_p,
+                    "break_even_p": break_even_p,
+                    "qualifies": qualifies,
+                    "planned": planned,
+                    "exported": exported,
+                    "off_peak": off_peak,
+                    "soc_delta": delta,
+                    "projected_soc_after": projected,
+                    "revenue_gbp": revenue_gbp,
+                    "gain_gbp": gain_gbp,
+                    "gain_p_per_kwh": gain_p_per_kwh,
+                    "reason": reason,
+                }
+            )
+
+        planned_rows = [row for row in rows if row["planned"]]
+        skipped_qualifying = [
+            row for row in rows if row["qualifies"] and not row["planned"]
+        ]
+        options = sorted(
+            [
+                row
+                for row in rows
+                if row["kind"] in ("load_follow", "planned_export")
+                and not row["off_peak"]
+                and row["export_price_p"] is not None
+            ],
+            key=lambda row: (-row["export_price_p"], row["slot"]),
+        )
+
+        additional_cost = export_loss - non_export_loss
+        if additional_cost <= 0:
+            additional_cost = export_loss
+
+        if current_soc is None:
+            diagnosis = (
+                "The battery state of charge is unknown, so the controller "
+                "cannot calculate a 23:30 projection or commit export headroom."
+            )
+        elif start_slot >= 47:
+            diagnosis = (
+                "No export slots remain today: the export window closes at "
+                "23:30 (slot 47)."
+            )
+        elif not rate_by_slot:
+            diagnosis = (
+                "No Agile Outgoing prices are loaded, so the planner has no "
+                "profitable slots to choose from."
+            )
+        elif headroom <= 0:
+            diagnosis = (
+                f"No export is planned. The session-aware 23:30 projection is "
+                f"{baseline_projection:.0f}%, at or below the "
+                f"{target_soc:.0f}% export floor (absolute minimum "
+                f"{absolute_min_soc:.0f}%)."
+            )
+            if skipped_qualifying:
+                diagnosis += (
+                    f" {len(skipped_qualifying)} slot(s) beat the "
+                    f"{default_break_even_p:.1f}p house-offset break-even, but "
+                    "exporting in them would spend the house reserve."
+                )
+        elif not planned_rows:
+            diagnosis = (
+                f"No export is planned even though {headroom:.1f}% is above "
+                f"the {target_soc:.0f}% export floor. "
+            )
+            if headroom < additional_cost:
+                diagnosis += (
+                    f"One export slot needs {additional_cost:.1f}% more SoC "
+                    "than the load-follow baseline, and the headroom is "
+                    "smaller than that."
+                )
+            elif skipped_qualifying:
+                diagnosis += (
+                    f"{len(skipped_qualifying)} slot(s) beat the "
+                    f"{default_break_even_p:.1f}p house-offset break-even, but "
+                    "none could be fitted into the remaining headroom."
+                )
+            else:
+                diagnosis += (
+                    f"No future slot reaches the {min_export_rate_p:.1f}p "
+                    "export minimum."
+                )
+        else:
+            diagnosis = (
+                f"{len(planned_rows)} export slot(s) planned. The session-aware "
+                f"23:30 projection is {baseline_projection:.0f}% before the "
+                f"plan and {plan_projection:.0f}% after it, against a "
+                f"{target_soc:.0f}% floor."
+            )
+            if skipped_qualifying:
+                diagnosis += (
+                    f" {len(skipped_qualifying)} qualifying slot(s) are left "
+                    "unplanned because the headroom was used by higher-priced "
+                    "slots."
+                )
+
+        return {
+            "start_slot": start_slot,
+            "current_soc": current_soc,
+            "baseline_projection": baseline_projection,
+            "plan_projection": plan_projection,
+            "target_soc": target_soc,
+            "bulk_target_soc": bulk_target_soc,
+            "house_floor_soc": house_floor_soc,
+            "absolute_min_soc": absolute_min_soc,
+            "headroom_soc": headroom,
+            "planned_slots": sorted(
+                slot for slot in planned_export_slots if start_slot <= slot < 47
+            ),
+            "qualifying_slots": sorted(priority_slots),
+            "skipped_qualifying_slots": [
+                row["slot"] for row in skipped_qualifying
+            ],
+            "slot_export_kwh": slot_export_kwh,
+            "export_soc_loss_percent": export_loss,
+            "non_export_soc_loss_percent": non_export_loss,
+            "full_charge_soc_gain_percent": full_charge_gain,
+            "additional_export_soc_cost_percent": additional_cost,
+            "min_export_rate_p": min_export_rate_p,
+            "default_break_even_p": default_break_even_p,
+            "selected_revenue_gbp": sum(
+                row["revenue_gbp"] or 0.0 for row in planned_rows
+            ),
+            "selected_gain_gbp": sum(
+                row["gain_gbp"] or 0.0 for row in planned_rows
+            ),
+            "diagnosis": diagnosis,
+            "rows": rows,
+            "options": options,
         }
 
     def get_decision_explanation(self) -> dict:
@@ -4196,6 +4596,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "discharge": discharge_answer,
             }
 
+        plan = self._plan_explanation(snap)
+
         state = [
             {"label": "Decision taken at", "value": snap.updated_at.strftime("%H:%M:%S")},
             {"label": "Half-hour slot", "value": slot_label},
@@ -4249,11 +4651,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
             }
         )
-        if snap.projected_soc_at_2330 is not None:
+        if plan["baseline_projection"] is not None:
             state.append(
                 {
-                    "label": "Projected 23:30 SoC",
-                    "value": f"{math.floor(snap.projected_soc_at_2330)}%",
+                    "label": "Projected 23:30 SoC (before export)",
+                    "value": f"{math.floor(plan['baseline_projection'])}%",
+                }
+            )
+            state.append(
+                {
+                    "label": "Projected 23:30 SoC (with plan)",
+                    "value": f"{math.floor(plan['plan_projection'])}%",
                 }
             )
         if snap.house_floor_soc is not None:
@@ -4266,7 +4674,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         state.append(
             {
                 "label": "Absolute minimum",
-                "value": f"{self.absolute_min_soc_percent():.0f}%",
+                "value": f"{plan['absolute_min_soc']:.0f}%",
+            }
+        )
+        state.append(
+            {
+                "label": "Export floor",
+                "value": f"{plan['target_soc']:.0f}%",
+            }
+        )
+        if plan["headroom_soc"] is not None:
+            state.append(
+                {
+                    "label": "SoC headroom for export",
+                    "value": f"{max(0.0, plan['headroom_soc']):.1f}%",
+                }
+            )
+        state.append(
+            {
+                "label": "Export slots planned",
+                "value": f"{len(plan['planned_slots'])}",
             }
         )
         if snap.decision_tier in ("planned_export", "export_priority", "grid_support"):
@@ -4343,6 +4770,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "The absolute minimum SoC is a hard floor for discharge and "
             "export. It can be raised above the 25% physical reserve but not "
             "lowered.",
+            f"The 23:30 projection applies {self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT:.1f}% "
+            "of load-follow loss per ordinary slot, the measured export loss "
+            f"of {self._export_slot_soc_loss_percent():.1f}% per export slot, "
+            "and the session effects. EV-away slots are skipped entirely.",
+            "Export slots are ranked by price and the best are selected first, "
+            "but the plan still stops at the export floor. A slot can therefore "
+            "qualify on price and still be left unplanned because the reserve "
+            "has no headroom.",
         ]
 
         return {
@@ -4356,6 +4791,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "state": state,
             "ledger": self._ledger_explanation(snap),
             "efficiency": self._efficiency_explanation(),
+            "plan": plan,
             "steps": steps,
             "answer": answer,
             "assumptions": assumptions,
@@ -4792,6 +5228,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # illegible on a narrow screen, so the plan must also be readable
             # as words.  An empty plan is stated too: it explains a decision
             # that declined to store solar for a later sale.
+            priority = self._export_priority_slots(current_slot_idx)
+            skipped_priority = priority - set(planned_slots)
             if planned_slots:
                 plan_items = [
                     f"{self._slot_range_label(idx)} @ {rate_dict[idx]['rate']:.1f}p"
@@ -4807,10 +5245,48 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         f"+{len(planned_slots) - 6} more"
                     ]
                 plan_text = "Export plan: " + " · ".join(plan_items)
+                if skipped_priority:
+                    plan_text += (
+                        f" · {len(skipped_priority)} qualifying slot(s) "
+                        "skipped (headroom used)"
+                    )
                 plan_colour = "#e65100"
             else:
-                plan_text = "Export plan: none planned"
-                plan_colour = "#888"
+                # An empty plan is easy to misread as "nothing qualified".  If
+                # slots did clear the break-even, say explicitly that the SoC
+                # floor, not the prices, is what stopped the export.
+                target = max(
+                    config.MIN_AGILE_DISCHARGE_SOC,
+                    self.absolute_min_soc_percent(),
+                )
+                projected = self._projected_soc_at_2330
+                if priority:
+                    qualifier = (
+                        f"{len(priority)} slot(s) beat the "
+                        f"{self.export_house_break_even_p(config.IMPORT_HIGH):.1f}p "
+                        "break-even, but "
+                    )
+                    if projected is None:
+                        plan_text = (
+                            "Export plan: none planned — " + qualifier
+                            + "no 23:30 projection is available"
+                        )
+                    elif projected <= target:
+                        plan_text = (
+                            "Export plan: none planned — " + qualifier
+                            + f"the 23:30 projection is {projected:.0f}% "
+                            f"against the {target:.0f}% floor"
+                        )
+                    else:
+                        plan_text = (
+                            "Export plan: none planned — " + qualifier
+                            + f"the remaining {projected - target:.1f}% "
+                            "headroom is less than one export slot"
+                        )
+                    plan_colour = "#a15c00"
+                else:
+                    plan_text = "Export plan: none planned"
+                    plan_colour = "#888"
             html.append(
                 '<div style="font-size:10px;color:' + plan_colour + ";"
                 'margin-top:1px;" title="Slots the planner will export in. '

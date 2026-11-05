@@ -3523,3 +3523,189 @@ class TestAbsoluteMinimumSocControl:
         assert explanation["answer"]["discharge"]["headline"] == (
             "Do not discharge"
         )
+
+
+class TestPlanExplanation:
+    """The explanation page shows the projection and every export option."""
+
+    @staticmethod
+    def _set_time(tariff, hour, minute=0):
+        return TestDecisionSnapshot._set_time(tariff, hour, minute)
+
+    def test_plan_rows_match_the_projection_and_mark_the_selected_slots(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 17, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 10.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.0
+
+        agile_tariff.get_control_state(create_test_state(92), 17 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        plan = explanation["plan"]
+
+        assert plan["current_soc"] == pytest.approx(92.0)
+        assert plan["baseline_projection"] == pytest.approx(79.0)
+        assert plan["planned_slots"] == [35, 36]
+        assert plan["skipped_qualifying_slots"] == [34, 37, 38]
+        assert plan["plan_projection"] == pytest.approx(
+            plan["rows"][-1]["projected_soc_after"]
+        )
+
+        planned_rows = [row for row in plan["rows"] if row["planned"]]
+        assert [row["slot"] for row in planned_rows] == [35, 36]
+        assert all(row["status"] == "planned" for row in planned_rows)
+        assert all(row["status_class"] == "status-planned" for row in planned_rows)
+        assert all(
+            "break-even" in row["reason"] for row in planned_rows
+        )
+        assert plan["selected_revenue_gbp"] == pytest.approx(
+            sum(row["revenue_gbp"] for row in planned_rows)
+        )
+
+        # The options table is ranked by price, and the selected slots carry
+        # their planned status into it.
+        option_prices = [row["export_price_p"] for row in plan["options"]]
+        assert option_prices == sorted(option_prices, reverse=True)
+        assert {
+            row["slot"] for row in plan["options"] if row["planned"]
+        } == {35, 36}
+
+        html = agile_tariff.get_dashboard_html()
+        assert "3 qualifying slot(s) skipped (headroom used)" in html
+
+    def test_empty_plan_explains_that_the_floor_blocked_qualifying_slots(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 12, 0)
+
+        agile_tariff.get_control_state(create_test_state(80), 12 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        plan = explanation["plan"]
+
+        # 80% at midday loses 23% of load-follow energy, so 23:30 projects to
+        # 57%, below the 60% target.  The afternoon peak still qualifies on
+        # price, but no SoC can be committed to it.
+        assert plan["planned_slots"] == []
+        assert plan["headroom_soc"] < 0
+        assert plan["skipped_qualifying_slots"] == [34, 35, 36, 37, 38]
+        assert "No export is planned" in plan["diagnosis"]
+        assert "export floor" in plan["diagnosis"]
+        assert "5 slot(s) beat" in plan["diagnosis"]
+
+        skipped_rows = [
+            row for row in plan["rows"] if row["status"] == "skipped"
+        ]
+        assert len(skipped_rows) == 5
+        assert all(row["qualifies"] for row in skipped_rows)
+        assert all("no headroom" in row["reason"] for row in skipped_rows)
+
+        # The options list still shows them, ranked best price first, so the
+        # user can see the trade-off rather than an unexplained empty plan.
+        assert plan["options"][0]["slot"] == 36
+        assert {
+            row["slot"] for row in plan["options"] if row["qualifies"]
+        } == {34, 35, 36, 37, 38}
+
+        html = agile_tariff.get_dashboard_html()
+        assert "break-even, but" in html
+        assert "against the 60% floor" in html
+
+    def test_session_slots_are_named_and_excluded_from_export_options(
+        self, agile_tariff, tmp_path
+    ):
+        start = self._set_time(agile_tariff, 12, 0)
+        store = SessionStore(tmp_path / "sessions.json")
+        agile_tariff.session_store = store
+        store.add(
+            EnergySession(
+                FREE_IMPORT,
+                start.replace(hour=14, minute=0),
+                start.replace(hour=15, minute=0),
+            )
+        )
+        store.add(
+            EnergySession(
+                GRID_SUPPORT,
+                start.replace(hour=20, minute=0),
+                start.replace(hour=20, minute=30),
+            )
+        )
+        store.add(
+            EnergySession(
+                EV_AWAY,
+                start.replace(hour=21, minute=0),
+                start.replace(hour=21, minute=30),
+            )
+        )
+
+        agile_tariff.get_control_state(create_test_state(50), 12 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        rows = {row["slot"]: row for row in explanation["plan"]["rows"]}
+
+        assert rows[28]["kind"] == "free_import"
+        assert rows[28]["status"] == "free_import"
+        assert "charges at full rate" in rows[28]["reason"]
+        assert rows[40]["kind"] == "grid_support"
+        assert "already exports at maximum" in rows[40]["reason"]
+        assert rows[42]["kind"] == "away"
+        assert "not an export target" in rows[42]["reason"]
+
+        option_slots = {
+            row["slot"] for row in explanation["plan"]["options"]
+        }
+        assert not ({28, 29, 40, 42} & option_slots)
+
+    def test_decision_template_renders_the_plan_and_options(
+        self, agile_tariff, monkeypatch
+    ):
+        from pathlib import Path
+
+        from flask import Flask
+
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 17, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 10.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.0
+        agile_tariff.get_control_state(create_test_state(92), 17 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+
+        templates = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "evse_controller"
+            / "templates"
+        )
+        app = Flask(
+            __name__,
+            template_folder=str(templates),
+            static_folder=str(templates.parent / "static"),
+        )
+        app.config.update(TESTING=True)
+
+        @app.route("/")
+        def index():
+            return "dashboard"
+
+        @app.route("/sessions")
+        def sessions_page():
+            return "sessions"
+
+        @app.route("/config")
+        def config_page():
+            return "config"
+
+        @app.route("/decision")
+        def decision_page():
+            from flask import render_template
+
+            return render_template("decision.html", **explanation)
+
+        html = app.test_client().get("/decision").get_data(as_text=True)
+
+        assert "The rest of today: SoC projection and export plan" in html
+        assert "Export options, best price first" in html
+        assert "23:30 with plan" in html
+        assert "PLANNED" in html
+        assert "House break-even" in html

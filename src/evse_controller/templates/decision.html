@@ -333,6 +333,147 @@
         margin-right: 4px;
     }
 
+    .plan-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+
+    .plan-stat {
+        background: #f6f8f9;
+        border-radius: 6px;
+        padding: 10px 12px;
+    }
+
+    .plan-stat .label {
+        display: block;
+        color: #666;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 3px;
+    }
+
+    .plan-stat .value {
+        display: block;
+        font-size: 18px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .plan-diagnosis {
+        margin: 0 0 14px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #fff8e1;
+        border: 1px solid #f0d48a;
+        color: #5a4500;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .plan-scroll {
+        overflow-x: auto;
+        border: 1px solid #e0e2e6;
+        border-radius: 8px;
+    }
+
+    table.plan-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .plan-table th,
+    .plan-table td {
+        padding: 6px 8px;
+        border-bottom: 1px solid #eceef1;
+        text-align: right;
+        vertical-align: top;
+    }
+
+    .plan-table th {
+        background: #f6f8f9;
+        color: #555;
+        font-weight: 600;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+
+    .plan-table th:first-child,
+    .plan-table td:first-child,
+    .plan-table th:nth-child(2),
+    .plan-table td:nth-child(2),
+    .plan-table td.reason {
+        text-align: left;
+    }
+
+    .plan-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .plan-table td.reason {
+        white-space: normal;
+        min-width: 250px;
+        color: #444;
+        line-height: 1.45;
+    }
+
+    .plan-table tr.is-planned {
+        background: #fff3e0;
+    }
+
+    .plan-table tr.is-skipped {
+        background: #fffde7;
+    }
+
+    .plan-table tr.is-exported {
+        background: #e8f5e9;
+    }
+
+    .plan-table tr.is-session {
+        opacity: 0.75;
+    }
+
+    .status {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+
+    .status-planned {
+        background: #ffb74d;
+        color: #3e2600;
+    }
+
+    .status-exported {
+        background: #4caf50;
+        color: #fff;
+    }
+
+    .status-skipped {
+        background: #fff59d;
+        color: #5f5200;
+    }
+
+    .status-session {
+        background: #e0e0e0;
+        color: #444;
+    }
+
+    .status-normal {
+        background: #eceff1;
+        color: #455a64;
+    }
+
     .footer-links {
         margin-top: 26px;
         display: flex;
@@ -423,6 +564,213 @@
             </tbody>
         </table>
     </div>
+
+    {% if plan %}
+    <h2 class="section-title">The rest of today: SoC projection and export plan</h2>
+    <div class="card">
+        <p class="section-note">
+            The projection starts from the SoC at the decision and applies the
+            same half-hour model the controller used: ordinary slots lose
+            {{ '%.1f'|format(plan.non_export_soc_loss_percent) }} percentage
+            points of SoC to load-follow demand, planned export slots lose
+            {{ '%.1f'|format(plan.export_soc_loss_percent) }}%, free-import
+            slots charge at full rate, grid-support slots export at full rate,
+            and EV-away slots are skipped entirely. The export floor is the
+            higher of the {{ '%.1f'|format(plan.bulk_target_soc) }}% bulk
+            target and the {{ '%.1f'|format(plan.absolute_min_soc) }}%
+            absolute minimum, so
+            {{ '%.1f'|format(plan.target_soc) }}% here.
+        </p>
+
+        <div class="plan-summary">
+            <div class="plan-stat">
+                <span class="label">SoC at the decision</span>
+                <span class="value">
+                    {% if plan.current_soc is not none %}
+                    {{ '%.0f'|format(plan.current_soc) }}%
+                    {% else %}
+                    Unknown
+                    {% endif %}
+                </span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">23:30 before export</span>
+                <span class="value">
+                    {% if plan.baseline_projection is not none %}
+                    {{ '%.0f'|format(plan.baseline_projection) }}%
+                    {% else %}
+                    —
+                    {% endif %}
+                </span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">23:30 with plan</span>
+                <span class="value">
+                    {% if plan.plan_projection is not none %}
+                    {{ '%.0f'|format(plan.plan_projection) }}%
+                    {% else %}
+                    —
+                    {% endif %}
+                </span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">Export floor</span>
+                <span class="value">{{ '%.0f'|format(plan.target_soc) }}%</span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">Headroom for export</span>
+                <span class="value">
+                    {% if plan.headroom_soc is not none %}
+                    {{ '%.1f'|format([plan.headroom_soc, 0]|max) }}%
+                    {% else %}
+                    —
+                    {% endif %}
+                </span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">Export slots planned</span>
+                <span class="value">{{ plan.planned_slots|length }}</span>
+            </div>
+            {% if plan.planned_slots %}
+            <div class="plan-stat">
+                <span class="label">Planned revenue (£)</span>
+                <span class="value">£{{ '%.2f'|format(plan.selected_revenue_gbp) }}</span>
+            </div>
+            <div class="plan-stat">
+                <span class="label">Gain vs house (£)</span>
+                <span class="value">£{{ '%.2f'|format(plan.selected_gain_gbp) }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <p class="plan-diagnosis">{{ plan.diagnosis }}</p>
+
+        {% if plan.rows %}
+        <div class="plan-scroll">
+            <table class="plan-table">
+                <thead>
+                    <tr>
+                        <th>Slot</th>
+                        <th>Kind</th>
+                        <th>Export</th>
+                        <th>Import</th>
+                        <th>House break-even</th>
+                        <th>SoC after (current plan)</th>
+                        <th>Status</th>
+                        <th>Slot revenue</th>
+                        <th>Gain vs house (p/kWh)</th>
+                        <th>Why</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in plan.rows %}
+                    <tr class="{% if row.status == 'planned' %}is-planned{% elif row.status == 'exported' %}is-exported{% elif row.status == 'skipped' %}is-skipped{% elif row.kind in ('away', 'free_import', 'grid_support') or row.status == 'off_peak' %}is-session{% endif %}">
+                        <td>{{ row.time }}</td>
+                        <td>{{ row.kind_label }}</td>
+                        <td>
+                            {% if row.export_price_p is not none %}
+                            {{ '%.1f'|format(row.export_price_p) }}p
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{{ '%.1f'|format(row.import_price_p) }}p</td>
+                        <td>{{ '%.1f'|format(row.break_even_p) }}p</td>
+                        <td>
+                            {% if row.projected_soc_after is not none %}
+                            {{ '%.1f'|format(row.projected_soc_after) }}%
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="status {{ row.status_class }}">{{ row.status_label }}</span>
+                        </td>
+                        <td>
+                            {% if row.revenue_gbp is not none %}
+                            £{{ '%.3f'|format(row.revenue_gbp) }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if row.gain_p_per_kwh is not none %}
+                            {{ '%+.1f'|format(row.gain_p_per_kwh) }}p/kWh
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td class="reason">{{ row.reason }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data">There are no half-hour slots left before 23:30.</p>
+        {% endif %}
+    </div>
+
+    <h3 class="section-title">Export options, best price first</h3>
+    <div class="card">
+        <p class="section-note">
+            Every remaining slot with an export price, sorted by price. The
+            house break-even is the price at which exporting beats using the
+            same stored energy to offset house import. A positive gain means
+            export is the better use of that energy; a slot marked
+            <strong>PLANNED</strong> is in the current export plan, while
+            <strong>QUALIFIES</strong> means it beats the break-even but the
+            SoC floor left no room for it.
+        </p>
+        {% if plan.options %}
+        <div class="plan-scroll">
+            <table class="plan-table">
+                <thead>
+                    <tr>
+                        <th>Slot</th>
+                        <th>Export</th>
+                        <th>Import</th>
+                        <th>House break-even</th>
+                        <th>Gain p/kWh</th>
+                        <th>Slot revenue</th>
+                        <th>Slot gain</th>
+                        <th>Status</th>
+                        <th>Why</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in plan.options %}
+                    <tr class="{% if row.status == 'planned' %}is-planned{% elif row.status == 'exported' %}is-exported{% elif row.status == 'skipped' %}is-skipped{% endif %}">
+                        <td>{{ row.time }}</td>
+                        <td>{{ '%.1f'|format(row.export_price_p) }}p</td>
+                        <td>{{ '%.1f'|format(row.import_price_p) }}p</td>
+                        <td>{{ '%.1f'|format(row.break_even_p) }}p</td>
+                        <td>{{ '%+.1f'|format(row.gain_p_per_kwh) }}p</td>
+                        <td>£{{ '%.3f'|format(row.revenue_gbp) }}</td>
+                        <td>
+                            {% if row.gain_gbp < 0 %}
+                            -£{{ '%.3f'|format(-row.gain_gbp) }}
+                            {% else %}
+                            £{{ '%.3f'|format(row.gain_gbp) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="status {{ row.status_class }}">{{ row.status_label }}</span>
+                        </td>
+                        <td class="reason">{{ row.reason }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="no-data">
+            No remaining slot has an export price, so there are no export
+            options to show.
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <h2 class="section-title">How the answer was reached</h2>
     <ol class="steps">
