@@ -176,7 +176,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._update_state()
                 self._process_commands()
                 #debug("Completed Wallbox state update cycle")  # New log
-                                    
+
+            except ConnectionError as e:
+                # A read failure is usually a transport problem, not a bug.
+                # Log it once and then keep the per-poll detail at DEBUG so
+                # an intermittent link does not fill the log with stack
+                # traces.  The underlying Modbus error code is included in
+                # the message so timeouts can be told apart from exceptions.
+                self._log_connection_error(e)
+                self._handle_error()
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
                 error(f"Stack trace: {traceback.format_exc()}")  # Add stack trace
@@ -281,6 +289,49 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         except queue.Empty:
             pass
 
+    def _modbus_failure_detail(self) -> str:
+        """Return the underlying Modbus error, if the client exposes one.
+
+        ``read_holding_registers`` returns ``None`` for several different
+        failures, so the bare register address cannot distinguish a timeout
+        from a refused connection or a Modbus exception.  pyModbusTCP keeps
+        the last error on the client; include it when available.  Test and
+        third-party clients may not have these attributes, hence the
+        defensive ``getattr`` calls.
+        """
+        wrapped = getattr(self._client, "_client", None)
+        if wrapped is None:
+            return ""
+        try:
+            error_code = int(getattr(wrapped, "last_error", 0) or 0)
+        except (TypeError, ValueError):
+            return ""
+        if error_code == 0:
+            return ""
+        text = getattr(wrapped, "last_error_as_txt", "") or str(error_code)
+        if error_code == 7:  # Modbus exception response
+            except_text = getattr(wrapped, "last_except_as_full_txt", "")
+            if except_text:
+                return f"{text}: {except_text}"
+        return text
+
+    def _log_connection_error(self, exc: ConnectionError) -> None:
+        """Log a Modbus read failure at a rate that matches its severity."""
+        with self._state_lock:
+            count = self._state.consecutive_connection_errors
+        if count <= 1:
+            warning(f"WALLBOX Modbus communication failed: {exc}")
+        elif count == self._reset_attempt_threshold or count % 100 == 0:
+            warning(
+                f"WALLBOX Modbus still failing "
+                f"({count} consecutive errors): {exc}"
+            )
+        else:
+            debug(
+                f"WALLBOX Modbus read failed "
+                f"({count} consecutive errors): {exc}"
+            )
+
     def _battery_percentage_valid(self, value: int) -> bool:
         return 5 <= value <= 100
 
@@ -324,8 +375,11 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             for reg in regs_to_read:
                 output = self._client.read_holding_registers(reg)
                 if output is None:
-                    error(f"Failed to read register {hex(reg)}")
-                    raise ConnectionError(f"Failed to read register {hex(reg)}")
+                    detail = self._modbus_failure_detail()
+                    message = f"Failed to read register {hex(reg)}"
+                    if detail:
+                        message += f" ({detail})"
+                    raise ConnectionError(message)
                 reg_contents.append(output)
 
             state_reg = reg_contents[0][0]
@@ -363,6 +417,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
+                previous_errors = self._state.consecutive_connection_errors
                 # If we're in FREERUN state, we don't override our tracked state with the Modbus state
                 # but we still update other values like battery level and current
                 if self._state.evse_state == EvseState.FREERUN:
@@ -398,6 +453,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._state.last_update = time.time()
                 self._state.consecutive_connection_errors = 0
 
+            if previous_errors:
+                info(
+                    "WALLBOX Modbus communication recovered after "
+                    f"{previous_errors} consecutive error(s)"
+                )
+
         except ConnectionError:
             with self._state_lock:
                 # Even in FREERUN state, we still count communication errors
@@ -418,6 +479,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
             error(f"Error reading EVSE state: {str(e)}")
+            debug(traceback.format_exc())
             raise ConnectionError(f"Communication error: {str(e)}")
 
     def _get_scaled_delay(self, delay: float) -> float:

@@ -1,5 +1,6 @@
 import unittest
 from unittest import TestCase
+from types import SimpleNamespace
 import time
 from typing import Optional, List
 from evse_controller.drivers.evse.wallbox.wallbox_thread import WallboxThread
@@ -24,6 +25,10 @@ class MockModbusClient(ModbusClientInterface):
         }
         self._communication_fails = False
         self._recovering = False
+        self._fail_register = None
+        # Optional stand-in for the wrapped pyModbusTCP client, used to test
+        # the error detail that is added to a failed read.
+        self._client = None
 
     def open(self) -> bool:
         return True
@@ -43,7 +48,9 @@ class MockModbusClient(ModbusClientInterface):
     def read_holding_registers(self, reg_addr: int, reg_nb: int = 1) -> Optional[List[int]]:
         if self._communication_fails:
             raise ConnectionError("Simulated communication failure")
-        
+        if reg_addr == self._fail_register:
+            return None
+
         result = []
         try:
             for offset in range(reg_nb):
@@ -126,6 +133,33 @@ class TestWallboxThread(TestCase):
         finally:
             self.thread.stop()
             self.thread.join(timeout=1)
+
+    def test_read_failure_names_the_transport_error(self):
+        """A failed read should say whether it timed out or was refused."""
+        self.mock_client._fail_register = self.thread._READ_STATE_REG
+        self.mock_client._client = SimpleNamespace(
+            last_error=5,
+            last_error_as_txt="recv timeout occur",
+        )
+
+        with self.assertRaisesRegex(ConnectionError, "recv timeout occur"):
+            self.thread._update_state()
+
+        self.assertEqual(
+            self.thread.get_state().consecutive_connection_errors, 1
+        )
+
+        self.mock_client._client = SimpleNamespace(
+            last_error=7,
+            last_error_as_txt="modbus exception",
+            last_except=2,
+            last_except_as_full_txt="illegal data address",
+        )
+
+        with self.assertRaisesRegex(
+            ConnectionError, "modbus exception: illegal data address"
+        ):
+            self.thread._update_state()
 
     def test_thread_lifecycle(self):
         """Test thread start/stop operations"""
