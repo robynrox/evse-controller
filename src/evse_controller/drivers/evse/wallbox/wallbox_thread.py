@@ -7,7 +7,10 @@ from pyModbusTCP.client import ModbusClient
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
-from evse_controller.drivers.evse.async_interface import EvseState
+from evse_controller.drivers.evse.async_interface import (
+    DISCONNECTED_STATES,
+    EvseState,
+)
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
 from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
@@ -82,6 +85,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+        # Diagnostics: keep the most recent Modbus failure so the reset log
+        # can say why the charger is being rebooted, and remember an unknown
+        # state code so it is logged once rather than every poll.
+        self._last_modbus_error: Optional[str] = None
+        self._last_unknown_state_reg: Optional[int] = None
+        # A single raw 0 while the car is connected is usually the charger
+        # rebooting or a one-poll transition.  Require two consecutive reads
+        # before publishing DISCONNECTED; a real unplug lasts longer than that.
+        self._disconnected_streak = 0
 
         # A single lost Modbus transaction should not abort the whole poll.
         # pyModbusTCP closes the socket on a transport error and reopens it on
@@ -268,11 +280,18 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 warning("Skipping comms failure handling in FREERUN state - not attempting API reset")
                 return False
             
+            consecutive_errors = self._state.consecutive_connection_errors
             self._state.evse_state = EvseState.COMMS_FAILURE
 
         if not all([self._wallbox_username, self._wallbox_password, self._wallbox_serial]):
             error("Cannot reset via API - missing credentials or serial number")
             return False
+
+        warning(
+            f"Resetting Wallbox after {consecutive_errors} consecutive "
+            f"Modbus error(s); last error: "
+            f"{self._last_modbus_error or 'not recorded'}"
+        )
 
         try:
             info("Attempting to reset charger via Wallbox API")
@@ -410,6 +429,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
     def _log_connection_error(self, exc: ConnectionError) -> None:
         """Log a Modbus read failure at a rate that matches its severity."""
+        self._last_modbus_error = str(exc)
         with self._state_lock:
             count = self._state.consecutive_connection_errors
         if count <= 1:
@@ -450,6 +470,30 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             # Discharging: DC → AC conversion
             # Efficiency = |AC power| / |DC power|
             return (abs(ac_power) / abs(dc_power)) * 100 if dc_power != 0 else 0.0
+
+    def _state_from_register(self, state_reg: int) -> EvseState:
+        """Map a raw Wallbox state register to :class:`EvseState`.
+
+        The Wallbox defines more codes than this application needs to act on.
+        An unhandled code is a valid Modbus response, not a communication
+        failure, so map it to ``UNKNOWN`` and log it once instead of raising.
+        Raising here used to count towards the reset threshold and could reboot
+        the charger simply because it reported an unrecognised status.
+        """
+        try:
+            state = EvseState(state_reg)
+        except ValueError:
+            state = EvseState.UNKNOWN
+            if state_reg != self._last_unknown_state_reg:
+                warning(
+                    f"WALLBOX reported unknown EVSE state register "
+                    f"{state_reg}; treating it as UNKNOWN rather than a "
+                    "communication failure"
+                )
+                self._last_unknown_state_reg = state_reg
+        else:
+            self._last_unknown_state_reg = None
+        return state
 
     def _update_state(self):
         try:
@@ -517,15 +561,53 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     # In FREERUN state, we preserve our internal state but still update
                     # battery level and current for monitoring purposes
                     # We also store the actual Modbus state for when we transition out of FREERUN
-                    self._state._actual_modbus_state = EvseState(state_reg)
+                    self._state._actual_modbus_state = self._state_from_register(
+                        state_reg
+                    )
                 else:
-                    # Direct construction instead of using from_modbus_register
-                    new_state = EvseState(state_reg)
+                    previous_state = self._state.evse_state
+                    new_state = self._state_from_register(state_reg)
+                    # A one-poll raw 0 from a connected charger is usually a
+                    # reboot or a transitional read.  Confirm it on the next
+                    # poll before telling the rest of the system the car is
+                    # gone.  Real disconnects persist.
+                    if (
+                        state_reg == EvseState.DISCONNECTED.value
+                        and previous_state not in DISCONNECTED_STATES
+                        and previous_state
+                        not in (
+                            EvseState.UNKNOWN,
+                            EvseState.COMMS_FAILURE,
+                            EvseState.FREERUN,
+                        )
+                    ):
+                        self._disconnected_streak += 1
+                        if self._disconnected_streak < 2:
+                            debug(
+                                "WALLBOX raw state 0 ignored as a transient "
+                                f"disconnect (previous {previous_state.name})"
+                            )
+                            new_state = previous_state
+                    else:
+                        self._disconnected_streak = 0
+
                     # Update power model with new current
                     if new_state != self._state.evse_state or current != self._state.current:
                         self._power_model.set_current(float(current))
 
                     self._state.evse_state = new_state
+                    if new_state != previous_state:
+                        if new_state in DISCONNECTED_STATES:
+                            warning(
+                                f"WALLBOX state {previous_state.name} -> "
+                                f"{new_state.name} (raw {state_reg}, "
+                                f"battery {battery_reg}%)"
+                            )
+                        else:
+                            info(
+                                f"WALLBOX state {previous_state.name} -> "
+                                f"{new_state.name} (raw {state_reg})"
+                            )
 
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg

@@ -1,5 +1,6 @@
 import unittest
 from unittest import TestCase
+from unittest.mock import patch
 from types import SimpleNamespace
 import time
 from typing import Optional, List
@@ -427,6 +428,32 @@ class TestWallboxThread(TestCase):
             self.thread.stop()
             self.thread.join(timeout=1)
 
+    def test_reset_log_names_the_last_modbus_error(self):
+        """The reset log must say why the charger is being rebooted."""
+        mock_api = MockWallboxApi("test_user", "test_pass")
+        self.thread = WallboxThread(
+            "dummy_host",
+            modbus_client=self.mock_client,
+            poll_interval=0.1,
+            wallbox_username="test_user",
+            wallbox_password="test_pass",
+            wallbox_serial="TEST123",
+            wallbox_api_client=mock_api,
+        )
+        self.thread._state.consecutive_connection_errors = 10
+        self.thread._last_modbus_error = "timed out waiting for a reply"
+
+        with patch(
+            "evse_controller.drivers.evse.wallbox.wallbox_thread.warning"
+        ) as warning:
+            self.thread._handle_comms_failure()
+
+        warning.assert_any_call(
+            "Resetting Wallbox after 10 consecutive Modbus error(s); "
+            "last error: timed out waiting for a reply"
+        )
+        self.assertTrue(mock_api.reset_called)
+
     def test_comms_failure_handling(self):
         """Test the communication failure handling logic"""
         mock_api = MockWallboxApi("test_user", "test_pass")
@@ -609,8 +636,20 @@ class TestWallboxThread(TestCase):
                 (2, EvseState.WAITING_FOR_CAR_DEMAND, "Waiting for car demand"),
                 (3, EvseState.WAITING_FOR_SCHEDULE, "Waiting for schedule"),
                 (4, EvseState.PAUSED, "Paused state"),
+                (5, EvseState.CONNECTED_END_OF_SCHEDULE,
+                 "Connected, end of schedule"),
+                (6, EvseState.NO_CAR_CONNECTED_AND_CHARGER_LOCKED,
+                 "No car connected and charger locked"),
+                (7, EvseState.STANDBY, "Standby"),
+                (8, EvseState.CONNECTED_IN_QUEUE_POWER_SHARING,
+                 "Connected, queued by power sharing"),
+                (9, EvseState.ERROR_UNCONFIGURED_POWER_SHARING,
+                 "Unconfigured power sharing"),
+                (10, EvseState.POWER_DEMAND_TOO_HIGH,
+                 "Connected, queued by power boost"),
+                (11, EvseState.DISCHARGING, "Discharging state"),
                 (12, EvseState.ERROR, "Error state"),
-                (11, EvseState.DISCHARGING, "Discharging state")
+                (99, EvseState.UNKNOWN, "Unknown future state"),
             ]
             
             for register_value, expected_state, description in test_cases:
@@ -628,6 +667,41 @@ class TestWallboxThread(TestCase):
             # Ensure thread is stopped even if test fails
             self.thread.stop()
             self.thread.join(timeout=1)
+
+    def test_unknown_state_code_is_not_a_comms_failure(self):
+        """An unrecognised status is a valid response, not a dead link."""
+        try:
+            self.thread.start()
+            time.sleep(self.thread._poll_interval * 2)
+
+            self.mock_client._registers[self.thread._READ_STATE_REG] = [99]
+            time.sleep(self.thread._poll_interval * 3)
+
+            state = self.thread.get_state()
+            self.assertEqual(state.evse_state, EvseState.UNKNOWN)
+            self.assertEqual(state.consecutive_connection_errors, 0)
+        finally:
+            self.thread.stop()
+            self.thread.join(timeout=1)
+
+    def test_single_disconnected_read_is_debounced(self):
+        """A one-poll raw 0 must not be published as a real disconnect."""
+        # Drive the state machine synchronously so this is not timing-flaky.
+        self.thread._update_state()
+        self.assertEqual(
+            self.thread.get_state().evse_state, EvseState.CHARGING
+        )
+
+        self.mock_client._registers[self.thread._READ_STATE_REG] = [0]
+        self.thread._update_state()
+        self.assertEqual(
+            self.thread.get_state().evse_state, EvseState.CHARGING
+        )
+
+        self.thread._update_state()
+        self.assertEqual(
+            self.thread.get_state().evse_state, EvseState.DISCONNECTED
+        )
 
     def test_state_persistence_during_current_change(self):
         """Test that state remains correctly mapped while changing current"""
