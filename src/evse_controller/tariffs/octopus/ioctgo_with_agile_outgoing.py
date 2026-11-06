@@ -61,6 +61,7 @@ class DecisionSnapshot:
     target_soc_percent: Optional[float] = None
     projected_soc_at_2330: Optional[float] = None
     planned_export_slots: Optional[list] = None
+    planned_slot_actions: Optional[dict] = None
     current_rate_p: Optional[float] = None
     target_rate_p: Optional[float] = None
     target_slot: Optional[int] = None
@@ -485,6 +486,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
+        # Per-slot stage-1 actions behind the plan: export, conservative or
+        # idle.  The 23:30 projection and the explanation table replay this
+        # map, so they cannot drift from the planner's own feasibility check.
+        self._planned_slot_actions = {}
         self._exported_slots = []  # Track slots where export actually occurred
 
         # Rate fetching state.  _last_fetch_date is read by
@@ -774,13 +779,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         full_charge_gain: float,
         export_loss: float,
         non_export_loss: float,
+        slot_actions: dict[int, str] | None = None,
     ) -> tuple[float, str]:
         """Return the SoC change and the reason for one planning slot.
 
         This is the single per-slot model behind both the 23:30 projection and
         the explanation page's half-hour table, so the two cannot disagree.
         The returned kind is one of ``away``, ``free_import``,
-        ``grid_support``, ``planned_export`` or ``load_follow``.
+        ``grid_support``, ``planned_export``, ``load_follow`` or ``idle``.
+
+        ``slot_actions`` maps a slot to ``export``, ``conservative`` or
+        ``idle``.  When it is supplied, an ordinary slot not named in the map
+        is idle: the stage-1 planner starts from a no-discretionary-load
+        baseline.  When it is omitted, ordinary slots keep the historical
+        load-follow loss and ``export_slots`` alone selects exports.
         """
         if slot in away_slots:
             return 0.0, "away"
@@ -796,25 +808,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return -export_loss, "grid_support"
         if slot in planned_export_slots:
             return -export_loss, "planned_export"
+        if slot_actions is not None:
+            action = slot_actions.get(slot)
+            if action == "export":
+                return -export_loss, "planned_export"
+            if action == "conservative":
+                return -non_export_loss, "load_follow"
+            return 0.0, "idle"
         return -non_export_loss, "load_follow"
 
-    def _project_soc_at_2330(
+    def _soc_projection_path(
         self,
         current_soc_percent: float,
         current_slot_idx: int,
         *,
         export_slots: set[int] | None = None,
-    ) -> float:
-        """Project the SoC at 23:30, including session, away and export slots.
+        slot_actions: dict[int, str] | None = None,
+    ) -> list[tuple[int, float, str]]:
+        """Return ``(slot, SoC after the slot, kind)`` for the rest of today.
 
-        Every ordinary slot keeps the load-follow loss.  A free-import slot
-        charges at full rate instead, and a grid-support slot exports at full
-        rate, so those two session kinds replace the baseline with their own
-        per-slot change.  An EV-away slot is skipped entirely: the pack is not
-        available, so it neither supplies the house nor charges.  Slots in
-        ``export_slots`` also lose the export rate, because the plan has
-        committed that energy to the grid.  The free-import gain stops at the
-        effective charge cap, matching what the controller will actually do.
+        The path starts at ``current_slot_idx`` and stops before slot 47
+        (23:30).  It is shared by the 23:30 projection, the running-minimum
+        floor check and the explanation table, so all three use exactly the
+        same per-slot model.
         """
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
@@ -826,8 +842,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         charge_cap = self.charge_cap_percent()
 
         projected = current_soc_percent
+        path: list[tuple[int, float, str]] = []
         for slot in range(current_slot_idx, 47):
-            delta, _ = self._slot_soc_delta(
+            delta, kind = self._slot_soc_delta(
                 slot,
                 projected,
                 free_import_slots=free_import_slots,
@@ -838,9 +855,61 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 full_charge_gain=full_charge_gain,
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
+                slot_actions=slot_actions,
             )
             projected += delta
-        return projected
+            path.append((slot, projected, kind))
+        return path
+
+    def _project_soc_at_2330(
+        self,
+        current_soc_percent: float,
+        current_slot_idx: int,
+        *,
+        export_slots: set[int] | None = None,
+        slot_actions: dict[int, str] | None = None,
+    ) -> float:
+        """Project the SoC at 23:30, including session, away and export slots.
+
+        Every ordinary slot keeps the load-follow loss unless ``slot_actions``
+        supplies an explicit action map.  In that case an unlisted ordinary
+        slot is idle, which is the stage-1 planning baseline.  A free-import
+        slot charges at full rate, a grid-support slot exports at full rate,
+        and an EV-away slot is skipped entirely.  The free-import gain stops
+        at the effective charge cap, matching what the controller will do.
+        """
+        path = self._soc_projection_path(
+            current_soc_percent,
+            current_slot_idx,
+            export_slots=export_slots,
+            slot_actions=slot_actions,
+        )
+        return path[-1][1] if path else current_soc_percent
+
+    def _minimum_projected_soc(
+        self,
+        current_soc_percent: float,
+        current_slot_idx: int,
+        *,
+        export_slots: set[int] | None = None,
+        slot_actions: dict[int, str] | None = None,
+    ) -> float:
+        """Lowest SoC reached between now and 23:30, including the start.
+
+        The export floor applies to the running minimum, not only to the final
+        projection, so a later free-import charge cannot hide an earlier dip
+        below the floor.
+        """
+        path = self._soc_projection_path(
+            current_soc_percent,
+            current_slot_idx,
+            export_slots=export_slots,
+            slot_actions=slot_actions,
+        )
+        minimum = current_soc_percent
+        for _, soc, _ in path:
+            minimum = min(minimum, soc)
+        return minimum
 
     def _apply_discharge_policy(self, projected_soc: float) -> str:
         """Choose the house-load discharge policy from the 23:30 projection.
@@ -904,28 +973,46 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         now = self.get_current_datetime()
         current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        # Replay the committed action map when there is one, so the projection
+        # includes the conservative and idle slots the planner chose.  Without
+        # a plan, keep the historical load-follow baseline.
+        projection_kwargs = (
+            {"slot_actions": dict(self._planned_slot_actions)}
+            if self._planned_slot_actions
+            else {"export_slots": set(self._planned_export_slots)}
+        )
         projected_soc_at_2330 = self._project_soc_at_2330(
             current_soc_percent,
             current_slot_idx,
-            export_slots=set(self._planned_export_slots),
+            **projection_kwargs,
         )
         self._apply_discharge_policy(projected_soc_at_2330)
         return self._energy_shortfall
 
     def calculate_export_plan(self, current_soc_percent: float) -> list:
-        """Calculate which slots to use for export based on current SoC and rates.
+        """Cherry-pick exports, then spend what is left on house load.
 
-        Uses a two-phase approach:
-        1. Project SoC to 23:30 including energy-session slots and skipping
-           planned EV-away slots
-        2. Select the best export slots.  High-value slots that beat covering
-           the house may use the reserve down to the absolute minimum; other
-           profitable slots stop at the bulk target.
+        The planner no longer treats the ~3 A load-follow drain as a mandatory
+        baseline in every ordinary slot.  Instead it:
+
+        1. Projects the day with **no discretionary house load** (ordinary
+           slots idle, supplier sessions still applied) and takes the running
+           minimum as the available budget.
+        2. Spends that budget on the highest-priced export-priority slots
+           first, at the full export cost per slot, down to the absolute
+           minimum.  A slot is accepted only when the running minimum over the
+           whole horizon stays at or above the floor.
+        3. Offers ordinary profitable slots only the headroom above the bulk
+           target, again highest price first.
+        4. Uses whatever budget remains for conservative house coverage in
+           the remaining slots, earliest first.  Slots that no longer fit are
+           left idle so the house imports instead of spending reserved energy.
 
         Grid-support slots already export at maximum regardless of the quoted
-        price.  Their drain is included in phase 1 and they are excluded from
-        phase 2, so the same slot is never charged for export twice.  Planned
-        EV-away slots are not export targets either.
+        price.  Their drain is part of the session simulation and they are
+        excluded from the candidate list, so the same slot is never charged
+        for export twice.  Planned EV-away and free-import slots are excluded
+        for the same reason.
 
         Args:
             current_soc_percent: Current battery state of charge (%)
@@ -934,10 +1021,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             List of slot indices (0-47) planned for export
         """
         if current_soc_percent < 0:
+            self._planned_slot_actions = {}
             self._update_energy_shortfall(current_soc_percent)
             return []
 
-        target_soc_percent = max(
+        bulk_target_soc = max(
             config.MIN_AGILE_DISCHARGE_SOC,
             self.absolute_min_soc_percent(),
         )
@@ -946,205 +1034,206 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         export_slot_soc_loss = self._export_slot_soc_loss_percent()
         non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
 
-        debug(f"IOCTGO_AGILEOUT: Export slot loss={export_slot_soc_loss:.2f}%, non-export slot loss={non_export_slot_soc_loss:.2f}%")
-        info(f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, target {target_soc_percent}%, absolute minimum {absolute_floor_soc}%, export loss {export_slot_soc_loss:.1f}%/slot, load-follow loss {non_export_slot_soc_loss:.1f}%/slot")
+        debug(
+            f"IOCTGO_AGILEOUT: Export slot loss={export_slot_soc_loss:.2f}%, "
+            f"conservative slot loss={non_export_slot_soc_loss:.2f}%"
+        )
+        info(
+            f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, "
+            f"bulk target {bulk_target_soc}%, absolute minimum "
+            f"{absolute_floor_soc}%, export loss "
+            f"{export_slot_soc_loss:.1f}%/slot, conservative loss "
+            f"{non_export_slot_soc_loss:.1f}%/slot"
+        )
 
         # Get current time to determine slot range
         now = self.get_current_datetime()
         current_slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
 
-        # Calculate number of slots from current slot until 23:30
         # Slot 47 starts at 23:30, so slots remaining = 47 - current_slot
         # e.g. at 21:33 (slot 43): 47 - 43 = 4 slots (43, 44, 45, 46)
-        slots_remaining = 47 - current_slot_idx
-
-        if slots_remaining <= 0:
-            debug(f"IOCTGO_AGILEOUT: No slots remaining today")
+        if 47 - current_slot_idx <= 0:
+            debug("IOCTGO_AGILEOUT: No slots remaining today")
+            self._planned_slot_actions = {}
             self._apply_discharge_policy(current_soc_percent)
             return []
 
-        # Phase 1: Project SoC at 23:30 with supplier sessions applied to the
-        # load-follow baseline.
-        projected_soc_at_2330 = self._project_soc_at_2330(
-            current_soc_percent, current_slot_idx
+        # Phase 1: the no-discretionary-load baseline.  Ordinary slots are
+        # idle, so the only changes come from supplier sessions.  The running
+        # minimum is the real budget: a later free-import charge must not
+        # sanction an earlier dip below the floor.
+        baseline_path = self._soc_projection_path(
+            current_soc_percent,
+            current_slot_idx,
+            slot_actions={},
         )
-        debug(
-            "IOCTGO_AGILEOUT: Projected SoC at 23:30 "
-            f"(session-aware): {projected_soc_at_2330:.1f}%"
+        baseline_projection = (
+            baseline_path[-1][1] if baseline_path else current_soc_percent
         )
-
-        # Two budgets.  Ordinary profitable slots stop at the bulk target, but
-        # high-value slots (those that beat offsetting the house) may spend the
-        # house reserve down to the hard absolute minimum.  Without this, a
-        # projection below the target would refuse the very slots whose export
-        # value is higher than covering the house.
-        target_headroom_soc = projected_soc_at_2330 - target_soc_percent
-        priority_headroom_soc = projected_soc_at_2330 - absolute_floor_soc
+        baseline_minimum = min(
+            [current_soc_percent] + [soc for _, soc, _ in baseline_path]
+        )
+        priority_headroom_soc = baseline_minimum - absolute_floor_soc
+        target_headroom_soc = baseline_minimum - bulk_target_soc
         debug(
-            "IOCTGO_AGILEOUT: SoC headroom above target "
-            f"{target_headroom_soc:.1f}%, above absolute minimum "
+            "IOCTGO_AGILEOUT: Session-aware baseline 23:30="
+            f"{baseline_projection:.1f}%, running minimum="
+            f"{baseline_minimum:.1f}%, headroom above bulk target="
+            f"{target_headroom_soc:.1f}%, above absolute minimum="
             f"{priority_headroom_soc:.1f}%"
         )
 
-        if priority_headroom_soc <= 0:
-            debug(
-                "IOCTGO_AGILEOUT: No SoC available for export above the "
-                "absolute minimum"
+        actions: dict[int, str] = {}
+        planned_slots: list[int] = []
+
+        def feasible(floor_soc: float) -> bool:
+            """True when the proposed action map never crosses *floor_soc*."""
+            return (
+                self._minimum_projected_soc(
+                    current_soc_percent,
+                    current_slot_idx,
+                    slot_actions=actions,
+                )
+                >= floor_soc - 1e-9
             )
-            self._apply_discharge_policy(projected_soc_at_2330)
-            return []
-
-        # Calculate SoC cost per export slot
-        # Export slot uses export_slot_soc_loss instead of non_export_slot_soc_loss
-        # The "extra" cost of choosing export vs load-follow is the difference
-        additional_soc_cost_per_export_slot = export_slot_soc_loss - non_export_slot_soc_loss
-
-        if additional_soc_cost_per_export_slot <= 0:
-            # Export slots don't cost extra SoC - can export in all profitable slots
-            debug(f"IOCTGO_AGILEOUT: Export slots don't cost extra SoC")
-            additional_soc_cost_per_export_slot = export_slot_soc_loss  # Use full cost
-
-        debug(f"IOCTGO_AGILEOUT: Additional SoC cost per export slot: {additional_soc_cost_per_export_slot:.2f}%")
 
         # Calculate minimum profitable rate.  With no rate data this is just a
         # threshold that no (0p) slot can meet, so the plan is empty.
         min_export_rate_p = self.export_min_rate_p()
-
         info(f"IOCTGO_AGILEOUT: Min export rate {min_export_rate_p:.1f}p/kWh")
 
-        # Create list of (slot_index, rate) for all future slots today that are profitable
-        # Only consider slots 0-46 (exclude slot 47 = 23:30-00:00)
-        # Missing slots are treated as unprofitable (not included)
+        # Candidate slots: future, not owned by a supplier session, not
+        # off-peak charging, and at or above the export minimum.
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
         away_slots = self._away_slots_today()
-        slot_rates = []
+        slot_rates: list[tuple[int, float]] = []
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
 
-            # The EV is planned to be away: the slot is not in the projection
-            # and must not be selected as an export target either.
             if slot_idx in away_slots:
                 debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} skipped - EV planned away")
                 continue
-
-            # A free-import session owns the slot: charging at 0p is worth more
-            # than selling stored energy, and the Wallbox cannot do both.
             if slot_idx in free_import_slots:
                 debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} reserved for a free-import session")
                 continue
-
-            # A grid-support slot already exports at maximum, and its drain is
-            # in the phase 1 projection.  Selecting it here would charge the
-            # same SoC twice.
             if slot_idx in grid_support_slots:
                 debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} already exports for grid support")
                 continue
-
-            # Skip slots that have completely passed (current slot is still valid)
             if slot_idx < current_slot_idx:
                 continue
-            
-            # Skip slot 47 (23:30-00:00) - not available for export
             if slot_idx >= 47:
+                continue
+            if self.is_off_peak(slot_idx * 30):
+                debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} skipped - off-peak charging")
                 continue
 
             rate_p = rate_data['rate']  # Already in p/kWh
-            if rate_p >= min_export_rate_p:  # Only consider profitable slots
+            if rate_p >= min_export_rate_p:
                 slot_rates.append((slot_idx, rate_p))
-                debug(f"IOCTGO_AGILEOUT: Slot {slot_idx} ({hour:02d}:{rate_data['start'].minute:02d}) @ {rate_p:.1f}p (profitable)")
+                debug(
+                    f"IOCTGO_AGILEOUT: Slot {slot_idx} "
+                    f"({hour:02d}:{rate_data['start'].minute:02d}) @ "
+                    f"{rate_p:.1f}p (profitable)"
+                )
 
         debug(f"IOCTGO_AGILEOUT: Found {len(slot_rates)} profitable slots")
 
-        # Qualifying slots are those where bulk export beats offsetting the
-        # house at ~3 A.  Select them first, highest price first, so the pack
-        # is spent on the most profitable use.  They may spend below the bulk
-        # target, down to the absolute minimum; ordinary slots may not.
         priority_slots = self._export_priority_slots(current_slot_idx)
-        priority_rates = [
-            item for item in slot_rates if item[0] in priority_slots
-        ]
-        other_rates = [
-            item for item in slot_rates if item[0] not in priority_slots
-        ]
-        priority_rates.sort(key=lambda x: x[1], reverse=True)
-        other_rates.sort(key=lambda x: x[1], reverse=True)
+        priority_rates = sorted(
+            (item for item in slot_rates if item[0] in priority_slots),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        other_rates = sorted(
+            (item for item in slot_rates if item[0] not in priority_slots),
+            key=lambda item: item[1],
+            reverse=True,
+        )
         if priority_rates:
             info(
                 f"IOCTGO_AGILEOUT: {len(priority_rates)} export-priority "
                 "slot(s) beat the house-offset break-even"
             )
 
-        # Phase 2: Select slots until each budget is exhausted.  Priority slots
-        # get first claim, down to the absolute minimum; ordinary slots may
-        # only use what is left above the bulk target.
-        planned_slots = []
-        remaining_priority_soc = priority_headroom_soc
-        remaining_target_soc = max(0.0, target_headroom_soc)
-
-        debug(
-            "IOCTGO_AGILEOUT: Selecting slots with "
-            f"{remaining_priority_soc:.1f}% priority headroom and "
-            f"{remaining_target_soc:.1f}% target headroom"
-        )
-
+        # Phase 2a: priority exports.  They get first claim on the pack and
+        # may spend it down to the hard floor.  All exports carry the same
+        # full per-slot cost, so price order is also value order.
         for slot_idx, rate in priority_rates:
-            if remaining_priority_soc >= additional_soc_cost_per_export_slot:
+            actions[slot_idx] = "export"
+            if feasible(absolute_floor_soc):
                 planned_slots.append(slot_idx)
-                remaining_priority_soc -= additional_soc_cost_per_export_slot
-                remaining_target_soc = max(
-                    0.0,
-                    remaining_target_soc - additional_soc_cost_per_export_slot,
-                )
                 debug(
                     f"IOCTGO_AGILEOUT: Selected priority slot {slot_idx} @ "
-                    f"{rate:.1f}p, remaining priority SoC="
-                    f"{remaining_priority_soc:.1f}%"
+                    f"{rate:.1f}p, running minimum "
+                    f"{self._minimum_projected_soc(current_soc_percent, current_slot_idx, slot_actions=actions):.1f}%"
                 )
             else:
+                del actions[slot_idx]
                 debug(
                     f"IOCTGO_AGILEOUT: Skipping priority slot {slot_idx} @ "
-                    f"{rate:.1f}p (not enough SoC: need "
-                    f"{additional_soc_cost_per_export_slot:.1f}%, have "
-                    f"{remaining_priority_soc:.1f}%)"
+                    f"{rate:.1f}p - it would take the running minimum below "
+                    f"the {absolute_floor_soc:.0f}% absolute minimum"
                 )
-                break
 
+        # Phase 2b: ordinary exports may only use the headroom above the bulk
+        # target.  Their lower price makes them the next best use of energy.
         for slot_idx, rate in other_rates:
-            if remaining_target_soc >= additional_soc_cost_per_export_slot:
+            actions[slot_idx] = "export"
+            if feasible(bulk_target_soc):
                 planned_slots.append(slot_idx)
-                remaining_target_soc -= additional_soc_cost_per_export_slot
-                remaining_priority_soc -= additional_soc_cost_per_export_slot
                 debug(
-                    f"IOCTGO_AGILEOUT: Selected slot {slot_idx} @ {rate:.1f}p, "
-                    f"remaining target SoC={remaining_target_soc:.1f}%"
+                    f"IOCTGO_AGILEOUT: Selected ordinary slot {slot_idx} @ "
+                    f"{rate:.1f}p above the {bulk_target_soc:.0f}% bulk target"
                 )
             else:
+                del actions[slot_idx]
                 debug(
-                    f"IOCTGO_AGILEOUT: Skipping slot {slot_idx} @ {rate:.1f}p "
-                    f"(not enough target SoC: need "
-                    f"{additional_soc_cost_per_export_slot:.1f}%, have "
-                    f"{remaining_target_soc:.1f}%)"
+                    f"IOCTGO_AGILEOUT: Skipping ordinary slot {slot_idx} @ "
+                    f"{rate:.1f}p - no headroom above the "
+                    f"{bulk_target_soc:.0f}% bulk target"
                 )
-                break
 
-        # Sort planned slots by time for easier processing
+        # Phase 2c: spend the remaining budget on conservative house coverage,
+        # earliest first.  Slots that no longer fit stay idle and the house
+        # imports instead of eating energy reserved for the exports.
+        conservative_count = 0
+        for slot_idx in range(current_slot_idx, 47):
+            if slot_idx in free_import_slots or slot_idx in grid_support_slots:
+                continue
+            if slot_idx in away_slots or slot_idx in actions:
+                continue
+            if self.is_off_peak(slot_idx * 30):
+                continue
+            actions[slot_idx] = "conservative"
+            if feasible(absolute_floor_soc):
+                conservative_count += 1
+            else:
+                actions[slot_idx] = "idle"
+
         planned_slots.sort()
+        self._planned_slot_actions = dict(actions)
 
-        debug(f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} slots: {planned_slots}")
-        info(f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} slots planned")
-
-        # Refresh the three-band house-load policy with the committed plan.
-        # The projection now includes the export drain, so a plan that uses
-        # the available headroom cannot leave the house mode over-optimistic.
-        self._apply_discharge_policy(
-            self._project_soc_at_2330(
-                current_soc_percent,
-                current_slot_idx,
-                export_slots=set(planned_slots),
-            )
+        debug(
+            f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} export "
+            f"slot(s), {conservative_count} conservative slot(s): "
+            f"{planned_slots}"
         )
+        info(
+            f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} slot(s) "
+            f"planned, {conservative_count} conservative house slot(s)"
+        )
+
+        # Refresh the three-band house-load policy with the full action map.
+        # The projection now includes both the export drain and the
+        # conservative coverage, so the house mode cannot be over-optimistic.
+        final_projection = self._project_soc_at_2330(
+            current_soc_percent,
+            current_slot_idx,
+            slot_actions=actions,
+        )
+        self._apply_discharge_policy(final_projection)
 
         return planned_slots
 
@@ -2799,6 +2888,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             target_soc_percent=target_soc_percent,
             projected_soc_at_2330=projected_soc_at_2330,
             planned_export_slots=list(self._planned_export_slots),
+            planned_slot_actions=(
+                dict(self._planned_slot_actions)
+                if self._planned_slot_actions
+                else None
+            ),
             current_rate_p=current_rate_p,
             target_rate_p=target_rate_p,
             target_slot=target_slot,
@@ -3482,6 +3576,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if snap.planned_export_slots is not None
             else self._planned_export_slots
         )
+        planned_slot_actions = (
+            dict(snap.planned_slot_actions)
+            if snap.planned_slot_actions is not None
+            else None
+        )
+        if planned_slot_actions is not None:
+            planned_export_slots = {
+                slot
+                for slot, action in planned_slot_actions.items()
+                if action == "export"
+            }
         exported_slots = set(self._exported_slots)
         priority_slots = self._export_priority_slots(start_slot)
         planned_priority_slots = planned_export_slots & priority_slots
@@ -3510,6 +3615,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             plan_projection = None
             headroom = None
             priority_headroom = None
+        elif planned_slot_actions is not None:
+            # Stage-1 plan: the budget is measured against a day with no
+            # discretionary house load, using the running minimum so a later
+            # charge cannot hide an earlier dip.
+            baseline_projection = self._project_soc_at_2330(
+                current_soc,
+                start_slot,
+                slot_actions={},
+            )
+            baseline_minimum = self._minimum_projected_soc(
+                current_soc,
+                start_slot,
+                slot_actions={},
+            )
+            plan_projection = self._project_soc_at_2330(
+                current_soc,
+                start_slot,
+                slot_actions=planned_slot_actions,
+            )
+            headroom = baseline_minimum - target_soc
+            priority_headroom = baseline_minimum - absolute_min_soc
         else:
             baseline_projection = self._project_soc_at_2330(
                 current_soc, start_slot
@@ -3538,6 +3664,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 full_charge_gain=full_charge_gain,
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
+                slot_actions=planned_slot_actions,
             )
             if projected is not None:
                 projected += delta
@@ -3554,7 +3681,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             gain_gbp = None
             gain_p_per_kwh = None
             if (
-                change_kind in ("load_follow", "planned_export")
+                change_kind in ("load_follow", "planned_export", "idle")
                 and not off_peak
                 and rate is not None
             ):
@@ -3626,6 +3753,63 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         f"Planned — above the {min_export_rate_p:.1f}p export "
                         "minimum, using spare headroom after the priority slots."
                     )
+            elif change_kind == "load_follow" and planned_slot_actions is not None:
+                status = "conservative"
+                status_label = "CONSERVATIVE"
+                status_class = "status-normal"
+                reason = (
+                    "Conservative house coverage — about 3 A, using "
+                    f"{non_export_loss:.1f}% of SoC this slot."
+                )
+                if qualifies:
+                    reason += (
+                        f" Its {rate:.1f}p export price qualifies, but the "
+                        "remaining budget went to higher-priced slots."
+                    )
+            elif change_kind == "idle":
+                if qualifies:
+                    status = "skipped"
+                    status_label = "QUALIFIES"
+                    status_class = "status-skipped"
+                    if priority_headroom is None:
+                        reason = (
+                            "Qualifies on price, but the battery state of "
+                            "charge is unknown, so no headroom can be "
+                            "committed."
+                        )
+                    elif priority_headroom <= 0:
+                        reason = (
+                            f"Qualifies at {rate:.1f}p, but the no-load "
+                            f"baseline already reaches {baseline_projection:.0f}% "
+                            f"at 23:30, at or below the "
+                            f"{absolute_min_soc:.0f}% absolute minimum, so "
+                            "there is no headroom."
+                        )
+                    else:
+                        reason = (
+                            f"Qualifies at {rate:.1f}p, but the "
+                            f"{priority_headroom:.1f}% headroom above the "
+                            f"{absolute_min_soc:.0f}% absolute minimum was "
+                            "used by higher-priced slots."
+                        )
+                else:
+                    status = "idle"
+                    status_label = "IDLE"
+                    status_class = "status-normal"
+                    if rate < min_export_rate_p:
+                        reason = (
+                            f"Left idle — {rate:.1f}p is below the "
+                            f"{min_export_rate_p:.1f}p export minimum; the "
+                            "house imports in this slot."
+                        )
+                    else:
+                        reason = (
+                            f"Left idle to protect the "
+                            f"{absolute_min_soc:.0f}% floor — {rate:.1f}p is "
+                            f"below the {break_even_p:.1f}p house-offset "
+                            "break-even, and the remaining budget went to "
+                            "higher-value export slots. The house imports."
+                        )
             elif qualifies:
                 status = "skipped"
                 status_label = "QUALIFIES"
@@ -3687,7 +3871,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         "free_import": "Free import",
                         "grid_support": "Grid support",
                         "planned_export": "Export",
-                        "load_follow": "Normal",
+                        "load_follow": (
+                            "Conservative"
+                            if planned_slot_actions is not None
+                            else "Normal"
+                        ),
+                        "idle": "Idle",
                     }.get(change_kind, change_kind),
                     "status": status,
                     "status_label": status_label,
@@ -3710,22 +3899,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         planned_rows = [row for row in rows if row["planned"]]
         skipped_qualifying = [
-            row for row in rows if row["qualifies"] and not row["planned"]
+            row
+            for row in rows
+            if row["qualifies"]
+            and not row["planned"]
+            and row["status"] == "skipped"
         ]
         options = sorted(
             [
                 row
                 for row in rows
-                if row["kind"] in ("load_follow", "planned_export")
+                if row["kind"] in ("load_follow", "planned_export", "idle")
                 and not row["off_peak"]
                 and row["export_price_p"] is not None
             ],
             key=lambda row: (-row["export_price_p"], row["slot"]),
         )
 
-        additional_cost = export_loss - non_export_loss
-        if additional_cost <= 0:
-            additional_cost = export_loss
+        additional_cost = export_loss
 
         if current_soc is None:
             diagnosis = (
@@ -3743,11 +3934,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "profitable slots to choose from."
             )
         elif not planned_rows:
-            if priority_headroom <= 0:
+            if priority_headroom is None:
                 diagnosis = (
-                    f"No export is planned. The session-aware 23:30 projection "
-                    f"is {baseline_projection:.0f}%, at or below the "
-                    f"{absolute_min_soc:.0f}% absolute minimum."
+                    "No export is planned because the battery state of charge "
+                    "is unknown."
+                )
+            elif priority_headroom <= 0:
+                diagnosis = (
+                    "No export is planned. With ordinary slots idle, the "
+                    "weakest point before 23:30 is at or below the "
+                    f"{absolute_min_soc:.0f}% absolute minimum, so there is no "
+                    "headroom to spend."
                 )
                 if skipped_qualifying:
                     diagnosis += (
@@ -3756,56 +3953,48 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         "but exporting in them would breach the absolute "
                         "minimum."
                     )
-            elif headroom <= 0:
+            elif priority_headroom < additional_cost:
                 diagnosis = (
-                    f"No export is planned. The session-aware 23:30 projection "
-                    f"is {baseline_projection:.0f}%, at or below the "
-                    f"{target_soc:.0f}% target."
+                    f"No export is planned. The no-load baseline leaves "
+                    f"{priority_headroom:.1f}% above the "
+                    f"{absolute_min_soc:.0f}% absolute minimum, which is less "
+                    f"than the {additional_cost:.1f}% cost of one export slot."
                 )
                 if skipped_qualifying:
                     diagnosis += (
                         f" {len(skipped_qualifying)} slot(s) beat the "
-                        f"{default_break_even_p:.1f}p house-offset break-even, "
-                        "but no export slot fits within the remaining SoC "
-                        f"budget (target floor {target_soc:.0f}%, absolute "
-                        f"minimum {absolute_min_soc:.0f}%)."
+                        f"{default_break_even_p:.1f}p house-offset break-even."
                     )
+            elif skipped_qualifying:
+                diagnosis = (
+                    f"No export is planned even though "
+                    f"{priority_headroom:.1f}% is available above the "
+                    f"{absolute_min_soc:.0f}% absolute minimum. "
+                    f"{len(skipped_qualifying)} slot(s) beat the "
+                    f"{default_break_even_p:.1f}p house-offset break-even, but "
+                    "none could be fitted without crossing the floor."
+                )
             else:
                 diagnosis = (
-                    f"No export is planned even though {headroom:.1f}% is above "
-                    f"the {target_soc:.0f}% target. "
+                    f"No export is planned. The no-load baseline leaves "
+                    f"{priority_headroom:.1f}% above the "
+                    f"{absolute_min_soc:.0f}% absolute minimum, but no future "
+                    f"slot reaches the {min_export_rate_p:.1f}p export minimum."
                 )
-                if priority_headroom < additional_cost:
-                    diagnosis += (
-                        f"One export slot needs {additional_cost:.1f}% more SoC "
-                        "than the load-follow baseline, and the headroom above "
-                        f"the {absolute_min_soc:.0f}% absolute minimum is "
-                        "smaller than that."
-                    )
-                elif skipped_qualifying:
-                    diagnosis += (
-                        f"{len(skipped_qualifying)} slot(s) beat the "
-                        f"{default_break_even_p:.1f}p house-offset break-even, "
-                        "but none could be fitted into the remaining headroom."
-                    )
-                else:
-                    diagnosis += (
-                        f"No future slot reaches the {min_export_rate_p:.1f}p "
-                        "export minimum."
-                    )
         else:
             diagnosis = (
-                f"{len(planned_rows)} export slot(s) planned. The session-aware "
-                f"23:30 projection is {baseline_projection:.0f}% before the "
-                f"plan and {plan_projection:.0f}% after it. High-value slots may "
-                f"use the reserve down to the {absolute_min_soc:.0f}% absolute "
-                f"minimum; other slots stop at the {target_soc:.0f}% target."
+                f"{len(planned_rows)} export slot(s) planned. With ordinary "
+                f"slots idle, the day ends at {baseline_projection:.0f}%; the "
+                f"plan ends at {plan_projection:.0f}%. High-value slots may "
+                f"spend down to the {absolute_min_soc:.0f}% absolute minimum; "
+                f"ordinary slots stop at the {target_soc:.0f}% target, and "
+                "the remaining budget covers the house conservatively."
             )
             if skipped_qualifying:
                 diagnosis += (
                     f" {len(skipped_qualifying)} qualifying slot(s) are left "
-                    "unplanned because the priority headroom was used by "
-                    "higher-priced slots."
+                    "idle because the export budget was used by higher-priced "
+                    "slots."
                 )
 
         return {
@@ -4868,7 +5057,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if plan["baseline_projection"] is not None:
             state.append(
                 {
-                    "label": "Projected 23:30 SoC (before export)",
+                    "label": "Projected 23:30 SoC (before house load/exports)",
                     "value": f"{math.floor(plan['baseline_projection'])}%",
                 }
             )
@@ -5455,6 +5644,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # that declined to store solar for a later sale.
             priority = self._export_priority_slots(current_slot_idx)
             skipped_priority = priority - set(planned_slots)
+            if self._planned_slot_actions:
+                # A qualifying slot that is used conservatively is not a
+                # skipped export.  Only idle qualifying slots were left out.
+                skipped_priority = {
+                    slot
+                    for slot in skipped_priority
+                    if self._planned_slot_actions.get(slot) == "idle"
+                }
             if planned_slots:
                 plan_items = [
                     f"{self._slot_range_label(idx)} @ {rate_dict[idx]['rate']:.1f}p"
