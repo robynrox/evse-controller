@@ -748,6 +748,41 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             * 0.5 / self.SOC_CAPACITY_KWH
         ) * 100
 
+    def _aggressive_slot_soc_loss_percent(self) -> float:
+        """SoC lost by one half-hour of aggressive load-following discharge.
+
+        Conservative coverage models the measured 3 A house-drain point.
+        Aggressive mode adds the positive discharge bias, so it covers the
+        house and exports the small surplus.  Scale the measured conservative
+        loss by the extra current rather than inventing a separate figure.
+        """
+        base = max(0.0, float(self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT))
+        bias_a = max(0.0, float(self.AGGRESSIVE_DISCHARGE_BIAS_A))
+        reference_a = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
+        return base * (1.0 + bias_a / reference_a)
+
+    def _aggressive_extra_soc_loss_percent(self) -> float:
+        """Extra SoC spent by aggressive discharge over conservative coverage."""
+        return max(
+            0.0,
+            self._aggressive_slot_soc_loss_percent()
+            - max(0.0, float(self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT)),
+        )
+
+    def _aggressive_export_kwh(self) -> float:
+        """AC energy exported by one aggressive slot, from its extra SoC.
+
+        The extra SoC is the modelled pack energy; multiplying by the
+        measured pack-to-AC efficiency gives the energy sold.  This keeps the
+        slot's revenue and its SoC budget on the same model.
+        """
+        return (
+            self._aggressive_extra_soc_loss_percent()
+            / 100.0
+            * self.SOC_CAPACITY_KWH
+            * self.STORED_TO_AC_EFFICIENCY
+        )
+
     def _full_charge_slot_soc_gain_percent(self) -> float:
         """SoC gained by one half-hour of sustained full-rate charging.
 
@@ -812,6 +847,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             action = slot_actions.get(slot)
             if action == "export":
                 return -export_loss, "planned_export"
+            if action == "aggressive":
+                return -self._aggressive_slot_soc_loss_percent(), "aggressive"
             if action == "conservative":
                 return -non_export_loss, "load_follow"
             return 0.0, "idle"
@@ -1181,7 +1218,34 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"the {absolute_floor_soc:.0f}% absolute minimum"
                 )
 
-        # Phase 2b: ordinary exports may only use the headroom above the bulk
+        # Phase 2b: remaining priority slots can still take the small extra
+        # export that aggressive load-following produces.  The house is
+        # covered in both cases, so the marginal value is the slot's export
+        # price; this lets a high-value slot contribute even when a full
+        # export slot would not fit the remaining budget.  Ordinary slots do
+        # not get this treatment: below the house-offset break-even, spending
+        # the extra SoC on another conservative slot is worth more.
+        aggressive_count = 0
+        aggressive_loss = self._aggressive_slot_soc_loss_percent()
+        for slot_idx, rate in priority_rates:
+            if slot_idx in actions:
+                continue
+            actions[slot_idx] = "aggressive"
+            if feasible(absolute_floor_soc):
+                aggressive_count += 1
+                debug(
+                    f"IOCTGO_AGILEOUT: Selected aggressive slot {slot_idx} @ "
+                    f"{rate:.1f}p, cost {aggressive_loss:.3f}%"
+                )
+            else:
+                del actions[slot_idx]
+                debug(
+                    f"IOCTGO_AGILEOUT: Skipping aggressive slot {slot_idx} @ "
+                    f"{rate:.1f}p - it would take the running minimum below "
+                    f"the {absolute_floor_soc:.0f}% absolute minimum"
+                )
+
+        # Phase 2c: ordinary exports may only use the headroom above the bulk
         # target.  Their lower price makes them the next best use of energy.
         for slot_idx, rate in other_rates:
             actions[slot_idx] = "export"
@@ -1199,7 +1263,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{bulk_target_soc:.0f}% bulk target"
                 )
 
-        # Phase 2c: spend the remaining budget on conservative house coverage,
+        # Phase 2d: spend the remaining budget on conservative house coverage,
         # earliest first.  Slots that no longer fit stay idle and the house
         # imports instead of eating energy reserved for the exports.
         conservative_count = 0
@@ -1221,12 +1285,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         debug(
             f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} export "
-            f"slot(s), {conservative_count} conservative slot(s): "
-            f"{planned_slots}"
+            f"slot(s), {aggressive_count} aggressive slot(s), "
+            f"{conservative_count} conservative slot(s): {planned_slots}"
         )
         info(
-            f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} slot(s) "
-            f"planned, {conservative_count} conservative house slot(s)"
+            f"IOCTGO_AGILEOUT: Export plan - {len(planned_slots)} export "
+            f"slot(s), {aggressive_count} aggressive house+export slot(s), "
+            f"{conservative_count} conservative house slot(s)"
         )
 
         # Refresh the three-band house-load policy with the full action map.
@@ -3708,6 +3773,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         full_charge_gain = self._full_charge_slot_soc_gain_percent()
         charge_cap = self.charge_cap_percent()
         slot_export_kwh = self.EXPORT_POWER_KW * 0.5
+        aggressive_export_kwh = self._aggressive_export_kwh()
+        aggressive_soc_loss = self._aggressive_slot_soc_loss_percent()
         min_export_rate_p = self.export_min_rate_p()
         default_break_even_p = self.export_house_break_even_p(config.IMPORT_HIGH)
 
@@ -3782,13 +3849,23 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             gain_gbp = None
             gain_p_per_kwh = None
             if (
-                change_kind in ("load_follow", "planned_export", "idle")
+                change_kind in (
+                    "load_follow",
+                    "planned_export",
+                    "aggressive",
+                    "idle",
+                )
                 and not off_peak
                 and rate is not None
             ):
+                export_kwh = (
+                    aggressive_export_kwh
+                    if change_kind == "aggressive"
+                    else slot_export_kwh
+                )
                 gain_p_per_kwh = rate - break_even_p
-                revenue_gbp = rate * slot_export_kwh / 100.0
-                gain_gbp = gain_p_per_kwh * slot_export_kwh / 100.0
+                revenue_gbp = rate * export_kwh / 100.0
+                gain_gbp = gain_p_per_kwh * export_kwh / 100.0
 
             if change_kind == "away":
                 status = "away"
@@ -3853,6 +3930,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     reason = (
                         f"Planned — above the {min_export_rate_p:.1f}p export "
                         "minimum, using spare headroom after the priority slots."
+                    )
+            elif change_kind == "aggressive":
+                status = "aggressive"
+                status_label = "AGGRESSIVE"
+                status_class = "status-normal"
+                reason = (
+                    f"Aggressive load-following — covers the house and exports "
+                    f"the surplus at {rate:.1f}p. The extra "
+                    f"{self._aggressive_extra_soc_loss_percent():.2f}% of SoC "
+                    f"sells about {aggressive_export_kwh:.3f} kWh this slot."
+                )
+                if not qualifies:
+                    reason += (
+                        f" It is below the {break_even_p:.1f}p house-offset "
+                        "break-even, so another conservative slot would "
+                        "normally be worth more."
                     )
             elif change_kind == "load_follow" and planned_slot_actions is not None:
                 status = "conservative"
@@ -3972,6 +4065,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         "free_import": "Free import",
                         "grid_support": "Grid support",
                         "planned_export": "Export",
+                        "aggressive": "Aggressive",
                         "load_follow": (
                             "Conservative"
                             if planned_slot_actions is not None
@@ -3999,6 +4093,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
         planned_rows = [row for row in rows if row["planned"]]
+        aggressive_rows = [
+            row for row in rows if row["kind"] == "aggressive"
+        ]
         skipped_qualifying = [
             row
             for row in rows
@@ -4010,7 +4107,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             [
                 row
                 for row in rows
-                if row["kind"] in ("load_follow", "planned_export", "idle")
+                if row["kind"] in (
+                    "load_follow",
+                    "planned_export",
+                    "aggressive",
+                    "idle",
+                )
                 and not row["off_peak"]
                 and row["export_price_p"] is not None
             ],
@@ -4035,7 +4137,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "profitable slots to choose from."
             )
         elif not planned_rows:
-            if priority_headroom is None:
+            if aggressive_rows:
+                diagnosis = (
+                    f"No full export slot fits, but {len(aggressive_rows)} "
+                    "high-value slot(s) use aggressive load-following: the "
+                    "house is covered and the small surplus is exported. This "
+                    f"spends {aggressive_soc_loss:.2f}% of SoC per slot "
+                    f"instead of {export_loss:.1f}% for a bulk export."
+                )
+            elif priority_headroom is None:
                 diagnosis = (
                     "No export is planned because the battery state of charge "
                     "is unknown."
@@ -4089,8 +4199,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"plan ends at {plan_projection:.0f}%. High-value slots may "
                 f"spend down to the {absolute_min_soc:.0f}% absolute minimum; "
                 f"ordinary slots stop at the {target_soc:.0f}% target, and "
-                "the remaining budget covers the house conservatively."
+                "the remaining budget is used for aggressive or conservative "
+                "house coverage."
             )
+            if aggressive_rows:
+                diagnosis += (
+                    f" {len(aggressive_rows)} high-value slot(s) also use "
+                    "aggressive load-following to capture a small surplus "
+                    "export."
+                )
             if skipped_qualifying:
                 diagnosis += (
                     f" {len(skipped_qualifying)} qualifying slot(s) are left "
@@ -4122,11 +4239,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "planned_slots": sorted(
                 slot for slot in planned_export_slots if start_slot <= slot < 47
             ),
+            "aggressive_slots": sorted(
+                row["slot"] for row in aggressive_rows
+            ),
             "qualifying_slots": sorted(priority_slots),
             "skipped_qualifying_slots": [
                 row["slot"] for row in skipped_qualifying
             ],
             "slot_export_kwh": slot_export_kwh,
+            "aggressive_export_kwh": aggressive_export_kwh,
+            "aggressive_soc_loss_percent": aggressive_soc_loss,
+            "aggressive_extra_soc_loss_percent": (
+                self._aggressive_extra_soc_loss_percent()
+            ),
             "export_soc_loss_percent": export_loss,
             "non_export_soc_loss_percent": non_export_loss,
             "full_charge_soc_gain_percent": full_charge_gain,
@@ -4134,10 +4259,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "min_export_rate_p": min_export_rate_p,
             "default_break_even_p": default_break_even_p,
             "selected_revenue_gbp": sum(
-                row["revenue_gbp"] or 0.0 for row in planned_rows
+                row["revenue_gbp"] or 0.0
+                for row in planned_rows + aggressive_rows
             ),
             "selected_gain_gbp": sum(
-                row["gain_gbp"] or 0.0 for row in planned_rows
+                row["gain_gbp"] or 0.0
+                for row in planned_rows + aggressive_rows
             ),
             "diagnosis": diagnosis,
             "rows": rows,
@@ -5248,6 +5375,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "value": f"{len(plan['planned_slots'])}",
             }
         )
+        if plan.get("aggressive_slots"):
+            state.append(
+                {
+                    "label": "Aggressive house+export slots",
+                    "value": f"{len(plan['aggressive_slots'])}",
+                }
+            )
         if snap.decision_tier in (
             "planned_export", "export_priority", "export_reserve", "grid_support"
         ):
@@ -5786,6 +5920,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # that declined to store solar for a later sale.
             priority = self._export_priority_slots(current_slot_idx)
             skipped_priority = priority - set(planned_slots)
+            aggressive_slots = sorted(
+                slot
+                for slot, action in self._planned_slot_actions.items()
+                if action == "aggressive"
+            )
             if self._planned_slot_actions:
                 # A qualifying slot that is used conservatively is not a
                 # skipped export.  Only idle qualifying slots were left out.
@@ -5814,6 +5953,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         f" · {len(skipped_priority)} qualifying slot(s) "
                         "skipped (headroom used)"
                     )
+                if aggressive_slots:
+                    plan_text += (
+                        f" · {len(aggressive_slots)} aggressive "
+                        "(house + surplus export)"
+                    )
+                plan_colour = "#e65100"
+            elif aggressive_slots:
+                plan_text = (
+                    f"Aggressive plan: {len(aggressive_slots)} slot(s) cover "
+                    "the house and export the surplus — no full export fits"
+                )
                 plan_colour = "#e65100"
             else:
                 # An empty plan is easy to misread as "nothing qualified".  If
@@ -6503,6 +6653,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "IOCTGO_AGILEOUT Export slot (max discharge)",
             )
 
+        # The planner may have selected this slot for aggressive load-following
+        # even though the day as a whole is projected to be short.  Aggressive
+        # slots are the small surplus-export top-up after full exports; they
+        # must not be overridden by the global conservative policy or by the
+        # reserve-for-a-later-export branch, because the plan already budgeted
+        # their extra SoC.
+        slot_action = self._planned_slot_actions.get(current_slot)
+        force_aggressive = slot_action == "aggressive"
+
         # Shortfall with a high-value export still ahead: keep the energy for
         # that export instead of spending it on the house at 3 A.  This is the
         # same comparison as the per-slot priority rule, applied across time:
@@ -6511,7 +6670,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         reserve_slots = self._reserve_slots_for_priority_export(
             current_slot, dayMinute
         )
-        if self._energy_shortfall and reserve_slots:
+        if self._energy_shortfall and not force_aggressive and reserve_slots:
             harvest_current_a = self._estimate_solar_harvest_current()
             target_slot = max(
                 reserve_slots,
@@ -6618,7 +6777,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Energy shortfall: conserve energy for the house rather than exporting.
         # Stay bidirectional so surplus solar can still be absorbed, but use
         # the conservative discharge configuration in set_home_demand_levels().
-        if self._energy_shortfall:
+        if self._energy_shortfall and not force_aggressive:
             harvest_current_a = self._estimate_solar_harvest_current()
             debug(
                 f"IOCTGO_AGILEOUT: Energy shortfall (SoC {battery_level}%), "
@@ -7114,6 +7273,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
             return  # Don't configure load-following during export slots
 
+        # A planned aggressive slot must execute as aggressive load-following,
+        # even when the day as a whole is in shortfall.  The planner has
+        # already budgeted the extra SoC for this slot's surplus export.
+        slot_action = self._planned_slot_actions.get(current_slot)
+        force_aggressive = slot_action == "aggressive"
+
         # Absolute floor: close the discharge range entirely.  The pack may
         # still absorb surplus solar, so charging stays available unless the
         # battery is already at its cap.
@@ -7155,8 +7320,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Shortfall with a high-value export ahead: hold the pack for the
         # export rather than covering the house now.  The pack may still absorb
         # surplus solar, so charging stays available unless it is at the cap.
-        if self._energy_shortfall and self._reserve_slots_for_priority_export(
-            current_slot, dayMinute
+        if (
+            self._energy_shortfall
+            and not force_aggressive
+            and self._reserve_slots_for_priority_export(current_slot, dayMinute)
         ):
             if charge_at_cap:
                 charge_min_a, charge_activation_w = 0.0, 0.0
@@ -7196,7 +7363,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # solar is still absorbed, but discharge conservatively - cover most
         # of the house load and leave a small import rather than intentionally
         # exporting. This replaces the fixed SOC_THRESHOLD_FOR_STRATEGY test.
-        if self._energy_shortfall:
+        if self._energy_shortfall and not force_aggressive:
             # Conservative discharge floors the activation at the Wallbox's
             # minimum output (3 A, ~720 W), so it never starts a discharge
             # that would have to export at the activation point.

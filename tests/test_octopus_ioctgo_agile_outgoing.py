@@ -3482,6 +3482,45 @@ class TestBreakEvenExportPriority:
             3, agile_tariff.MAX_CHARGE_CURRENT
         )
 
+    def test_planned_aggressive_slot_overrides_the_shortfall_policy(
+        self, agile_tariff, monkeypatch
+    ):
+        """An aggressive slot must execute as aggressive, not conservative."""
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 11, 0)
+        TestDecisionSnapshot._pin_plan(
+            agile_tariff, 22, 79, shortfall=True
+        )
+        # A high-value export is still ahead, which would normally trigger the
+        # reserve branch; this slot was explicitly chosen for aggression.
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+        agile_tariff._planned_slot_actions = {
+            22: "aggressive",
+            36: "export",
+        }
+        state = create_test_state(79)
+
+        agile_tariff.get_control_state(state, 11 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.discharge_aggressive is True
+        assert "aggressive discharge" in snapshot.mode
+
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        agile_tariff.set_home_demand_levels(controller, state, 11 * 60)
+
+        controller.setDischargeCurrentBias.assert_called_with(
+            agile_tariff.AGGRESSIVE_DISCHARGE_BIAS_A
+        )
+        controller.setDischargeCurrentRange.assert_called_with(
+            3, agile_tariff.MAX_DISCHARGE_CURRENT
+        )
+
     def test_dashboard_names_the_reserved_priority_plan(
         self, agile_tariff, monkeypatch
     ):
@@ -3563,17 +3602,108 @@ class TestStageOneExportBudget:
         assert minimum >= 40.0 - 1e-9
         assert minimum < 41.0
 
-        # The remaining budget covers two early conservative slots; the rest
-        # idle so the house imports instead of spending reserved energy.
+        # The remaining budget covers two high-value aggressive slots; the
+        # rest idle so the house imports instead of spending reserved energy.
+        aggressive = [
+            slot for slot, action in actions.items()
+            if action == "aggressive"
+        ]
         conservative = [
             slot for slot, action in actions.items()
             if action == "conservative"
         ]
         idle = [slot for slot, action in actions.items() if action == "idle"]
-        assert len(conservative) == 2
+        assert len(aggressive) == 2
+        assert conservative == []
         assert idle
-        assert min(conservative) < min(plan)
+        assert min(aggressive) < max(plan)
         assert agile_tariff._discharge_policy == "conservative"
+
+    def test_aggressive_slots_are_the_next_highest_priority_prices(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        self._set_time(agile_tariff, 9, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+
+        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
+        prices = {
+            slot: 26.0 + index for index, slot in enumerate(priority)
+        }
+        self._set_rates(agile_tariff, prices)
+
+        agile_tariff.calculate_export_plan(79)
+
+        aggressive = sorted(
+            slot
+            for slot, action in agile_tariff._planned_slot_actions.items()
+            if action == "aggressive"
+        )
+        # The nine highest-priced priority slots are full exports; the next
+        # two by price get aggressive load-following, and the 12th is idle.
+        assert aggressive == [22, 24]
+        assert prices[24] > prices[22] > prices[20]
+        assert agile_tariff._planned_slot_actions[20] == "idle"
+
+    def test_aggressive_cost_sits_between_conservative_and_bulk_export(
+        self, agile_tariff
+    ):
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+
+        conservative = agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        aggressive = agile_tariff._aggressive_slot_soc_loss_percent()
+        export = agile_tariff._export_slot_soc_loss_percent()
+
+        assert conservative < aggressive < export
+        assert agile_tariff._aggressive_extra_soc_loss_percent() == (
+            pytest.approx(aggressive - conservative)
+        )
+        assert agile_tariff._aggressive_export_kwh() > 0
+
+    def test_plan_explanation_marks_aggressive_slots(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        self._set_time(agile_tariff, 9, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+
+        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
+        prices = {
+            slot: 26.0 + index for index, slot in enumerate(priority)
+        }
+        self._set_rates(agile_tariff, prices)
+
+        agile_tariff.get_control_state(create_test_state(79), 9 * 60)
+        explanation = agile_tariff.get_decision_explanation()
+        plan = explanation["plan"]
+
+        assert plan["planned_slots"] == [26, 28, 30, 32, 34, 36, 38, 40, 42]
+        assert plan["aggressive_slots"] == [22, 24]
+        aggressive_rows = [
+            row for row in plan["rows"] if row["kind"] == "aggressive"
+        ]
+        assert [row["slot"] for row in aggressive_rows] == [22, 24]
+        assert all(row["status"] == "aggressive" for row in aggressive_rows)
+        assert all(row["revenue_gbp"] for row in aggressive_rows)
+        assert plan["selected_revenue_gbp"] == pytest.approx(
+            sum(
+                row["revenue_gbp"] or 0.0
+                for row in plan["rows"]
+                if row["planned"] or row["kind"] == "aggressive"
+            )
+        )
+        assert "aggressive" in plan["diagnosis"].lower()
+        assert {row["slot"] for row in plan["options"] if row["kind"] == "aggressive"} == {22, 24}
+
+        html = agile_tariff.get_dashboard_html()
+        assert "2 aggressive (house + surplus export)" in html
 
     def test_ordinary_exports_stop_at_the_bulk_target(
         self, agile_tariff, monkeypatch
