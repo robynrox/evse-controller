@@ -858,6 +858,32 @@ class TestEnergyShortfall:
         mock_controller.setChargeActivationPower.assert_called_with(720)
         mock_controller.setChargeCurrentBias.assert_called_with(-0.5)
 
+    def test_shortfall_sells_surplus_when_export_is_worth_more(
+        self, agile_tariff
+    ):
+        """A high export price must close the conservative solar charge path."""
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        TestDecisionSnapshot._pin_plan(
+            agile_tariff, 24, 30, shortfall=True
+        )
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 19.9}, default=5.0
+        )
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(30)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        snapshot = agile_tariff._decision_snapshot
+
+        assert snapshot.mode.startswith(
+            "Do not charge — surplus worth more exported"
+        )
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+        controller.setChargeCurrentRange.assert_called_with(0.0, 0.0)
+        controller.setChargeActivationPower.assert_called_with(0.0)
+
     def test_no_shortfall_configures_aggressive_discharge(self, agile_tariff):
         """Outside shortfall the aggressive bias is used, at the break-even."""
         mock_controller = Mock()
@@ -1982,7 +2008,7 @@ class TestDecisionExplanation:
         )
         assert "Will the battery last until 23:30?" in text
         assert "55% house floor" in text
-        assert "Charge from surplus solar only" in (
+        assert "Charge from surplus at ≥3 A" in (
             explanation["answer"]["charge"]["headline"]
         )
 
@@ -3811,6 +3837,55 @@ class TestAbsoluteMinimumSocControl:
             for step in explanation["steps"]
         )
 
+    def test_absolute_floor_uses_the_break_even_harvest_current(
+        self, agile_tariff, monkeypatch
+    ):
+        """3 A is not automatic: the floor follows the export price."""
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        # 18p at the current slot makes 3 A solar storage uneconomic; the
+        # measured efficiency curve only clears it from 8 A.
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 18.0}, default=5.0
+        )
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(40)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        snapshot = agile_tariff._decision_snapshot
+
+        assert snapshot.charge_min_a == pytest.approx(8.0)
+        assert snapshot.charge_activation_w == pytest.approx(8 * 240)
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+        controller.setChargeCurrentRange.assert_called_with(
+            8.0, agile_tariff.MAX_CHARGE_CURRENT
+        )
+        controller.setChargeActivationPower.assert_called_with(8 * 240)
+
+    def test_absolute_floor_sells_surplus_when_export_is_worth_more(
+        self, agile_tariff, monkeypatch
+    ):
+        """No measured current clears a very high export price."""
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 19.9}, default=5.0
+        )
+        controller = Mock()
+        controller.use_new_current_calculation = False
+        state = create_test_state(40)
+
+        agile_tariff.get_control_state(state, 12 * 60)
+        snapshot = agile_tariff._decision_snapshot
+
+        assert snapshot.charge_min_a == pytest.approx(0.0)
+        assert snapshot.charge_activation_w == pytest.approx(0.0)
+        assert "surplus solar is worth more exported now" in snapshot.reason
+        agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
+        controller.setChargeCurrentRange.assert_called_with(0.0, 0.0)
+        controller.setChargeActivationPower.assert_called_with(0.0)
+
 
 class TestPlanExplanation:
     """The explanation page shows the projection and every export option."""
@@ -3866,8 +3941,11 @@ class TestPlanExplanation:
         # export.
         html = agile_tariff.get_dashboard_html()
         assert "1 qualifying slot(s) skipped (headroom used)" in html
-        # Idle plan rows mean "no discharge", not "no solar".
-        assert "surplus solar charges at ≥3 A (≈720 W)" in plan["diagnosis"]
+        # Idle plan rows mean "no discharge", not "no solar".  The charge floor
+        # is price-dependent, so the note must not imply a fixed 3 A.
+        assert "Idle rows stop battery discharge, not solar charging" in (
+            plan["diagnosis"]
+        )
 
     def test_empty_plan_explains_that_the_floor_blocked_qualifying_slots(
         self, agile_tariff, monkeypatch

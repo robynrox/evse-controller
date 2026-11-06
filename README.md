@@ -394,6 +394,12 @@ cell on a phone, where the badge alone is too small to rely on.
   the surplus reaches it. The charge and discharge ranges are independent, so
   a strong surplus can charge while the house is still covered at 3 A. 6 A is
   an illustrative break-even point, not a policy constant.
+
+  The same break-even test applies when the pack is in conservative,
+  reserve-for-export or absolute-floor mode. Those states stop discharge, but
+  they do not accept an unconditional 3 A trickle: the charge floor follows
+  the live export price, and closes entirely when selling the surplus now is
+  worth more than storing it.
 - **The charge floor also gates activation.** `LOAD_FOLLOW_BIDIRECTIONAL`
   treats the charge minimum as a floor and tops up from the grid once charging
   starts, so the activation power is set to `floor × 240 W` rather than the
@@ -459,7 +465,8 @@ numbers the control loop used:
   today's surplus can reach the charge floor, and where discharge starts. An
   export-priority decision also shows the break-even arithmetic against
   offsetting house load; an absolute-floor decision says that discharge and
-  export have stopped and that only surplus solar may charge.
+  export have stopped and what the current break-even solar floor is, which
+  can be above 3 A or closed when exporting now pays more.
 - It states the answer for both directions. For example: *“Answer 242 W
   because that is the point where the import avoided plus the exported surplus
   exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
