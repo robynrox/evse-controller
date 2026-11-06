@@ -253,7 +253,7 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
-- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, default 50, 0-100). Export slots are planned down to this figure. Lower it to export more of the pack; raise it to keep more reserve for the evening, overnight or the next day
+- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, default 50, 0-100). Ordinary export slots are planned down to this figure. High-value slots that beat covering the house load may use the reserve below it, down to `absolute_min_soc_percent`. Lower it to export more of the pack; raise it to keep more reserve for the evening, overnight or the next day
 - `absolute_min_soc_percent`: Hard lower limit for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve, and it can be raised (for example to 40%) to avoid draining the pack on winter days. Surplus solar may still charge the pack below this level
 - `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The house floor is clamped above both the 25% reserve and `absolute_min_soc_percent`, and bulk export planning still uses `min_agile_discharge_soc` itself unless the absolute minimum is higher
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later

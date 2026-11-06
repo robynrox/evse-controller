@@ -499,9 +499,12 @@ fetch cannot silently reuse yesterday's prices.
 
 ### Target, house floor and aggressive mode
 
-The manager uses two SoC thresholds rather than one. Bulk export planning keeps
-`MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots are selected
-until the projected 23:30 SoC would reach that target. The
+The manager uses two SoC thresholds rather than one. Ordinary export planning
+keeps `MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots are
+selected until the projected 23:30 SoC would reach that target. High-value slots
+whose price clears the house-offset break-even get first claim and may spend the
+reserve below the target, down to the absolute minimum; while one is still ahead
+in an energy shortfall, house discharge is paused. The
 aggressive/conservative house-load decision uses
 `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT` (default 5%, clamped
 above the 25% protection reserve). A projection between the two therefore stays

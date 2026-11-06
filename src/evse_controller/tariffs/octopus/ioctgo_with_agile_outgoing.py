@@ -119,7 +119,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import session slots gain the
     full-charge rate, grid-support session slots lose the bulk-export rate and
     planned EV-away slots are left out entirely.
-    The bulk-export planner uses MIN_AGILE_DISCHARGE_SOC as its floor.  The
+    The bulk-export planner normally uses MIN_AGILE_DISCHARGE_SOC as its
+    floor.  High-value slots whose price beats offsetting the house load may
+    spend the reserve down to the absolute minimum instead.  The
     aggressive/conservative house-load decision uses a lower floor,
     MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT (default 5%,
     clamped above the 25% protection reserve).  That lets the controller stay
@@ -127,16 +129,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     of switching to conservative the moment the projection reaches the target.
 
     If the projection is below that house floor, the day is treated as an
-    energy shortfall and the system switches to a conservative bidirectional
-    mode:
+    energy shortfall.  High-value exports already planned are still protected;
+    everything else switches to a conservative bidirectional mode:
 
-    - No export slots are planned (there is no spare SoC above the target).
-    - The car still absorbs surplus solar, since that improves the chance of
-      reaching the target.
-    - Discharge covers most of the house load but deliberately leaves a small
-      import (activation floored at the 3 A minimum, -0.5 A bias) so it does
-      not intentionally export. This replaces the fixed
-      SOC_THRESHOLD_FOR_STRATEGY approach in the standard IOCTGO tariff.
+    - High-value export slots may still be planned down to the absolute
+      minimum, because their sale value beats covering the house at 3 A.
+    - While such a slot is still ahead, house discharge is paused so the pack
+      is not spent before the export.  Surplus solar may still charge it.
+    - With no high-value export left, discharge covers most of the house load
+      but deliberately leaves a small import (activation floored at the 3 A
+      minimum, -0.5 A bias) so it does not intentionally export. This replaces
+      the fixed SOC_THRESHOLD_FOR_STRATEGY approach in the standard IOCTGO
+      tariff.
     - The shortfall state is recalculated whenever the export plan is
       recalculated (slot boundaries, significant SoC changes, and rate
       refreshes), keeping the plan and discharge mode consistent.
@@ -595,9 +599,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         flexibility, raised if necessary to the absolute minimum and never
         below the physical protection reserve.
 
-        Bulk export planning keeps using MIN_AGILE_DISCHARGE_SOC as its floor,
-        raised to the absolute minimum if that is higher; the flexibility only
-        applies to the house-load choice.
+        Bulk export planning normally stops at MIN_AGILE_DISCHARGE_SOC,
+        raised to the absolute minimum if that is higher.  High-value export
+        slots that beat offsetting the house may spend below that target, down
+        to the absolute minimum; the flexibility margin itself only applies to
+        the house-load choice.
         """
         try:
             margin = float(config.HOUSE_LOAD_MARGIN_PERCENT)
@@ -657,9 +663,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         it is not already marked as free-import, grid-support or EV-away.
         Off-peak slots are excluded because the car is charging then.
 
-        The export plan still stops at MIN_AGILE_DISCHARGE_SOC.  Qualification
-        is a priority and an explanation, not permission to spend the house
-        reserve.
+        These slots get first claim on the pack and may spend the house
+        reserve down to the absolute minimum, because their export value beats
+        offsetting the house load.  Ordinary profitable slots still stop at
+        MIN_AGILE_DISCHARGE_SOC.
         """
         if current_slot is None:
             now = self.get_current_datetime()
@@ -684,6 +691,44 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if rate_data['rate'] >= break_even:
                 qualifying.add(slot)
         return qualifying
+
+    def _pending_priority_export_slots(
+        self, current_slot: int
+    ) -> list[int]:
+        """Planned high-value export slots that are still ahead.
+
+        These are the slots the planner has deliberately kept energy for, so
+        the house load must not spend that energy first.  A slot is included
+        only when it is strictly after the current one: during the export slot
+        itself ``get_control_state()`` already commands the discharge.
+        """
+        priority = self._export_priority_slots(current_slot)
+        return sorted(
+            slot
+            for slot in self._planned_export_slots
+            if slot > current_slot and slot in priority
+        )
+
+    def _reserve_slots_for_priority_export(
+        self, current_slot: int, day_minute: int
+    ) -> list[int]:
+        """Planned priority slots that beat covering the house right now.
+
+        Pausing discharge is only justified when the best planned export price
+        clears the current house-offset break-even.  If it does not, covering
+        the house now is the better use of the stored energy and conservative
+        discharge remains correct.
+        """
+        pending = self._pending_priority_export_slots(current_slot)
+        if not pending:
+            return []
+        best_rate_p = max(
+            self._current_export_rate_p(slot) for slot in pending
+        )
+        break_even_p = self.export_house_break_even_p(
+            self._current_import_rate_p(day_minute)
+        )
+        return pending if best_rate_p >= break_even_p else []
 
     def _export_slot_soc_loss_percent(self) -> float:
         """SoC lost by one half-hour of bulk export.
@@ -873,7 +918,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Uses a two-phase approach:
         1. Project SoC to 23:30 including energy-session slots and skipping
            planned EV-away slots
-        2. Select best export slots based on projected SoC and configured loss rates
+        2. Select the best export slots.  High-value slots that beat covering
+           the house may use the reserve down to the absolute minimum; other
+           profitable slots stop at the bulk target.
 
         Grid-support slots already export at maximum regardless of the quoted
         price.  Their drain is included in phase 1 and they are excluded from
@@ -890,16 +937,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._update_energy_shortfall(current_soc_percent)
             return []
 
-        min_soc_percent = max(
+        target_soc_percent = max(
             config.MIN_AGILE_DISCHARGE_SOC,
             self.absolute_min_soc_percent(),
         )
+        absolute_floor_soc = self.absolute_min_soc_percent()
 
         export_slot_soc_loss = self._export_slot_soc_loss_percent()
         non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
 
         debug(f"IOCTGO_AGILEOUT: Export slot loss={export_slot_soc_loss:.2f}%, non-export slot loss={non_export_slot_soc_loss:.2f}%")
-        info(f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, min {min_soc_percent}%, export loss {export_slot_soc_loss:.1f}%/slot, load-follow loss {non_export_slot_soc_loss:.1f}%/slot")
+        info(f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, target {target_soc_percent}%, absolute minimum {absolute_floor_soc}%, export loss {export_slot_soc_loss:.1f}%/slot, load-follow loss {non_export_slot_soc_loss:.1f}%/slot")
 
         # Get current time to determine slot range
         now = self.get_current_datetime()
@@ -925,12 +973,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f"(session-aware): {projected_soc_at_2330:.1f}%"
         )
 
-        # Calculate available SoC for export (above minimum reserve)
-        available_soc_for_export = projected_soc_at_2330 - min_soc_percent
-        debug(f"IOCTGO_AGILEOUT: Available SoC for export: {available_soc_for_export:.1f}%")
+        # Two budgets.  Ordinary profitable slots stop at the bulk target, but
+        # high-value slots (those that beat offsetting the house) may spend the
+        # house reserve down to the hard absolute minimum.  Without this, a
+        # projection below the target would refuse the very slots whose export
+        # value is higher than covering the house.
+        target_headroom_soc = projected_soc_at_2330 - target_soc_percent
+        priority_headroom_soc = projected_soc_at_2330 - absolute_floor_soc
+        debug(
+            "IOCTGO_AGILEOUT: SoC headroom above target "
+            f"{target_headroom_soc:.1f}%, above absolute minimum "
+            f"{priority_headroom_soc:.1f}%"
+        )
 
-        if available_soc_for_export <= 0:
-            debug(f"IOCTGO_AGILEOUT: No SoC available for export after load-follow projection")
+        if priority_headroom_soc <= 0:
+            debug(
+                "IOCTGO_AGILEOUT: No SoC available for export above the "
+                "absolute minimum"
+            )
             self._apply_discharge_policy(projected_soc_at_2330)
             return []
 
@@ -999,9 +1059,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Qualifying slots are those where bulk export beats offsetting the
         # house at ~3 A.  Select them first, highest price first, so the pack
-        # is spent on the most profitable use.  The normal target still caps
-        # the plan: qualification is a priority, not permission to spend the
-        # house reserve.
+        # is spent on the most profitable use.  They may spend below the bulk
+        # target, down to the absolute minimum; ordinary slots may not.
         priority_slots = self._export_priority_slots(current_slot_idx)
         priority_rates = [
             item for item in slot_rates if item[0] in priority_slots
@@ -1011,26 +1070,64 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         ]
         priority_rates.sort(key=lambda x: x[1], reverse=True)
         other_rates.sort(key=lambda x: x[1], reverse=True)
-        slot_rates = priority_rates + other_rates
         if priority_rates:
             info(
                 f"IOCTGO_AGILEOUT: {len(priority_rates)} export-priority "
                 "slot(s) beat the house-offset break-even"
             )
 
-        # Phase 2: Select slots until we run out of available SoC
+        # Phase 2: Select slots until each budget is exhausted.  Priority slots
+        # get first claim, down to the absolute minimum; ordinary slots may
+        # only use what is left above the bulk target.
         planned_slots = []
-        remaining_soc = available_soc_for_export
+        remaining_priority_soc = priority_headroom_soc
+        remaining_target_soc = max(0.0, target_headroom_soc)
 
-        debug(f"IOCTGO_AGILEOUT: Selecting slots with {remaining_soc:.1f}% SoC available")
+        debug(
+            "IOCTGO_AGILEOUT: Selecting slots with "
+            f"{remaining_priority_soc:.1f}% priority headroom and "
+            f"{remaining_target_soc:.1f}% target headroom"
+        )
 
-        for slot_idx, rate in slot_rates:
-            if remaining_soc >= additional_soc_cost_per_export_slot:
+        for slot_idx, rate in priority_rates:
+            if remaining_priority_soc >= additional_soc_cost_per_export_slot:
                 planned_slots.append(slot_idx)
-                remaining_soc -= additional_soc_cost_per_export_slot
-                debug(f"IOCTGO_AGILEOUT: Selected slot {slot_idx} @ {rate:.1f}p, remaining SoC={remaining_soc:.1f}%")
+                remaining_priority_soc -= additional_soc_cost_per_export_slot
+                remaining_target_soc = max(
+                    0.0,
+                    remaining_target_soc - additional_soc_cost_per_export_slot,
+                )
+                debug(
+                    f"IOCTGO_AGILEOUT: Selected priority slot {slot_idx} @ "
+                    f"{rate:.1f}p, remaining priority SoC="
+                    f"{remaining_priority_soc:.1f}%"
+                )
             else:
-                debug(f"IOCTGO_AGILEOUT: Skipping slot {slot_idx} @ {rate:.1f}p (not enough SoC: need {additional_soc_cost_per_export_slot:.1f}%, have {remaining_soc:.1f}%)")
+                debug(
+                    f"IOCTGO_AGILEOUT: Skipping priority slot {slot_idx} @ "
+                    f"{rate:.1f}p (not enough SoC: need "
+                    f"{additional_soc_cost_per_export_slot:.1f}%, have "
+                    f"{remaining_priority_soc:.1f}%)"
+                )
+                break
+
+        for slot_idx, rate in other_rates:
+            if remaining_target_soc >= additional_soc_cost_per_export_slot:
+                planned_slots.append(slot_idx)
+                remaining_target_soc -= additional_soc_cost_per_export_slot
+                remaining_priority_soc -= additional_soc_cost_per_export_slot
+                debug(
+                    f"IOCTGO_AGILEOUT: Selected slot {slot_idx} @ {rate:.1f}p, "
+                    f"remaining target SoC={remaining_target_soc:.1f}%"
+                )
+            else:
+                debug(
+                    f"IOCTGO_AGILEOUT: Skipping slot {slot_idx} @ {rate:.1f}p "
+                    f"(not enough target SoC: need "
+                    f"{additional_soc_cost_per_export_slot:.1f}%, have "
+                    f"{remaining_target_soc:.1f}%)"
+                )
+                break
 
         # Sort planned slots by time for easier processing
         planned_slots.sort()
@@ -3387,6 +3484,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         exported_slots = set(self._exported_slots)
         priority_slots = self._export_priority_slots(start_slot)
+        planned_priority_slots = planned_export_slots & priority_slots
 
         rate_by_slot: dict[int, float] = {}
         for rate_data in self._today_rates():
@@ -3411,6 +3509,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             baseline_projection = None
             plan_projection = None
             headroom = None
+            priority_headroom = None
         else:
             baseline_projection = self._project_soc_at_2330(
                 current_soc, start_slot
@@ -3421,6 +3520,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 export_slots=planned_export_slots,
             )
             headroom = baseline_projection - target_soc
+            # High-value slots may spend below the bulk target, down to the
+            # hard absolute minimum, so their budget is wider.
+            priority_headroom = baseline_projection - absolute_min_soc
 
         rows: list[dict] = []
         projected = current_soc
@@ -3528,24 +3630,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 status = "skipped"
                 status_label = "QUALIFIES"
                 status_class = "status-skipped"
-                if headroom is None:
+                if priority_headroom is None:
                     reason = (
                         "Qualifies on price, but the battery state of charge "
                         "is unknown, so no headroom can be committed."
                     )
-                elif headroom <= 0:
+                elif priority_headroom <= 0:
                     reason = (
                         f"Qualifies at {rate:.1f}p, but the session-aware "
                         f"23:30 projection ({baseline_projection:.0f}%) is at "
-                        f"or below the {target_soc:.0f}% export floor "
-                        f"(absolute minimum {absolute_min_soc:.0f}%), so "
-                        "there is no headroom."
+                        f"or below the {absolute_min_soc:.0f}% absolute "
+                        "minimum, so there is no headroom."
                     )
                 else:
                     reason = (
                         f"Qualifies at {rate:.1f}p, but the "
-                        f"{headroom:.1f}% headroom was used by higher-priced "
-                        "slots."
+                        f"{priority_headroom:.1f}% headroom above the "
+                        f"{absolute_min_soc:.0f}% absolute minimum was used by "
+                        "higher-priced slots."
                     )
             else:
                 status = "not_selected"
@@ -3558,10 +3660,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 elif headroom is None:
                     reason = "The battery state of charge is unknown."
                 elif headroom <= 0:
-                    reason = (
-                        f"Not selected — the 23:30 projection is at or below "
-                        f"the {target_soc:.0f}% export floor."
-                    )
+                    if planned_priority_slots:
+                        reason = (
+                            f"Not selected — the high-value priority slots used "
+                            f"the reserve below the {target_soc:.0f}% target."
+                        )
+                    else:
+                        reason = (
+                            f"Not selected — the 23:30 projection is at or "
+                            f"below the {target_soc:.0f}% export floor."
+                        )
                 else:
                     reason = (
                         f"{rate:.1f}p is below the {break_even_p:.1f}p "
@@ -3634,53 +3742,70 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "No Agile Outgoing prices are loaded, so the planner has no "
                 "profitable slots to choose from."
             )
-        elif headroom <= 0:
-            diagnosis = (
-                f"No export is planned. The session-aware 23:30 projection is "
-                f"{baseline_projection:.0f}%, at or below the "
-                f"{target_soc:.0f}% export floor (absolute minimum "
-                f"{absolute_min_soc:.0f}%)."
-            )
-            if skipped_qualifying:
-                diagnosis += (
-                    f" {len(skipped_qualifying)} slot(s) beat the "
-                    f"{default_break_even_p:.1f}p house-offset break-even, but "
-                    "exporting in them would spend the house reserve."
-                )
         elif not planned_rows:
-            diagnosis = (
-                f"No export is planned even though {headroom:.1f}% is above "
-                f"the {target_soc:.0f}% export floor. "
-            )
-            if headroom < additional_cost:
-                diagnosis += (
-                    f"One export slot needs {additional_cost:.1f}% more SoC "
-                    "than the load-follow baseline, and the headroom is "
-                    "smaller than that."
+            if priority_headroom <= 0:
+                diagnosis = (
+                    f"No export is planned. The session-aware 23:30 projection "
+                    f"is {baseline_projection:.0f}%, at or below the "
+                    f"{absolute_min_soc:.0f}% absolute minimum."
                 )
-            elif skipped_qualifying:
-                diagnosis += (
-                    f"{len(skipped_qualifying)} slot(s) beat the "
-                    f"{default_break_even_p:.1f}p house-offset break-even, but "
-                    "none could be fitted into the remaining headroom."
+                if skipped_qualifying:
+                    diagnosis += (
+                        f" {len(skipped_qualifying)} slot(s) beat the "
+                        f"{default_break_even_p:.1f}p house-offset break-even, "
+                        "but exporting in them would breach the absolute "
+                        "minimum."
+                    )
+            elif headroom <= 0:
+                diagnosis = (
+                    f"No export is planned. The session-aware 23:30 projection "
+                    f"is {baseline_projection:.0f}%, at or below the "
+                    f"{target_soc:.0f}% target."
                 )
+                if skipped_qualifying:
+                    diagnosis += (
+                        f" {len(skipped_qualifying)} slot(s) beat the "
+                        f"{default_break_even_p:.1f}p house-offset break-even, "
+                        "but no export slot fits within the remaining SoC "
+                        f"budget (target floor {target_soc:.0f}%, absolute "
+                        f"minimum {absolute_min_soc:.0f}%)."
+                    )
             else:
-                diagnosis += (
-                    f"No future slot reaches the {min_export_rate_p:.1f}p "
-                    "export minimum."
+                diagnosis = (
+                    f"No export is planned even though {headroom:.1f}% is above "
+                    f"the {target_soc:.0f}% target. "
                 )
+                if priority_headroom < additional_cost:
+                    diagnosis += (
+                        f"One export slot needs {additional_cost:.1f}% more SoC "
+                        "than the load-follow baseline, and the headroom above "
+                        f"the {absolute_min_soc:.0f}% absolute minimum is "
+                        "smaller than that."
+                    )
+                elif skipped_qualifying:
+                    diagnosis += (
+                        f"{len(skipped_qualifying)} slot(s) beat the "
+                        f"{default_break_even_p:.1f}p house-offset break-even, "
+                        "but none could be fitted into the remaining headroom."
+                    )
+                else:
+                    diagnosis += (
+                        f"No future slot reaches the {min_export_rate_p:.1f}p "
+                        "export minimum."
+                    )
         else:
             diagnosis = (
                 f"{len(planned_rows)} export slot(s) planned. The session-aware "
                 f"23:30 projection is {baseline_projection:.0f}% before the "
-                f"plan and {plan_projection:.0f}% after it, against a "
-                f"{target_soc:.0f}% floor."
+                f"plan and {plan_projection:.0f}% after it. High-value slots may "
+                f"use the reserve down to the {absolute_min_soc:.0f}% absolute "
+                f"minimum; other slots stop at the {target_soc:.0f}% target."
             )
             if skipped_qualifying:
                 diagnosis += (
                     f" {len(skipped_qualifying)} qualifying slot(s) are left "
-                    "unplanned because the headroom was used by higher-priced "
-                    "slots."
+                    "unplanned because the priority headroom was used by "
+                    "higher-priced slots."
                 )
 
         return {
@@ -3693,6 +3818,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "house_floor_soc": house_floor_soc,
             "absolute_min_soc": absolute_min_soc,
             "headroom_soc": headroom,
+            "priority_headroom_soc": priority_headroom,
             "planned_slots": sorted(
                 slot for slot in planned_export_slots if start_slot <= slot < 47
             ),
@@ -4113,6 +4239,94 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     export_p,
                     min_discharge_w,
                 ),
+            }
+
+        elif snap.decision_tier == "export_reserve":
+            pending = sorted(
+                export_slot
+                for export_slot in (snap.planned_export_slots or [])
+                if export_slot >= slot
+                and export_slot in self._export_priority_slots(slot)
+            )
+            target_slot = snap.target_slot
+            target_rate_p = snap.target_rate_p or 0.0
+            break_even_p = self.export_house_break_even_p(import_p)
+            projected = snap.projected_soc_at_2330
+            floor = snap.house_floor_soc
+            projection_text = (
+                f"{math.floor(projected)}%"
+                if projected is not None
+                else "below the floor"
+            )
+            slot_text = ", ".join(
+                self._slot_range_label(export_slot)
+                for export_slot in pending[:3]
+            )
+            if len(pending) > 3:
+                slot_text += f" (+{len(pending) - 3} more)"
+            add_step(
+                "Why is the house load not covered now?",
+                "Is the stored energy worth more in a later high-value export?",
+                (
+                    f"Importing now avoids {import_p:.1f}p through the house "
+                    f"at {self.self_use_discharge_efficiency() * 100:.1f}%. "
+                    f"Exporting later sells through "
+                    f"{self.export_discharge_efficiency() * 100:.1f}% at "
+                    f"{target_rate_p:.1f}p. Break-even = "
+                    f"{self.self_use_discharge_efficiency() * 100:.1f}% ÷ "
+                    f"{self.export_discharge_efficiency() * 100:.1f}% × "
+                    f"{import_p:.1f}p = {break_even_p:.1f}p."
+                ),
+                f"Export {target_rate_p:.1f}p ≥ break-even {break_even_p:.1f}p.",
+                "The later export is worth more per stored kWh, so the pack is "
+                "held for it and the house imports for now.",
+            )
+            if floor is not None:
+                add_step(
+                    "Will the battery last until 23:30?",
+                    "Does pausing house discharge protect the planned export?",
+                    (
+                        f"Projected 23:30 SoC = {projection_text}; house floor = "
+                        f"{floor:.0f}%. Planned high-value slots: "
+                        f"{slot_text or 'none'}."
+                    ),
+                    f"{projection_text} is below the {floor:.0f}% house floor.",
+                    "Yes. The planned export slots are reserved rather than "
+                    "spent on the house at the 3 A minimum.",
+                )
+            answer = {
+                "heading": "Reserve the pack for high-value export",
+                "summary": (
+                    f"The pack is projected to finish at {projection_text}, "
+                    f"below its {floor:.0f}% house floor, but the planned "
+                    f"export at {target_rate_p:.1f}p beats covering the house "
+                    f"at {import_p:.1f}p. House load is imported for now."
+                    if floor is not None
+                    else "The pack is projected to be short of energy, but a "
+                    "later high-value export is worth more than covering the "
+                    "house now."
+                ),
+                "charge": {
+                    "headline": (
+                        "No charging — at the cap"
+                        if at_cap
+                        else "Charge from surplus solar only, at ≥3 A (≈720 W)"
+                    ),
+                    "because": (
+                        "The pack is at its charge cap."
+                        if at_cap
+                        else "Grid charging would spend the energy the export "
+                        "is being reserved for; only free surplus is accepted."
+                    ),
+                },
+                "discharge": {
+                    "headline": "Do not discharge — holding for export",
+                    "because": (
+                        f"The planned export at {target_rate_p:.1f}p clears "
+                        f"the {break_even_p:.1f}p house-offset break-even, so "
+                        "the pack is not spent covering the house first."
+                    ),
+                },
             }
 
         elif snap.store_decision:
@@ -4686,8 +4900,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if plan["headroom_soc"] is not None:
             state.append(
                 {
-                    "label": "SoC headroom for export",
+                    "label": "SoC headroom above target",
                     "value": f"{max(0.0, plan['headroom_soc']):.1f}%",
+                }
+            )
+        if plan.get("priority_headroom_soc") is not None:
+            state.append(
+                {
+                    "label": "SoC headroom above absolute minimum",
+                    "value": f"{max(0.0, plan['priority_headroom_soc']):.1f}%",
                 }
             )
         state.append(
@@ -4696,7 +4917,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "value": f"{len(plan['planned_slots'])}",
             }
         )
-        if snap.decision_tier in ("planned_export", "export_priority", "grid_support"):
+        if snap.decision_tier in (
+            "planned_export", "export_priority", "export_reserve", "grid_support"
+        ):
             break_even_p = self.export_house_break_even_p(import_p)
             state.append(
                 {
@@ -4738,7 +4961,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             {"label": "Charging", "value": charging_value}
         )
         if snap.discharge_activation_w is not None:
-            if snap.discharge_activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+            if snap.decision_tier == "export_reserve":
+                discharge_value = "Paused — holding energy for planned export"
+            elif snap.discharge_activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
                 discharge_value = "Disabled — stored energy costs more than it saves"
             elif snap.discharge_activation_w <= 0:
                 discharge_value = "Any house import (≥0 W)"
@@ -5259,6 +5484,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     config.MIN_AGILE_DISCHARGE_SOC,
                     self.absolute_min_soc_percent(),
                 )
+                absolute_floor = self.absolute_min_soc_percent()
                 projected = self._projected_soc_at_2330
                 if priority:
                     qualifier = (
@@ -5271,17 +5497,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                             "Export plan: none planned — " + qualifier
                             + "no 23:30 projection is available"
                         )
+                    elif projected <= absolute_floor:
+                        plan_text = (
+                            "Export plan: none planned — " + qualifier
+                            + f"the 23:30 projection is {projected:.0f}% "
+                            f"against the {absolute_floor:.0f}% absolute minimum"
+                        )
                     elif projected <= target:
                         plan_text = (
                             "Export plan: none planned — " + qualifier
                             + f"the 23:30 projection is {projected:.0f}% "
-                            f"against the {target:.0f}% floor"
+                            f"against the {target:.0f}% target"
                         )
                     else:
                         plan_text = (
                             "Export plan: none planned — " + qualifier
-                            + f"the remaining {projected - target:.1f}% "
-                            "headroom is less than one export slot"
+                            + f"the remaining {projected - absolute_floor:.1f}% "
+                            f"above the {absolute_floor:.0f}% absolute minimum "
+                            "is less than one export slot"
                         )
                     plan_colour = "#a15c00"
                 else:
@@ -5898,6 +6131,101 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "IOCTGO_AGILEOUT Export slot (max discharge)",
             )
 
+        # Shortfall with a high-value export still ahead: keep the energy for
+        # that export instead of spending it on the house at 3 A.  This is the
+        # same comparison as the per-slot priority rule, applied across time:
+        # importing the house now is cheaper than losing a later export that
+        # clears the house-offset break-even.
+        reserve_slots = self._reserve_slots_for_priority_export(
+            current_slot, dayMinute
+        )
+        if self._energy_shortfall and reserve_slots:
+            harvest_current_a = self._estimate_solar_harvest_current()
+            harvest_label = (
+                f"Harvest {harvest_current_a:.0f} A"
+                if harvest_current_a > self.SOLAR_CHARGE_REFERENCE_CURRENT
+                else f"Harvest ≥{self.SOLAR_CHARGE_REFERENCE_CURRENT:.0f} A"
+            )
+            target_slot = max(
+                reserve_slots,
+                key=lambda slot: self._current_export_rate_p(slot),
+            )
+            target_rate_p = self._current_export_rate_p(target_slot)
+            import_price_p = self._current_import_rate_p(dayMinute)
+            break_even_p = self.export_house_break_even_p(import_price_p)
+            projected = self._projected_soc_at_2330
+            projection_text = (
+                f"{math.floor(projected)}%"
+                if projected is not None
+                else "below floor"
+            )
+            detail_projection = (
+                f"projected 23:30 SoC {math.floor(projected)}%"
+                if projected is not None
+                else "23:30 SoC projection unavailable"
+            )
+            house_floor = self._house_load_floor_soc()
+            slot_text = ", ".join(
+                f"{self._slot_range_label(slot)} @ "
+                f"{self._current_export_rate_p(slot):.1f}p"
+                for slot in reserve_slots[:3]
+            )
+            if len(reserve_slots) > 3:
+                slot_text += f" (+{len(reserve_slots) - 3} more)"
+            at_cap = battery_level >= charge_cap
+            self._record_decision(
+                mode=f"{harvest_label} · reserve for export",
+                reason=(
+                    f"projected 23:30 SoC {projection_text} < "
+                    f"{house_floor:.0f}% house floor — holding for "
+                    f"{target_rate_p:.1f}p export"
+                ),
+                soc_percent=battery_level,
+                detail=(
+                    f"SoC {battery_level}%, {detail_projection}. Current "
+                    f"import is {import_price_p:.1f}p, while the best planned "
+                    f"export is {target_rate_p:.1f}p, above the "
+                    f"{break_even_p:.1f}p house-offset break-even. Discharge is "
+                    "paused so the pack is not spent covering the house now. "
+                    f"High-value slots: {slot_text}. "
+                    + (
+                        f"Charging is inhibited at the {charge_cap:.0f}% cap."
+                        if at_cap
+                        else "Surplus solar may still charge at ≥3 A."
+                    )
+                ),
+                target_soc_percent=target_soc,
+                projected_soc_at_2330=projected,
+                current_rate_p=self._current_export_rate_p(current_slot),
+                target_rate_p=target_rate_p,
+                target_slot=target_slot,
+                harvest_current_a=harvest_current_a,
+                surplus_w=surplus_w,
+                efficiency_pct=self.export_discharge_efficiency() * 100,
+                efficiency_label="discharge",
+                min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+                charge_min_a=0 if at_cap else 3,
+                charge_max_a=0 if at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=0,
+                discharge_max_a=0,
+                discharge_aggressive=False,
+                discharge_activation_w=self.NEVER_DISCHARGE_ACTIVATION_W,
+                decision_tier="export_reserve",
+                shortfall=True,
+                import_rate_p=import_price_p,
+                house_floor_soc=house_floor,
+                charge_cap_percent=charge_cap,
+                stored_cost_p=self._delivered_cost_per_kwh_p(),
+                voltage_v=power_snapshot["voltage"] if power_snapshot else None,
+            )
+            return (
+                ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
+                None,
+                None,
+                "IOCTGO_AGILEOUT Shortfall: reserve energy for planned export",
+            )
+
         # Energy shortfall: conserve energy for the house rather than exporting.
         # Stay bidirectional so surplus solar can still be absorbed, but use
         # the conservative discharge configuration in set_home_demand_levels().
@@ -6412,6 +6740,38 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(
                 "IOCTGO_AGILEOUT: Absolute minimum SoC - discharge range "
                 "closed (0 A)"
+            )
+            return
+
+        # Shortfall with a high-value export ahead: hold the pack for the
+        # export rather than covering the house now.  The pack may still absorb
+        # surplus solar, so charging stays available unless it is at the cap.
+        if self._energy_shortfall and self._reserve_slots_for_priority_export(
+            current_slot, dayMinute
+        ):
+            evseController.setDischargeActivationPower(
+                self.NEVER_DISCHARGE_ACTIVATION_W
+            )
+            evseController.setDischargeCurrentBias(0)
+            evseController.setDischargeCurrentRange(0, 0)
+            evseController.setChargeActivationPower(720)
+            evseController.setChargeCurrentBias(-0.5)
+            if charge_at_cap:
+                evseController.setChargeCurrentRange(0, 0)
+            else:
+                evseController.setChargeCurrentRange(3, self.MAX_CHARGE_CURRENT)
+            self._update_snapshot_ranges(
+                charge_min_a=0 if charge_at_cap else 3,
+                charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
+                charge_activation_w=720,
+                discharge_min_a=0,
+                discharge_max_a=0,
+                discharge_aggressive=False,
+                discharge_activation_w=self.NEVER_DISCHARGE_ACTIVATION_W,
+            )
+            debug(
+                "IOCTGO_AGILEOUT: Shortfall with planned priority export - "
+                "discharge range closed to conserve the export"
             )
             return
 

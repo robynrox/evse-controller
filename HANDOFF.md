@@ -200,11 +200,15 @@ completed fixes.
   below 3 A (~720 W), so starting for a tiny load would export the excess.
   Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
   controller never starts a discharge.
-- Bulk export planning keeps `MIN_AGILE_DISCHARGE_SOC` as its floor. The
-  aggressive/conservative house-load decision now uses
-  `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
+- Bulk export planning normally stops at `MIN_AGILE_DISCHARGE_SOC`.
+  High-value slots whose export price clears the house-offset break-even get
+  first claim and may spend the reserve below that target, down to the
+  absolute minimum. While one of those slots is still ahead, an energy
+  shortfall pauses house discharge so the pack is not spent at 3 A first;
+  surplus solar may still charge. The aggressive/conservative house-load
+  decision uses `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
   (`house_load_margin_percent`, default 5%, clamped above the 25% protection
-  reserve). This keeps aggressive mode after a bulk export reaches the target;
+  reserve), so it stays aggressive after a bulk export reaches the target;
   only a projection below the lower floor becomes conservative.
 - The default `MIN_AGILE_DISCHARGE_SOC` / `min_agile_discharge_soc` is **50%**
   (the 23:30 bulk-export target and export floor). The 25% absolute minimum
