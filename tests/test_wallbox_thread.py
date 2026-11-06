@@ -657,8 +657,9 @@ class TestWallboxThread(TestCase):
                     # Set the mock register value
                     self.mock_client._registers[self.thread._READ_STATE_REG] = [register_value]
                     
-                    # Wait for a poll cycle
-                    time.sleep(self.thread._poll_interval * 2)
+                    # Wait for enough poll cycles.  Raw state 0 is debounced
+                    # until a second read confirms it, so allow extra time.
+                    time.sleep(self.thread._poll_interval * 4)
                     
                     # Check the mapped state
                     state = self.thread.get_state()
