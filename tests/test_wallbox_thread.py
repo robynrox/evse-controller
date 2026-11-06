@@ -26,6 +26,8 @@ class MockModbusClient(ModbusClientInterface):
         self._communication_fails = False
         self._recovering = False
         self._fail_register = None
+        self._fail_register_once = None
+        self._read_counts = {}
         # Optional stand-in for the wrapped pyModbusTCP client, used to test
         # the error detail that is added to a failed read.
         self._client = None
@@ -46,9 +48,13 @@ class MockModbusClient(ModbusClientInterface):
         return self._registers[reg_addr][0]
 
     def read_holding_registers(self, reg_addr: int, reg_nb: int = 1) -> Optional[List[int]]:
+        self._read_counts[reg_addr] = self._read_counts.get(reg_addr, 0) + 1
         if self._communication_fails:
             raise ConnectionError("Simulated communication failure")
         if reg_addr == self._fail_register:
+            return None
+        if reg_addr == self._fail_register_once:
+            self._fail_register_once = None
             return None
 
         result = []
@@ -148,7 +154,12 @@ class TestWallboxThread(TestCase):
         self.assertEqual(
             self.thread.get_state().consecutive_connection_errors, 1
         )
+        # A transport error is retried once before the cycle is abandoned.
+        self.assertEqual(
+            self.mock_client._read_counts[self.thread._READ_STATE_REG], 2
+        )
 
+        self.mock_client._read_counts = {}
         self.mock_client._client = SimpleNamespace(
             last_error=7,
             last_error_as_txt="modbus exception",
@@ -160,6 +171,25 @@ class TestWallboxThread(TestCase):
             ConnectionError, "modbus exception: illegal data address"
         ):
             self.thread._update_state()
+
+        # A Modbus exception is a deterministic answer, not a lost link, so
+        # it is not retried.
+        self.assertEqual(
+            self.mock_client._read_counts[self.thread._READ_STATE_REG], 1
+        )
+
+    def test_transient_read_failure_is_retried(self):
+        """One lost transaction must not abandon the whole poll cycle."""
+        self.mock_client._fail_register_once = self.thread._READ_STATE_REG
+
+        self.thread._update_state()
+
+        state = self.thread.get_state()
+        self.assertEqual(state.consecutive_connection_errors, 0)
+        self.assertEqual(state.evse_state, EvseState.CHARGING)
+        self.assertEqual(
+            self.mock_client._read_counts[self.thread._READ_STATE_REG], 2
+        )
 
     def test_thread_lifecycle(self):
         """Test thread start/stop operations"""

@@ -82,6 +82,14 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+
+        # A single lost Modbus transaction should not abort the whole poll.
+        # pyModbusTCP closes the socket on a transport error and reopens it on
+        # the next request, so retrying the same register is effectively a
+        # reconnect.  Keep the retry budget small: the poll loop runs every
+        # second, and a dead link should still reach the reset logic promptly.
+        self.MODBUS_READ_ATTEMPTS = 2
+        self.MODBUS_RETRY_DELAY_SECONDS = 0.05
         
         # Add tracking for OCPP state change to implement 2-minute delay for resets
         self._last_ocpp_change_time = 0
@@ -289,6 +297,16 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         except queue.Empty:
             pass
 
+    def _modbus_error_code(self) -> Optional[int]:
+        """Return pyModbusTCP's last error code, if the client exposes one."""
+        wrapped = getattr(self._client, "_client", None)
+        if wrapped is None:
+            return None
+        try:
+            return int(getattr(wrapped, "last_error", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+
     def _modbus_failure_detail(self) -> str:
         """Return the underlying Modbus error, if the client exposes one.
 
@@ -300,13 +318,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         defensive ``getattr`` calls.
         """
         wrapped = getattr(self._client, "_client", None)
-        if wrapped is None:
-            return ""
-        try:
-            error_code = int(getattr(wrapped, "last_error", 0) or 0)
-        except (TypeError, ValueError):
-            return ""
-        if error_code == 0:
+        error_code = self._modbus_error_code()
+        if wrapped is None or not error_code:
             return ""
         text = getattr(wrapped, "last_error_as_txt", "") or str(error_code)
         if error_code == 7:  # Modbus exception response
@@ -314,6 +327,45 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             if except_text:
                 return f"{text}: {except_text}"
         return text
+
+    def _read_holding_registers(self, reg: int) -> Optional[list[int]]:
+        """Read one register, retrying a transport failure once.
+
+        The Kotlin proof of concept reconnects and retries the same register
+        when the link is lost, but does not retry a Modbus exception (which
+        will simply happen again).  ``pyModbusTCP`` returns ``None`` rather
+        than raising, and its ``auto_open`` mode reconnects on the next
+        request, so closing the socket and calling the same read is the
+        equivalent here.  Limit this to one retry so a genuinely dead link
+        still reaches the existing reset logic quickly.
+        """
+        last_error: Optional[ConnectionError] = None
+        for attempt in range(1, self.MODBUS_READ_ATTEMPTS + 1):
+            try:
+                output = self._client.read_holding_registers(reg)
+            except ConnectionError as exc:
+                output = None
+                last_error = exc
+
+            if output is not None:
+                return output
+
+            # A Modbus exception is a valid response from the device, not a
+            # lost connection.  Retrying it just repeats the same error.
+            if self._modbus_error_code() == 7:
+                return None
+
+            if attempt < self.MODBUS_READ_ATTEMPTS:
+                try:
+                    self._client.close()
+                except Exception:
+                    # A client that was never opened may not have a socket.
+                    pass
+                time.sleep(self.MODBUS_RETRY_DELAY_SECONDS)
+
+        if last_error is not None:
+            raise last_error
+        return None
 
     def _log_connection_error(self, exc: ConnectionError) -> None:
         """Log a Modbus read failure at a rate that matches its severity."""
@@ -373,7 +425,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._READ_DC_CURRENT_REG
             ]
             for reg in regs_to_read:
-                output = self._client.read_holding_registers(reg)
+                output = self._read_holding_registers(reg)
                 if output is None:
                     detail = self._modbus_failure_detail()
                     message = f"Failed to read register {hex(reg)}"
