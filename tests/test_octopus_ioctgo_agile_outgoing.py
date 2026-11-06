@@ -3670,6 +3670,19 @@ class TestThreeBandDischargePolicy:
             3, agile_tariff.MAX_CHARGE_CURRENT
         )
 
+    def test_plan_landing_exactly_on_the_floor_is_conservative(
+        self, agile_tariff, monkeypatch
+    ):
+        """Floating-point noise must not turn a floor-level plan into Idle."""
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+
+        assert agile_tariff._apply_discharge_policy(40.0) == "conservative"
+        assert (
+            agile_tariff._apply_discharge_policy(40.0 - 1e-12)
+            == "conservative"
+        )
+        assert agile_tariff._apply_discharge_policy(39.9) == "inhibited"
+
 
 class TestAbsoluteMinimumSocControl:
     """The configured floor applies to house load and grid support."""
@@ -3765,6 +3778,39 @@ class TestAbsoluteMinimumSocControl:
             "Do not discharge"
         )
 
+    def test_absolute_floor_message_names_the_solar_charge_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        """Idle at the floor still has to say how solar is harvested."""
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        TestDecisionSnapshot._set_time(agile_tariff, 12, 0)
+
+        agile_tariff.get_control_state(create_test_state(40), 12 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.decision_tier == "absolute_floor"
+        assert snapshot.charge_min_a == pytest.approx(3.0)
+        assert snapshot.charge_max_a == pytest.approx(
+            agile_tariff.MAX_CHARGE_CURRENT
+        )
+        assert snapshot.charge_activation_w == pytest.approx(720.0)
+        assert (
+            "surplus solar still charges at ≥3 A (≈720 W)"
+            in snapshot.reason
+        )
+
+        html = agile_tariff.get_dashboard_html()
+        assert "solar ≥3 A (≈720 W)" in html
+
+        explanation = agile_tariff.get_decision_explanation()
+        assert explanation["answer"]["charge"]["headline"] == (
+            "Charge from surplus solar at ≥3 A (≈720 W)"
+        )
+        assert any(
+            "surplus solar" in step["title"].lower()
+            for step in explanation["steps"]
+        )
+
 
 class TestPlanExplanation:
     """The explanation page shows the projection and every export option."""
@@ -3820,6 +3866,8 @@ class TestPlanExplanation:
         # export.
         html = agile_tariff.get_dashboard_html()
         assert "1 qualifying slot(s) skipped (headroom used)" in html
+        # Idle plan rows mean "no discharge", not "no solar".
+        assert "surplus solar charges at ≥3 A (≈720 W)" in plan["diagnosis"]
 
     def test_empty_plan_explains_that_the_floor_blocked_qualifying_slots(
         self, agile_tariff, monkeypatch

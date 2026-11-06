@@ -925,7 +925,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         floor_soc = self._house_load_floor_soc()
         absolute_floor = self.absolute_min_soc_percent()
-        if projected_soc < absolute_floor:
+        # The planner accepts a plan whose running minimum lands exactly on
+        # the floor.  Floating-point arithmetic can leave it a few ulps below
+        # (for example 39.99999999999999 for 40%), so use the same tolerance
+        # here; otherwise a correctly planned day is reported as inhibited.
+        if projected_soc < absolute_floor - 1e-9:
             policy = "inhibited"
         elif projected_soc < floor_soc:
             policy = "conservative"
@@ -1577,6 +1581,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         behaviour.  A floor of zero disables charging entirely.
         """
         return 0.0 if current_a <= 0 else float(current_a) * 240.0
+
+    def _solar_charge_floor_text(self, *, at_cap: bool = False) -> str:
+        """One sentence describing what idle/conservative modes do with solar.
+
+        Idle and conservative modes stop discharge but do not close the charge
+        path.  The control loop arms the Wallbox's minimum charge current and
+        lets the surplus decide the rest, up to the configured maximum.  The
+        text is shared by the dashboard mode line, the explanation page and
+        the export-plan rows so they cannot disagree.
+        """
+        cap = self.charge_cap_percent()
+        if at_cap:
+            return (
+                f"The pack is at its {cap:.0f}% charge cap, so surplus solar "
+                "is exported."
+            )
+        floor_a = float(self.SOLAR_CHARGE_REFERENCE_CURRENT)
+        activation_w = self._charge_activation_w_for_current(floor_a)
+        return (
+            f"Below the {cap:.0f}% charge cap, surplus solar charges at "
+            f"≥{floor_a:.0f} A (≈{activation_w:.0f} W), up to "
+            f"{self.MAX_CHARGE_CURRENT:.0f} A."
+        )
 
     def _read_power_snapshot(self) -> Optional[dict]:
         """Read the latest grid/EVSE channels, or ``None`` if unavailable.
@@ -3151,6 +3178,41 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"{activation_label}</span>"
                 )
 
+        if snapshot.charge_min_a is not None:
+            charge_floor_a = float(snapshot.charge_min_a)
+            if charge_floor_a <= 0:
+                charge_label = "solar off"
+                charge_title = html_module.escape(
+                    "No surplus solar is accepted: the pack is at its charge "
+                    "cap, or this slot is committed to export.",
+                    quote=True,
+                )
+            else:
+                activation_w = snapshot.charge_activation_w
+                if activation_w is None:
+                    activation_w = self._charge_activation_w_for_current(
+                        charge_floor_a
+                    )
+                max_a = snapshot.charge_max_a
+                max_text = (
+                    f", up to {float(max_a):.0f} A" if max_a else ""
+                )
+                charge_label = (
+                    f"solar ≥{charge_floor_a:.0f} A "
+                    f"(≈{activation_w:.0f} W)"
+                )
+                charge_title = html_module.escape(
+                    "Surplus solar starts charging at "
+                    f"{charge_floor_a:.0f} A (≈{activation_w:.0f} W)"
+                    f"{max_text}. Below that the surplus is exported or left "
+                    "unused; the car only takes what the roof provides.",
+                    quote=True,
+                )
+            parts.append(
+                f'<span class="ioctgo-metric" title="{charge_title}">'
+                f"{charge_label}</span>"
+            )
+
         low_p, high_p = self._delivered_cost_range_per_kwh_p()
         stored_title = html_module.escape(
             "Average cost of the energy in the pack: "
@@ -3997,6 +4059,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "slots."
                 )
 
+        if any(row["kind"] == "idle" for row in rows):
+            # Idle means "no battery discharge" in the plan, not "no solar".
+            # Say so once for the table instead of repeating it in every row.
+            diagnosis += " " + self._solar_charge_floor_text()
+
         return {
             "start_slot": start_slot,
             "current_soc": current_soc,
@@ -4814,17 +4881,41 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "discharging and exporting there even when the price is "
                 "attractive. Surplus solar may still refill the pack.",
             )
+            solar_floor_a = (
+                float(charge_floor_a)
+                if charge_floor_a is not None and charge_floor_a > 0
+                else float(self.SOLAR_CHARGE_REFERENCE_CURRENT)
+            )
+            solar_activation_w = (
+                charge_activation_w
+                if charge_activation_w
+                else self._charge_activation_w_for_current(solar_floor_a)
+            )
+            if not at_cap:
+                add_step(
+                    "Will the car still take surplus solar?",
+                    "Does the absolute minimum close the charge path as well?",
+                    f"Discharge floor = {absolute_floor:.0f}%. Charge floor = "
+                    f"{solar_floor_a:.0f} A "
+                    f"(≈{solar_activation_w:.0f} W); cap = {cap:.0f}%.",
+                    f"Charging is allowed from surplus at "
+                    f"≥{solar_floor_a:.0f} A "
+                    f"(≈{solar_activation_w:.0f} W).",
+                    "The floor stops discharge and export, not free solar. The "
+                    "pack can refill during the day without importing at the "
+                    "peak rate.",
+                )
             charge_answer = {
                 "headline": (
                     "No charging — at the cap"
                     if at_cap
-                    else "Charge from surplus solar only"
+                    else f"Charge from surplus solar at ≥{solar_floor_a:.0f} A "
+                    f"(≈{solar_activation_w:.0f} W)"
                 ),
                 "because": (
                     "The pack is at its charge cap."
                     if at_cap
-                    else "The absolute minimum only stops discharge; surplus "
-                    "solar may still refill the pack."
+                    else self._solar_charge_floor_text()
                 ),
             }
             discharge_answer = {
@@ -6223,18 +6314,40 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Charging from surplus solar is still allowed, so the pack can recover
         # during the day without importing at the peak rate.
         if discharge_inhibited:
+            charge_at_cap = battery_level >= charge_cap
+            solar_floor_a = float(self.SOLAR_CHARGE_REFERENCE_CURRENT)
+            solar_activation_w = self._charge_activation_w_for_current(
+                solar_floor_a
+            )
+            if charge_at_cap:
+                solar_reason = (
+                    "the pack is at its charge cap, so surplus solar is "
+                    "exported"
+                )
+            else:
+                solar_reason = (
+                    f"surplus solar still charges at ≥{solar_floor_a:.0f} A "
+                    f"(≈{solar_activation_w:.0f} W) up to "
+                    f"{self.MAX_CHARGE_CURRENT:.0f} A"
+                )
             self._record_decision(
                 mode="Idle — absolute minimum SoC",
                 reason=(
-                    f"{floor_reason}, so the pack will not discharge"
+                    f"{floor_reason}, so the pack will not discharge; "
+                    f"{solar_reason}"
                 ),
                 soc_percent=battery_level,
                 detail=(
                     f"{floor_detail} The pack will not discharge or export, "
-                    "even at an attractive price. Surplus solar may still "
-                    "charge it."
+                    "even at an attractive price. "
+                    + self._solar_charge_floor_text(at_cap=charge_at_cap)
                 ),
                 current_rate_p=self._current_export_rate_p(current_slot),
+                charge_min_a=0 if charge_at_cap else solar_floor_a,
+                charge_max_a=(
+                    0 if charge_at_cap else self.MAX_CHARGE_CURRENT
+                ),
+                charge_activation_w=0 if charge_at_cap else solar_activation_w,
                 discharge_min_a=0,
                 discharge_max_a=0,
                 discharge_aggressive=False,
