@@ -88,7 +88,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         # the next request, so retrying the same register is effectively a
         # reconnect.  Keep the retry budget small: the poll loop runs every
         # second, and a dead link should still reach the reset logic promptly.
-        self.MODBUS_READ_ATTEMPTS = 2
+        # The same budget applies to reads and writes.
+        self.MODBUS_ATTEMPTS = 2
         self.MODBUS_RETRY_DELAY_SECONDS = 0.05
         
         # Add tracking for OCPP state change to implement 2-minute delay for resets
@@ -340,7 +341,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         still reaches the existing reset logic quickly.
         """
         last_error: Optional[ConnectionError] = None
-        for attempt in range(1, self.MODBUS_READ_ATTEMPTS + 1):
+        for attempt in range(1, self.MODBUS_ATTEMPTS + 1):
             try:
                 output = self._client.read_holding_registers(reg)
             except ConnectionError as exc:
@@ -355,7 +356,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             if self._modbus_error_code() == 7:
                 return None
 
-            if attempt < self.MODBUS_READ_ATTEMPTS:
+            if attempt < self.MODBUS_ATTEMPTS:
                 try:
                     self._client.close()
                 except Exception:
@@ -366,6 +367,46 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         if last_error is not None:
             raise last_error
         return None
+
+    def _write_single_register(self, reg: int, value: int) -> bool:
+        """Write one register, retrying a transport failure once.
+
+        This mirrors :meth:`_read_holding_registers`.  ``write_single_register``
+        returns ``True`` on success and ``None`` on failure; the previous code
+        ignored that result, so a failed command could silently do nothing and
+        still leave the controller believing the setpoint had changed.
+        """
+        last_error: Optional[ConnectionError] = None
+        for attempt in range(1, self.MODBUS_ATTEMPTS + 1):
+            try:
+                result = self._client.write_single_register(reg, value)
+            except ConnectionError as exc:
+                result = None
+                last_error = exc
+
+            if result:
+                return True
+
+            # A Modbus exception is a valid response from the device, not a
+            # lost connection.  Retrying it just repeats the same error.
+            if self._modbus_error_code() == 7:
+                break
+
+            if attempt < self.MODBUS_ATTEMPTS:
+                try:
+                    self._client.close()
+                except Exception:
+                    # A client that was never opened may not have a socket.
+                    pass
+                time.sleep(self.MODBUS_RETRY_DELAY_SECONDS)
+
+        detail = self._modbus_failure_detail()
+        message = f"Failed to write register {hex(reg)}"
+        if detail:
+            message += f" ({detail})"
+        elif last_error is not None:
+            message += f" ({last_error})"
+        raise ConnectionError(message)
 
     def _log_connection_error(self, exc: ConnectionError) -> None:
         """Log a Modbus read failure at a rate that matches its severity."""
@@ -611,19 +652,27 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _set_current(self, current: int):
         try:
             # Take control
-            self._client.write_single_register(self._CONTROL_LOCKOUT_REG, self._MODBUS_CONTROL)
+            self._write_single_register(
+                self._CONTROL_LOCKOUT_REG, self._MODBUS_CONTROL
+            )
             # If current is zero, stop charging
             if current == 0:
-                self._client.write_single_register(self._CONTROL_STATE_REG, self._STOP_CHARGING)
-                self._client.write_single_register(self._CONTROL_CURRENT_REG, 0)
+                self._write_single_register(
+                    self._CONTROL_STATE_REG, self._STOP_CHARGING
+                )
+                self._write_single_register(self._CONTROL_CURRENT_REG, 0)
                 # Update power model
                 self._power_model.set_current(0.0)
             else:
                 # Set charging current as 16-bit value
                 reg_value = self.convert_to_16_bit_twos_complement(current)
-                self._client.write_single_register(self._CONTROL_CURRENT_REG, reg_value)
+                self._write_single_register(
+                    self._CONTROL_CURRENT_REG, reg_value
+                )
                 # Start charging
-                self._client.write_single_register(self._CONTROL_STATE_REG, self._START_CHARGING)
+                self._write_single_register(
+                    self._CONTROL_STATE_REG, self._START_CHARGING
+                )
                 # Update power model
                 self._power_model.set_current(float(current))
 
@@ -639,10 +688,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         finally:
             try:
                 # Always attempt to return control to user, even if previous operations failed
-                self._client.write_single_register(self._CONTROL_LOCKOUT_REG, self._USER_CONTROL)
+                self._write_single_register(
+                    self._CONTROL_LOCKOUT_REG, self._USER_CONTROL
+                )
                 # Don't close the client here as we will be reading the state in the next step
                 # (don't do self._client.close())
-            except:
+            except Exception:
                 pass
 
     def _set_freerun(self):

@@ -28,6 +28,9 @@ class MockModbusClient(ModbusClientInterface):
         self._fail_register = None
         self._fail_register_once = None
         self._read_counts = {}
+        self._fail_write_register = None
+        self._fail_write_register_once = None
+        self._write_counts = {}
         # Optional stand-in for the wrapped pyModbusTCP client, used to test
         # the error detail that is added to a failed read.
         self._client = None
@@ -68,8 +71,14 @@ class MockModbusClient(ModbusClientInterface):
             raise
 
     def write_single_register(self, reg_addr: int, reg_value: int) -> Optional[bool]:
+        self._write_counts[reg_addr] = self._write_counts.get(reg_addr, 0) + 1
         if self._communication_fails:
             raise ConnectionError("Simulated communication failure")
+        if reg_addr == self._fail_write_register:
+            return None
+        if reg_addr == self._fail_write_register_once:
+            self._fail_write_register_once = None
+            return None
         self._registers[reg_addr] = [reg_value]
         return True
 
@@ -189,6 +198,48 @@ class TestWallboxThread(TestCase):
         self.assertEqual(state.evse_state, EvseState.CHARGING)
         self.assertEqual(
             self.mock_client._read_counts[self.thread._READ_STATE_REG], 2
+        )
+
+    def test_transient_write_failure_is_retried(self):
+        """A single lost write must not leave a command half-applied."""
+        self.mock_client._fail_write_register_once = (
+            self.thread._CONTROL_LOCKOUT_REG
+        )
+
+        self.thread._set_current(10)
+
+        self.assertEqual(self.mock_client._registers[0x102], [10])
+        self.assertEqual(self.mock_client._registers[0x101], [1])
+        self.assertEqual(self.mock_client._registers[0x51], [0])
+        # First lockout write failed, the retry succeeded, and the final
+        # write returned control to the user.
+        self.assertEqual(
+            self.mock_client._write_counts[self.thread._CONTROL_LOCKOUT_REG],
+            3,
+        )
+
+    def test_write_failure_is_not_silent(self):
+        """A failed write must raise instead of leaving a stale setpoint."""
+        self.mock_client._fail_write_register = self.thread._CONTROL_LOCKOUT_REG
+        self.mock_client._client = SimpleNamespace(
+            last_error=5,
+            last_error_as_txt="recv timeout occur",
+        )
+
+        with self.assertRaisesRegex(
+            ConnectionError, "Failed to write register 0x51.*recv timeout occur"
+        ):
+            self.thread._set_current(10)
+
+        # The failed lockout write and the best-effort release both retry.
+        self.assertEqual(
+            self.mock_client._write_counts[self.thread._CONTROL_LOCKOUT_REG],
+            4,
+        )
+        # The current/state writes were never attempted.
+        self.assertNotIn(0x102, self.mock_client._write_counts)
+        self.assertEqual(
+            self.thread.get_state().consecutive_connection_errors, 1
         )
 
     def test_thread_lifecycle(self):
