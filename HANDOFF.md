@@ -226,7 +226,9 @@ completed fixes.
   `house` series (`grid − Wallbox AC`). The planner uses the 90th percentile
   for conservative coverage and the median for aggressive, over the last 28
   days where available (minimum 14), and falls back to the flat configured
-  constants when there is not enough history.
+  constants when there is not enough history.  A graceful SIGINT/SIGTERM
+  flushes the daily report and the open profile slot; the next run reloads
+  both and continues the same half-hour.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts

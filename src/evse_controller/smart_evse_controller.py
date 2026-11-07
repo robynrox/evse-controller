@@ -330,6 +330,11 @@ def signal_handler(signum, frame):
     try:
         tariffManager.save_state()  # Persist the ledger and today's saving
         evseController.stop()  # Stop the controller first
+        # Persist the partial daily report and the sparse house-load profile,
+        # including the slot that is still open.
+        from evse_controller.daily_report import daily_log
+
+        daily_log.flush()
         mqttManager.shutdown() # Stop the MQTT manager
 
         # Give threads time to clean up

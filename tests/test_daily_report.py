@@ -585,3 +585,50 @@ class TestPowerProfile:
         assert evse_bins[str(int(300 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
             1800.0
         )
+
+
+class TestPowerProfileResume:
+    """A graceful shutdown keeps the open slot and the next run continues."""
+
+    def test_flush_persists_the_open_slot_and_resumes(self, tmp_path):
+        log = _log(tmp_path)
+        for minute in (0, 5, 10):
+            log.observe(
+                _at(DAY, 0, minute), {"grid": 600.0, "evse": 0.0}
+            )
+        log.flush()
+
+        profile_path = (
+            tmp_path / "load_profile" / f"{DAY.isoformat()}.json"
+        )
+        profile = json.loads(profile_path.read_text())
+        slot0 = profile["slots"][0]
+        assert slot0["closed"] is False
+        assert slot0["coverage_s"]["house"] > 0
+        assert slot0["bins_s"]["house"]
+
+        daily = json.loads(
+            (tmp_path / "reports" / f"{DAY.isoformat()}.json").read_text()
+        )
+        assert daily["slots"][0]["energy"]["grid"]["in"] is not None
+
+        # A new process loads the flushed data and continues the same slot.
+        resumed = _log(tmp_path)
+        for minute in (15, 20, 25, 30):
+            resumed.observe(
+                _at(DAY, 0, minute), {"grid": 1000.0, "evse": 0.0}
+            )
+
+        profile = json.loads(profile_path.read_text())
+        slot0 = profile["slots"][0]
+        assert slot0["closed"] is True
+        # The pre-shutdown 600 W interval plus the post-restart 1000 W
+        # intervals.  The 0:10-0:15 gap is deliberately not bridged.
+        assert slot0["coverage_s"]["house"] == pytest.approx(1500.0)
+        bins = slot0["bins_s"]["house"]
+        assert bins[str(int(600 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            600.0
+        )
+        assert bins[str(int(1000 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            900.0
+        )

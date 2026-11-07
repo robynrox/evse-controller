@@ -404,7 +404,9 @@ cell on a phone, where the badge alone is too small to rely on.
   the 90th percentile for conservative coverage and the median for aggressive
   discharge. With too little history it falls back to the flat configured
   losses. The same histograms are the raw material for future house-load
-  reports.
+  reports. A graceful SIGINT/SIGTERM flushes the open slot as well as the
+  completed ones, so a restart continues the same half-hour rather than
+  losing it; the downtime itself is not bridged.
 - **The charge floor and its activation are calculated, not fixed.** When the
   decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car

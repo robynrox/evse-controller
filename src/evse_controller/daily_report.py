@@ -456,19 +456,24 @@ class DailyEnergyLog:
                 for key, value in coverage.items()
                 if isinstance(value, (int, float)) and value > 0
             }
-            bins = slot.get("bins_s")
-            if not isinstance(bins, dict):
-                bins = {}
-            converted = {}
-            for key, value in bins.items():
-                try:
-                    bin_index = int(key)
-                    seconds = float(value)
-                except (TypeError, ValueError):
+            raw_bins = slot.get("bins_s")
+            if not isinstance(raw_bins, dict):
+                raw_bins = {}
+            bins_by_series: dict[str, dict[int, float]] = {}
+            for key, bins in raw_bins.items():
+                if not isinstance(bins, dict):
                     continue
-                if seconds > 0:
-                    converted[bin_index] = seconds
-            slot["bins_s"] = converted
+                converted: dict[int, float] = {}
+                for bin_index, seconds in bins.items():
+                    try:
+                        index = int(bin_index)
+                        value = float(seconds)
+                    except (TypeError, ValueError):
+                        continue
+                    if value > 0:
+                        converted[index] = value
+                bins_by_series[str(key)] = converted
+            slot["bins_s"] = bins_by_series
         return data
 
     def _write_profile(self, force: bool = False) -> None:
@@ -838,6 +843,18 @@ class DailyEnergyLog:
             warning(f"DAILY_REPORT: Could not write {path}: {exc}")
 
     # -- readers --------------------------------------------------------
+
+    def flush(self) -> None:
+        """Persist the in-progress daily report and power profile.
+
+        The periodic write already keeps the daily report within a minute of
+        the latest sample.  The profile is normally written only when a slot
+        closes, so a graceful shutdown must flush the partial slot too; the
+        next run then continues from the same bins.
+        """
+        with self._lock:
+            self._write(force=True)
+            self._write_profile(force=True)
 
     def snapshot(self, now: Optional[datetime] = None) -> dict:
         """Return a copy of the current day, including the partial slot."""
