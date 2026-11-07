@@ -194,18 +194,41 @@ completed fixes.
   ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling zeroes
   the charge range outside off-peak, so solar cannot overfill the pack.
 - Discharge activation is no longer the hard-coded 1 W (aggressive) or 720 W
-  (conservative). It is the break-even house load
-  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `H` is the
-  stored cost per delivered kWh plus the profit margin. The Wallbox cannot go
-  below 3 A (~720 W), so starting for a tiny load would export the excess.
-  Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
-  controller never starts a discharge.
-- Bulk export planning keeps `MIN_AGILE_DISCHARGE_SOC` as its floor. The
-  aggressive/conservative house-load decision now uses
-  `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
-  (`house_load_margin_percent`, default 5%, clamped above the 25% protection
-  reserve). This keeps aggressive mode after a bulk export reaches the target;
-  only a projection below the lower floor becomes conservative.
+  (conservative). Aggressive mode scans the house load and evaluates the
+  integer current the Wallbox would actually choose at each point, so the
+  4 A/5 A efficiency step is included. The stored energy is valued at the
+  higher of its ledger cost and the best *uncommitted* export price
+  (converted to DC); the hurdle applies the delivery loss at that current
+  plus the profit margin. A better unplanned slot therefore raises the gate,
+  while planned sales do not. Conservative mode keeps the closed-form
+  break-even at the minimum output
+  `G* = P_min × (H − P_export) / (P_import − P_export)` and floors the
+  activation at `P_min`; when `H ≥ P_import` the controller never starts a
+  discharge.
+- The four SoC limits are explicit: `aggressive_soc_lower_limit` (default
+  50%, also the 23:30 target), `conservative_soc_lower_limit` (default 45%),
+  `bulk_discharge_soc_lower_limit` (defaults to the hard protection floor),
+  and `absolute_min_soc_percent` (hard protection floor, default 25%). Old
+  `min_agile_discharge_soc` and `house_load_margin_percent` values migrate
+  automatically when the new keys are absent.
+- Priority exports (price above the house-offset break-even) get first claim
+  and may spend down to `bulk_discharge_soc_lower_limit`. While one is still
+  ahead, an energy shortfall pauses house discharge so the pack is not spent
+  at 3 A first; surplus solar may still charge.
+- The plan order is priority exports, conservative house coverage, surplus
+  exports, then aggressive discharge. Conservative coverage wins where the
+  forecast expects it to activate; surplus and aggressive use only headroom
+  above `aggressive_soc_lower_limit` that conservative does not need. A day
+  that maxes out its export budget therefore has no aggressive slots.
+- The rolling house-load profile lives in
+  `data/state/load_profile/YYYY-MM-DD.json`. Each file holds sparse 25 W
+  time-weighted histograms per half-hour slot for every CT clamp and a derived
+  `house` series (`grid − Wallbox AC`). The planner uses the 90th percentile
+  for conservative coverage and the median for aggressive, over the last 28
+  days where available (minimum 14), and falls back to the flat configured
+  constants when there is not enough history.  A graceful SIGINT/SIGTERM
+  flushes the daily report and the open profile slot; the next run reloads
+  both and continues the same half-hour.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts

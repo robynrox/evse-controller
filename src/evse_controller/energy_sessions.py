@@ -1,7 +1,7 @@
-"""Supplier-requested energy sessions covering whole half-hour slots.
+"""Whole-slot energy sessions and planned EV availability windows.
 
-Two kinds of window are supported, both expressed in neutral terms rather than
-one supplier's marketing names:
+Three kinds of window are supported, all expressed in neutral terms rather
+than one supplier's marketing names:
 
 ``free_import``
     The supplier makes import free for the window (a "Happy Hour").  The tariff
@@ -14,7 +14,14 @@ one supplier's marketing names:
     for the window.  The reward for doing so is not a price the tariff can see,
     so it is deliberately not modelled as one.
 
-Sessions are quantised to the half-hour tariff slots: ``start`` is floored and
+``ev_away``
+    The user expects the EV to be disconnected for the window.  This is a
+    planning assumption, not a control override: the 23:30 projection leaves
+    those slots out because the pack will not be available, but if the EV is
+    still connected the normal heuristic keeps running and may charge or
+    discharge it.
+
+Windows are quantised to the half-hour tariff slots: ``start`` is floored and
 ``end`` is ceiled to a slot boundary, and ``end`` is exclusive.  Utilities bill
 and pay on half-hour settlement periods, so anything finer would be a fiction.
 
@@ -36,12 +43,14 @@ from evse_controller.utils.logging_config import error
 
 FREE_IMPORT = "free_import"
 GRID_SUPPORT = "grid_support"
+EV_AWAY = "ev_away"
 
 #: Display labels.  Kept out of the stored data so the wording can change (or
 #: be translated) without migrating the file.
 SESSION_LABELS = {
     FREE_IMPORT: "Free Energy Session",
     GRID_SUPPORT: "Save Energy Session",
+    EV_AWAY: "EV Away",
 }
 
 SLOT_MINUTES = 30
@@ -100,7 +109,7 @@ def session_from_slots(
 
 @dataclass
 class EnergySession:
-    """A supplier-requested window, snapped to half-hour slots."""
+    """A supplier-requested or EV-availability window, snapped to slots."""
 
     kind: str
     start: datetime
@@ -200,6 +209,10 @@ class SessionStore:
     def free_import_slots(self, day: date_type) -> set[int]:
         """Slots of *day* whose import price is zero."""
         return self.slots_for_kind(day, FREE_IMPORT)
+
+    def away_slots(self, day: date_type) -> set[int]:
+        """Slots of *day* during which the EV is planned to be away."""
+        return self.slots_for_kind(day, EV_AWAY)
 
     def is_free_import(self, when: datetime) -> bool:
         session = self.active(when)

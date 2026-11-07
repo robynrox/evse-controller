@@ -15,7 +15,10 @@ import json
 from pathlib import Path
 from typing import List, Dict, Optional
 from evse_controller.utils.paths import ensure_data_dirs
-from evse_controller.drivers.evse.async_interface import EvseThreadInterface
+from evse_controller.drivers.evse.async_interface import (
+    DISCONNECTED_STATES,
+    EvseThreadInterface,
+)
 from evse_controller.utils.memory_monitor import MemoryMonitor
 from evse_controller.mqtt import MQTTManager
 
@@ -227,7 +230,7 @@ def handle_pause_until_disconnect(previous_state: Optional[ExecState],
         - If disconnected: Returns (previous_state, None) or (PAUSE, None) if no previous state
         - If still connected: Returns (PAUSE_UNTIL_DISCONNECT, previous_state) to maintain current state
     """
-    if evse_state == EvseState.DISCONNECTED:
+    if evse_state in DISCONNECTED_STATES:
         if previous_state is not None:
             return previous_state, None
         else:
@@ -327,6 +330,11 @@ def signal_handler(signum, frame):
     try:
         tariffManager.save_state()  # Persist the ledger and today's saving
         evseController.stop()  # Stop the controller first
+        # Persist the partial daily report and the sparse house-load profile,
+        # including the slot that is still open.
+        from evse_controller.daily_report import daily_log
+
+        daily_log.flush()
         mqttManager.shutdown() # Stop the MQTT manager
 
         # Give threads time to clean up

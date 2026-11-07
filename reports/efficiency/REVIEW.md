@@ -499,19 +499,30 @@ fetch cannot silently reuse yesterday's prices.
 
 ### Target, house floor and aggressive mode
 
-The manager uses two SoC thresholds rather than one. Bulk export planning keeps
-`MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots are selected
-until the projected 23:30 SoC would reach that target. The
-aggressive/conservative house-load decision uses
-`MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT` (default 5%, clamped
-above the 25% protection reserve). A projection between the two therefore stays
-in aggressive load-following rather than switching to conservative the moment a
-bulk export has consumed the planned headroom. The decision is a single
-comparison recomputed with the export plan at slot boundaries, so no separate
-latch is needed; the comparison is strict, and exactly on the floor remains
-aggressive. The margin is configuration (`house_load_margin_percent`) and is
-clamped at zero so a bad value cannot put the house floor above the bulk
-target.
+The manager uses four explicit SoC limits: `aggressive_soc_lower_limit`
+(default 50%, also the 23:30 target), `conservative_soc_lower_limit` (default
+45%), `bulk_discharge_soc_lower_limit` (defaults to the hard protection floor),
+and `absolute_min_soc_percent` (default 25%). Priority exports whose price
+clears the house-offset break-even get first claim and may spend down to the
+bulk discharge floor; while one is still ahead in an energy shortfall, house
+discharge is paused.
+
+The plan order is priority exports, conservative house coverage, surplus
+exports, then aggressive discharge. Conservative coverage wins where the
+forecast expects it to activate. Surplus exports and aggressive discharge use
+only headroom above the aggressive floor that conservative does not need, so a
+day that maxes out its export budget has no aggressive slots.
+
+A rolling house-load profile supplies the per-slot SoC cost. The daily report
+writes sparse 25 W time-weighted histograms to
+`data/state/load_profile/YYYY-MM-DD.json`; the profile merges the last 28 days
+(minimum 14) and uses the 90th percentile for conservative coverage and the
+median for aggressive. With insufficient history it falls back to the flat
+configured constants. Committed exports may run below the conservative floor
+down to the bulk discharge floor. The decision is a single comparison
+recomputed with the export plan at slot boundaries, so no separate latch is
+needed; the comparison is strict, and exactly on a floor stays in the higher
+band.
 
 ### Dashboard, charge ceiling and savings estimate
 
@@ -532,26 +543,33 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`,
   `Do not charge — SoC at N% cap · aggressive discharge`,
   `Idle — battery protection`, or `Charge at 3 A (SoC unknown)`.
-- **Aggressive** means a +0.5 A bias with the activation set to the calculated
-  break-even load. **Conservative** means a −0.5 A bias with the activation
-  floored at the Wallbox minimum (3 A, ~720 W), so it never starts a discharge
-  that would have to export; above that floor it covers the load to within
-  ~120 W (the bias). The aggressive house-load reason also spells out the
-  trigger: any import, a specific break-even house import, or a disabled
-  discharge when stored energy costs more than the import it avoids.
+- **Aggressive** means a +0.5 A bias with the activation set to the scanned
+  break-even load. The scan evaluates the integer current the Wallbox would
+  choose, so a load that only pays at 4 A or 5 A is found. **Conservative**
+  means a −0.5 A bias with the activation floored at the Wallbox minimum
+  (3 A, ~720 W), so it never starts a discharge that would have to export;
+  above that floor it covers the load to within ~120 W (the bias). The
+  aggressive house-load reason also spells out the trigger: any import, a
+  specific break-even house import, or a disabled discharge when stored
+  energy is worth more in its best alternative use than the import it avoids.
 - **Discharge ≥N W** is the house import at which a discharge starts. A
   load-following discharge cannot follow a load smaller than 3 A (~720 W):
   starting for a 30 W base load sends the other ~690 W to the grid at the
-  prevailing export price. The break-even load is
+  prevailing export price. Aggressive mode scans the load and evaluates the
+  integer current the Wallbox would choose, valuing the stored energy at the
+  higher of its ledger cost and the best *uncommitted* export price. A better
+  unplanned slot raises the gate; planned sales are already committed to the
+  pack and do not. Conservative mode uses the closed-form break-even
   `G* = P_min × (H − P_export) / (P_import − P_export)`, where `P_min` is the
   minimum output, `H` is the stored cost per delivered kWh plus the profit
   margin, and the prices are the live import and export rates. If
   `P_export ≥ H` the forced export alone clears the hurdle, so any import
   starts it (0 W). If `H ≥ P_import`, even a load equal to `P_min` cannot repay
   the energy, so it never starts. At 32.26p import, 0p export and `H ≈ 12.1p`
-  the threshold is ~269 W: a 480 W house load is economic, a 30 W one is not.
-  The threshold is recalculated each control cycle from the ledger, so cheap
-  stored energy lowers it and expensive stored energy raises it.
+  the conservative threshold is ~269 W: a 480 W house load is economic, a
+  30 W one is not. The threshold is recalculated each control cycle from the
+  ledger and the plan, so cheap stored energy lowers it, expensive stored
+  energy raises it, and a better unplanned export slot raises it further.
 - **Stored N.Np/kWh** is that ledger cost per kWh delivered to the house: the
   money paid for the energy (or the Agile export value forgone when it was
   stored), divided by the measured charge and discharge efficiency. The charge
@@ -580,9 +598,9 @@ text log; the dashboard gets one compact, wrapping line above the 48-slot strip.
   import therefore books `32.26p − 7.62p / η_rt` per kWh delivered, with the
   round-trip loss included. The dashboard shows the in-pack cost and the range
   of cost per kWh delivered across the discharge range; the delivered cost is
-  highest at the 3 A minimum and lowest at maximum current, and the 3 A figure
-  is the discharge-threshold basis because activation starts at the minimum
-  output. Only realised energy counts, so a charge still in the pack shows no
+  highest at the 3 A minimum and lowest at maximum current. The 3 A figure is
+  the conservative activation basis; aggressive mode applies the delivery loss
+  at the actual current the scan selects. Only realised energy counts, so a charge still in the pack shows no
   saving yet. The daily total resets at midnight; the ledger persists so
   yesterday's cheap energy is priced correctly today. At startup,
   the charge already in the pack is seeded at the off-peak fallback price, and

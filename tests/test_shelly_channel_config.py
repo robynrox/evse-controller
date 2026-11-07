@@ -1,6 +1,6 @@
 import pytest
 from evse_controller.utils.config import Config
-from evse_controller.configure import DEFAULT_CONFIG
+from evse_controller.utils.default_config import DEFAULT_CONFIG
 
 @pytest.fixture(autouse=True)
 def reset_config():

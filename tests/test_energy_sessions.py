@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from evse_controller.energy_sessions import (
+    EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
     EnergySession,
@@ -88,6 +89,11 @@ class TestEnergySession:
         assert restored.enabled is False
         assert restored.id == session.id
 
+    def test_ev_away_is_a_supported_window(self):
+        session = EnergySession(EV_AWAY, at(18), at(19))
+        assert session.label == "EV Away"
+        assert session.slot_indices(at(18).date()) == [36, 37]
+
 
 class TestSessionStore:
     def test_add_and_query(self, tmp_path):
@@ -125,6 +131,13 @@ class TestSessionStore:
         store.add(EnergySession(FREE_IMPORT, at(18), at(19)))
         store.add(EnergySession(FREE_IMPORT, at(20), at(21)))
         assert store.free_import_slots(at(18).date()) == {36, 37, 40, 41}
+
+    def test_away_slots_union(self, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        store.add(EnergySession(EV_AWAY, at(18), at(19)))
+        store.add(EnergySession(EV_AWAY, at(20), at(21)))
+        assert store.away_slots(at(18).date()) == {36, 37, 40, 41}
+        assert store.free_import_slots(at(18).date()) == set()
 
     def test_disabled_free_session_contributes_no_slots(self, tmp_path):
         store = SessionStore(tmp_path / "sessions.json")

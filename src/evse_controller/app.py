@@ -29,6 +29,7 @@ from evse_controller.web.daily_report_routes import (
     slot_label as _slot_label,
 )
 from evse_controller.energy_sessions import (
+    EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
     SLOTS_PER_DAY,
@@ -401,8 +402,10 @@ def sessions_page():
         labels=SESSION_LABELS,
         free_kind=FREE_IMPORT,
         grid_kind=GRID_SUPPORT,
+        away_kind=EV_AWAY,
         free_slots=session_store.slots_for_kind(today, FREE_IMPORT),
         grid_slots=session_store.slots_for_kind(today, GRID_SUPPORT),
+        away_slots=session_store.away_slots(today),
         now_slot=now.hour * 2 + (1 if now.minute >= 30 else 0),
         now=now,
     )
@@ -577,19 +580,53 @@ def config_page():
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
             if non_export_slot_loss is not None:
                 config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+            full_charge_gain = request.form.get('tariffs.ioctgo[full_charge_slot_soc_gain_percent]')
+            if full_charge_gain is not None:
+                config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = float(full_charge_gain)
             min_profit_margin = request.form.get('tariffs.ioctgo[min_profit_margin_p_per_kwh]')
             if min_profit_margin is not None:
                 config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = float(min_profit_margin)
 
-            # Update Minimum SoC for Agile Discharge
-            min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
-            if min_agile_soc is not None:
-                config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
+            # Hard protection floor for discharge and export
+            absolute_min_soc = request.form.get(
+                'tariffs.ioctgo[absolute_min_soc_percent]'
+            )
+            if absolute_min_soc is not None:
+                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = int(
+                    absolute_min_soc
+                )
 
-            # Flexibility below the bulk-export target for house-load mode
-            house_load_margin = request.form.get('tariffs.ioctgo[house_load_margin_percent]')
-            if house_load_margin is not None:
-                config.HOUSE_LOAD_MARGIN_PERCENT = int(house_load_margin)
+            # Three economic SoC limits.  Accept the old form field names too
+            # so a stale browser tab cannot silently discard the setting.
+            bulk_soc = request.form.get(
+                'tariffs.ioctgo[bulk_discharge_soc_lower_limit]'
+            )
+            if bulk_soc is not None:
+                config.BULK_DISCHARGE_SOC_LOWER_LIMIT = int(bulk_soc)
+
+            aggressive_soc = request.form.get(
+                'tariffs.ioctgo[aggressive_soc_lower_limit]'
+            )
+            if aggressive_soc is None:
+                aggressive_soc = request.form.get(
+                    'tariffs.ioctgo[min_agile_discharge_soc]'
+                )
+            if aggressive_soc is not None:
+                config.AGGRESSIVE_SOC_LOWER_LIMIT = int(aggressive_soc)
+
+            conservative_soc = request.form.get(
+                'tariffs.ioctgo[conservative_soc_lower_limit]'
+            )
+            if conservative_soc is None:
+                margin = request.form.get(
+                    'tariffs.ioctgo[house_load_margin_percent]'
+                )
+                if margin is not None:
+                    conservative_soc = (
+                        config.AGGRESSIVE_SOC_LOWER_LIMIT - int(margin)
+                    )
+            if conservative_soc is not None:
+                config.CONSERVATIVE_SOC_LOWER_LIMIT = int(conservative_soc)
 
             # Handle channel configuration for both devices
             devices = ['primary']
