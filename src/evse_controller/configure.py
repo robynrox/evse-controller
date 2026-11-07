@@ -1,3 +1,11 @@
+"""Deprecated interactive configuration wizard.
+
+The controller is configured from the web interface or by editing
+``data/config/config.yaml`` directly.  This wizard is retained so existing
+installations can still use it, but it is no longer the recommended setup
+path.
+"""
+
 import questionary
 import yaml
 from pathlib import Path
@@ -505,6 +513,12 @@ def interactive_config():
     return config
 
 def main():
+    print(
+        "WARNING: the interactive configuration wizard is deprecated. "
+        "Configure the controller from the web interface or by editing "
+        "data/config/config.yaml directly.",
+        file=sys.stderr,
+    )
     config = interactive_config()
     save_config(config)
     config_path = get_data_dir() / "config" / "config.yaml"

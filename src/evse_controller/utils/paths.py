@@ -57,7 +57,10 @@ def get_config_file(require_exists: bool = True) -> Path:
     # No config found
     if require_exists:
         print("No configuration file found.", file=sys.stderr)
-        print("Please run 'python -m evse_controller.configure' to create one.", file=sys.stderr)
+        print(
+            "Please create data/config/config.yaml (see README.md).",
+            file=sys.stderr,
+        )
         sys.exit(1)
     
     return data_config
