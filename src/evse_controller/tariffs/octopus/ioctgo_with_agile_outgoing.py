@@ -881,7 +881,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if not self._shadow_enabled:
             return self._soc_estimator
         battery = getattr(state, "battery_level", -1)
-        if battery is None or battery < 0:
+        try:
+            battery = float(battery)
+        except (TypeError, ValueError):
+            return self._soc_estimator
+        if battery < 0:
             return self._soc_estimator
 
         if self._soc_estimator is None:
@@ -6920,8 +6924,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         now = self.get_current_datetime()
 
         # Keep the continuous SoC estimate warm even when the DP is only
-        # running in shadow mode.
-        self._update_soc_estimator(state, now)
+        # running in shadow mode.  It is an observer: never let an estimator
+        # error escape into the heuristic's control decision.
+        try:
+            self._update_soc_estimator(state, now)
+        except Exception as exc:
+            warning(
+                f"IOCTGO_AGILEOUT: SoC estimator update failed: {exc}"
+            )
 
         # Roll the dashboard saving forward with the latest power sample.
         self._accumulate_daily_savings()

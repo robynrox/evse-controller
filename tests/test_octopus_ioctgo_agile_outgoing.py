@@ -4901,6 +4901,23 @@ class TestShadowPlannerAndEstimator:
         assert tariff._history.runs_for_day(today) == []
         assert tariff._history.soc_samples_for_day(today) == []
 
+    def test_estimator_failure_does_not_break_control(self, tmp_path):
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("estimator failed")
+
+        tariff._update_soc_estimator = boom
+
+        result = tariff.get_control_state(
+            create_test_state(60), 12 * 60
+        )
+
+        assert isinstance(result, tuple)
+        assert result[0] is not None
+
     def test_shadow_planner_is_disabled_by_default(self):
         tariff = _build_tariff()
         assert tariff._shadow_enabled is False
