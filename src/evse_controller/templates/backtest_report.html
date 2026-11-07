@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>DP backtest</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0 18px;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 150px;
+        flex: 1 1 150px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 23px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+        margin-bottom: 14px;
+    }
+    .chart { width: 100%; height: auto; display: block; }
+    .zero { stroke: #b8bec6; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .better-bar { fill: #2e7d32; opacity: .8; }
+    .worse-bar { fill: #c62828; opacity: .8; }
+    .legend { font-size: 11px; font-weight: 700; }
+    .better-legend { fill: #2e7d32; }
+    .worse-legend { fill: #c62828; }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 900px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>DP backtest</h1>
+        <p>
+            The first shadow plan of each day is replayed against the measured
+            house load and frozen prices. The DP cost replaces the actual EVSE
+            action, so it is comparable with the heuristic's net cost over the
+            same slots. Positive delta means the DP plan would have been
+            cheaper. This is a first-order sanity check: it does not re-solve
+            battery constraints or supplier rewards.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/plan">Plan vs actual</a>
+        <a href="/reports/value">Battery value</a>
+        <a href="/reports/export">Export</a>
+        <a href="/reports/data-quality">Data quality</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Window</span>
+        {% for choice in window_choices %}
+            {% if choice == days %}
+                <span class="current">{{ choice }} days</span>
+            {% else %}
+                <a href="/reports/backtest?days={{ choice }}">{{ choice }} days</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    {% if rows %}
+        <div class="cards">
+            <div class="card">
+                <div class="label">Paired days</div>
+                <div class="value">{{ metrics.paired_days }} / {{ metrics.days }}</div>
+                <div class="note">Days with both costs</div>
+            </div>
+            <div class="card">
+                <div class="label">DP plan cost</div>
+                <div class="value">{{ fmt_money(metrics.dp_cost_gbp) }}</div>
+                <div class="note">Replayed grid cost</div>
+            </div>
+            <div class="card">
+                <div class="label">Heuristic actual</div>
+                <div class="value">{{ fmt_money(metrics.actual_cost_gbp) }}</div>
+                <div class="note">Same slots, measured</div>
+            </div>
+            <div class="card">
+                <div class="label">Delta</div>
+                <div class="value">{{ fmt_money(metrics.delta_gbp) }}</div>
+                <div class="note">Actual minus DP; positive is better</div>
+            </div>
+            <div class="card">
+                <div class="label">SoC MAE</div>
+                <div class="value">{{ fmt_pp(metrics.soc_mae) }}</div>
+                <div class="note">{{ metrics.soc_pairs }} matched slots</div>
+            </div>
+            <div class="card">
+                <div class="label">Action match</div>
+                <div class="value">{{ fmt_pct(metrics.action_match_rate) }}</div>
+                <div class="note">{{ metrics.action_slots }} slots</div>
+            </div>
+        </div>
+
+        <h2>Daily delta</h2>
+        <div class="panel">{{ chart|safe }}</div>
+
+        <h2>Daily detail</h2>
+        <div class="table-wrap">
+            <table class="detail">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Start slot</th>
+                        <th>Linked</th>
+                        <th>Skipped</th>
+                        <th>DP cost</th>
+                        <th>Actual</th>
+                        <th>Delta</th>
+                        <th>SoC MAE</th>
+                        <th>SoC bias</th>
+                        <th>Action match</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows|reverse %}
+                        <tr>
+                            <td><a href="/reports/plan/{{ row.day }}">{{ row.day }}</a></td>
+                            <td>{{ row.start_slot }}</td>
+                            <td>{{ row.linked_slots }}</td>
+                            <td>{{ row.skipped_slots }}</td>
+                            <td>{{ fmt_money(row.dp_cost_gbp) }}</td>
+                            <td>{{ fmt_money(row.actual_cost_gbp) }}</td>
+                            <td>{{ fmt_money(row.delta_gbp) }}</td>
+                            <td>{{ fmt_pp(row.soc_mae) }}</td>
+                            <td>{{ fmt_pp(row.soc_bias) }}</td>
+                            <td>{{ fmt_pct(row.action_match_rate) }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <p class="footer-link">
+            <a href="/reports/backtest.csv?days={{ days }}">
+                Download this window as CSV
+            </a>
+        </p>
+    {% else %}
+        <p class="empty">
+            No shadow plans are recorded yet. Enable the shadow planner and let
+            it run for at least one slot; the backtest will appear here.
+        </p>
+    {% endif %}
+</div>
+{% endblock %}

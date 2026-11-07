@@ -714,6 +714,10 @@ does not re-solve battery constraints or model supplier rewards, and it is a
 sanity check rather than a promise that the plan could have been executed
 exactly.
 
+The same result is on the **DP Backtest** page (`/reports/backtest`, with 7,
+30 or 90-day windows, CSV and JSON). It appears only after the shadow planner
+has recorded at least one run.
+
 ##### Plan-versus-actual report (`/reports/plan`)
 
 The **Plan vs Actual** link opens the report that joins the three histories

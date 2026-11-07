@@ -334,10 +334,13 @@ completed fixes.
   compares DP grid cost with the heuristic's actual cost, SoC MAE/bias and the
   planned-versus-actual action match rate. It is first-order: it does not
   re-solve battery constraints or supplier rewards.
+- `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
+  7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
+  shows an explanation rather than a score before any shadow plan exists.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **727 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **732 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
