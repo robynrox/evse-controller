@@ -718,6 +718,27 @@ The DP and actual net costs both include the house load and are from different
 sources (forecast versus measured), so treat the cost cards as a sanity check,
 not as an exact saving.
 
+##### Value and battery-health report (`/reports/value`)
+
+The **Battery Value** link aggregates the daily energy reports over 7, 30 or 90
+days. It shows measured battery throughput and health rather than a second
+ledger:
+
+- equivalent full cycles, defined as
+  `(DC in + DC out) / (2 × configured battery capacity)`;
+- measured charge efficiency (`DC in ÷ AC charged`), discharge efficiency
+  (`AC discharged ÷ DC out`) and their round trip;
+- daily SoC range and end-of-day SoC;
+- EVSE AC and battery DC energy, grid import/export and average daily SoC span;
+- import cost, export revenue, net grid cost and the controller's own saving;
+- saving per equivalent full cycle.
+
+The charts show the daily SoC band, equivalent cycles and daily money. The
+table links each day back to its energy report. CSV is at
+`/reports/value.csv?days=30` and JSON at `/api/reports/value?days=30`. Missing
+measurements stay blank: efficiency is not inferred from a missing counter,
+and a day with no throughput contributes no cycles.
+
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

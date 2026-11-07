@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Value and battery health</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .spacer { flex: 1; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0 18px;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 150px;
+        flex: 1 1 150px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 23px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+        margin-bottom: 14px;
+    }
+    .chart { width: 100%; height: auto; display: block; }
+    .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .zero { stroke: #b8bec6; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .soc-band { fill: #0b5cad; opacity: .16; }
+    .soc-line { fill: none; stroke: #0b5cad; stroke-width: 2.4; }
+    .cycle-bar { fill: #2e7d32; opacity: .8; }
+    .net-bar { fill: #e65100; opacity: .8; }
+    .saved-bar { fill: #0b5cad; opacity: .8; }
+    .legend { font-size: 11px; font-weight: 700; }
+    .soc-legend, .saved-legend { fill: #0b5cad; }
+    .cycle-legend { fill: #2e7d32; }
+    .net-legend { fill: #e65100; }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1350px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>Value and battery health</h1>
+        <p>
+            Measured energy, efficiency and money over the last
+            {{ metrics.days }} day{{ '' if metrics.days == 1 else 's' }} with a
+            daily report. A full cycle is
+            <code>(DC in + DC out) / (2 × {{ '%.1f'|format(metrics.capacity_kwh) }} kWh)</code>.
+            Efficiency is measured, not assumed: charge is DC in ÷ AC charged,
+            discharge is AC discharged ÷ DC out.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/load-profile">Load profile</a>
+        <a href="/reports/plan">Plan vs actual</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Window</span>
+        {% for choice in window_choices %}
+            {% if choice == days %}
+                <span class="current">{{ choice }} days</span>
+            {% else %}
+                <a href="/reports/value?days={{ choice }}">{{ choice }} days</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Equivalent full cycles</div>
+            <div class="value">{{ fmt_cycles(metrics.cycles) }}</div>
+            <div class="note">{{ metrics.days_with_energy }} days with energy</div>
+        </div>
+        <div class="card">
+            <div class="label">Round-trip efficiency</div>
+            <div class="value">{{ fmt_pct(metrics.round_trip) }}</div>
+            <div class="note">
+                Charge {{ fmt_pct(metrics.charge_efficiency) }} ·
+                discharge {{ fmt_pct(metrics.discharge_efficiency) }}
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">Controller saving</div>
+            <div class="value">{{ fmt_gbp(metrics.saved_gbp) }}</div>
+            <div class="note">Tariff attribution</div>
+        </div>
+        <div class="card">
+            <div class="label">Saving per cycle</div>
+            <div class="value">{{ fmt_gbp(metrics.value_per_cycle_gbp) }}</div>
+            <div class="note">Saving ÷ equivalent cycles</div>
+        </div>
+        <div class="card">
+            <div class="label">Net grid cost</div>
+            <div class="value">{{ fmt_gbp(metrics.net_cost_gbp) }}</div>
+            <div class="note">Import minus export revenue</div>
+        </div>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Battery throughput</div>
+            <div class="value">
+                {{ fmt_kwh(metrics.dc_in_kwh) }} /
+                {{ fmt_kwh(metrics.dc_out_kwh) }}
+            </div>
+            <div class="note">DC in / out kWh</div>
+        </div>
+        <div class="card">
+            <div class="label">EVSE energy</div>
+            <div class="value">
+                {{ fmt_kwh(metrics.charged_kwh) }} /
+                {{ fmt_kwh(metrics.discharged_kwh) }}
+            </div>
+            <div class="note">AC charged / discharged kWh</div>
+        </div>
+        <div class="card">
+            <div class="label">Grid energy</div>
+            <div class="value">
+                {{ fmt_kwh(metrics.imported_kwh) }} /
+                {{ fmt_kwh(metrics.exported_kwh) }}
+            </div>
+            <div class="note">Imported / exported kWh</div>
+        </div>
+        <div class="card">
+            <div class="label">Export revenue</div>
+            <div class="value">{{ fmt_gbp(metrics.export_revenue_gbp) }}</div>
+            <div class="note">Agile Outgoing</div>
+        </div>
+        <div class="card">
+            <div class="label">Average daily SoC span</div>
+            <div class="value">
+                {% if metrics.average_span is not none %}
+                    {{ '%.0f'|format(metrics.average_span) }}%
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">Max minus min, per day</div>
+        </div>
+    </div>
+
+    <h2>State of charge</h2>
+    <div class="panel">{{ soc_chart|safe }}</div>
+
+    <h2>Equivalent full cycles</h2>
+    <div class="panel">{{ cycles_chart|safe }}</div>
+
+    <h2>Daily money</h2>
+    <div class="panel">{{ money_chart|safe }}</div>
+
+    <h2>Daily detail</h2>
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Imported</th>
+                    <th>Exported</th>
+                    <th>AC charged</th>
+                    <th>AC discharged</th>
+                    <th>DC in</th>
+                    <th>DC out</th>
+                    <th>Charge eff.</th>
+                    <th>Discharge eff.</th>
+                    <th>Round trip</th>
+                    <th>Cycles</th>
+                    <th>SoC min</th>
+                    <th>SoC max</th>
+                    <th>SoC end</th>
+                    <th>Import cost</th>
+                    <th>Export revenue</th>
+                    <th>Net cost</th>
+                    <th>Saved</th>
+                    <th>Coverage</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows|reverse %}
+                    <tr>
+                        <td><a href="/reports/daily/{{ row.day }}">{{ row.day }}</a></td>
+                        <td>{{ fmt_kwh(row.imported_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.exported_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.charged_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.discharged_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.dc_in_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.dc_out_kwh) }}</td>
+                        <td>{{ fmt_pct(row.charge_efficiency) }}</td>
+                        <td>{{ fmt_pct(row.discharge_efficiency) }}</td>
+                        <td>{{ fmt_pct(row.round_trip) }}</td>
+                        <td>{{ fmt_cycles(row.cycles) }}</td>
+                        <td>{{ fmt_soc(row.soc_min) }}</td>
+                        <td>{{ fmt_soc(row.soc_max) }}</td>
+                        <td>{{ fmt_soc(row.soc_end) }}</td>
+                        <td>{{ fmt_gbp(row.import_cost_gbp) }}</td>
+                        <td>{{ fmt_gbp(row.export_revenue_gbp) }}</td>
+                        <td>{{ fmt_gbp(row.net_cost_gbp) }}</td>
+                        <td>{{ fmt_gbp(row.saved_gbp) }}</td>
+                        <td>{{ row.measured_slots }}/{{ row.closed_slots }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <p class="footer-link">
+        <a href="/reports/value.csv?days={{ days }}">
+            Download this window as CSV
+        </a>
+    </p>
+</div>
+{% endblock %}

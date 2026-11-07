@@ -312,10 +312,14 @@ completed fixes.
   SoC MAE/bias/worst error, planned versus actual cost and energy, CSV and JSON.
   It uses the latest plan run that had started by each slot, so the page shows
   what was believed at the time rather than a hindsight fit.
+- `web/value_report_routes.py` serves `/reports/value`: measured battery
+  throughput, equivalent full cycles, charge/discharge/round-trip efficiency,
+  SoC range, money and saving per cycle over 7/30/90 days, with CSV and JSON.
+  It aggregates the daily energy reports and does not rebuild the saving.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **697 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **703 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
