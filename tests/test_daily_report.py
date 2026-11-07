@@ -14,6 +14,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from evse_controller.daily_report import (
     DailyEnergyLog,
+    PROFILE_BIN_WIDTH_W,
     SeriesSpec,
     _is_clock_change,
     configured_series,
@@ -36,6 +37,7 @@ def _at(day: date, hour: int, minute: int = 0, second: int = 0) -> datetime:
 def _log(tmp_path: Path, *specs: SeriesSpec) -> DailyEnergyLog:
     log = DailyEnergyLog()
     log.set_directory(tmp_path / "reports")
+    log.set_profile_directory(tmp_path / "load_profile")
     log.configure(specs or (GRID, EVSE))
     return log
 
@@ -506,3 +508,80 @@ class TestConfiguration:
         assert start.tzinfo is None
         assert end - start == timedelta(minutes=30)
         assert snapshot["timezone"]
+
+
+class TestPowerProfile:
+    """The sparse per-slot histograms used by the house-load forecast."""
+
+    def test_sparse_time_weighted_bins(self, tmp_path):
+        log = _log(tmp_path)
+        for minute, watts in (
+            (0, 600.0),
+            (5, 600.0),
+            (10, 600.0),
+            (15, 600.0),
+            (20, 1000.0),
+            (25, 1000.0),
+            (30, 1000.0),
+        ):
+            log.observe(_at(DAY, 0, minute), {"grid": watts, "evse": 0.0})
+
+        path = tmp_path / "load_profile" / f"{DAY.isoformat()}.json"
+        payload = json.loads(path.read_text())
+        assert payload["bin_width_w"] == PROFILE_BIN_WIDTH_W
+        slot0 = payload["slots"][0]
+        assert slot0["closed"] is True
+        assert slot0["coverage_s"]["house"] == pytest.approx(1800.0)
+
+        bins = slot0["bins_s"]["house"]
+        # 600 W for 900 s and 1000 W for 900 s; no empty bins are written.
+        assert bins[str(int(600 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            900.0
+        )
+        assert bins[str(int(1000 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            900.0
+        )
+        assert "0" not in bins
+
+    def test_signed_bins_have_no_range_limit(self, tmp_path):
+        log = _log(tmp_path)
+        for minute in (0, 5):
+            log.observe(_at(DAY, 0, minute), {"grid": 15000.0, "evse": 0.0})
+        for minute in (10, 15, 20, 25, 30):
+            log.observe(_at(DAY, 0, minute), {"grid": -5000.0, "evse": 0.0})
+
+        payload = json.loads(
+            (tmp_path / "load_profile" / f"{DAY.isoformat()}.json").read_text()
+        )
+        bins = payload["slots"][0]["bins_s"]["house"]
+        assert bins[str(int(15000 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            300.0
+        )
+        assert bins[str(int(-5000 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            1500.0
+        )
+
+    def test_house_is_grid_with_the_wallbox_removed(self, tmp_path):
+        log = _log(tmp_path, GRID, EVSE)
+        for minute in (0, 5, 10, 15, 20, 25, 30):
+            log.observe(
+                _at(DAY, 0, minute), {"grid": 1000.0, "evse": 300.0}
+            )
+
+        payload = json.loads(
+            (tmp_path / "load_profile" / f"{DAY.isoformat()}.json").read_text()
+        )
+        slot0 = payload["slots"][0]
+        house_bins = slot0["bins_s"]["house"]
+        grid_bins = slot0["bins_s"]["grid"]
+        evse_bins = slot0["bins_s"]["evse"]
+
+        assert house_bins[str(int(700 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            1800.0
+        )
+        assert grid_bins[str(int(1000 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            1800.0
+        )
+        assert evse_bins[str(int(300 / PROFILE_BIN_WIDTH_W))] == pytest.approx(
+            1800.0
+        )

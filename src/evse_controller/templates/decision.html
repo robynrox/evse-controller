@@ -570,16 +570,22 @@
     <div class="card">
         <p class="section-note">
             The projection starts from the SoC at the decision and applies the
-            same half-hour model the controller used: ordinary slots lose
-            {{ '%.1f'|format(plan.non_export_soc_loss_percent) }} percentage
-            points of SoC to load-follow demand, planned export slots lose
+            same half-hour model the controller used. Conservative coverage
+            uses the rolling house-load forecast where available
+            ({{ plan.forecast_slots }} slot(s), up to
+            {{ plan.forecast_days }} day(s), 90th percentile) and the flat
+            {{ '%.1f'|format(plan.non_export_soc_loss_percent) }}% fallback
+            otherwise. Planned export slots lose
             {{ '%.1f'|format(plan.export_soc_loss_percent) }}%, free-import
             slots charge at full rate, grid-support slots export at full rate,
-            and EV-away slots are skipped entirely. The export floor is the
-            higher of the {{ '%.1f'|format(plan.bulk_target_soc) }}% bulk
-            target and the {{ '%.1f'|format(plan.absolute_min_soc) }}%
-            absolute minimum, so
-            {{ '%.1f'|format(plan.target_soc) }}% here.
+            and EV-away slots are skipped entirely. High-value exports may
+            spend down to the {{ '%.1f'|format(plan.bulk_floor_soc) }}% bulk
+            discharge lower limit; ordinary/surplus exports stop at the
+            {{ '%.1f'|format(plan.aggressive_floor_soc) }}% aggressive lower
+            limit; conservative house coverage stops at the
+            {{ '%.1f'|format(plan.house_floor_soc) }}% conservative lower
+            limit. The hard protection floor is
+            {{ '%.1f'|format(plan.absolute_min_soc) }}%.
         </p>
 
         <div class="plan-summary">

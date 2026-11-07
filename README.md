@@ -177,9 +177,10 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     tariffs:
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
-        min_agile_discharge_soc: 50     # Bulk-export SoC floor and 23:30 target (default)
-        absolute_min_soc_percent: 25   # Hard discharge/export floor (cannot be below 25)
-        house_load_margin_percent: 5   # Flexibility below the target before conservative
+        aggressive_soc_lower_limit: 50    # Aggressive house discharge floor and 23:30 target
+        conservative_soc_lower_limit: 45  # Conservative house discharge floor
+        bulk_discharge_soc_lower_limit: 40 # High-value/priority export floor
+        absolute_min_soc_percent: 25      # Hard protection floor (cannot be below 25)
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
         soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
@@ -249,9 +250,11 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
-- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, default 50, 0-100). Ordinary export slots are planned down to this figure. High-value slots that beat covering the house load may use the reserve below it, down to `absolute_min_soc_percent`. Lower it to export more of the pack; raise it to keep more reserve for the evening, overnight or the next day
-- `absolute_min_soc_percent`: Hard lower limit for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve, and it can be raised (for example to 40%) to avoid draining the pack on winter days. Surplus solar may still charge the pack below this level
-- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` for conservative house coverage (whole percent, default 5). Aggressive house discharge stops at `min_agile_discharge_soc`; below that, conservative coverage continues down to `min_agile_discharge_soc - house_load_margin_percent`, and below that the house imports. The floor is clamped above both the 25% reserve and `absolute_min_soc_percent`
+- `aggressive_soc_lower_limit`: Aggressive house-discharge floor and the 23:30 target (whole percent, default 50, 0-100). Aggressive discharge stops here. It must be at or above the conservative lower limit
+- `conservative_soc_lower_limit`: Conservative house-discharge floor (whole percent, default 45). Between this and the aggressive lower limit the controller covers most of the house load; below this the house imports. It must be at or above the bulk discharge lower limit
+- `bulk_discharge_soc_lower_limit`: SoC floor for high-value/priority exports (whole percent, defaults to the hard protection floor). These slots may spend the reserve down to this figure, but not below the hard protection floor
+- `absolute_min_soc_percent`: Hard protection floor for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve. Scheduled events may override the three economic limits above, but never this one. Surplus solar may still charge the pack below this level
+- `house_load_margin_percent`: Deprecated migration setting. If `conservative_soc_lower_limit` is absent, it is used to derive the conservative floor from the old `min_agile_discharge_soc` value
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -335,14 +338,14 @@ cell on a phone, where the badge alone is too small to rely on.
   explanation.
 - **Aggressive vs conservative** follows the projected 23:30 SoC. Aggressive
   house discharge runs while the projection is at or above
-  `min_agile_discharge_soc` (the bulk target). Between that target and the
-  house floor (`min_agile_discharge_soc - house_load_margin_percent`, default
-  5%) it discharges conservatively. Below the house floor it stops discharging
-  and the house imports; below `absolute_min_soc_percent` even committed
-  exports are inhibited. Exports get first claim on the pack: aggressive slots
-  are only planned after every planned export and only if the running minimum
-  is still at or above the target, so a day that maxes out its export budget
-  does not also spend energy on house load.
+  `aggressive_soc_lower_limit`. Between that and
+  `conservative_soc_lower_limit` it discharges conservatively. Below the
+  conservative floor it stops and the house imports; below
+  `absolute_min_soc_percent` even committed exports are inhibited. Priority
+  exports get first claim and may spend down to
+  `bulk_discharge_soc_lower_limit`. Conservative coverage comes next; surplus
+  exports and aggressive discharge only use headroom above the aggressive
+  floor that conservative does not need.
 - **Export priority** applies when the quoted export price clears the
   house-offset break-even:
   `η_house ÷ η_export × import price`, using the measured discharge
@@ -350,9 +353,8 @@ cell on a phone, where the badge alone is too small to rely on.
   (about 77.8% of the import price at the default table). Both options consume
   the same stored energy, so the ratio is a pure efficiency comparison and no
   profit margin is added. Such a slot is exported at maximum rate and is
-  selected before ordinary export slots when energy is limited; it still stops
-  at the normal `min_agile_discharge_soc` target and never spends the house
-  reserve.
+  selected before surplus export slots when energy is limited; it may spend
+  the reserve down to `bulk_discharge_soc_lower_limit`.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
   current-dependent, so there is no single global minimum figure. The solar
@@ -369,15 +371,16 @@ cell on a phone, where the badge alone is too small to rely on.
   and the reason says which slot is committed and what the next unused rate
   would yield. `Do not charge` does not mean the day has no higher price left.
 - **Aggressive slots are conditional, not guaranteed.** Remaining high-value
-  slots (at or above the house-offset break-even) can be planned for
-  aggressive load-following: the house is covered and the small surplus is
-  exported. That costs
-  `non_export_slot_soc_loss_percent × (1 + 0.5 A ÷ minimum discharge current)`
-  instead of a full export slot, so it fits when a bulk export no longer does.
-  These slots are ranked by export price and labelled `AGGRESSIVE` in the
-  plan table. The planner does not forecast the house load, so each row
-  carries its break-even: the slot only starts once the live house import
-  reaches that load. Below it, the forced output would export more than it
+  slots can be planned for aggressive load-following only when the rolling
+  house-load forecast says conservative coverage would not activate there and
+  the running minimum stays above `aggressive_soc_lower_limit`. The house is
+  covered and the small surplus is exported. The SoC cost is estimated from
+  the forecasted load and the integer current the Wallbox would choose, not a
+  flat constant, so it fits when a full export no longer does. These slots
+  are ranked by export price and labelled `AGGRESSIVE` in the plan table. The
+  planner uses a rolling persistence forecast from the last 28 days (minimum
+  14); each row still carries its live break-even gate: the slot only starts
+  once the live house import reaches that load. Below it, the forced output would export more than it
   saves. The scan evaluates the integer current the Wallbox would actually
   choose, so a load that only pays at 4 A or 5 A is found even when 3 A is
   uneconomic. The reason names the gate and the stored-energy hurdle: the
@@ -387,11 +390,21 @@ cell on a phone, where the badge alone is too small to rely on.
   gate; an unplanned higher-priced slot does, because spending the energy now
   could put it out of reach. If even the full output cannot repay the pack,
   the slot is not planned as aggressive at all; it falls through to
-  conservative coverage or idle. A planned aggressive slot takes precedence
-  over the global shortfall/reserve policy for that slot, so the surplus is
-  actually exported rather than held back when the gate is reached. See
-  `evse.log`'s `CONTROL Setting discharge activation power to N W` line for
-  the live value.
+  conservative coverage or idle. A planned aggressive slot only forces the
+  aggressive mode while the policy is still in the aggressive band; if the
+  projection has fallen below the aggressive floor, the current policy wins
+  and the pack is conserved. See `evse.log`'s
+  `CONTROL Setting discharge activation power to N W` line for the live
+  value.
+- **House-load forecast.** The controller keeps sparse 25 W time-weighted
+  power histograms per half-hour slot and CT clamp under
+  `data/state/load_profile/`. The forecast target is the net grid load before
+  the Wallbox (`grid − Wallbox AC`), so EV and battery activity are removed.
+  The planner merges the last 28 days where available (minimum 14) and uses
+  the 90th percentile for conservative coverage and the median for aggressive
+  discharge. With too little history it falls back to the flat configured
+  losses. The same histograms are the raw material for future house-load
+  reports.
 - **The charge floor and its activation are calculated, not fixed.** When the
   decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
@@ -479,8 +492,8 @@ numbers the control loop used:
 - It declares the state at the moment of the decision: time and half-hour
   slot, SoC, charge cap, import and export prices, the best later export slot,
   harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
-  output, the projected 23:30 SoC, the house floor and the absolute minimum
-  where relevant.
+  output, the projected 23:30 SoC, and the aggressive, conservative, bulk
+  discharge and hard protection floors.
 - It walks through the checks in order: whether the pack will last to 23:30,
   what the surplus is worth exported now, what it is worth kept for the house,
   what it is worth stored for a later sale, where each break-even lies, whether

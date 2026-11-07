@@ -20,6 +20,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 import io
 import json
+import math
 import os
 import threading
 from typing import Callable, Optional
@@ -33,6 +34,13 @@ SLOTS_PER_DAY = 48
 GAP_CAP_SECONDS = 300.0
 WRITE_INTERVAL_SECONDS = 60.0
 STATE_VERSION = 1
+
+# Power histograms used by the house-load forecast.  The bin width is the
+# resolution of the stored distribution; the range is unbounded, so a large
+# appliance or a whole-house peak is recorded in a higher bin instead of an
+# overflow bucket.  Bins are sparse: only the bins with samples are written.
+PROFILE_BIN_WIDTH_W = 25.0
+PROFILE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -140,6 +148,14 @@ class DailyEnergyLog:
         self._last_soc: Optional[int] = None
         self._last_write: Optional[datetime] = None
 
+        # Sparse per-slot power histograms for the house-load forecast.  Kept
+        # separately from the daily report so the report's frequent writes stay
+        # small; the profile is written when a slot closes.
+        self._profile_dir_override: Optional[Path] = None
+        self._profile_day: Optional[date] = None
+        self._profile_day_data: Optional[dict] = None
+        self._profile_slots: list = []
+
     # -- configuration and test support ---------------------------------
 
     @property
@@ -152,11 +168,28 @@ class DailyEnergyLog:
         with self._lock:
             self._dir_override = Path(directory) if directory else None
 
-    def reset(self, directory=None) -> None:
+    @property
+    def profile_directory(self) -> Path:
+        if self._profile_dir_override is not None:
+            return self._profile_dir_override
+        return Path(config.LOAD_PROFILE_DIR)
+
+    def set_profile_directory(self, directory) -> None:
+        with self._lock:
+            self._profile_dir_override = (
+                Path(directory) if directory else None
+            )
+            self._profile_day = None
+            self._profile_day_data = None
+            self._profile_slots = []
+
+    def reset(self, directory=None, profile_directory=None) -> None:
         """Clear the in-memory day and optionally point the log elsewhere."""
         with self._lock:
             if directory is not None:
                 self._dir_override = Path(directory)
+            if profile_directory is not None:
+                self._profile_dir_override = Path(profile_directory)
             self._day = None
             self._day_data = None
             self._slots = []
@@ -164,6 +197,9 @@ class DailyEnergyLog:
             self._last_values = {}
             self._last_soc = None
             self._last_write = None
+            self._profile_day = None
+            self._profile_day_data = None
+            self._profile_slots = []
 
     def configure(self, specs) -> None:
         """Set the series to record.  Safe to call more than once."""
@@ -183,6 +219,9 @@ class DailyEnergyLog:
 
     def _path(self, day: date) -> Path:
         return self.directory / f"{day.isoformat()}.json"
+
+    def _profile_path(self, day: date) -> Path:
+        return self.profile_directory / f"{day.isoformat()}.json"
 
     # -- observation ----------------------------------------------------
 
@@ -300,7 +339,171 @@ class DailyEnergyLog:
                 entry["out"] += (-watts) * seconds / 3_600_000.0
             slot["coverage"][key] = slot["coverage"].get(key, 0.0) + seconds
 
+        self._add_profile_interval(_slot_index(start), values, seconds)
         self._set_soc_in_slot(slot, soc)
+
+    # -- sparse power profile -------------------------------------------
+
+    def _add_profile_interval(
+        self,
+        slot_index: int,
+        values: dict,
+        seconds: float,
+    ) -> None:
+        """Accumulate one time-weighted power sample into the sparse bins."""
+        if (
+            seconds <= 0
+            or not self._profile_slots
+            or not (0 <= slot_index < SLOTS_PER_DAY)
+        ):
+            return
+        slot = self._profile_slots[slot_index]
+        for key, watts in values.items():
+            if watts is None or not math.isfinite(watts):
+                continue
+            self._add_profile_bin(slot, key, watts, seconds)
+
+        # The house load that the Wallbox would have to cover: the grid
+        # reading with the Wallbox's own AC activity removed.  Without a
+        # Wallbox reading, the grid reading alone is the best available
+        # proxy and the slot's coverage still records that the sample exists.
+        grid_w = values.get("grid")
+        if grid_w is None or not math.isfinite(grid_w):
+            return
+        evse_w = values.get("evse")
+        if evse_w is None or not math.isfinite(evse_w):
+            evse_w = 0.0
+        self._add_profile_bin(slot, "house", grid_w - evse_w, seconds)
+
+    @staticmethod
+    def _add_profile_bin(slot: dict, key: str, watts: float, seconds: float) -> None:
+        bin_index = math.floor(watts / PROFILE_BIN_WIDTH_W)
+        bins = slot["bins_s"].setdefault(key, {})
+        bins[bin_index] = bins.get(bin_index, 0.0) + seconds
+        slot["coverage_s"][key] = (
+            slot["coverage_s"].get(key, 0.0) + seconds
+        )
+
+    def _empty_profile_slot(self, index: int) -> dict:
+        return {
+            "index": index,
+            "closed": False,
+            "coverage_s": {},
+            "bins_s": {},
+        }
+
+    def _empty_profile_day(self, day: date) -> dict:
+        return {
+            "version": PROFILE_VERSION,
+            "date": day.isoformat(),
+            "bin_width_w": PROFILE_BIN_WIDTH_W,
+            "slots": [
+                self._empty_profile_slot(index)
+                for index in range(SLOTS_PER_DAY)
+            ],
+        }
+
+    def _ensure_profile_day(self, day: date) -> None:
+        if self._profile_day == day:
+            return
+        self._profile_day = day
+        loaded = self._load_profile_day(day)
+        self._profile_day_data = (
+            loaded if loaded is not None else self._empty_profile_day(day)
+        )
+        self._profile_slots = self._profile_day_data["slots"]
+
+    def _load_profile_day(self, day: date) -> Optional[dict]:
+        path = self._profile_path(day)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            warning(f"LOAD_PROFILE: Ignoring unreadable profile {path}: {exc}")
+            return None
+        if not isinstance(data, dict) or data.get("date") != day.isoformat():
+            warning(
+                f"LOAD_PROFILE: Ignoring profile with a mismatched date: {path}"
+            )
+            return None
+        try:
+            bin_width = float(data.get("bin_width_w", PROFILE_BIN_WIDTH_W))
+        except (TypeError, ValueError):
+            bin_width = PROFILE_BIN_WIDTH_W
+        if abs(bin_width - PROFILE_BIN_WIDTH_W) > 1e-9:
+            warning(
+                f"LOAD_PROFILE: Ignoring profile with bin width {bin_width}: "
+                f"{path}"
+            )
+            return None
+        slots = data.get("slots")
+        if not isinstance(slots, list) or len(slots) != SLOTS_PER_DAY:
+            warning(f"LOAD_PROFILE: Ignoring profile with bad slots: {path}")
+            return None
+
+        for index, slot in enumerate(slots):
+            if not isinstance(slot, dict):
+                slot = {}
+                slots[index] = slot
+            slot["index"] = index
+            slot.setdefault("closed", False)
+            coverage = slot.get("coverage_s")
+            if not isinstance(coverage, dict):
+                coverage = {}
+            slot["coverage_s"] = {
+                str(key): float(value)
+                for key, value in coverage.items()
+                if isinstance(value, (int, float)) and value > 0
+            }
+            bins = slot.get("bins_s")
+            if not isinstance(bins, dict):
+                bins = {}
+            converted = {}
+            for key, value in bins.items():
+                try:
+                    bin_index = int(key)
+                    seconds = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if seconds > 0:
+                    converted[bin_index] = seconds
+            slot["bins_s"] = converted
+        return data
+
+    def _write_profile(self, force: bool = False) -> None:
+        if self._profile_day is None or self._profile_day_data is None:
+            return
+        payload = copy.deepcopy(self._profile_day_data)
+        payload["meta"] = {
+            "updated_at": _local_iso(
+                self._last_observe or datetime.now()
+            )
+        }
+        for slot in payload["slots"]:
+            slot["coverage_s"] = {
+                key: round(float(value), 3)
+                for key, value in sorted(slot["coverage_s"].items())
+                if value and value > 0
+            }
+            slot["bins_s"] = {
+                key: {
+                    str(bin_index): round(float(seconds), 3)
+                    for bin_index, seconds in sorted(bins.items())
+                    if seconds and seconds > 0
+                }
+                for key, bins in slot["bins_s"].items()
+                if bins
+            }
+        path = self._profile_path(self._profile_day)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(json.dumps(payload, indent=2) + "\n")
+            temporary.replace(path)
+            debug(f"LOAD_PROFILE: Wrote {path}")
+        except OSError as exc:
+            warning(f"LOAD_PROFILE: Could not write {path}: {exc}")
 
     def _set_soc(self, when: datetime, soc: Optional[int]) -> None:
         if soc is None or not self._slots:
@@ -338,25 +541,31 @@ class DailyEnergyLog:
                 for index in range(
                     _slot_index(self._last_observe), SLOTS_PER_DAY
                 ):
-                    self._close_slot(index)
+                    self._close_slot(index, write_profile=False)
+                self._write_profile(force=True)
         self._day = day
         loaded = self._load_day(day)
         self._day_data = loaded if loaded is not None else self._empty_day(day)
         self._slots = self._day_data["slots"]
         self._merge_specs()
+        self._ensure_profile_day(day)
         self._last_write = None
 
-    def _close_slot(self, index: int) -> None:
+    def _close_slot(self, index: int, write_profile: bool = True) -> None:
         if not self._slots or not (0 <= index < SLOTS_PER_DAY):
             return
         slot = self._slots[index]
         if slot.get("closed"):
             return
         slot["closed"] = True
+        if self._profile_slots and 0 <= index < len(self._profile_slots):
+            self._profile_slots[index]["closed"] = True
         self._price_slot(slot)
         self._book_savings(slot)
         self._recompute_totals()
         self._write(force=True)
+        if write_profile:
+            self._write_profile(force=True)
 
     def _price_slot(self, slot: dict) -> None:
         import_p, export_p, session = price_book.prices_for(

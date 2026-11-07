@@ -76,6 +76,9 @@ class Config:
                                 'bulk_discharge_end_time': '19:00',
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
+                                'aggressive_soc_lower_limit': 50,
+                                'conservative_soc_lower_limit': 45,
+                                'bulk_discharge_soc_lower_limit': 25,
                                 'min_agile_discharge_soc': 50,
                                 'absolute_min_soc_percent': 25,
                                 'house_load_margin_percent': 5,
@@ -140,6 +143,12 @@ class Config:
         """Directory holding the per-day Agile Outgoing rate cache."""
         self._ensure_initialized()
         return get_data_dir() / "state" / "agile_rates"
+
+    @property
+    def LOAD_PROFILE_DIR(self):
+        """Directory holding sparse per-slot power histograms per day."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "load_profile"
 
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -443,10 +452,75 @@ class Config:
     )
 
     # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
-    # house-load decision.  Bulk export planning still uses the target itself.
+    # house-load decision.  Retained for migration: new installations use the
+    # explicit conservative_soc_lower_limit.
     HOUSE_LOAD_MARGIN_PERCENT = property(
         lambda self: self._get_config_int("tariffs.ioctgo", "house_load_margin_percent", 5),
         lambda self, value: self._set_config_int("tariffs.ioctgo", "house_load_margin_percent", value, 5)
+    )
+
+    def _ioctgo_soc_setting(self, key: str) -> Optional[int]:
+        """Read an explicit SoC limit, or ``None`` when it is not configured."""
+        value = self.get(f"tariffs.ioctgo.{key}", None)
+        if value is None:
+            return None
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return None
+
+    def _bulk_discharge_soc_lower_limit(self) -> int:
+        absolute = self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT
+        raw = self._ioctgo_soc_setting("bulk_discharge_soc_lower_limit")
+        if raw is None:
+            raw = absolute
+        return max(absolute, min(100, raw))
+
+    def _conservative_soc_lower_limit(self) -> int:
+        raw = self._ioctgo_soc_setting("conservative_soc_lower_limit")
+        if raw is None:
+            margin = max(0, int(self.HOUSE_LOAD_MARGIN_PERCENT))
+            raw = self.MIN_AGILE_DISCHARGE_SOC - margin
+        bulk = self.BULK_DISCHARGE_SOC_LOWER_LIMIT
+        return max(bulk, min(100, raw))
+
+    def _aggressive_soc_lower_limit(self) -> int:
+        raw = self._ioctgo_soc_setting("aggressive_soc_lower_limit")
+        if raw is None:
+            raw = self.MIN_AGILE_DISCHARGE_SOC
+        conservative = self.CONSERVATIVE_SOC_LOWER_LIMIT
+        return max(conservative, min(100, raw))
+
+    # The three economic SoC limits.  They are independent of the hard
+    # protection floor, which remains absolute_min_soc_percent.
+    BULK_DISCHARGE_SOC_LOWER_LIMIT = property(
+        lambda self: self._bulk_discharge_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "bulk_discharge_soc_lower_limit",
+            self._as_int(value, self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT),
+            self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT,
+        ),
+    )
+
+    CONSERVATIVE_SOC_LOWER_LIMIT = property(
+        lambda self: self._conservative_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "conservative_soc_lower_limit",
+            self._as_int(value, self.CONSERVATIVE_SOC_LOWER_LIMIT),
+            self.CONSERVATIVE_SOC_LOWER_LIMIT,
+        ),
+    )
+
+    AGGRESSIVE_SOC_LOWER_LIMIT = property(
+        lambda self: self._aggressive_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "aggressive_soc_lower_limit",
+            self._as_int(value, self.AGGRESSIVE_SOC_LOWER_LIMIT),
+            self.AGGRESSIVE_SOC_LOWER_LIMIT,
+        ),
     )
 
     # Maximum export power for Agile Outgoing (kW).  Default is the non-derated
@@ -707,6 +781,9 @@ class Config:
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+                    'aggressive_soc_lower_limit': self.AGGRESSIVE_SOC_LOWER_LIMIT,
+                    'conservative_soc_lower_limit': self.CONSERVATIVE_SOC_LOWER_LIMIT,
+                    'bulk_discharge_soc_lower_limit': self.BULK_DISCHARGE_SOC_LOWER_LIMIT,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
                     'absolute_min_soc_percent': self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT,
                     'house_load_margin_percent': self.HOUSE_LOAD_MARGIN_PERCENT,

@@ -499,27 +499,30 @@ fetch cannot silently reuse yesterday's prices.
 
 ### Target, house floor and aggressive mode
 
-The manager uses a bulk target and a lower house floor. Ordinary export
-planning keeps `MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots
-are selected until the projected 23:30 SoC would reach that target. High-value
-slots whose price clears the house-offset break-even get first claim and may
-spend the reserve below the target, down to the absolute minimum; while one is
-still ahead in an energy shortfall, house discharge is paused. Exports are
-planned before aggressive house load, so aggressive slots are only selected
-when the running minimum after every planned export is still at or above the
-target. If the exports max out the budget, the remaining slots stay idle rather
-than spending the pack on house load.
+The manager uses four explicit SoC limits: `aggressive_soc_lower_limit`
+(default 50%, also the 23:30 target), `conservative_soc_lower_limit` (default
+45%), `bulk_discharge_soc_lower_limit` (defaults to the hard protection floor),
+and `absolute_min_soc_percent` (default 25%). Priority exports whose price
+clears the house-offset break-even get first claim and may spend down to the
+bulk discharge floor; while one is still ahead in an energy shortfall, house
+discharge is paused.
 
-The house-load bands are therefore: aggressive at or above
-`MIN_AGILE_DISCHARGE_SOC`; conservative between the target and
-`MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT` (default 5%, clamped
-above the 25% protection reserve); idle below the house floor. Committed
-exports may still run below the house floor down to the absolute minimum. The
-decision is a single comparison recomputed with the export plan at slot
-boundaries, so no separate latch is needed; the comparison is strict, and
-exactly on a floor stays in the higher band. The margin is configuration
-(`house_load_margin_percent`) and is clamped at zero so a bad value cannot put
-the house floor above the bulk target.
+The plan order is priority exports, conservative house coverage, surplus
+exports, then aggressive discharge. Conservative coverage wins where the
+forecast expects it to activate. Surplus exports and aggressive discharge use
+only headroom above the aggressive floor that conservative does not need, so a
+day that maxes out its export budget has no aggressive slots.
+
+A rolling house-load profile supplies the per-slot SoC cost. The daily report
+writes sparse 25 W time-weighted histograms to
+`data/state/load_profile/YYYY-MM-DD.json`; the profile merges the last 28 days
+(minimum 14) and uses the 90th percentile for conservative coverage and the
+median for aggressive. With insufficient history it falls back to the flat
+configured constants. Committed exports may run below the conservative floor
+down to the bulk discharge floor. The decision is a single comparison
+recomputed with the export plan at slot boundaries, so no separate latch is
+needed; the comparison is strict, and exactly on a floor stays in the higher
+band.
 
 ### Dashboard, charge ceiling and savings estimate
 

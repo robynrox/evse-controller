@@ -75,4 +75,15 @@ DEFAULT_CONFIG = {
         "file_level": "INFO",
         "console_level": "WARNING",
     },
+    "tariffs": {
+        "ioctgo": {
+            "aggressive_soc_lower_limit": 50,
+            "conservative_soc_lower_limit": 45,
+            "bulk_discharge_soc_lower_limit": 25,
+            "absolute_min_soc_percent": 25,
+        }
+    },
+    "octopus": {
+        "region": "K",
+    },
 }

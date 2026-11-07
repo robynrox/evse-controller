@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
+from evse_controller.load_profile import SlotLoad
 from evse_controller.energy_sessions import (
     EV_AWAY,
     FREE_IMPORT,
@@ -85,9 +86,15 @@ def _build_tariff(state_path=None) -> IOctGoWithAgileOutgoingTariff:
 
 
 @pytest.fixture
-def agile_tariff():
-    """Create tariff instance with mocked Agile rates."""
-    yield _build_tariff()
+def agile_tariff(tmp_path):
+    """Create tariff instance with mocked Agile rates.
+
+    The rolling load profile is pointed at a temporary directory so a test
+    never reads (or writes) the live history.
+    """
+    tariff = _build_tariff()
+    tariff._load_profile.set_directory(tmp_path / "load_profile")
+    yield tariff
 
 
 class TestStorageFloorThreshold:
@@ -766,13 +773,13 @@ class TestEnergyShortfall:
         assert agile_tariff._update_energy_shortfall(59) is True
         assert agile_tariff._discharge_policy == "idle"
 
-    def test_house_floor_never_enters_the_protection_reserve(
+    def test_house_floor_is_clamped_to_the_absolute_minimum(
         self, agile_tariff, monkeypatch
     ):
         """A low target plus a large margin must not floor below the reserve."""
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 25)
         monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 10)
-        assert agile_tariff._house_load_floor_soc() == 26
+        assert agile_tariff._house_load_floor_soc() == 25
 
     def test_negative_margin_is_treated_as_zero(self, agile_tariff, monkeypatch):
         """Bad configuration must not raise the floor above the target."""
@@ -1636,8 +1643,8 @@ class TestDecisionSnapshot:
         snapshot = agile_tariff._decision_snapshot
         assert "55% house floor" in snapshot.reason
         assert "no house discharge" in snapshot.reason
-        assert "60% bulk target" in snapshot.detail
-        assert "5% flexibility" in snapshot.detail
+        assert "House floor 55%" in snapshot.detail
+        assert "aggressive floor 60%" in snapshot.detail
         assert snapshot.decision_tier == "house_floor"
 
     def test_house_floor_reason_floors_the_projection(
@@ -3770,9 +3777,18 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
         # A large export loss leaves headroom above the 50% aggressive target
-        # after the one full export that fits.
+        # after the one full export that fits.  The forecast says the house
+        # will not need conservative coverage, so aggressive may use it.
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        monkeypatch.setattr(
+            agile_tariff,
+            "_conservative_slot_soc_loss",
+            lambda slot, fallback=None: 0.0,
+        )
+        monkeypatch.setattr(
+            agile_tariff, "_conservative_would_activate", lambda slot: False
+        )
 
         priority = [38, 40, 42]
         prices = {42: 37.0, 40: 36.0, 38: 35.0}
@@ -3848,6 +3864,14 @@ class TestStageOneExportBudget:
         # considers these slots; the gate, not the budget, must reject them.
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        monkeypatch.setattr(
+            agile_tariff,
+            "_conservative_slot_soc_loss",
+            lambda slot, fallback=None: 0.0,
+        )
+        monkeypatch.setattr(
+            agile_tariff, "_conservative_would_activate", lambda slot: False
+        )
         # 50p/kWh DC is above the peak import price even after discharge
         # losses, so the 3 A minimum can never repay the pack.
         agile_tariff._bank_dc_kwh = 1.0
@@ -3873,6 +3897,14 @@ class TestStageOneExportBudget:
         self._set_time(agile_tariff, 9, 0)
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        monkeypatch.setattr(
+            agile_tariff,
+            "_conservative_slot_soc_loss",
+            lambda slot, fallback=None: 0.0,
+        )
+        monkeypatch.setattr(
+            agile_tariff, "_conservative_would_activate", lambda slot: False
+        )
 
         priority = [38, 40, 42]
         prices = {42: 37.0, 40: 36.0, 38: 35.0}
@@ -3926,6 +3958,16 @@ class TestStageOneExportBudget:
         self._set_time(agile_tariff, 12, 0)
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        # The house is forecast below the conservative activation point, so
+        # conservative coverage does not consume the surplus headroom.
+        monkeypatch.setattr(
+            agile_tariff,
+            "_conservative_slot_soc_loss",
+            lambda slot, fallback=None: 0.0,
+        )
+        monkeypatch.setattr(
+            agile_tariff, "_conservative_would_activate", lambda slot: False
+        )
 
         # Five high-value slots, plus many 23p slots that are profitable but
         # below the 23.4p house-offset break-even.
@@ -4167,7 +4209,10 @@ class TestAbsoluteMinimumSocControl:
 
         labels = [row["label"] for row in explanation["state"]]
         assert explanation["answer"]["heading"] == "Hold at the absolute minimum"
-        assert "Absolute minimum" in labels
+        assert "Hard protection floor" in labels
+        assert "Aggressive floor" in labels
+        assert "Conservative floor" in labels
+        assert "Bulk discharge floor" in labels
         assert explanation["answer"]["discharge"]["headline"] == (
             "Do not discharge"
         )
@@ -4334,7 +4379,7 @@ class TestPlanExplanation:
         assert plan["priority_headroom_soc"] == pytest.approx(0.0)
         assert plan["skipped_qualifying_slots"] == [34, 35, 36, 37, 38]
         assert "No export is planned" in plan["diagnosis"]
-        assert "absolute minimum" in plan["diagnosis"]
+        assert "bulk discharge floor" in plan["diagnosis"]
         assert "5 slot(s) beat" in plan["diagnosis"]
 
         skipped_rows = [
@@ -4452,3 +4497,271 @@ class TestPlanExplanation:
         assert "23:30 with plan" in html
         assert "PLANNED" in html
         assert "House break-even" in html
+
+
+class TestLoadProfileForecast:
+    """The planner uses the rolling house-load profile when it exists."""
+
+    @staticmethod
+    def _expected_loss(tariff, load_w: float, aggressive: bool) -> float:
+        volts = 240.0
+        min_current = max(1.0, float(tariff.MIN_DISCHARGE_CURRENT))
+        max_current = max(
+            min_current, float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        )
+        bias = (
+            tariff.AGGRESSIVE_DISCHARGE_BIAS_A
+            if aggressive
+            else tariff.CONSERVATIVE_DISCHARGE_BIAS_A
+        )
+        current = float(
+            round(max(min_current, min(load_w / volts + bias, max_current)))
+        )
+        current = max(min_current, min(current, max_current))
+        efficiency = tariff.EFFICIENCY_MODEL.discharge_efficiency(current)
+        return (
+            current * volts / max(efficiency, 1e-6) / 1000.0
+            * 0.5
+            / tariff.SOC_CAPACITY_KWH
+            * 100.0
+        )
+
+    def test_conservative_loss_uses_the_p90_forecast(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff,
+            "_profile_stats",
+            lambda slot: SlotLoad(1200.0, 2400.0, 14, 1800.0),
+        )
+
+        loss = agile_tariff._conservative_slot_soc_loss(0)
+
+        assert loss == pytest.approx(
+            self._expected_loss(agile_tariff, 2400.0, aggressive=False)
+        )
+        assert loss > agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+    def test_aggressive_loss_uses_the_median_forecast(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff,
+            "_profile_stats",
+            lambda slot: SlotLoad(1200.0, 2400.0, 14, 1800.0),
+        )
+
+        loss = agile_tariff._aggressive_slot_soc_loss(0)
+
+        assert loss == pytest.approx(
+            self._expected_loss(agile_tariff, 1200.0, aggressive=True)
+        )
+        assert loss > agile_tariff._aggressive_slot_soc_loss_percent()
+
+    def test_conservative_does_not_start_below_the_minimum_output(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff,
+            "_profile_stats",
+            lambda slot: SlotLoad(300.0, 400.0, 14, 1800.0),
+        )
+
+        assert agile_tariff._conservative_slot_soc_loss(0) == 0.0
+
+    def test_forecast_absent_falls_back_to_the_configured_loss(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff, "_profile_stats", lambda slot: None
+        )
+
+        assert agile_tariff._conservative_slot_soc_loss(0) == pytest.approx(
+            agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        )
+        assert agile_tariff._aggressive_slot_soc_loss(0) == pytest.approx(
+            agile_tariff._aggressive_slot_soc_loss_percent()
+        )
+
+
+class TestLoadProfileForecastHierarchy:
+    """Conservative coverage outranks surplus and aggressive use."""
+
+    def test_conservative_activation_uses_the_p90_forecast(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff,
+            "_profile_stats",
+            lambda slot: SlotLoad(300.0, 1200.0, 14, 1800.0),
+        )
+        assert agile_tariff._conservative_would_activate(0) is True
+
+        monkeypatch.setattr(
+            agile_tariff,
+            "_profile_stats",
+            lambda slot: SlotLoad(200.0, 400.0, 14, 1800.0),
+        )
+        assert agile_tariff._conservative_would_activate(0) is False
+
+    def test_conservative_activation_defaults_to_true_without_a_forecast(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(
+            agile_tariff, "_profile_stats", lambda slot: None
+        )
+        assert agile_tariff._conservative_would_activate(0) is True
+
+
+class TestExportFloors:
+    """Normal exports stop at their economic floor, not the hard floor."""
+
+    def test_priority_export_stops_at_the_bulk_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "AGGRESSIVE_SOC_LOWER_LIMIT", 50)
+        monkeypatch.setattr(config, "CONSERVATIVE_SOC_LOWER_LIMIT", 45)
+        monkeypatch.setattr(config, "BULK_DISCHARGE_SOC_LOWER_LIMIT", 40)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 18, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 36, 40)
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+        agile_tariff._planned_slot_actions = {36: "export"}
+
+        agile_tariff.get_control_state(create_test_state(40), 18 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.decision_tier != "export_priority"
+        assert not snapshot.mode.startswith("Max discharge")
+
+    def test_priority_export_runs_above_the_bulk_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "AGGRESSIVE_SOC_LOWER_LIMIT", 50)
+        monkeypatch.setattr(config, "CONSERVATIVE_SOC_LOWER_LIMIT", 45)
+        monkeypatch.setattr(config, "BULK_DISCHARGE_SOC_LOWER_LIMIT", 40)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 18, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 36, 41)
+        agile_tariff._planned_export_slots = [36]
+        agile_tariff._plan_cache = [36]
+        agile_tariff._planned_slot_actions = {36: "export"}
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(41), 18 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.decision_tier == "export_priority"
+
+    def test_surplus_export_stops_at_the_aggressive_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "AGGRESSIVE_SOC_LOWER_LIMIT", 50)
+        monkeypatch.setattr(config, "CONSERVATIVE_SOC_LOWER_LIMIT", 45)
+        monkeypatch.setattr(config, "BULK_DISCHARGE_SOC_LOWER_LIMIT", 40)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 20, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 40, 50)
+        agile_tariff._planned_export_slots = [40]
+        agile_tariff._plan_cache = [40]
+        agile_tariff._planned_slot_actions = {40: "export"}
+
+        agile_tariff.get_control_state(create_test_state(50), 20 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.decision_tier != "planned_export"
+        assert not snapshot.mode.startswith("Max discharge")
+
+    def test_surplus_export_runs_above_the_aggressive_floor(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "AGGRESSIVE_SOC_LOWER_LIMIT", 50)
+        monkeypatch.setattr(config, "CONSERVATIVE_SOC_LOWER_LIMIT", 45)
+        monkeypatch.setattr(config, "BULK_DISCHARGE_SOC_LOWER_LIMIT", 40)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 20, 0)
+        TestDecisionSnapshot._pin_plan(agile_tariff, 40, 51)
+        agile_tariff._planned_export_slots = [40]
+        agile_tariff._plan_cache = [40]
+        agile_tariff._planned_slot_actions = {40: "export"}
+
+        control_state, _, _, _ = agile_tariff.get_control_state(
+            create_test_state(51), 20 * 60
+        )
+
+        snapshot = agile_tariff._decision_snapshot
+        assert control_state == ControlState.DISCHARGE
+        assert snapshot.decision_tier == "planned_export"
+
+
+class TestLoadProfileIntegration:
+    """The tariff reads the rolling profile files end to end."""
+
+    def test_tariff_uses_the_rolling_profile(
+        self, agile_tariff, tmp_path
+    ):
+        fixed = datetime.now().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        agile_tariff.set_time_functions(datetime_func=lambda: fixed)
+        day = fixed.date()
+        bin_index = int(1200 / 25)
+        for offset in range(14):
+            file_day = day - timedelta(days=offset)
+            slots = [
+                {
+                    "index": index,
+                    "closed": True,
+                    "coverage_s": {},
+                    "bins_s": {},
+                }
+                for index in range(48)
+            ]
+            slots[24] = {
+                "index": 24,
+                "closed": True,
+                "coverage_s": {"house": 1800.0},
+                "bins_s": {"house": {str(bin_index): 1800.0}},
+            }
+            payload = {
+                "version": 1,
+                "date": file_day.isoformat(),
+                "bin_width_w": 25.0,
+                "slots": slots,
+            }
+            (tmp_path / f"{file_day.isoformat()}.json").write_text(
+                json.dumps(payload)
+            )
+
+        agile_tariff._load_profile.set_directory(tmp_path)
+        agile_tariff._profile_day = None
+        agile_tariff._profile_slots = None
+
+        stats = agile_tariff._load_profile.for_date(day)[24]
+        assert stats.p90_w is not None
+        loss = agile_tariff._conservative_slot_soc_loss(24)
+        expected = agile_tariff._house_load_soc_loss_percent(
+            stats.p90_w, aggressive=False
+        )
+
+        assert loss == pytest.approx(expected)
+        assert loss > agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+
+
+class TestExplicitSocLimitsInTheTariff:
+    """The tariff's bands follow the explicit new limits."""
+
+    def test_explicit_limits_drive_the_bands(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "AGGRESSIVE_SOC_LOWER_LIMIT", 55)
+        monkeypatch.setattr(config, "CONSERVATIVE_SOC_LOWER_LIMIT", 48)
+        monkeypatch.setattr(config, "BULK_DISCHARGE_SOC_LOWER_LIMIT", 42)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+
+        assert agile_tariff._house_load_floor_soc() == 48
+        assert agile_tariff._apply_discharge_policy(55) == "aggressive"
+        assert agile_tariff._apply_discharge_policy(50) == "conservative"
+        assert agile_tariff._apply_discharge_policy(47) == "idle"
+        assert agile_tariff._apply_discharge_policy(39) == "inhibited"

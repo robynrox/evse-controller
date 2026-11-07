@@ -66,12 +66,16 @@ def isolated_daily_report(tmp_path):
     """
     from evse_controller.daily_report import daily_log
 
-    daily_log.reset(tmp_path / "daily_reports")
+    daily_log.reset(
+        tmp_path / "daily_reports",
+        profile_directory=tmp_path / "load_profile",
+    )
     try:
         yield daily_log
     finally:
         daily_log.reset()
         daily_log.set_directory(None)
+        daily_log.set_profile_directory(None)
 
 
 @pytest.fixture(autouse=True)

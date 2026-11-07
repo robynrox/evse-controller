@@ -587,22 +587,46 @@ def config_page():
             if min_profit_margin is not None:
                 config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = float(min_profit_margin)
 
-            # Update Minimum SoC for Agile Discharge
-            min_agile_soc = request.form.get('tariffs.ioctgo[min_agile_discharge_soc]')
-            if min_agile_soc is not None:
-                config.MIN_AGILE_DISCHARGE_SOC = int(min_agile_soc)
-
-            # Hard floor for discharge and export
+            # Hard protection floor for discharge and export
             absolute_min_soc = request.form.get(
                 'tariffs.ioctgo[absolute_min_soc_percent]'
             )
             if absolute_min_soc is not None:
-                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = int(absolute_min_soc)
+                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = int(
+                    absolute_min_soc
+                )
 
-            # Flexibility below the bulk-export target for house-load mode
-            house_load_margin = request.form.get('tariffs.ioctgo[house_load_margin_percent]')
-            if house_load_margin is not None:
-                config.HOUSE_LOAD_MARGIN_PERCENT = int(house_load_margin)
+            # Three economic SoC limits.  Accept the old form field names too
+            # so a stale browser tab cannot silently discard the setting.
+            bulk_soc = request.form.get(
+                'tariffs.ioctgo[bulk_discharge_soc_lower_limit]'
+            )
+            if bulk_soc is not None:
+                config.BULK_DISCHARGE_SOC_LOWER_LIMIT = int(bulk_soc)
+
+            aggressive_soc = request.form.get(
+                'tariffs.ioctgo[aggressive_soc_lower_limit]'
+            )
+            if aggressive_soc is None:
+                aggressive_soc = request.form.get(
+                    'tariffs.ioctgo[min_agile_discharge_soc]'
+                )
+            if aggressive_soc is not None:
+                config.AGGRESSIVE_SOC_LOWER_LIMIT = int(aggressive_soc)
+
+            conservative_soc = request.form.get(
+                'tariffs.ioctgo[conservative_soc_lower_limit]'
+            )
+            if conservative_soc is None:
+                margin = request.form.get(
+                    'tariffs.ioctgo[house_load_margin_percent]'
+                )
+                if margin is not None:
+                    conservative_soc = (
+                        config.AGGRESSIVE_SOC_LOWER_LIMIT - int(margin)
+                    )
+            if conservative_soc is not None:
+                config.CONSERVATIVE_SOC_LOWER_LIMIT = int(conservative_soc)
 
             # Handle channel configuration for both devices
             devices = ['primary']

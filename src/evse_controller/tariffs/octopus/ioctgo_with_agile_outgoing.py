@@ -10,6 +10,7 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.load_profile import LoadProfile, SlotLoad
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
 import queue
@@ -116,34 +117,37 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     **Energy Shortfall Mode:**
 
     Before applying the storage/export logic, the tariff projects the SoC at
-    23:30 slot by slot.  Ordinary slots lose
-    NON_EXPORT_SLOT_SOC_LOSS_PERCENT, free-import session slots gain the
+    23:30 slot by slot.  Conservative coverage uses the rolling house-load
+    forecast where available; otherwise ordinary slots lose
+    NON_EXPORT_SLOT_SOC_LOSS_PERCENT.  Free-import session slots gain the
     full-charge rate, grid-support session slots lose the bulk-export rate and
     planned EV-away slots are left out entirely.
-    The bulk-export planner normally uses MIN_AGILE_DISCHARGE_SOC as its
-    floor.  High-value slots whose price beats offsetting the house load may
-    spend the reserve down to the absolute minimum instead.  Exports get
-    first claim on the pack: aggressive house discharge only starts if the
-    projection after every planned export is still at or above
-    MIN_AGILE_DISCHARGE_SOC.  Conservative house coverage uses
-    MIN_AGILE_DISCHARGE_SOC less HOUSE_LOAD_MARGIN_PERCENT (default 5%,
-    clamped above the 25% protection reserve) as its floor.
 
-    If the projection is below the bulk target, the day is treated as an
-    energy shortfall.  High-value exports already planned are still
+    The four SoC limits are explicit: ``aggressive_soc_lower_limit`` (also the
+    23:30 target), ``conservative_soc_lower_limit``,
+    ``bulk_discharge_soc_lower_limit`` for priority exports, and
+    ``absolute_min_soc_percent`` as the hard protection floor.  Priority
+    exports whose price beats offsetting the house load get first claim and may
+    spend down to the bulk discharge floor.  Exports are planned before
+    lower-value house use: conservative coverage comes next, then surplus
+    exports and aggressive discharge, which use only headroom above the
+    aggressive floor that conservative does not need.
+
+    If the projection is below the aggressive lower limit, the day is treated
+    as an energy shortfall.  High-value exports already planned are still
     protected:
 
-    - High-value export slots may still be planned down to the absolute
-      minimum, because their sale value beats covering the house at 3 A.
+    - High-value export slots may still be planned down to the bulk discharge
+      floor, because their sale value beats covering the house at 3 A.
     - While such a slot is still ahead, house discharge is paused so the pack
       is not spent before the export.  Surplus solar may still charge it.
-    - Between the bulk target and the house floor, discharge covers most of
-      the house load but deliberately leaves a small import (activation
-      floored at the 3 A minimum, -0.5 A bias) so it does not intentionally
-      export.
-    - Below the house floor, discretionary house discharge stops; the house
-      imports and surplus solar may still charge.  Committed exports can
-      still run down to the absolute minimum.
+    - Between the aggressive and conservative lower limits, discharge covers
+      most of the house load but deliberately leaves a small import
+      (activation floored at the 3 A minimum, -0.5 A bias) so it does not
+      intentionally export.
+    - Below the conservative lower limit, discretionary house discharge stops;
+      the house imports and surplus solar may still charge.  Committed exports
+      can still run down to the bulk discharge floor.
     - The shortfall state is recalculated whenever the export plan is
       recalculated (slot boundaries, significant SoC changes, and rate
       refreshes), keeping the plan and discharge mode consistent.
@@ -512,12 +516,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._plan_cache = []
         self._prev_battery_level = -1
 
+        # Rolling house-load profile used to estimate the SoC cost of
+        # conservative and aggressive house coverage.  It falls back to the
+        # flat configured constants when there is not enough history.
+        self._load_profile = LoadProfile()
+        self._profile_day = None
+        self._profile_slots = None
+
         # House-load discharge policy, derived from the projected 23:30 SoC:
-        # ``aggressive`` at or above the bulk target, ``conservative`` between
-        # the house floor and the bulk target, ``idle`` below the house floor
-        # (no discretionary house discharge; committed exports may still run),
-        # and ``inhibited`` below the absolute minimum.  Updated whenever the
-        # export plan is recalculated so the projection and the configured
+        # ``aggressive`` at or above the aggressive lower limit,
+        # ``conservative`` between the conservative and aggressive limits,
+        # ``idle`` below the conservative floor (no discretionary house
+        # discharge; committed exports may still run down to the bulk floor),
+        # and ``inhibited`` below the hard protection floor.  Updated whenever
+        # the export plan is recalculated so the projection and the configured
         # demand levels stay in step.
         self._energy_shortfall = False
         self._discharge_policy = "aggressive"
@@ -608,27 +620,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         At or above this floor the pack may cover the house conservatively;
         below it, discretionary house discharge stops and the house imports.
-        Aggressive house discharge has a higher floor: the bulk target itself.
-        The floor is the normal bulk target less the configured house-load
-        flexibility, raised if necessary to the absolute minimum and never
-        below the physical protection reserve.
-
-        Bulk export planning normally stops at MIN_AGILE_DISCHARGE_SOC,
-        raised to the absolute minimum if that is higher.  High-value export
-        slots that beat offsetting the house may spend below that target, down
-        to the absolute minimum; the flexibility margin itself only applies to
-        the house-load choice.
+        Aggressive house discharge has a higher floor:
+        ``aggressive_soc_lower_limit``.  High-value exports may spend below
+        both house floors down to ``bulk_discharge_soc_lower_limit``.  The
+        hard protection floor remains ``absolute_min_soc_percent``.
         """
-        try:
-            margin = float(config.HOUSE_LOAD_MARGIN_PERCENT)
-        except (TypeError, ValueError):
-            margin = 5.0
-        margin = max(0.0, margin)
-        return max(
-            self.BATTERY_PROTECTION_RESERVE_SOC + 1,
-            config.MIN_AGILE_DISCHARGE_SOC - margin,
-            self.absolute_min_soc_percent(),
-        )
+        return float(config.CONSERVATIVE_SOC_LOWER_LIMIT)
 
     def self_use_discharge_efficiency(self) -> float:
         """Pack-to-AC efficiency at the ~3 A house-load reference."""
@@ -678,9 +675,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         Off-peak slots are excluded because the car is charging then.
 
         These slots get first claim on the pack and may spend the house
-        reserve down to the absolute minimum, because their export value beats
-        offsetting the house load.  Ordinary profitable slots still stop at
-        MIN_AGILE_DISCHARGE_SOC.
+        reserve down to ``bulk_discharge_soc_lower_limit``, because their
+        export value beats offsetting the house load.  Surplus export slots
+        still stop at ``aggressive_soc_lower_limit``.
         """
         if current_slot is None:
             now = self.get_current_datetime()
@@ -770,6 +767,89 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         reference_a = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
         return base * (1.0 + bias_a / reference_a)
 
+    def _profile_for_current_day(self) -> Optional[list[SlotLoad]]:
+        """The rolling house-load profile for the current local day."""
+        day = self.get_current_datetime().date()
+        if self._profile_day != day:
+            self._profile_slots = self._load_profile.for_date(day)
+            self._profile_day = day
+        return self._profile_slots
+
+    def _profile_stats(self, slot: int) -> Optional[SlotLoad]:
+        profile = self._profile_for_current_day()
+        if not profile or slot < 0 or slot >= len(profile):
+            return None
+        stats = profile[slot]
+        return stats if stats.available else None
+
+    def _house_load_soc_loss_percent(
+        self, load_w: float, *, aggressive: bool
+    ) -> float:
+        """Half-hour SoC loss for covering *load_w* with the Wallbox.
+
+        The forecast load is the grid import before the Wallbox.  The
+        conservative bias leaves a small import; the aggressive bias covers
+        the house and exports the small surplus.  The current is quantised to
+        whole amps, so the measured 4 A/5 A efficiency steps are included.
+        """
+        volts = 240.0
+        min_current = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
+        max_current = max(
+            min_current, float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        )
+        if not aggressive and load_w < min_current * volts:
+            # Conservative mode refuses to start below its minimum output.
+            return 0.0
+        bias = (
+            self.AGGRESSIVE_DISCHARGE_BIAS_A
+            if aggressive
+            else self.CONSERVATIVE_DISCHARGE_BIAS_A
+        )
+        biased = load_w / volts + bias
+        current = float(round(max(min_current, min(biased, max_current))))
+        current = max(min_current, min(current, max_current))
+        output_w = current * volts
+        efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(current)
+        dc_kw = output_w / max(efficiency, 1e-6) / 1000.0
+        return dc_kw * 0.5 / self.SOC_CAPACITY_KWH * 100.0
+
+    def _conservative_slot_soc_loss(
+        self, slot: int, fallback: Optional[float] = None
+    ) -> float:
+        """Conservative half-hour SoC loss, forecast when history allows."""
+        stats = self._profile_stats(slot)
+        if stats is not None and stats.p90_w is not None:
+            return self._house_load_soc_loss_percent(
+                max(0.0, stats.p90_w), aggressive=False
+            )
+        if fallback is not None:
+            return max(0.0, float(fallback))
+        return max(0.0, float(self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT))
+
+    def _aggressive_slot_soc_loss(
+        self, slot: int, fallback: Optional[float] = None
+    ) -> float:
+        """Aggressive half-hour SoC loss, forecast when history allows."""
+        stats = self._profile_stats(slot)
+        if stats is not None and stats.median_w is not None:
+            return self._house_load_soc_loss_percent(
+                max(0.0, stats.median_w), aggressive=True
+            )
+        if fallback is not None:
+            return max(0.0, float(fallback))
+        return self._aggressive_slot_soc_loss_percent()
+
+    def _conservative_would_activate(self, slot: int) -> bool:
+        """Whether the forecast expects conservative coverage to start."""
+        stats = self._profile_stats(slot)
+        if stats is None or stats.p90_w is None:
+            # Without a forecast, keep the conservative coverage: it is the
+            # higher-value use of the stored energy.
+            return True
+        return max(0.0, stats.p90_w) >= (
+            float(self.MIN_DISCHARGE_CURRENT) * 240.0
+        )
+
     def _aggressive_extra_soc_loss_percent(self) -> float:
         """Extra SoC spent by aggressive discharge over conservative coverage."""
         return max(
@@ -857,11 +937,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if action == "export":
                 return -export_loss, "planned_export"
             if action == "aggressive":
-                return -self._aggressive_slot_soc_loss_percent(), "aggressive"
+                return -self._aggressive_slot_soc_loss(slot), "aggressive"
             if action == "conservative":
-                return -non_export_loss, "load_follow"
+                return -self._conservative_slot_soc_loss(
+                    slot, fallback=non_export_loss
+                ), "load_follow"
             return 0.0, "idle"
-        return -non_export_loss, "load_follow"
+        return -self._conservative_slot_soc_loss(
+            slot, fallback=non_export_loss
+        ), "load_follow"
 
     def _soc_projection_path(
         self,
@@ -975,10 +1059,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         floor_soc = self._house_load_floor_soc()
         absolute_floor = self.absolute_min_soc_percent()
-        aggressive_floor = max(
-            float(config.MIN_AGILE_DISCHARGE_SOC),
-            absolute_floor,
-        )
+        aggressive_floor = float(config.AGGRESSIVE_SOC_LOWER_LIMIT)
         # The planner accepts a plan whose running minimum lands exactly on
         # the floor.  Floating-point arithmetic can leave it a few ulps below
         # (for example 39.99999999999999 for 40%), so use the same tolerance
@@ -1000,7 +1081,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         debug(
             f"IOCTGO_AGILEOUT: Projected SoC at 23:30={projected_soc:.1f}% "
-            f"(target {config.MIN_AGILE_DISCHARGE_SOC}%, house floor "
+            f"(aggressive floor {aggressive_floor:.1f}%, conservative floor "
             f"{floor_soc:.1f}%, absolute floor {absolute_floor:.1f}%), "
             f"discharge policy={policy}"
         )
@@ -1089,12 +1170,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._update_energy_shortfall(current_soc_percent)
             return []
 
-        bulk_target_soc = max(
-            config.MIN_AGILE_DISCHARGE_SOC,
-            self.absolute_min_soc_percent(),
-        )
-        absolute_floor_soc = self.absolute_min_soc_percent()
-        conservative_floor_soc = self._house_load_floor_soc()
+        aggressive_floor_soc = float(config.AGGRESSIVE_SOC_LOWER_LIMIT)
+        bulk_floor_soc = float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT)
+        conservative_floor_soc = float(config.CONSERVATIVE_SOC_LOWER_LIMIT)
 
         export_slot_soc_loss = self._export_slot_soc_loss_percent()
         non_export_slot_soc_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
@@ -1105,8 +1183,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         info(
             f"IOCTGO_AGILEOUT: Planning export - SoC {current_soc_percent}%, "
-            f"bulk target {bulk_target_soc}%, absolute minimum "
-            f"{absolute_floor_soc}%, export loss "
+            f"aggressive lower limit {aggressive_floor_soc}%, bulk discharge "
+            f"lower limit {bulk_floor_soc}%, conservative lower limit "
+            f"{conservative_floor_soc}%, export loss "
             f"{export_slot_soc_loss:.1f}%/slot, conservative loss "
             f"{non_export_slot_soc_loss:.1f}%/slot"
         )
@@ -1139,13 +1218,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         baseline_minimum = min(
             [current_soc_percent] + [soc for _, soc, _ in baseline_path]
         )
-        priority_headroom_soc = baseline_minimum - absolute_floor_soc
-        target_headroom_soc = baseline_minimum - bulk_target_soc
+        priority_headroom_soc = baseline_minimum - bulk_floor_soc
+        target_headroom_soc = baseline_minimum - aggressive_floor_soc
         debug(
             "IOCTGO_AGILEOUT: Session-aware baseline 23:30="
             f"{baseline_projection:.1f}%, running minimum="
-            f"{baseline_minimum:.1f}%, headroom above bulk target="
-            f"{target_headroom_soc:.1f}%, above absolute minimum="
+            f"{baseline_minimum:.1f}%, headroom above aggressive floor="
+            f"{target_headroom_soc:.1f}%, above bulk floor="
             f"{priority_headroom_soc:.1f}%"
         )
 
@@ -1228,7 +1307,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # full per-slot cost, so price order is also value order.
         for slot_idx, rate in priority_rates:
             actions[slot_idx] = "export"
-            if feasible(absolute_floor_soc):
+            if feasible(bulk_floor_soc):
                 planned_slots.append(slot_idx)
                 debug(
                     f"IOCTGO_AGILEOUT: Selected priority slot {slot_idx} @ "
@@ -1240,42 +1319,69 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 debug(
                     f"IOCTGO_AGILEOUT: Skipping priority slot {slot_idx} @ "
                     f"{rate:.1f}p - it would take the running minimum below "
-                    f"the {absolute_floor_soc:.0f}% absolute minimum"
+                    f"the {bulk_floor_soc:.0f}% bulk discharge floor"
                 )
 
-        # Phase 2b: ordinary exports may only use the headroom above the bulk
-        # target.  They come before aggressive house load: a planned export
-        # is a committed sale, and aggressive discharge must not consume
-        # energy that a qualifying export could use.
+        # Phase 2b: conservative house coverage is the next best use of the
+        # pack after priority exports.  It uses the forecasted house load and
+        # stops at the conservative lower limit.  Slots that do not fit stay
+        # idle so the house imports rather than eating the reserve.
+        for slot_idx in range(current_slot_idx, 47):
+            if slot_idx in free_import_slots or slot_idx in grid_support_slots:
+                continue
+            if slot_idx in away_slots or slot_idx in actions:
+                continue
+            if self.is_off_peak(slot_idx * 30):
+                continue
+            actions[slot_idx] = "conservative"
+            if not feasible(conservative_floor_soc):
+                actions[slot_idx] = "idle"
+
+        # Phase 2c: surplus exports may only use the headroom above the
+        # aggressive lower limit.  They are lower value than conservative
+        # house coverage, so they replace a conservative slot only when the
+        # forecast says conservative would not activate there.
         for slot_idx, rate in other_rates:
+            existing = actions.get(slot_idx)
+            if (
+                existing == "conservative"
+                and self._conservative_would_activate(slot_idx)
+            ):
+                continue
             actions[slot_idx] = "export"
-            if feasible(bulk_target_soc):
+            if feasible(aggressive_floor_soc):
                 planned_slots.append(slot_idx)
                 debug(
-                    f"IOCTGO_AGILEOUT: Selected ordinary slot {slot_idx} @ "
-                    f"{rate:.1f}p above the {bulk_target_soc:.0f}% bulk target"
+                    f"IOCTGO_AGILEOUT: Selected surplus slot {slot_idx} @ "
+                    f"{rate:.1f}p above the "
+                    f"{aggressive_floor_soc:.0f}% aggressive lower limit"
                 )
             else:
-                del actions[slot_idx]
+                if existing is not None:
+                    actions[slot_idx] = existing
+                else:
+                    del actions[slot_idx]
                 debug(
-                    f"IOCTGO_AGILEOUT: Skipping ordinary slot {slot_idx} @ "
+                    f"IOCTGO_AGILEOUT: Skipping surplus slot {slot_idx} @ "
                     f"{rate:.1f}p - no headroom above the "
-                    f"{bulk_target_soc:.0f}% bulk target"
+                    f"{aggressive_floor_soc:.0f}% aggressive lower limit"
                 )
 
-        # Phase 2c: remaining priority slots can still take the small extra
-        # export that aggressive load-following produces.  The house is
-        # covered in both cases, so the marginal value is the slot's export
-        # price.  This runs after every planned export and only uses headroom
-        # above the bulk target: if the exports have already maxed out the
-        # pack, there is no aggressive headroom.  Ordinary slots do not get
-        # this treatment: below the house-offset break-even, spending the
-        # extra SoC on another conservative slot is worth more.
+        # Phase 2d: remaining priority slots can still take the small extra
+        # export that aggressive load-following produces.  Conservative
+        # coverage wins where the forecast expects it to activate; otherwise
+        # aggressive may use the slot, but only while the running minimum
+        # stays above the aggressive lower limit.
         aggressive_count = 0
-        aggressive_loss = self._aggressive_slot_soc_loss_percent()
         aggressive_gates: dict[int, dict] = {}
         for slot_idx, rate in priority_rates:
-            if slot_idx in actions:
+            existing = actions.get(slot_idx)
+            if existing == "export":
+                continue
+            if (
+                existing == "conservative"
+                and self._conservative_would_activate(slot_idx)
+            ):
                 continue
             gate = self._aggressive_slot_gate(
                 slot_idx,
@@ -1297,39 +1403,32 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
                 continue
             actions[slot_idx] = "aggressive"
-            if feasible(bulk_target_soc):
+            if feasible(aggressive_floor_soc):
                 aggressive_count += 1
                 aggressive_gates[slot_idx] = gate
+                slot_loss = self._aggressive_slot_soc_loss(slot_idx)
                 debug(
                     f"IOCTGO_AGILEOUT: Selected aggressive slot {slot_idx} @ "
-                    f"{rate:.1f}p, cost {aggressive_loss:.3f}%, starts at "
+                    f"{rate:.1f}p, cost {slot_loss:.3f}%, starts at "
                     f"{gate['activation_w']:.0f} W house import"
                 )
             else:
-                del actions[slot_idx]
+                if existing is not None:
+                    actions[slot_idx] = existing
+                else:
+                    del actions[slot_idx]
                 debug(
                     f"IOCTGO_AGILEOUT: Skipping aggressive slot {slot_idx} @ "
                     f"{rate:.1f}p - no headroom above the "
-                    f"{bulk_target_soc:.0f}% bulk target"
+                    f"{aggressive_floor_soc:.0f}% aggressive lower limit"
                 )
 
-        # Phase 2d: spend the remaining budget on conservative house coverage,
-        # earliest first.  Conservative discharge stops at the house floor,
-        # not the absolute export floor.  Slots that no longer fit stay idle
-        # and the house imports instead of eating energy reserved for exports.
-        conservative_count = 0
-        for slot_idx in range(current_slot_idx, 47):
-            if slot_idx in free_import_slots or slot_idx in grid_support_slots:
-                continue
-            if slot_idx in away_slots or slot_idx in actions:
-                continue
-            if self.is_off_peak(slot_idx * 30):
-                continue
-            actions[slot_idx] = "conservative"
-            if feasible(conservative_floor_soc):
-                conservative_count += 1
-            else:
-                actions[slot_idx] = "idle"
+        conservative_count = sum(
+            1 for action in actions.values() if action == "conservative"
+        )
+        aggressive_count = sum(
+            1 for action in actions.values() if action == "aggressive"
+        )
 
         planned_slots.sort()
         self._planned_slot_actions = dict(actions)
@@ -2913,7 +3012,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Calculate dynamic SoC threshold based on remaining slots until 23:30
             # This attempts to "get back on the curve" without needing grid import
             # Dynamic threshold = MIN_AGILE_DISCHARGE_SOC + (remaining_slots × NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
-            min_soc_percent = config.MIN_AGILE_DISCHARGE_SOC
+            min_soc_percent = config.AGGRESSIVE_SOC_LOWER_LIMIT
             dynamic_soc_threshold = min_soc_percent + (slots_remaining * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT)
 
             if soc_percent < dynamic_soc_threshold:
@@ -4017,10 +4116,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             rate_by_slot[slot] = float(rate_data['rate'])
 
-        bulk_target_soc = float(config.MIN_AGILE_DISCHARGE_SOC)
+        aggressive_floor_soc = float(config.AGGRESSIVE_SOC_LOWER_LIMIT)
+        bulk_floor_soc = float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT)
         absolute_min_soc = self.absolute_min_soc_percent()
-        target_soc = max(bulk_target_soc, absolute_min_soc)
-        house_floor_soc = self._house_load_floor_soc()
+        target_soc = aggressive_floor_soc
+        house_floor_soc = float(config.CONSERVATIVE_SOC_LOWER_LIMIT)
         export_loss = self._export_slot_soc_loss_percent()
         non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         full_charge_gain = self._full_charge_slot_soc_gain_percent()
@@ -4028,6 +4128,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         slot_export_kwh = self.EXPORT_POWER_KW * 0.5
         aggressive_export_kwh = self._aggressive_export_kwh()
         aggressive_soc_loss = self._aggressive_slot_soc_loss_percent()
+        profile = self._profile_for_current_day()
+        forecast_days = (
+            max((item.days for item in profile), default=0)
+            if profile
+            else 0
+        )
+        forecast_slots = (
+            sum(1 for item in profile if item.available) if profile else 0
+        )
         min_export_rate_p = self.export_min_rate_p()
         default_break_even_p = self.export_house_break_even_p(config.IMPORT_HIGH)
 
@@ -4056,7 +4165,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 slot_actions=planned_slot_actions,
             )
             headroom = baseline_minimum - target_soc
-            priority_headroom = baseline_minimum - absolute_min_soc
+            priority_headroom = baseline_minimum - bulk_floor_soc
         else:
             baseline_projection = self._project_soc_at_2330(
                 current_soc, start_slot
@@ -4067,9 +4176,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 export_slots=planned_export_slots,
             )
             headroom = baseline_projection - target_soc
-            # High-value slots may spend below the bulk target, down to the
-            # hard absolute minimum, so their budget is wider.
-            priority_headroom = baseline_projection - absolute_min_soc
+            # High-value slots may spend below the aggressive floor, down to
+            # the bulk discharge floor, so their budget is wider.
+            priority_headroom = baseline_projection - bulk_floor_soc
 
         rows: list[dict] = []
         projected = current_soc
@@ -4244,7 +4353,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 status_class = "status-normal"
                 reason = (
                     "Conservative house coverage — about 3 A, using "
-                    f"{non_export_loss:.1f}% of SoC this slot and stopping "
+                    f"{abs(delta):.1f}% of SoC this slot and stopping "
                     f"at the {house_floor_soc:.0f}% house floor."
                 )
                 if qualifies:
@@ -4268,14 +4377,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                             f"Qualifies at {rate:.1f}p, but the no-load "
                             f"baseline already reaches {baseline_projection:.0f}% "
                             f"at 23:30, at or below the "
-                            f"{absolute_min_soc:.0f}% absolute minimum, so "
+                            f"{bulk_floor_soc:.0f}% bulk discharge floor, so "
                             "there is no headroom."
                         )
                     else:
                         reason = (
                             f"Qualifies at {rate:.1f}p, but the "
                             f"{priority_headroom:.1f}% headroom above the "
-                            f"{absolute_min_soc:.0f}% absolute minimum was "
+                            f"{bulk_floor_soc:.0f}% bulk discharge floor was "
                             "used by higher-priced slots. The remaining "
                             f"budget is below the {house_floor_soc:.0f}% "
                             "house floor, so it stays idle rather than "
@@ -4320,7 +4429,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     reason = (
                         f"Qualifies at {rate:.1f}p, but the "
                         f"{priority_headroom:.1f}% headroom above the "
-                        f"{absolute_min_soc:.0f}% absolute minimum was used by "
+                        f"{bulk_floor_soc:.0f}% bulk discharge floor was used by "
                         "higher-priced slots."
                     )
             else:
@@ -4461,21 +4570,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 diagnosis = (
                     "No export is planned. With ordinary slots idle, the "
                     "weakest point before 23:30 is at or below the "
-                    f"{absolute_min_soc:.0f}% absolute minimum, so there is no "
+                    f"{bulk_floor_soc:.0f}% bulk discharge floor, so there is no "
                     "headroom to spend."
                 )
                 if skipped_qualifying:
                     diagnosis += (
                         f" {len(skipped_qualifying)} slot(s) beat the "
                         f"{default_break_even_p:.1f}p house-offset break-even, "
-                        "but exporting in them would breach the absolute "
-                        "minimum."
+                        "but exporting in them would breach the bulk "
+                        "discharge floor."
                     )
             elif priority_headroom < additional_cost:
                 diagnosis = (
                     f"No export is planned. The no-load baseline leaves "
                     f"{priority_headroom:.1f}% above the "
-                    f"{absolute_min_soc:.0f}% absolute minimum, which is less "
+                    f"{bulk_floor_soc:.0f}% bulk discharge floor, which is less "
                     f"than the {additional_cost:.1f}% cost of one export slot."
                 )
                 if skipped_qualifying:
@@ -4487,7 +4596,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 diagnosis = (
                     f"No export is planned even though "
                     f"{priority_headroom:.1f}% is available above the "
-                    f"{absolute_min_soc:.0f}% absolute minimum. "
+                    f"{bulk_floor_soc:.0f}% bulk discharge floor. "
                     f"{len(skipped_qualifying)} slot(s) beat the "
                     f"{default_break_even_p:.1f}p house-offset break-even, but "
                     "none could be fitted without crossing the floor."
@@ -4496,7 +4605,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 diagnosis = (
                     f"No export is planned. The no-load baseline leaves "
                     f"{priority_headroom:.1f}% above the "
-                    f"{absolute_min_soc:.0f}% absolute minimum, but no future "
+                    f"{bulk_floor_soc:.0f}% bulk discharge floor, but no future "
                     f"slot reaches the {min_export_rate_p:.1f}p export minimum."
                 )
         else:
@@ -4504,7 +4613,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"{len(planned_rows)} export slot(s) planned. With ordinary "
                 f"slots idle, the day ends at {baseline_projection:.0f}%; the "
                 f"plan ends at {plan_projection:.0f}%. High-value slots may "
-                f"spend down to the {absolute_min_soc:.0f}% absolute minimum; "
+                f"spend down to the {bulk_floor_soc:.0f}% bulk discharge floor; "
                 f"ordinary slots stop at the {target_soc:.0f}% target. "
                 "Aggressive house coverage also stops at that target, and "
                 f"conservative coverage stops at the {house_floor_soc:.0f}% "
@@ -4539,7 +4648,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "baseline_projection": baseline_projection,
             "plan_projection": plan_projection,
             "target_soc": target_soc,
-            "bulk_target_soc": bulk_target_soc,
+            "aggressive_floor_soc": aggressive_floor_soc,
+            "bulk_floor_soc": bulk_floor_soc,
             "house_floor_soc": house_floor_soc,
             "absolute_min_soc": absolute_min_soc,
             "headroom_soc": headroom,
@@ -4547,6 +4657,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "planned_slots": sorted(
                 slot for slot in planned_export_slots if start_slot <= slot < 47
             ),
+            "forecast_days": forecast_days,
+            "forecast_slots": forecast_slots,
             "aggressive_slots": sorted(
                 row["slot"] for row in aggressive_rows
             ),
@@ -4939,9 +5051,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "The controller projects the state of charge at the end of "
                 "the cheap window and compares it with the house floor.",
                 (
-                    f"House floor = bulk target {bulk:.0f}% − "
-                    f"{max(0.0, config.HOUSE_LOAD_MARGIN_PERCENT):.0f}% "
-                    f"flexibility = {floor:.0f}%."
+                    f"Conservative floor = {floor:.0f}%; aggressive floor = "
+                    f"{bulk:.0f}%."
                     if bulk is not None and floor is not None
                     else comparison
                 ),
@@ -5139,7 +5250,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             elif tier == "self-use":
                 remaining_slots = max(0, 47 - slot)
                 dynamic_floor = (
-                    config.MIN_AGILE_DISCHARGE_SOC
+                    config.AGGRESSIVE_SOC_LOWER_LIMIT
                     + remaining_slots * self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
                 )
                 because = (
@@ -5678,29 +5789,37 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "value": f"{math.floor(plan['plan_projection'])}%",
                 }
             )
-        if snap.house_floor_soc is not None:
+        if plan.get("aggressive_floor_soc") is not None:
             state.append(
                 {
-                    "label": "House floor",
-                    "value": f"{snap.house_floor_soc:.0f}%",
+                    "label": "Aggressive floor",
+                    "value": f"{plan['aggressive_floor_soc']:.0f}%",
+                }
+            )
+        if plan.get("house_floor_soc") is not None:
+            state.append(
+                {
+                    "label": "Conservative floor",
+                    "value": f"{plan['house_floor_soc']:.0f}%",
+                }
+            )
+        if plan.get("bulk_floor_soc") is not None:
+            state.append(
+                {
+                    "label": "Bulk discharge floor",
+                    "value": f"{plan['bulk_floor_soc']:.0f}%",
                 }
             )
         state.append(
             {
-                "label": "Absolute minimum",
+                "label": "Hard protection floor",
                 "value": f"{plan['absolute_min_soc']:.0f}%",
-            }
-        )
-        state.append(
-            {
-                "label": "Export floor",
-                "value": f"{plan['target_soc']:.0f}%",
             }
         )
         if plan["headroom_soc"] is not None:
             state.append(
                 {
-                    "label": "SoC headroom above target",
+                    "label": "SoC headroom above aggressive floor",
                     "value": f"{max(0.0, plan['headroom_soc']):.1f}%",
                 }
             )
@@ -5996,7 +6115,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 
                 # Calculate available energy
                 battery_capacity_kwh = self.SOC_CAPACITY_KWH
-                min_soc_kwh = (config.MIN_AGILE_DISCHARGE_SOC / 100.0) * battery_capacity_kwh
+                min_soc_kwh = (config.AGGRESSIVE_SOC_LOWER_LIMIT / 100.0) * battery_capacity_kwh
                 current_soc = 0
                 try:
                     from evse_controller.drivers.evse.async_interface import EvseThreadInterface
@@ -6314,7 +6433,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 # slots did clear the break-even, say explicitly that the SoC
                 # floor, not the prices, is what stopped the export.
                 target = max(
-                    config.MIN_AGILE_DISCHARGE_SOC,
+                    config.AGGRESSIVE_SOC_LOWER_LIMIT,
                     self.absolute_min_soc_percent(),
                 )
                 absolute_floor = self.absolute_min_soc_percent()
@@ -6490,7 +6609,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         battery_level = state.battery_level
         current_slot = dayMinute // 30
-        target_soc = config.MIN_AGILE_DISCHARGE_SOC
+        target_soc = config.AGGRESSIVE_SOC_LOWER_LIMIT
         charge_cap = self.charge_cap_percent()
 
         # Roll the dashboard saving forward with the latest power sample.
@@ -6919,15 +7038,32 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "IOCTGO_AGILEOUT Absolute minimum SoC - discharge inhibited",
             )
 
-        # Check if current slot is a planned export slot
-        if current_slot in self._planned_export_slots:
+        # Check if current slot is a planned export slot.  A normal export
+        # stops at its economic floor: high-value priority exports at the
+        # bulk discharge floor, surplus exports at the aggressive floor.
+        # Scheduled grid-support sessions sit above this guard and may still
+        # run down to the hard protection floor.
+        planned_export = current_slot in self._planned_export_slots
+        export_is_priority = (
+            planned_export
+            and current_slot in self._export_priority_slots(current_slot)
+        )
+        export_floor = (
+            config.BULK_DISCHARGE_SOC_LOWER_LIMIT
+            if export_is_priority
+            else config.AGGRESSIVE_SOC_LOWER_LIMIT
+        )
+        if planned_export and battery_level <= export_floor:
+            debug(
+                f"IOCTGO_AGILEOUT: Planned export in slot {current_slot} "
+                f"stopped at the {export_floor}% "
+                f"{'bulk' if export_is_priority else 'aggressive'} floor"
+            )
+        if planned_export and battery_level > export_floor:
             # Export at maximum rate during planned slots
             export_rate_p = self._current_export_rate_p(current_slot)
             import_price_p = self._current_import_rate_p(dayMinute)
             break_even_p = self.export_house_break_even_p(import_price_p)
-            export_is_priority = (
-                current_slot in self._export_priority_slots(current_slot)
-            )
             discharge_efficiency = (
                 self.EFFICIENCY_MODEL.discharge_efficiency(
                     self.EXPORT_REFERENCE_CURRENT
@@ -7157,12 +7293,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 else "23:30 SoC projection unavailable"
             )
             house_floor = self._house_load_floor_soc()
-            try:
-                margin = max(
-                    0.0, float(config.HOUSE_LOAD_MARGIN_PERCENT)
-                )
-            except (TypeError, ValueError):
-                margin = 5.0
             self._record_decision(
                 mode=mode,
                 reason=(
@@ -7173,9 +7303,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 detail=(
                     f"SoC {battery_level}%, {detail_projection}. "
                     f"House floor {house_floor:.0f}% "
-                    f"({target_soc:.0f}% bulk target − {margin:.0f}% "
-                    f"flexibility). Discharge is paused so the pack is not "
-                    "spent below its conservative floor. "
+                    f"(aggressive floor {target_soc:.0f}%). Discharge is "
+                    "paused so the pack is not spent below its conservative "
+                    "floor. "
                     + self._solar_charge_floor_text(
                         at_cap=charge_at_cap,
                         charge_min_a=charge_min_a,
@@ -7257,10 +7387,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 else "23:30 SoC projection unavailable"
             )
             house_floor = self._house_load_floor_soc()
-            try:
-                margin = max(0.0, float(config.HOUSE_LOAD_MARGIN_PERCENT))
-            except (TypeError, ValueError):
-                margin = 5.0
             # Conservative discharge deliberately refuses to start below the
             # Wallbox's minimum output, so this is usually the 3 A floor.
             activation_w = self._current_discharge_activation_w(
@@ -7275,13 +7401,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             elif projected is not None:
                 reason = (
                     f"projected 23:30 SoC {projection_text} < "
-                    f"{target_soc:.0f}% bulk target — conserving energy with "
-                    "conservative discharge"
+                    f"{target_soc:.0f}% aggressive floor — conserving energy "
+                    "with conservative discharge"
                 )
             else:
                 reason = (
-                    f"projected to miss the {target_soc:.0f}% bulk target — "
-                    "conserving energy with conservative discharge"
+                    f"projected to miss the {target_soc:.0f}% aggressive "
+                    "floor — conserving energy with conservative discharge"
                 )
             self._record_decision(
                 mode=mode,
@@ -7290,8 +7416,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 detail=(
                     f"SoC {battery_level}%, {detail_projection}. "
                     f"House floor {house_floor:.0f}% "
-                    f"({target_soc:.0f}% bulk target − {margin:.0f}% "
-                    f"flexibility). "
+                    f"(aggressive floor {target_soc:.0f}%). "
                     f"Conservative discharge {activation_text}. "
                     f"Stored energy costs "
                     f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
@@ -7703,16 +7828,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             debug(f"IOCTGO_AGILEOUT: Off-peak hours - skipping load-following configuration")
             return  # Don't configure load-following during off-peak charging
 
-        # If we're in an export slot, don't configure load-following
-        # The control state is already set to DISCHARGE at max current
+        # If we're in an export slot, don't configure load-following.  The
+        # export stops at its economic floor; below it the normal house
+        # configuration resumes.
         if current_slot in self._planned_export_slots:
-            # Export slot - max discharge already commanded by get_control_state()
-            # Just track that we're exporting
-            if state.current < -1:  # More than 1A discharge
-                if current_slot not in self._exported_slots:
-                    self._exported_slots.append(current_slot)
-                    info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
-            return  # Don't configure load-following during export slots
+            export_is_priority = (
+                current_slot in self._export_priority_slots(current_slot)
+            )
+            export_floor = (
+                config.BULK_DISCHARGE_SOC_LOWER_LIMIT
+                if export_is_priority
+                else config.AGGRESSIVE_SOC_LOWER_LIMIT
+            )
+            if battery_level > export_floor:
+                # Export slot - max discharge already commanded by
+                # get_control_state().  Just track that we're exporting.
+                if state.current < -1:  # More than 1A discharge
+                    if current_slot not in self._exported_slots:
+                        self._exported_slots.append(current_slot)
+                        info(f"IOCTGO_AGILEOUT: Export started in slot {current_slot} ({dayMinute//60:02d}:{dayMinute%60:02d})")
+                return  # Don't configure load-following during export slots
+            debug(
+                f"IOCTGO_AGILEOUT: Export slot {current_slot} at the "
+                f"{export_floor}% floor - configuring house levels"
+            )
 
         # A planned aggressive slot is a conditional house-load action.  It
         # only forces aggressive while the policy is still in the aggressive
