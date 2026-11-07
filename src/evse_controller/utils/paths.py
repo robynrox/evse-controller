@@ -2,6 +2,11 @@ from pathlib import Path
 import os
 import sys
 
+import yaml
+
+from evse_controller.utils.default_config import DEFAULT_CONFIG
+
+
 def get_data_dir() -> Path:
     """Get the data directory for the application.
     
@@ -29,23 +34,20 @@ def ensure_data_dirs():
     (data_dir / "state" / "agile_rates").mkdir(parents=True, exist_ok=True)
     (data_dir / "reports" / "daily").mkdir(parents=True, exist_ok=True)
 
-def get_config_file(require_exists: bool = True) -> Path:
-    """Get the configuration file path.
-    
-    Args:
-        require_exists: If True (default), exits if no config file exists.
-                      If False, returns the path where config should be created.
-    
-    Returns:
-        Path to data/config/config.yaml
+def get_config_file() -> Path:
+    """Get the configuration file path, creating a default if needed.
+
+    A fresh installation has no ``config.yaml``.  Write the built-in defaults
+    so the controller can boot into simulator/FREERUN mode and be configured
+    from the web interface, rather than refusing to start.
     """
     ensure_data_dirs()  # Make sure data/config exists
     data_config = get_data_dir() / "config" / "config.yaml"
-    
+
     # If data/config/config.yaml exists, use it
     if data_config.exists():
         return data_config
-        
+
     # Check current directory
     cwd_config = Path("config.yaml")
     if cwd_config.exists():
@@ -53,14 +55,15 @@ def get_config_file(require_exists: bool = True) -> Path:
         data_config.write_text(cwd_config.read_text())
         print(f"Copied config from {cwd_config} to {data_config}", file=sys.stderr)
         return data_config
-        
-    # No config found
-    if require_exists:
-        print("No configuration file found.", file=sys.stderr)
-        print(
-            "Please create data/config/config.yaml (see README.md).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    
+
+    data_config.write_text(
+        "# EVSE Controller configuration.\n"
+        "# Created with defaults on first run. Edit this file directly or\n"
+        "# use the web interface at http://localhost:5000/config.\n\n"
+        + yaml.safe_dump(DEFAULT_CONFIG, sort_keys=False)
+    )
+    print(
+        f"No configuration file found; wrote defaults to {data_config}.",
+        file=sys.stderr,
+    )
     return data_config

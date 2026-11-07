@@ -49,15 +49,11 @@ The documentation provided has been tested with Docker and Podman. If you wish t
 
 ### Setup Steps
 
-1. **Build the system and create the initial configuration**
+1. **Build the system**
    ```bash
    [docker|podman] compose build
    ```
-   Create `config.yaml` in the `data` volume manually; see the main README for the structure. The old interactive wizard still works but is deprecated:
-   ```bash
-   [docker|podman] compose run --rm controller -m evse_controller.configure
-   ```
-   Once the service is running, you can change the common settings through the web interface at http://localhost:5000/config.
+   The first start creates a default `config.yaml` in the `data` volume with the simulator enabled. Once the service is running, change the common settings through the web interface at http://localhost:5000/config, or edit the file directly; see the main README for the structure.
 
 2. **Start the service**
    ```bash

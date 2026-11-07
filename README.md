@@ -114,8 +114,9 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
   Before configuring, you may want to use the discovery tool to find your devices.
   See `evse-discovery/README.md` for detailed information about the discovery process.
 
-  There are two supported ways to configure the application. The old
-  text-based wizard is deprecated.
+  If `data/config/config.yaml` does not exist, the controller creates one
+  with safe defaults (simulator enabled) on first start. There are two ways
+  to configure the application:
 
   A. Manual Configuration (recommended):
   - Edit or create `data/config/config.yaml` directly
@@ -203,14 +204,6 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
   http://localhost:5000/config. Some settings are only available by editing
   `config.yaml` directly.
 
-  C. Interactive Configuration (deprecated):
-  The text-based wizard is deprecated and will be removed in a future
-  release. It still works, but manual configuration or the web interface
-  should be used instead:
-  ```bash
-  poetry run python -m evse_controller.configure
-  ```
-
   Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
 
 4. **Start the Application**
@@ -252,7 +245,7 @@ Detailed explanation of each configuration option:
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
 
 #### Intelligent Octopus Go Tariff Section
-The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. These parameters **cannot be configured using the deprecated interactive text-based configuration tool** and must be edited directly in `config.yaml` when using that approach instead of the web interface.
+The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
