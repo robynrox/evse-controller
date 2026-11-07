@@ -370,17 +370,30 @@ cell on a phone, where the badge alone is too small to rely on.
   already committed, the surplus is exported now even with a strong harvest,
   and the reason says which slot is committed and what the next unused rate
   would yield. `Do not charge` does not mean the day has no higher price left.
-- **Aggressive slots are the next-best use after full exports.** Remaining
-  high-value slots (at or above the house-offset break-even) can be planned
-  for aggressive load-following: the house is covered and the small surplus
-  is exported. That costs
+- **Aggressive slots are conditional, not guaranteed.** Remaining high-value
+  slots (at or above the house-offset break-even) can be planned for
+  aggressive load-following: the house is covered and the small surplus is
+  exported. That costs
   `non_export_slot_soc_loss_percent × (1 + 0.5 A ÷ minimum discharge current)`
   instead of a full export slot, so it fits when a bulk export no longer does.
   These slots are ranked by export price and labelled `AGGRESSIVE` in the
-  plan table. Below the break-even, conservative coverage is the better use
-  of the extra SoC, so no aggressive slot is planned there. A planned
-  aggressive slot takes precedence over the global shortfall/reserve policy
-  for that slot, so the surplus is actually exported rather than held back.
+  plan table. The planner does not forecast the house load, so each row
+  carries its break-even: the slot only starts once the live house import
+  reaches that load. Below it, the forced output would export more than it
+  saves. The scan evaluates the integer current the Wallbox would actually
+  choose, so a load that only pays at 4 A or 5 A is found even when 3 A is
+  uneconomic. The reason names the gate and the stored-energy hurdle: the
+  higher of the energy's ledger cost and its best **uncommitted** export price
+  (converted to DC), delivered at that current, plus the profit margin.
+  Planned sales are already committed to the pack, so they do not raise the
+  gate; an unplanned higher-priced slot does, because spending the energy now
+  could put it out of reach. If even the full output cannot repay the pack,
+  the slot is not planned as aggressive at all; it falls through to
+  conservative coverage or idle. A planned aggressive slot takes precedence
+  over the global shortfall/reserve policy for that slot, so the surplus is
+  actually exported rather than held back when the gate is reached. See
+  `evse.log`'s `CONTROL Setting discharge activation power to N W` line for
+  the live value.
 - **The charge floor and its activation are calculated, not fixed.** When the
   decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car

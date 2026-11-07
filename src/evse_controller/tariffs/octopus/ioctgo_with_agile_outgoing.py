@@ -490,6 +490,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # idle.  The 23:30 projection and the explanation table replay this
         # map, so they cannot drift from the planner's own feasibility check.
         self._planned_slot_actions = {}
+        # Break-even house-load gate for each planned aggressive slot.  The
+        # plan is conditional on the live load reaching this threshold, so
+        # the explanation shows it instead of promising a full slot of export.
+        self._aggressive_slot_gates = {}
         self._exported_slots = []  # Track slots where export actually occurred
 
         # Rate fetching state.  _last_fetch_date is read by
@@ -1063,6 +1067,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         if current_soc_percent < 0:
             self._planned_slot_actions = {}
+            self._aggressive_slot_gates = {}
             self._update_energy_shortfall(current_soc_percent)
             return []
 
@@ -1096,6 +1101,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if 47 - current_slot_idx <= 0:
             debug("IOCTGO_AGILEOUT: No slots remaining today")
             self._planned_slot_actions = {}
+            self._aggressive_slot_gates = {}
             self._apply_discharge_policy(current_soc_percent)
             return []
 
@@ -1227,15 +1233,37 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # the extra SoC on another conservative slot is worth more.
         aggressive_count = 0
         aggressive_loss = self._aggressive_slot_soc_loss_percent()
+        aggressive_gates: dict[int, dict] = {}
         for slot_idx, rate in priority_rates:
             if slot_idx in actions:
+                continue
+            gate = self._aggressive_slot_gate(
+                slot_idx,
+                planned_slots={
+                    slot
+                    for slot, action in actions.items()
+                    if action in ("export", "aggressive")
+                }
+                | set(planned_slots),
+            )
+            if (
+                gate["activation_w"]
+                >= self.NEVER_DISCHARGE_ACTIVATION_W
+            ):
+                debug(
+                    f"IOCTGO_AGILEOUT: Skipping aggressive slot {slot_idx} @ "
+                    f"{rate:.1f}p - the forced output cannot repay stored "
+                    f"energy (hurdle {gate['hurdle_p']:.1f}p)"
+                )
                 continue
             actions[slot_idx] = "aggressive"
             if feasible(absolute_floor_soc):
                 aggressive_count += 1
+                aggressive_gates[slot_idx] = gate
                 debug(
                     f"IOCTGO_AGILEOUT: Selected aggressive slot {slot_idx} @ "
-                    f"{rate:.1f}p, cost {aggressive_loss:.3f}%"
+                    f"{rate:.1f}p, cost {aggressive_loss:.3f}%, starts at "
+                    f"{gate['activation_w']:.0f} W house import"
                 )
             else:
                 del actions[slot_idx]
@@ -1282,6 +1310,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         planned_slots.sort()
         self._planned_slot_actions = dict(actions)
+        self._aggressive_slot_gates = dict(aggressive_gates)
 
         debug(
             f"IOCTGO_AGILEOUT: Final plan: {len(planned_slots)} export "
@@ -2112,6 +2141,145 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f"EVSE {label}"
         )
 
+    def _best_alternative_export_rate(
+        self,
+        current_slot: int,
+        *,
+        planned_slots: list[int] | set[int] | None = None,
+    ) -> float:
+        """Best price a marginal stored kWh could still earn elsewhere.
+
+        Planned export slots are already committed to the energy in the pack,
+        so the small extra SoC that aggressive load-following would spend
+        cannot displace them.  The alternative is therefore the best future
+        slot that the plan has *not* claimed.  When no such slot exists the
+        marginal energy has no better sale, so the alternative is 0p and the
+        ledger cost sets the hurdle.
+
+        The plan is current information, not a forecast: it is rebuilt from
+        today's known Agile prices and the live SoC.
+        """
+        if planned_slots is None:
+            actions = self._planned_slot_actions
+            if actions:
+                planned = {
+                    slot
+                    for slot, action in actions.items()
+                    if action in ("export", "aggressive")
+                }
+            else:
+                planned = set(self._planned_export_slots)
+        else:
+            planned = set(planned_slots)
+
+        free_import_slots = self._free_import_slots_today()
+        grid_support_slots = self._grid_support_slots_today()
+        away_slots = self._away_slots_today()
+        min_export_rate_p = self.export_min_rate_p()
+        best = 0.0
+        for rate_data in self._today_rates():
+            slot = rate_data['start'].hour * 2 + (
+                1 if rate_data['start'].minute == 30 else 0
+            )
+            if slot <= current_slot or slot >= 47:
+                continue
+            if slot in planned:
+                continue
+            if slot in free_import_slots or slot in away_slots:
+                continue
+            if slot in grid_support_slots:
+                continue
+            if self.is_off_peak(slot * SLOT_MINUTES):
+                continue
+            rate_p = float(rate_data['rate'])
+            if rate_p < min_export_rate_p:
+                continue
+            best = max(best, rate_p)
+        return best
+
+    def _aggressive_energy_dc_cost_p(self, alternative_rate_p: float) -> float:
+        """Value of one stored DC kWh: ledger cost or export alternative.
+
+        The alternative is converted from p/kWh AC to p/kWh DC with the
+        measured export efficiency, so the gate compares like with like.
+        """
+        alternative_value_p = (
+            max(0.0, float(alternative_rate_p))
+            * self.export_discharge_efficiency()
+        )
+        return max(
+            self._stored_cost_per_dc_kwh_p(),
+            alternative_value_p,
+        )
+
+    def _aggressive_activation_scan(
+        self,
+        export_rate_p: float,
+        *,
+        import_rate_p: float,
+        alternative_rate_p: float,
+        voltage: float | None,
+    ) -> tuple[float, float, float]:
+        """Scan house load for the first economic aggressive discharge.
+
+        The Wallbox current is quantised to whole amps and the +0.5 A bias
+        means the actual current rises with the load.  Discharge efficiency
+        improves with current, so a single break-even evaluated at 3 A can
+        miss a load that only pays at 4 A or 5 A.  This scan evaluates the
+        integer current the Wallbox would actually choose at each load.
+
+        A stored DC kWh is valued at the higher of its ledger cost and the
+        best alternative export price, then converted to a delivered cost at
+        the current being evaluated and increased by the profit margin.
+
+        Returns ``(activation_w, hurdle_p, current_a)``.  ``hurdle_p`` is the
+        delivered cost at the activation current, or at the minimum current
+        when no load is economic.
+        """
+        volts = 240.0 if voltage is None or voltage <= 0 else float(voltage)
+        min_current = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
+        max_current = max(
+            min_current, float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        )
+        energy_dc_p = self._aggressive_energy_dc_cost_p(alternative_rate_p)
+        margin_p = self.MIN_PROFIT_MARGIN_P_PER_KWH
+        min_hurdle_p = 0.0
+        max_load_w = int(math.floor(max_current * volts))
+
+        for load_w in range(0, max_load_w + 1):
+            biased_current = (
+                load_w / volts + self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
+            current_a = float(
+                round(
+                    max(
+                        min_current,
+                        min(biased_current, max_current),
+                    )
+                )
+            )
+            current_a = max(min_current, min(current_a, max_current))
+            output_w = current_a * volts
+            efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
+                current_a
+            )
+            hurdle_p = energy_dc_p / max(efficiency, 1e-6) + margin_p
+            if load_w == 0:
+                min_hurdle_p = hurdle_p
+
+            revenue_p = (
+                min(load_w, output_w) * import_rate_p
+                + max(0.0, output_w - load_w) * export_rate_p
+            )
+            if revenue_p >= output_w * hurdle_p:
+                return float(load_w), hurdle_p, current_a
+
+        return (
+            float(self.NEVER_DISCHARGE_ACTIVATION_W),
+            min_hurdle_p,
+            min_current,
+        )
+
     def discharge_activation_threshold_w(
         self,
         export_rate_p: float,
@@ -2119,6 +2287,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         import_rate_p: float | None = None,
         aggressive: bool = True,
         voltage: float | None = None,
+        alternative_rate_p: float | None = None,
     ) -> float:
         """Smallest house import at which discharging still makes money.
 
@@ -2128,34 +2297,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         the prevailing export price, which can cost more than the import it
         avoids.  This threshold is the break-even load.
 
-        One hour at the minimum output ``P_min`` serving a load ``L``
-        (``L < P_min``) earns ``L * P_import + (P_min - L) * P_export`` and
-        costs ``P_min * H``, where ``H`` is the stored cost per delivered kWh
-        plus the profit margin.  ``H`` is evaluated at the minimum discharge
-        current because activation is a decision to start at that output; once
-        running, the ledger and savings use the actual current.  Solving for
-        zero gives::
+        **Aggressive mode** scans the load and evaluates the integer current
+        the Wallbox would actually pick at each point.  A stored kWh is valued
+        at the higher of its ledger cost and the best *uncommitted* export
+        price, so energy is not spent now if a better unreserved slot could
+        need it.  The scan naturally covers the 4 A/5 A case where higher
+        discharge efficiency makes a load economic that 3 A could not repay.
+
+        **Conservative mode** deliberately never exports at activation, so it
+        keeps the closed-form break-even evaluated at the minimum output and
+        floors the result at ``P_min``.  One hour at ``P_min`` serving a load
+        ``L < P_min`` earns ``L * P_import + (P_min - L) * P_export`` and
+        costs ``P_min * H`` with the ledger's delivered cost plus margin::
 
             G* = P_min * (H - P_export) / (P_import - P_export)
-
-        The aggressive +0.5 A bias moves the output to ``L + b`` once that
-        exceeds ``P_min``, exporting ``b`` watts.  Above that point the
-        break-even is solved separately, allowing another half amp because
-        the Wallbox current is quantised to whole amps::
-
-            L_b = (b + V/2) * (H - P_export) / (P_import - H)
-
-        and the threshold is ``G*`` when it falls in the clamped region, or
-        ``L_b`` when the bias is already pushing power to the grid.
 
         * ``H >= P_import``: even a load equal to ``P_min`` cannot repay the
           stored energy, so never start (the export planner handles any
           profitable export separately).
         * ``P_export >= H``: the forced export alone clears the hurdle, so
           any import justifies a start (0 W).
-        * Conservative mode floors the result at ``P_min``: below that it
-          would have to export at the activation point, which is exactly what
-          conservative mode is meant to avoid.
 
         Args:
             export_rate_p: Export price that the forced excess would earn.
@@ -2165,11 +2326,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             aggressive: True for the +0.5 A bias strategy, False for the
                 -0.5 A conservative strategy.
             voltage: Live grid voltage in volts.  Defaults to 240 V.
+            alternative_rate_p: Best alternative export price for the stored
+                energy in an uncommitted slot.  Defaults to 0p, meaning the
+                marginal energy has no better sale than the ledger value.
         """
         import_p = (
             config.IMPORT_HIGH if import_rate_p is None else import_rate_p
         )
         volts = 240.0 if voltage is None or voltage <= 0 else voltage
+
+        if aggressive:
+            threshold_w, _, _ = self._aggressive_activation_scan(
+                export_rate_p,
+                import_rate_p=import_p,
+                alternative_rate_p=(
+                    0.0
+                    if alternative_rate_p is None
+                    else alternative_rate_p
+                ),
+                voltage=volts,
+            )
+            return threshold_w
+
+        # Conservative mode: never intentionally export at activation.
         p_min_w = max(0.0, self.MIN_DISCHARGE_CURRENT) * volts
         hurdle_p = (
             self._delivered_cost_per_kwh_p()
@@ -2186,25 +2365,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return self.NEVER_DISCHARGE_ACTIVATION_W
 
         clamped_break_even_w = p_min_w * (hurdle_p - export_rate_p) / spread_p
-        if not aggressive:
-            return round(max(clamped_break_even_w, p_min_w))
-
-        bias_w = self.AGGRESSIVE_DISCHARGE_BIAS_A * volts
-        if clamped_break_even_w <= p_min_w - bias_w:
-            threshold_w = clamped_break_even_w
-        else:
-            # The bias already exports b W; the break-even for that region is
-            # higher than the clamped one because the extra export must also
-            # repay the stored energy.  Allow half an amp for the Wallbox's
-            # whole-amp current quantisation.
-            threshold_w = (
-                (bias_w + volts / 2.0)
-                * (hurdle_p - export_rate_p)
-                / (import_p - hurdle_p)
-            )
-        # Whole watts: the ledger cost drifts continuously, and a sub-watt
-        # change is not worth re-configuring the Wallbox (or logging) for.
-        return round(max(0.0, threshold_w))
+        return round(max(clamped_break_even_w, p_min_w))
 
     def _slot_start_datetime(self, day_minute: int) -> datetime:
         """Start of the half-hour slot containing *day_minute* today."""
@@ -2258,23 +2419,41 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def _current_discharge_activation_w(
         self, current_slot: int, day_minute: int, *, aggressive: bool
     ) -> float:
-        """Discharge activation for the live prices and stored-energy cost."""
+        """Discharge activation for the live prices and stored-energy cost.
+
+        Aggressive load-following values the stored energy at its best
+        uncommitted alternative use, so a better unreserved export slot raises
+        the gate.  Conservative coverage keeps the ledger's delivered-cost
+        hurdle.
+
+        A planned aggressive slot reuses the gate the planner recorded, so the
+        threshold the plan explains and the threshold the Wallbox receives
+        cannot drift apart inside the slot.
+        """
+        if aggressive:
+            gate = self._aggressive_slot_gates.get(current_slot)
+            if gate is not None:
+                return gate["activation_w"]
         power = self._read_power_snapshot()
         return self.discharge_activation_threshold_w(
             self._current_export_rate_p(current_slot),
             import_rate_p=self._current_import_rate_p(day_minute),
             aggressive=aggressive,
             voltage=power["voltage"] if power else None,
+            alternative_rate_p=(
+                self._best_alternative_export_rate(current_slot)
+                if aggressive
+                else None
+            ),
         )
 
     @classmethod
     def _activation_note(cls, activation_w: float) -> str:
         """One-sentence explanation of a discharge activation threshold."""
-        min_current_a = config.WALLBOX_MIN_DISCHARGE_CURRENT
         if activation_w >= cls.NEVER_DISCHARGE_ACTIVATION_W:
             return (
-                f"will not run: even the {min_current_a:.0f} A minimum cannot "
-                "repay the stored energy"
+                "will not run: even the lowest output cannot repay the stored "
+                "energy's best alternative use"
             )
         if activation_w <= 0:
             return (
@@ -2282,17 +2461,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         return (
             f"starts at {activation_w:.0f} W import: below that the "
-            f"{min_current_a:.0f} A minimum would export more than it saves"
+            "forced output would export more than it saves"
         )
 
     @classmethod
     def _activation_explanation(cls, activation_w: float) -> str:
         """Short dashboard sentence explaining the aggressive trigger."""
-        min_current_a = config.WALLBOX_MIN_DISCHARGE_CURRENT
         if activation_w >= cls.NEVER_DISCHARGE_ACTIVATION_W:
             return (
-                "Discharge is disabled because stored energy costs more than "
-                "the import it avoids."
+                "Discharge is disabled because stored energy is worth more in "
+                "its best alternative use than the import it avoids."
             )
         if activation_w <= 0:
             return (
@@ -2301,9 +2479,61 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         return (
             f"Discharge starts at ≥{activation_w:.0f} W house import; below "
-            f"that the {min_current_a:.0f} A minimum would export more than "
-            "it saves."
+            "that the forced output would export more than it saves."
         )
+
+    def _aggressive_slot_gate(
+        self,
+        slot: int,
+        *,
+        planned_slots: list[int] | set[int] | None = None,
+    ) -> dict:
+        """Break-even house load for aggressive load-following in *slot*.
+
+        The planner does not forecast the house load, so an aggressive slot
+        is a *conditional* action: the live controller only starts the
+        discharge once the house import reaches this break-even.  Evaluating
+        the gate at the slot's own prices keeps the plan and the control loop
+        from disagreeing about whether the slot is worthwhile.
+
+        The stored energy is valued at the higher of its ledger cost and the
+        best *uncommitted* export price.  Planned sales are already committed
+        to the pack, so they are not an alternative for the small extra SoC
+        this slot would spend; an unplanned higher-priced slot is, because
+        spending now could put it out of reach.  The scan evaluates the
+        integer current the Wallbox would actually choose, so the 4 A/5 A
+        efficiency step is included.  The export price and the live voltage
+        come from the same helpers the control loop uses.
+        """
+        power = self._read_power_snapshot()
+        voltage = power["voltage"] if power else None
+        export_rate_p = self._current_export_rate_p(slot)
+        import_rate_p = self._current_import_rate_p(slot * SLOT_MINUTES)
+        alternative_rate_p = self._best_alternative_export_rate(
+            slot, planned_slots=planned_slots
+        )
+        (
+            activation_w,
+            hurdle_p,
+            activation_current_a,
+        ) = self._aggressive_activation_scan(
+            export_rate_p,
+            import_rate_p=import_rate_p,
+            alternative_rate_p=alternative_rate_p,
+            voltage=voltage,
+        )
+        return {
+            "slot": slot,
+            "activation_w": activation_w,
+            "hurdle_p": hurdle_p,
+            "activation_current_a": activation_current_a,
+            "alternative_rate_p": alternative_rate_p,
+            "export_rate_p": export_rate_p,
+            "import_rate_p": import_rate_p,
+            "voltage_v": voltage,
+            "note": self._activation_note(activation_w),
+            "explanation": self._activation_explanation(activation_w),
+        }
 
     def _record_savings_rate(self, now: datetime) -> None:
         """Update the recent rate of change of the saved-today total.
@@ -3844,6 +4074,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             planned = slot in planned_export_slots
             exported = slot in exported_slots
             off_peak = self.is_off_peak(slot * 30)
+            aggressive_gate = None
 
             revenue_gbp = None
             gain_gbp = None
@@ -3935,11 +4166,48 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 status = "aggressive"
                 status_label = "AGGRESSIVE"
                 status_class = "status-normal"
+                gate = self._aggressive_slot_gates.get(slot)
+                if gate is None:
+                    gate = self._aggressive_slot_gate(slot)
+                aggressive_gate = gate
+                activation_w = gate["activation_w"]
+                activation_a = gate.get("activation_current_a")
+                if activation_w >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                    gate_text = (
+                        "The live gate is closed: even the lowest output "
+                        "cannot repay the stored energy's best alternative "
+                        f"use ({gate['hurdle_p']:.1f}p/kWh delivered), so "
+                        "this slot will idle."
+                    )
+                elif activation_w <= 0:
+                    gate_text = (
+                        "It starts on any grid import because the "
+                        f"{rate:.1f}p export alone clears the "
+                        f"{gate['hurdle_p']:.1f}p/kWh stored-energy hurdle "
+                        "(best alternative use or delivered cost, whichever "
+                        "is higher, plus the profit margin)."
+                    )
+                else:
+                    current_text = (
+                        f" ({activation_a:.0f} A)"
+                        if activation_a is not None
+                        else ""
+                    )
+                    gate_text = (
+                        f"It starts only when the house imports at least "
+                        f"{activation_w:.0f} W{current_text}; below that the "
+                        "forced export would cost more than it saves. The "
+                        f"{gate['hurdle_p']:.1f}p/kWh hurdle is the higher "
+                        "of the energy's best alternative use and its "
+                        "delivered cost, plus the profit margin."
+                    )
                 reason = (
-                    f"Aggressive load-following — covers the house and exports "
-                    f"the surplus at {rate:.1f}p. The extra "
+                    f"Aggressive load-following — if the house load reaches "
+                    f"the gate, it covers the house and exports the surplus "
+                    f"at {rate:.1f}p. The extra "
                     f"{self._aggressive_extra_soc_loss_percent():.2f}% of SoC "
-                    f"sells about {aggressive_export_kwh:.3f} kWh this slot."
+                    f"sells about {aggressive_export_kwh:.3f} kWh this slot. "
+                    f"{gate_text}"
                 )
                 if not qualifies:
                     reason += (
@@ -4079,6 +4347,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "export_price_p": rate,
                     "import_price_p": import_price_p,
                     "break_even_p": break_even_p,
+                    "aggressive_activation_w": (
+                        aggressive_gate["activation_w"]
+                        if aggressive_gate is not None
+                        else None
+                    ),
+                    "aggressive_hurdle_p": (
+                        aggressive_gate["hurdle_p"]
+                        if aggressive_gate is not None
+                        else None
+                    ),
                     "qualifies": qualifies,
                     "planned": planned,
                     "exported": exported,
@@ -4140,7 +4418,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if aggressive_rows:
                 diagnosis = (
                     f"No full export slot fits, but {len(aggressive_rows)} "
-                    "high-value slot(s) use aggressive load-following: the "
+                    "high-value slot(s) are planned for aggressive "
+                    "load-following: if the house load reaches the gate, the "
                     "house is covered and the small surplus is exported. This "
                     f"spends {aggressive_soc_loss:.2f}% of SoC per slot "
                     f"instead of {export_loss:.1f}% for a bulk export."
@@ -4204,9 +4483,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             if aggressive_rows:
                 diagnosis += (
-                    f" {len(aggressive_rows)} high-value slot(s) also use "
-                    "aggressive load-following to capture a small surplus "
-                    "export."
+                    f" {len(aggressive_rows)} high-value slot(s) are also "
+                    "planned for aggressive load-following; they only run if "
+                    "the live house import reaches their break-even."
                 )
             if skipped_qualifying:
                 diagnosis += (
@@ -4242,6 +4521,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "aggressive_slots": sorted(
                 row["slot"] for row in aggressive_rows
             ),
+            "aggressive_activation_w": {
+                row["slot"]: row["aggressive_activation_w"]
+                for row in aggressive_rows
+            },
+            "aggressive_hurdle_p": {
+                row["slot"]: row["aggressive_hurdle_p"]
+                for row in aggressive_rows
+            },
+            "aggressive_conditional": bool(aggressive_rows),
             "qualifying_slots": sorted(priority_slots),
             "skipped_qualifying_slots": [
                 row["slot"] for row in skipped_qualifying
@@ -4330,6 +4618,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if snap.stored_cost_p is not None
             else self._delivered_cost_per_kwh_p()
         )
+        if (
+            snap.discharge_aggressive
+            and snap.decision_tier
+            not in (
+                "planned_export",
+                "export_priority",
+                "export_reserve",
+                "grid_support",
+            )
+        ):
+            # Aggressive load-following values the energy at its best
+            # uncommitted export alternative, so the answer page must use the
+            # same hurdle as the live gate rather than the ledger alone.
+            gate = self._aggressive_slot_gate(slot)
+            stored_cost_p = max(0.0, gate["hurdle_p"] - margin)
         hurdle_p = stored_cost_p + margin
         harvest_a = snap.harvest_current_a
         voltage = (
@@ -5378,7 +5681,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if plan.get("aggressive_slots"):
             state.append(
                 {
-                    "label": "Aggressive house+export slots",
+                    "label": "Aggressive house+export slots (conditional)",
                     "value": f"{len(plan['aggressive_slots'])}",
                 }
             )
@@ -5505,9 +5808,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return {
                 "headline": "Do not discharge",
                 "because": (
-                    f"Stored energy costs {hurdle_p:.1f}p/kWh delivered, "
-                    f"which is at or above the {import_p:.1f}p/kWh import "
-                    "price. Discharging would lose money."
+                    "Stored energy is worth at least "
+                    f"{hurdle_p:.1f}p/kWh delivered in its best alternative "
+                    "use or measured cost, which is at or above the "
+                    f"{import_p:.1f}p/kWh import price. Discharging would "
+                    "lose money."
                 ),
             }
         if activation_w <= 0:
@@ -5524,10 +5829,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"Power the home at ≥{activation_w:.0f} W house import"
             ),
             "because": (
-                "That is the break-even point: below it, the "
-                f"{min_discharge_w:.0f} W minimum exports more than the "
-                "import it avoids, so the stored energy would cost more than "
-                "it saves."
+                "That is the break-even point: below it, the forced output "
+                "exports more than the import it avoids, so the stored energy "
+                "would cost more than it saves."
             ),
         }
 
@@ -5956,13 +6260,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if aggressive_slots:
                     plan_text += (
                         f" · {len(aggressive_slots)} aggressive "
-                        "(house + surplus export)"
+                        "(conditional house + surplus export)"
                     )
                 plan_colour = "#e65100"
             elif aggressive_slots:
                 plan_text = (
-                    f"Aggressive plan: {len(aggressive_slots)} slot(s) cover "
-                    "the house and export the surplus — no full export fits"
+                    f"Aggressive plan: {len(aggressive_slots)} conditional "
+                    "slot(s) cover the house and export the surplus when the "
+                    "load reaches the break-even — no full export fits"
                 )
                 plan_colour = "#e65100"
             else:
@@ -6954,10 +7259,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     f"current export {current_export_rate_p:.1f}p, harvest "
                     f"estimate {harvest_current_a:.0f} A, surplus "
                     f"{surplus_w:.0f} W. Aggressive discharge {activation_text}. "
-                    "Stored energy costs "
-                    f"{self._delivered_cost_per_kwh_p():.1f}p/kWh delivered "
-                    f"at the {self.MIN_DISCHARGE_CURRENT:.0f} A minimum plus a "
-                    f"{self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p margin. "
+                    "Stored energy is valued at the higher of its ledger "
+                    "cost and its best alternative export use; the break-even "
+                    "adds the delivery loss at the actual discharge current "
+                    f"and a {self.MIN_PROFIT_MARGIN_P_PER_KWH:.1f}p/kWh "
+                    "margin. "
                     "Detailed slot and SoC projections are in the log."
                     if surplus_w is not None
                     else (
@@ -7422,9 +7728,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             harvest_current_a=harvest_current_a,
         )
 
-        # Aggressive discharge: start as soon as the forced 3 A minimum earns
-        # back the stored energy.  This is well below 720 W for cheap stored
-        # energy, but not the old blanket 1 W, which exported at a loss.
+        # Aggressive discharge: start only once the forced output earns back
+        # the stored energy's best alternative use or measured delivered cost,
+        # whichever is higher, plus the profit margin.  The gate can sit below
+        # 720 W for cheap energy, but never at the old blanket 1 W, which
+        # exported at a loss.
         activation_w = self._current_discharge_activation_w(
             current_slot, dayMinute, aggressive=True
         )

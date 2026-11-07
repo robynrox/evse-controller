@@ -194,12 +194,17 @@ completed fixes.
   ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling zeroes
   the charge range outside off-peak, so solar cannot overfill the pack.
 - Discharge activation is no longer the hard-coded 1 W (aggressive) or 720 W
-  (conservative). It is the break-even house load
-  `G* = P_min × (H − P_export) / (P_import − P_export)`, where `H` is the
-  stored cost per delivered kWh plus the profit margin. The Wallbox cannot go
-  below 3 A (~720 W), so starting for a tiny load would export the excess.
-  Conservative mode floors the activation at `P_min`; when `H ≥ P_import` the
-  controller never starts a discharge.
+  (conservative). Aggressive mode scans the house load and evaluates the
+  integer current the Wallbox would actually choose at each point, so the
+  4 A/5 A efficiency step is included. The stored energy is valued at the
+  higher of its ledger cost and the best *uncommitted* export price
+  (converted to DC); the hurdle applies the delivery loss at that current
+  plus the profit margin. A better unplanned slot therefore raises the gate,
+  while planned sales do not. Conservative mode keeps the closed-form
+  break-even at the minimum output
+  `G* = P_min × (H − P_export) / (P_import − P_export)` and floors the
+  activation at `P_min`; when `H ≥ P_import` the controller never starts a
+  discharge.
 - Bulk export planning normally stops at `MIN_AGILE_DISCHARGE_SOC`.
   High-value slots whose export price clears the house-offset break-even get
   first claim and may spend the reserve below that target, down to the

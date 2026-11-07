@@ -890,8 +890,12 @@ class TestEnergyShortfall:
         mock_controller.use_new_current_calculation = False
         state = create_test_state(80)
 
-        # Slot 24 (12:00) exports at 9p.  The activation must be the
-        # break-even load, not the old blanket 1 W.
+        # Slot 24 (12:00) exports at 9p and no better uncommitted slot is
+        # ahead, so the ledger cost sets the hurdle.  The activation must be
+        # the break-even load, not the old blanket 1 W.
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 9.0}, default=0.0
+        )
         expected = agile_tariff.discharge_activation_threshold_w(9.0)
 
         agile_tariff._energy_shortfall = False
@@ -1237,28 +1241,63 @@ class TestDischargeActivation:
 
         assert at_minus_five > at_zero
 
-    def test_bias_region_raises_the_break_even(self, agile_tariff):
-        """Once +0.5 A exports, the extra 120 W must clear the hurdle too."""
-        efficiency = agile_tariff.EFFICIENCY_MODEL.discharge_efficiency(
-            agile_tariff.MIN_DISCHARGE_CURRENT
-        )
-        target_hurdle_p = 27.3
-        dc_cost_p = (
-            target_hurdle_p - agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
-        ) * efficiency
-        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=dc_cost_p / 100.0)
+    def test_activation_scan_steps_up_to_4a_and_5a(self, agile_tariff):
+        """Higher-current efficiency can make 4 A or 5 A pay when 3 A cannot.
 
-        hurdle_p = (
-            agile_tariff._delivered_cost_per_kwh_p()
-            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        The old closed form priced the forced output at the 3 A efficiency and
+        could miss the step where a whole-amp increase makes the load
+        economic.  The scan evaluates the integer current at each load.
+        """
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=2.20)
+        at_22, _, current_22 = agile_tariff._aggressive_activation_scan(
+            0.0,
+            import_rate_p=30.0,
+            alternative_rate_p=0.0,
+            voltage=240.0,
         )
-        clamped = 720.0 * hurdle_p / 30.0
-        biased = 240.0 * hurdle_p / (30.0 - hurdle_p)
-        assert clamped > 600
+        assert current_22 >= 4
+        assert at_22 >= 720
 
-        assert agile_tariff.discharge_activation_threshold_w(
-            0.0, import_rate_p=30.0
-        ) == pytest.approx(round(biased), abs=1)
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=2.35)
+        at_235, _, current_235 = agile_tariff._aggressive_activation_scan(
+            0.0,
+            import_rate_p=30.0,
+            alternative_rate_p=0.0,
+            voltage=240.0,
+        )
+        assert current_235 >= 5
+        assert at_235 > at_22
+
+    def test_uncommitted_export_alternative_raises_the_gate(
+        self, agile_tariff, monkeypatch
+    ):
+        """A better unplanned slot is a real alternative for the energy."""
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)  # 10p DC
+
+        # No better slot ahead: the cheap ledger cost sets a modest gate.
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 5.0}, default=0.0
+        )
+        without_better = agile_tariff._aggressive_slot_gate(
+            24, planned_slots=set()
+        )
+        assert 0 < without_better["activation_w"] < 720
+
+        # The same slot with a 26p uncommitted export ahead: spending the
+        # energy now forgoes that sale, so the gate rises above 720 W.
+        TestStageOneExportBudget._set_rates(
+            agile_tariff, {24: 5.0, 36: 26.0}, default=0.0
+        )
+        with_better = agile_tariff._aggressive_slot_gate(
+            24, planned_slots=set()
+        )
+        assert with_better["alternative_rate_p"] == pytest.approx(26.0)
+        assert with_better["activation_w"] > without_better["activation_w"]
+        assert with_better["activation_w"] > 720
+        assert with_better["activation_current_a"] > (
+            without_better["activation_current_a"]
+        )
 
     def test_unaffordable_stored_energy_never_load_follows(self, agile_tariff):
         """H above import is a job for the export planner, not load-following."""
@@ -1819,7 +1858,7 @@ class TestDecisionSnapshot:
 
         reason = agile_tariff._decision_snapshot.reason
         assert "starts at ≥250 W house import" in reason
-        assert "3 A minimum would export more than it saves" in reason
+        assert "forced output would export more than it saves" in reason
 
     def test_aggressive_reason_explains_a_zero_break_even(self, agile_tariff):
         self._set_time(agile_tariff, 10, 0)
@@ -1845,7 +1884,7 @@ class TestDecisionSnapshot:
 
         reason = agile_tariff._decision_snapshot.reason
         assert "Discharge is disabled" in reason
-        assert "stored energy costs more" in reason
+        assert "worth more in its best alternative use" in reason
 
     def test_soc_at_cap_stops_solar_charging(self, agile_tariff):
         """At the cap the mode says so, and no charge range is offered."""
@@ -3502,6 +3541,13 @@ class TestBreakEvenExportPriority:
             22: "aggressive",
             36: "export",
         }
+        # The live gate is the house load that repays the pack; the planned
+        # aggressive slot must use it rather than starting at any import.
+        monkeypatch.setattr(
+            agile_tariff,
+            "_current_discharge_activation_w",
+            lambda *args, **kwargs: 275,
+        )
         state = create_test_state(79)
 
         agile_tariff.get_control_state(state, 11 * 60)
@@ -3509,11 +3555,13 @@ class TestBreakEvenExportPriority:
         snapshot = agile_tariff._decision_snapshot
         assert snapshot.discharge_aggressive is True
         assert "aggressive discharge" in snapshot.mode
+        assert snapshot.discharge_activation_w == 275
 
         controller = Mock()
         controller.use_new_current_calculation = False
         agile_tariff.set_home_demand_levels(controller, state, 11 * 60)
 
+        controller.setDischargeActivationPower.assert_called_with(275)
         controller.setDischargeCurrentBias.assert_called_with(
             agile_tariff.AGGRESSIVE_DISCHARGE_BIAS_A
         )
@@ -3664,6 +3712,61 @@ class TestStageOneExportBudget:
         )
         assert agile_tariff._aggressive_export_kwh() > 0
 
+    def test_aggressive_gate_shows_the_break_even_house_load(
+        self, agile_tariff, monkeypatch
+    ):
+        """The gate is the load at which the forced output repays the pack."""
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        self._set_time(agile_tariff, 11, 0)
+        agile_tariff._bank_dc_kwh = 10.0
+        agile_tariff._bank_cost_gbp = 1.0  # 10p/kWh DC
+        self._set_rates(agile_tariff, {22: 5.0}, default=5.0)
+
+        gate = agile_tariff._aggressive_slot_gate(22)
+
+        assert 0 < gate["activation_w"] < 720
+        assert gate["hurdle_p"] > 5.0
+        assert "starts at" in gate["note"]
+
+        # Free stored energy and a high current export price clear the
+        # hurdle, so any import is enough to start.  No future slot is set,
+        # so the current price is not competing with a better alternative.
+        agile_tariff._bank_dc_kwh = 1.0
+        agile_tariff._bank_cost_gbp = 0.0
+        self._set_rates(agile_tariff, {22: 27.0}, default=0.0)
+
+        gate = agile_tariff._aggressive_slot_gate(22)
+
+        assert gate["activation_w"] == 0
+        assert "starts on any import" in gate["note"]
+
+    def test_aggressive_plan_skips_slots_that_cannot_repay_stored_energy(
+        self, agile_tariff, monkeypatch
+    ):
+        """A gate of NEVER must fall back to conservative/idle, not promise."""
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        self._set_time(agile_tariff, 9, 0)
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+        # 50p/kWh DC is above the peak import price even after discharge
+        # losses, so the 3 A minimum can never repay the pack.
+        agile_tariff._bank_dc_kwh = 1.0
+        agile_tariff._bank_cost_gbp = 0.5
+
+        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
+        prices = {
+            slot: 26.0 + index for index, slot in enumerate(priority)
+        }
+        self._set_rates(agile_tariff, prices)
+
+        agile_tariff.calculate_export_plan(79)
+
+        actions = agile_tariff._planned_slot_actions
+        assert agile_tariff._aggressive_slot_gates == {}
+        assert all(action != "aggressive" for action in actions.values())
+
     def test_plan_explanation_marks_aggressive_slots(
         self, agile_tariff, monkeypatch
     ):
@@ -3692,6 +3795,20 @@ class TestStageOneExportBudget:
         assert [row["slot"] for row in aggressive_rows] == [22, 24]
         assert all(row["status"] == "aggressive" for row in aggressive_rows)
         assert all(row["revenue_gbp"] for row in aggressive_rows)
+        # The plan is conditional: every aggressive row carries the live
+        # house-load gate and the stored-energy hurdle, and the reason says
+        # the slot only runs if the load reaches that gate.
+        for row in aggressive_rows:
+            assert row["aggressive_activation_w"] is not None
+            assert row["aggressive_hurdle_p"] is not None
+            assert (
+                "starts only when the house imports"
+                in row["reason"]
+                or "starts on any grid import" in row["reason"]
+            )
+        assert set(plan["aggressive_activation_w"]) == {22, 24}
+        assert set(plan["aggressive_hurdle_p"]) == {22, 24}
+        assert plan["aggressive_conditional"] is True
         assert plan["selected_revenue_gbp"] == pytest.approx(
             sum(
                 row["revenue_gbp"] or 0.0
@@ -3703,7 +3820,7 @@ class TestStageOneExportBudget:
         assert {row["slot"] for row in plan["options"] if row["kind"] == "aggressive"} == {22, 24}
 
         html = agile_tariff.get_dashboard_html()
-        assert "2 aggressive (house + surplus export)" in html
+        assert "2 aggressive (conditional house + surplus export)" in html
 
     def test_ordinary_exports_stop_at_the_bulk_target(
         self, agile_tariff, monkeypatch
