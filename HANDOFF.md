@@ -210,11 +210,14 @@ completed fixes.
   first claim and may spend the reserve below that target, down to the
   absolute minimum. While one of those slots is still ahead, an energy
   shortfall pauses house discharge so the pack is not spent at 3 A first;
-  surplus solar may still charge. The aggressive/conservative house-load
-  decision uses `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
+  surplus solar may still charge. Exports are planned before aggressive house
+  load, so a day that maxes out its export budget has no aggressive slots.
+  The house-load bands are: aggressive at or above
+  `MIN_AGILE_DISCHARGE_SOC`; conservative between the target and
+  `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT`
   (`house_load_margin_percent`, default 5%, clamped above the 25% protection
-  reserve), so it stays aggressive after a bulk export reaches the target;
-  only a projection below the lower floor becomes conservative.
+  reserve); idle below the house floor. Committed exports may still run below
+  the house floor down to the absolute minimum.
 - The default `MIN_AGILE_DISCHARGE_SOC` / `min_agile_discharge_soc` is **50%**
   (the 23:30 bulk-export target and export floor). The 25% absolute minimum
   and the 5% house-load flexibility are unchanged. An existing `config.yaml`

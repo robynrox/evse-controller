@@ -499,22 +499,27 @@ fetch cannot silently reuse yesterday's prices.
 
 ### Target, house floor and aggressive mode
 
-The manager uses two SoC thresholds rather than one. Ordinary export planning
-keeps `MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots are
-selected until the projected 23:30 SoC would reach that target. High-value slots
-whose price clears the house-offset break-even get first claim and may spend the
-reserve below the target, down to the absolute minimum; while one is still ahead
-in an energy shortfall, house discharge is paused. The
-aggressive/conservative house-load decision uses
+The manager uses a bulk target and a lower house floor. Ordinary export
+planning keeps `MIN_AGILE_DISCHARGE_SOC` as its floor: profitable export slots
+are selected until the projected 23:30 SoC would reach that target. High-value
+slots whose price clears the house-offset break-even get first claim and may
+spend the reserve below the target, down to the absolute minimum; while one is
+still ahead in an energy shortfall, house discharge is paused. Exports are
+planned before aggressive house load, so aggressive slots are only selected
+when the running minimum after every planned export is still at or above the
+target. If the exports max out the budget, the remaining slots stay idle rather
+than spending the pack on house load.
+
+The house-load bands are therefore: aggressive at or above
+`MIN_AGILE_DISCHARGE_SOC`; conservative between the target and
 `MIN_AGILE_DISCHARGE_SOC − HOUSE_LOAD_MARGIN_PERCENT` (default 5%, clamped
-above the 25% protection reserve). A projection between the two therefore stays
-in aggressive load-following rather than switching to conservative the moment a
-bulk export has consumed the planned headroom. The decision is a single
-comparison recomputed with the export plan at slot boundaries, so no separate
-latch is needed; the comparison is strict, and exactly on the floor remains
-aggressive. The margin is configuration (`house_load_margin_percent`) and is
-clamped at zero so a bad value cannot put the house floor above the bulk
-target.
+above the 25% protection reserve); idle below the house floor. Committed
+exports may still run below the house floor down to the absolute minimum. The
+decision is a single comparison recomputed with the export plan at slot
+boundaries, so no separate latch is needed; the comparison is strict, and
+exactly on a floor stays in the higher band. The margin is configuration
+(`house_load_margin_percent`) and is clamped at zero so a bad value cannot put
+the house floor above the bulk target.
 
 ### Dashboard, charge ceiling and savings estimate
 

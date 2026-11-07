@@ -251,7 +251,7 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
 - `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, default 50, 0-100). Ordinary export slots are planned down to this figure. High-value slots that beat covering the house load may use the reserve below it, down to `absolute_min_soc_percent`. Lower it to export more of the pack; raise it to keep more reserve for the evening, overnight or the next day
 - `absolute_min_soc_percent`: Hard lower limit for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve, and it can be raised (for example to 40%) to avoid draining the pack on winter days. Surplus solar may still charge the pack below this level
-- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The house floor is clamped above both the 25% reserve and `absolute_min_soc_percent`, and bulk export planning still uses `min_agile_discharge_soc` itself unless the absolute minimum is higher
+- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` for conservative house coverage (whole percent, default 5). Aggressive house discharge stops at `min_agile_discharge_soc`; below that, conservative coverage continues down to `min_agile_discharge_soc - house_load_margin_percent`, and below that the house imports. The floor is clamped above both the 25% reserve and `absolute_min_soc_percent`
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -333,14 +333,16 @@ cell on a phone, where the badge alone is too small to rely on.
   energy costs more than the import it avoids`. Detailed SoC projections and
   slot analysis remain in the text log; hover the line for a fuller
   explanation.
-- **Aggressive vs conservative** is decided against a house-load floor, not the
-  bulk-export target. Bulk export slots are planned down to
-  `min_agile_discharge_soc`; the house-load strategy stays aggressive while the
-  projected 23:30 SoC remains above that target minus
-  `house_load_margin_percent` (default 5%). Between that floor and
-  `absolute_min_soc_percent` it discharges conservatively, and below the
-  absolute minimum it stops discharging altogether. A bulk export that
-  finishes at the target therefore does not by itself force conservative mode.
+- **Aggressive vs conservative** follows the projected 23:30 SoC. Aggressive
+  house discharge runs while the projection is at or above
+  `min_agile_discharge_soc` (the bulk target). Between that target and the
+  house floor (`min_agile_discharge_soc - house_load_margin_percent`, default
+  5%) it discharges conservatively. Below the house floor it stops discharging
+  and the house imports; below `absolute_min_soc_percent` even committed
+  exports are inhibited. Exports get first claim on the pack: aggressive slots
+  are only planned after every planned export and only if the running minimum
+  is still at or above the target, so a day that maxes out its export budget
+  does not also spend energy on house load.
 - **Export priority** applies when the quoted export price clears the
   house-offset break-even:
   `η_house ÷ η_export × import price`, using the measured discharge

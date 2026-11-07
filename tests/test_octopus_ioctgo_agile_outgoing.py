@@ -724,27 +724,33 @@ class TestEnergyShortfall:
         # 77% - 23% = 54%, below the 55% house floor (60% target - 5%).
         assert agile_tariff._update_energy_shortfall(77) is True
         assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_policy == "idle"
+        assert agile_tariff._house_discharge_inhibited is True
 
-    def test_no_shortfall_when_projection_meets_house_floor(self, agile_tariff):
+    def test_no_shortfall_when_projection_meets_the_target(self, agile_tariff):
         """At 22:00 only 3 slots remain, so 3% is lost."""
         self._set_time(agile_tariff, 22, 0)
-        # 70% - 3% = 67%, above the 55% house floor.
+        # 70% - 3% = 67%, above the 60% bulk target.
         assert agile_tariff._update_energy_shortfall(70) is False
         assert agile_tariff._energy_shortfall is False
+        assert agile_tariff._discharge_policy == "aggressive"
 
-    def test_projection_at_house_floor_is_not_shortfall(self, agile_tariff):
-        """The comparison is strict: exactly on the floor stays aggressive."""
+    def test_projection_at_house_floor_is_conservative(self, agile_tariff):
+        """Exactly on the house floor still allows conservative coverage."""
         self._set_time(agile_tariff, 12, 0)
         # 78% - 23% = 55%, exactly the floor.
-        assert agile_tariff._update_energy_shortfall(78) is False
-        assert agile_tariff._energy_shortfall is False
+        assert agile_tariff._update_energy_shortfall(78) is True
+        assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_policy == "conservative"
+        assert agile_tariff._house_discharge_inhibited is False
 
-    def test_target_headroom_does_not_force_conservative(self, agile_tariff):
-        """A projection between the floor and the target stays aggressive."""
+    def test_target_headroom_is_conservative(self, agile_tariff):
+        """A projection between the floor and the target is conservative."""
         self._set_time(agile_tariff, 12, 0)
         # 80% - 23% = 57%: below the 60% bulk target but above the 55% floor.
-        assert agile_tariff._update_energy_shortfall(80) is False
-        assert agile_tariff._energy_shortfall is False
+        assert agile_tariff._update_energy_shortfall(80) is True
+        assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_policy == "conservative"
 
     def test_house_floor_can_be_configured(self, agile_tariff, monkeypatch):
         """The margin is configuration, not a hidden constant."""
@@ -752,11 +758,13 @@ class TestEnergyShortfall:
         # 59% - 3% = 56%, below the 60% target but above the 50% floor.
         self._set_time(agile_tariff, 22, 0)
         assert agile_tariff._house_load_floor_soc() == 50
-        assert agile_tariff._update_energy_shortfall(59) is False
+        assert agile_tariff._update_energy_shortfall(59) is True
+        assert agile_tariff._discharge_policy == "conservative"
 
         monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 0)
         assert agile_tariff._house_load_floor_soc() == 60
         assert agile_tariff._update_energy_shortfall(59) is True
+        assert agile_tariff._discharge_policy == "idle"
 
     def test_house_floor_never_enters_the_protection_reserve(
         self, agile_tariff, monkeypatch
@@ -1109,7 +1117,10 @@ class TestSessionAwareSocProjection:
             expected
         )
         # Without the away window the projection is 54%, below the 55% floor.
-        assert agile_tariff._update_energy_shortfall(77) is False
+        # With the away window it is 56%: above the house floor but below the
+        # 60% bulk target, so it is conservative rather than short.
+        assert agile_tariff._update_energy_shortfall(77) is True
+        assert agile_tariff._discharge_policy == "conservative"
         assert agile_tariff._projected_soc_at_2330 == pytest.approx(expected)
 
     def test_away_slots_are_not_export_targets(self, agile_tariff, tmp_path):
@@ -1482,7 +1493,7 @@ class TestDecisionSnapshot:
         return fixed
 
     @staticmethod
-    def _pin_plan(tariff, slot, soc, shortfall=False):
+    def _pin_plan(tariff, slot, soc, shortfall=False, house_floor=False):
         """Stop get_control_state() recalculating the plan for this test."""
         tariff._last_plan_slot = slot
         tariff._last_plan_soc = soc
@@ -1490,6 +1501,13 @@ class TestDecisionSnapshot:
         tariff._planned_export_slots = []
         tariff._plan_cache = []
         tariff._energy_shortfall = shortfall
+        tariff._discharge_policy = (
+            "idle"
+            if house_floor
+            else ("conservative" if shortfall else "aggressive")
+        )
+        tariff._house_discharge_inhibited = house_floor
+        tariff._discharge_inhibited = False
 
     def test_off_peak_charges_to_the_effective_cap(self, agile_tariff):
         self._set_time(agile_tariff, 23, 45)
@@ -1602,12 +1620,14 @@ class TestDecisionSnapshot:
 
         assert "discharge ≥720 W" in html
 
-    def test_conservative_reason_names_the_house_floor(
+    def test_house_floor_reason_names_the_floor(
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 12, 0)
-        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        self._pin_plan(
+            agile_tariff, 24, 30, shortfall=True, house_floor=True
+        )
         agile_tariff._projected_soc_at_2330 = 54
         state = create_test_state(30)
 
@@ -1615,16 +1635,20 @@ class TestDecisionSnapshot:
 
         snapshot = agile_tariff._decision_snapshot
         assert "55% house floor" in snapshot.reason
+        assert "no house discharge" in snapshot.reason
         assert "60% bulk target" in snapshot.detail
         assert "5% flexibility" in snapshot.detail
+        assert snapshot.decision_tier == "house_floor"
 
-    def test_conservative_reason_floors_the_projection(
+    def test_house_floor_reason_floors_the_projection(
         self, agile_tariff, monkeypatch
     ):
         """54.6% must read as 54% against a 55% floor, not 55% vs 55%."""
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         self._set_time(agile_tariff, 12, 0)
-        self._pin_plan(agile_tariff, 24, 30, shortfall=True)
+        self._pin_plan(
+            agile_tariff, 24, 30, shortfall=True, house_floor=True
+        )
         agile_tariff._projected_soc_at_2330 = 54.6
         state = create_test_state(30)
 
@@ -1632,6 +1656,7 @@ class TestDecisionSnapshot:
 
         snapshot = agile_tariff._decision_snapshot
         assert "54% < 55% house floor" in snapshot.reason
+        assert "no house discharge" in snapshot.reason
         assert "55% < 55%" not in snapshot.reason
         assert "projected 23:30 SoC 54%" in snapshot.detail
 
@@ -3462,21 +3487,25 @@ class TestBreakEvenExportPriority:
 
         # 17:00 starts at 56% and the 25% absolute minimum gives a 31% export
         # budget.  Three 10% priority exports fit (highest price first):
-        # 35 (32p), 36 (35p) and 37 (30p), ending at 26%.  One conservative
-        # slot then spends the last percent down to the floor.
+        # 35 (32p), 36 (35p) and 37 (30p), ending at 26%.  The exports are
+        # allowed below the 55% house floor, but no house discharge is.
         plan = agile_tariff.calculate_export_plan(56)
 
         assert plan == [35, 36, 37]
         assert agile_tariff._project_soc_at_2330(
             56, 34, slot_actions=agile_tariff._planned_slot_actions
-        ) == pytest.approx(25.0)
+        ) == pytest.approx(26.0)
         assert agile_tariff._minimum_projected_soc(
             56, 34, slot_actions=agile_tariff._planned_slot_actions
-        ) == pytest.approx(25.0)
-        # The fourth-highest priority slot (34, 28p) is kept for a
-        # conservative 1% house slot; 38 is left idle.
-        assert agile_tariff._planned_slot_actions[34] == "conservative"
+        ) == pytest.approx(26.0)
+        # The remaining priority slot (34, 28p) and 38 are left idle: both
+        # are below the house floor, so there is no conservative coverage.
+        assert agile_tariff._planned_slot_actions[34] == "idle"
         assert agile_tariff._planned_slot_actions[38] == "idle"
+        assert all(
+            action != "conservative"
+            for action in agile_tariff._planned_slot_actions.values()
+        )
 
     def test_shortfall_reserves_the_pack_for_a_planned_priority_export(
         self, agile_tariff, monkeypatch
@@ -3521,26 +3550,19 @@ class TestBreakEvenExportPriority:
             3, agile_tariff.MAX_CHARGE_CURRENT
         )
 
-    def test_planned_aggressive_slot_overrides_the_shortfall_policy(
+    def test_planned_aggressive_slot_executes_in_the_aggressive_band(
         self, agile_tariff, monkeypatch
     ):
-        """An aggressive slot must execute as aggressive, not conservative."""
+        """A planned aggressive slot uses its stored gate when the band allows."""
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
         TestDecisionSnapshot._set_time(agile_tariff, 11, 0)
         TestDecisionSnapshot._pin_plan(
-            agile_tariff, 22, 79, shortfall=True
+            agile_tariff, 22, 79, shortfall=False
         )
-        # A high-value export is still ahead, which would normally trigger the
-        # reserve branch; this slot was explicitly chosen for aggression.
-        agile_tariff._planned_export_slots = [36]
-        agile_tariff._plan_cache = [36]
-        agile_tariff._planned_slot_actions = {
-            22: "aggressive",
-            36: "export",
-        }
+        agile_tariff._planned_slot_actions = {22: "aggressive"}
         # The live gate is the house load that repays the pack; the planned
         # aggressive slot must use it rather than starting at any import.
         monkeypatch.setattr(
@@ -3568,6 +3590,33 @@ class TestBreakEvenExportPriority:
         controller.setDischargeCurrentRange.assert_called_with(
             3, agile_tariff.MAX_DISCHARGE_CURRENT
         )
+
+    def test_planned_aggressive_slot_yields_below_the_target(
+        self, agile_tariff, monkeypatch
+    ):
+        """An aggressive plan action must not override a below-target policy."""
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+        TestDecisionSnapshot._set_time(agile_tariff, 11, 0)
+        TestDecisionSnapshot._pin_plan(
+            agile_tariff, 22, 57, shortfall=True
+        )
+        agile_tariff._planned_slot_actions = {22: "aggressive"}
+        monkeypatch.setattr(
+            agile_tariff,
+            "_current_discharge_activation_w",
+            lambda *args, **kwargs: 720,
+        )
+        state = create_test_state(57)
+
+        agile_tariff.get_control_state(state, 11 * 60)
+
+        snapshot = agile_tariff._decision_snapshot
+        assert snapshot.discharge_aggressive is False
+        assert "conservative discharge" in snapshot.mode
+        assert snapshot.discharge_activation_w == 720
 
     def test_dashboard_names_the_reserved_priority_plan(
         self, agile_tariff, monkeypatch
@@ -3615,7 +3664,7 @@ class TestStageOneExportBudget:
                 }
             )
 
-    def test_high_value_day_spends_the_whole_budget_to_the_floor(
+    def test_high_value_exports_stop_house_discharge_below_the_target(
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
@@ -3635,8 +3684,7 @@ class TestStageOneExportBudget:
         plan = agile_tariff.calculate_export_plan(79)
 
         # 79% - 40% = 39% of budget; at 4% per export nine priority slots fit
-        # and the tenth would cross the floor.  The old load-follow baseline
-        # selected only two.
+        # and the tenth would cross the floor.
         assert len(plan) == 9
         assert set(plan) <= set(priority)
         assert plan == sorted(
@@ -3647,11 +3695,10 @@ class TestStageOneExportBudget:
         minimum = agile_tariff._minimum_projected_soc(
             79, 18, slot_actions=actions
         )
-        assert minimum >= 40.0 - 1e-9
-        assert minimum < 41.0
+        assert minimum == pytest.approx(43.0)
 
-        # The remaining budget covers two high-value aggressive slots; the
-        # rest idle so the house imports instead of spending reserved energy.
+        # The exports have spent the budget below both the 50% aggressive
+        # target and the 45% house floor, so no house discharge is planned.
         aggressive = [
             slot for slot, action in actions.items()
             if action == "aggressive"
@@ -3661,11 +3708,59 @@ class TestStageOneExportBudget:
             if action == "conservative"
         ]
         idle = [slot for slot, action in actions.items() if action == "idle"]
-        assert len(aggressive) == 2
+        assert aggressive == []
         assert conservative == []
         assert idle
-        assert min(aggressive) < max(plan)
-        assert agile_tariff._discharge_policy == "conservative"
+        assert agile_tariff._discharge_policy == "idle"
+
+    def test_aggressive_plan_is_empty_when_exports_max_out_below_the_target(
+        self, agile_tariff, monkeypatch
+    ):
+        """Exports get first claim; no aggressive slot if they spend the pack.
+
+        This is the 16 A / 4%-per-slot case: seven high-value exports fit,
+        the running minimum lands below the 50% aggressive target, and the
+        remaining 15:00/15:30 slots must stay idle rather than load-follow.
+        """
+        monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+        self._set_time(agile_tariff, 14, 0)  # slot 28
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
+
+        # 15:00 and 15:30 are the lowest-priced qualifying slots; 16:00-19:30
+        # are the higher-value planned exports.  23p ordinary slots are
+        # profitable but below the house-offset break-even.
+        priority = {30: 26.0, 31: 26.0}
+        priority.update(
+            {slot: 30.0 + (slot - 32) for slot in range(32, 40)}
+        )
+        prices = dict(priority)
+        prices.update({40: 23.0, 41: 23.0})
+        self._set_rates(agile_tariff, prices)
+
+        plan = agile_tariff.calculate_export_plan(70)
+
+        # Seven 4% exports fit above the 40% absolute floor.
+        assert plan == [33, 34, 35, 36, 37, 38, 39]
+        assert 30 not in plan
+        assert 31 not in plan
+
+        actions = agile_tariff._planned_slot_actions
+        assert actions[30] != "aggressive"
+        assert actions[31] != "aggressive"
+        assert all(
+            action != "aggressive" for action in actions.values()
+        )
+        assert all(
+            action != "conservative" for action in actions.values()
+        )
+        assert agile_tariff._minimum_projected_soc(
+            70, 28, slot_actions=actions
+        ) == pytest.approx(42.0)
+        assert agile_tariff._discharge_policy == "idle"
 
     def test_aggressive_slots_are_the_next_highest_priority_prices(
         self, agile_tariff, monkeypatch
@@ -3674,27 +3769,28 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
-        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        # A large export loss leaves headroom above the 50% aggressive target
+        # after the one full export that fits.
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
 
-        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
-        prices = {
-            slot: 26.0 + index for index, slot in enumerate(priority)
-        }
+        priority = [38, 40, 42]
+        prices = {42: 37.0, 40: 36.0, 38: 35.0}
         self._set_rates(agile_tariff, prices)
 
-        agile_tariff.calculate_export_plan(79)
+        plan = agile_tariff.calculate_export_plan(79)
 
         aggressive = sorted(
             slot
             for slot, action in agile_tariff._planned_slot_actions.items()
             if action == "aggressive"
         )
-        # The nine highest-priced priority slots are full exports; the next
-        # two by price get aggressive load-following, and the 12th is idle.
-        assert aggressive == [22, 24]
-        assert prices[24] > prices[22] > prices[20]
-        assert agile_tariff._planned_slot_actions[20] == "idle"
+        # 42 is the only full export that fits.  The two remaining priority
+        # slots are the next highest prices and still leave the running
+        # minimum above the 50% target, so they get aggressive load-following.
+        assert plan == [42]
+        assert aggressive == [38, 40]
+        assert agile_tariff._planned_slot_actions[42] == "export"
 
     def test_aggressive_cost_sits_between_conservative_and_bulk_export(
         self, agile_tariff
@@ -3748,22 +3844,23 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
-        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        # Leave headroom above the 50% target so the aggressive phase really
+        # considers these slots; the gate, not the budget, must reject them.
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
         # 50p/kWh DC is above the peak import price even after discharge
         # losses, so the 3 A minimum can never repay the pack.
         agile_tariff._bank_dc_kwh = 1.0
         agile_tariff._bank_cost_gbp = 0.5
 
-        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
-        prices = {
-            slot: 26.0 + index for index, slot in enumerate(priority)
-        }
+        priority = [38, 40, 42]
+        prices = {42: 37.0, 40: 36.0, 38: 35.0}
         self._set_rates(agile_tariff, prices)
 
-        agile_tariff.calculate_export_plan(79)
+        plan = agile_tariff.calculate_export_plan(79)
 
         actions = agile_tariff._planned_slot_actions
+        assert plan == [42]
         assert agile_tariff._aggressive_slot_gates == {}
         assert all(action != "aggressive" for action in actions.values())
 
@@ -3774,25 +3871,23 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
-        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 4.0
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
 
-        priority = [20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42]
-        prices = {
-            slot: 26.0 + index for index, slot in enumerate(priority)
-        }
+        priority = [38, 40, 42]
+        prices = {42: 37.0, 40: 36.0, 38: 35.0}
         self._set_rates(agile_tariff, prices)
 
         agile_tariff.get_control_state(create_test_state(79), 9 * 60)
         explanation = agile_tariff.get_decision_explanation()
         plan = explanation["plan"]
 
-        assert plan["planned_slots"] == [26, 28, 30, 32, 34, 36, 38, 40, 42]
-        assert plan["aggressive_slots"] == [22, 24]
+        assert plan["planned_slots"] == [42]
+        assert plan["aggressive_slots"] == [38, 40]
         aggressive_rows = [
             row for row in plan["rows"] if row["kind"] == "aggressive"
         ]
-        assert [row["slot"] for row in aggressive_rows] == [22, 24]
+        assert [row["slot"] for row in aggressive_rows] == [38, 40]
         assert all(row["status"] == "aggressive" for row in aggressive_rows)
         assert all(row["revenue_gbp"] for row in aggressive_rows)
         # The plan is conditional: every aggressive row carries the live
@@ -3806,8 +3901,8 @@ class TestStageOneExportBudget:
                 in row["reason"]
                 or "starts on any grid import" in row["reason"]
             )
-        assert set(plan["aggressive_activation_w"]) == {22, 24}
-        assert set(plan["aggressive_hurdle_p"]) == {22, 24}
+        assert set(plan["aggressive_activation_w"]) == {38, 40}
+        assert set(plan["aggressive_hurdle_p"]) == {38, 40}
         assert plan["aggressive_conditional"] is True
         assert plan["selected_revenue_gbp"] == pytest.approx(
             sum(
@@ -3817,7 +3912,7 @@ class TestStageOneExportBudget:
             )
         )
         assert "aggressive" in plan["diagnosis"].lower()
-        assert {row["slot"] for row in plan["options"] if row["kind"] == "aggressive"} == {22, 24}
+        assert {row["slot"] for row in plan["options"] if row["kind"] == "aggressive"} == {38, 40}
 
         html = agile_tariff.get_dashboard_html()
         assert "2 aggressive (conditional house + surplus export)" in html
@@ -3852,17 +3947,16 @@ class TestStageOneExportBudget:
         assert agile_tariff._minimum_projected_soc(
             100, 24, slot_actions=exports_only
         ) >= 50.0 - 1e-9
-        # The full plan still spends down to the hard floor with conservative
-        # coverage, never below it.
+        # Conservative coverage stops at the 45% house floor, never below it.
         assert agile_tariff._minimum_projected_soc(
             100, 24, slot_actions=agile_tariff._planned_slot_actions
-        ) >= 40.0 - 1e-9
+        ) >= 45.0 - 1e-9
 
 
-class TestThreeBandDischargePolicy:
+class TestFourBandDischargePolicy:
     """The house-load mode follows the projected 23:30 SoC."""
 
-    def test_aggressive_above_the_house_floor(
+    def test_aggressive_at_or_above_the_target(
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
@@ -3870,19 +3964,33 @@ class TestThreeBandDischargePolicy:
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
 
         assert agile_tariff._apply_discharge_policy(70) == "aggressive"
-        assert agile_tariff._energy_shortfall is False
+        assert agile_tariff._apply_discharge_policy(60) == "aggressive"
+        assert agile_tariff._apply_discharge_policy(59.9) == "conservative"
+        assert agile_tariff._energy_shortfall is True
         assert agile_tariff._discharge_inhibited is False
+        assert agile_tariff._house_discharge_inhibited is False
 
-    def test_conservative_between_absolute_and_house_floor(
+    def test_conservative_between_house_floor_and_target(
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
         monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
 
-        assert agile_tariff._apply_discharge_policy(50) == "conservative"
+        assert agile_tariff._apply_discharge_policy(57) == "conservative"
         assert agile_tariff._energy_shortfall is True
         assert agile_tariff._discharge_inhibited is False
+        assert agile_tariff._house_discharge_inhibited is False
+
+    def test_idle_below_the_house_floor(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 60)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 25)
+
+        assert agile_tariff._apply_discharge_policy(54) == "idle"
+        assert agile_tariff._energy_shortfall is True
+        assert agile_tariff._discharge_inhibited is False
+        assert agile_tariff._house_discharge_inhibited is True
 
     def test_inhibited_below_the_absolute_floor(
         self, agile_tariff, monkeypatch
@@ -3943,17 +4051,30 @@ class TestThreeBandDischargePolicy:
             3, agile_tariff.MAX_CHARGE_CURRENT
         )
 
-    def test_plan_landing_exactly_on_the_floor_is_conservative(
+    def test_plan_landing_exactly_on_the_house_floor_is_conservative(
         self, agile_tariff, monkeypatch
     ):
         """Floating-point noise must not turn a floor-level plan into Idle."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
 
-        assert agile_tariff._apply_discharge_policy(40.0) == "conservative"
+        assert agile_tariff._apply_discharge_policy(45.0) == "conservative"
         assert (
-            agile_tariff._apply_discharge_policy(40.0 - 1e-12)
+            agile_tariff._apply_discharge_policy(45.0 - 1e-12)
             == "conservative"
         )
+        assert agile_tariff._apply_discharge_policy(44.9) == "idle"
+
+    def test_plan_landing_exactly_on_the_absolute_floor_is_idle(
+        self, agile_tariff, monkeypatch
+    ):
+        """The absolute floor allows committed exports but no house load."""
+        monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
+        monkeypatch.setattr(config, "HOUSE_LOAD_MARGIN_PERCENT", 5)
+        monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
+
+        assert agile_tariff._apply_discharge_policy(40.0) == "idle"
         assert agile_tariff._apply_discharge_policy(39.9) == "inhibited"
 
 
@@ -4160,7 +4281,7 @@ class TestPlanExplanation:
         assert plan["priority_headroom_soc"] == pytest.approx(31.0)
         assert plan["headroom_soc"] == pytest.approx(-4.0)
         assert plan["planned_slots"] == [35, 36, 37]
-        assert plan["skipped_qualifying_slots"] == [38]
+        assert plan["skipped_qualifying_slots"] == [34, 38]
         assert plan["plan_projection"] == pytest.approx(
             plan["rows"][-1]["projected_soc_after"]
         )
@@ -4184,10 +4305,10 @@ class TestPlanExplanation:
             row["slot"] for row in plan["options"] if row["planned"]
         } == {35, 36, 37}
 
-        # 34 qualifies but is used conservatively, so only 38 is a skipped
-        # export.
+        # 34 and 38 qualify but are below the house floor, so both are
+        # skipped rather than used conservatively.
         html = agile_tariff.get_dashboard_html()
-        assert "1 qualifying slot(s) skipped (headroom used)" in html
+        assert "2 qualifying slot(s) skipped (headroom used)" in html
         # Idle plan rows mean "no discharge", not "no solar".  The charge floor
         # is price-dependent, so the note must not imply a fixed 3 A.
         assert "Idle rows stop battery discharge, not solar charging" in (
