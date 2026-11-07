@@ -1,0 +1,319 @@
+"""Optional weather snapshots from Open-Meteo.
+
+Weather is a reporting and research input, not a control dependency.  The
+client fetches a small hourly series, normalises it, and caches it locally so
+the reports keep working when the network or the API is unavailable.
+
+There are deliberately no default coordinates or panel geometry.  If any of
+latitude, longitude, panel azimuth or panel tilt is missing or invalid,
+:attr:`OpenMeteoClient.configured` is false and no request is made.
+
+Open-Meteo's ``global_tilted_irradiance`` azimuth is measured from south
+(0° south, -90° east, 90° west, ±180° north).  The configuration uses the
+normal compass bearing (0° north, 90° east, 180° south, 270° west), and this
+module converts once at the request boundary.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime
+import json
+from pathlib import Path
+from typing import Any, Optional
+
+import requests
+
+from evse_controller.utils.config import config
+from evse_controller.utils.logging_config import debug, warning
+
+
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+HOURLY_VARIABLES = (
+    "temperature_2m",
+    "shortwave_radiation",
+    "direct_normal_irradiance",
+    "diffuse_radiation",
+    "global_tilted_irradiance",
+    "cloud_cover",
+)
+
+
+class WeatherNotConfigured(RuntimeError):
+    """Raised when a weather fetch is attempted without full geometry."""
+
+
+@dataclass(frozen=True)
+class WeatherHour:
+    """One hourly weather row, in local wall-clock time."""
+
+    time: datetime
+    temperature_c: Optional[float]
+    shortwave_radiation_wm2: Optional[float]
+    direct_normal_irradiance_wm2: Optional[float]
+    diffuse_radiation_wm2: Optional[float]
+    tilted_irradiance_wm2: Optional[float]
+    cloud_cover_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class WeatherSnapshot:
+    """A normalised Open-Meteo response."""
+
+    fetched_at: datetime
+    latitude: float
+    longitude: float
+    panel_azimuth: float
+    panel_tilt: float
+    timezone: str
+    hours: tuple[WeatherHour, ...]
+    source: str = "open-meteo"
+    model: str = "best_match"
+
+    def hours_for_day(self, day: date) -> list[WeatherHour]:
+        return [hour for hour in self.hours if hour.time.date() == day]
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number
+
+
+def _api_azimuth(compass_azimuth: float) -> float:
+    """Convert a compass bearing to Open-Meteo's south-zero convention."""
+    value = float(compass_azimuth) - 180.0
+    while value < -180.0:
+        value += 360.0
+    while value > 180.0:
+        value -= 360.0
+    return value
+
+
+class OpenMeteoClient:
+    """Fetch, normalise and cache the optional weather series."""
+
+    def __init__(
+        self,
+        *,
+        session=None,
+        cache_file: Optional[Path | str] = None,
+        timeout: float = 15.0,
+        max_age_hours: float = 3.0,
+    ):
+        self._session = session or requests.Session()
+        self._cache_file_override = (
+            Path(cache_file) if cache_file is not None else None
+        )
+        self.timeout = float(timeout)
+        self.max_age_hours = float(max_age_hours)
+
+    @property
+    def cache_file(self) -> Path:
+        if self._cache_file_override is not None:
+            return self._cache_file_override
+        return Path(config.WEATHER_CACHE_FILE)
+
+    @property
+    def configured(self) -> bool:
+        return bool(config.WEATHER_CONFIGURED)
+
+    def fetch(
+        self,
+        *,
+        past_days: int = 1,
+        forecast_days: int = 3,
+        at: Optional[datetime] = None,
+    ) -> WeatherSnapshot:
+        if not self.configured:
+            raise WeatherNotConfigured(
+                "Weather latitude, longitude, panel azimuth and panel tilt "
+                "must all be configured"
+            )
+        params = {
+            "latitude": config.WEATHER_LATITUDE,
+            "longitude": config.WEATHER_LONGITUDE,
+            "hourly": ",".join(HOURLY_VARIABLES),
+            "tilt": config.WEATHER_PANEL_TILT,
+            "azimuth": _api_azimuth(config.WEATHER_PANEL_AZIMUTH),
+            "past_days": max(0, int(past_days)),
+            "forecast_days": max(1, int(forecast_days)),
+            "timezone": "auto",
+        }
+        response = self._session.get(
+            OPEN_METEO_URL, params=params, timeout=self.timeout
+        )
+        response.raise_for_status()
+        payload = response.json()
+        snapshot = self._parse(payload, at=at)
+        self._write_cache(snapshot)
+        return snapshot
+
+    def load_cached(self) -> Optional[WeatherSnapshot]:
+        path = self.cache_file
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            warning(f"WEATHER: Ignoring unreadable cache {path}: {exc}")
+            return None
+        try:
+            return self._from_dict(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            warning(f"WEATHER: Ignoring malformed cache {path}: {exc}")
+            return None
+
+    def latest(
+        self,
+        *,
+        max_age_hours: Optional[float] = None,
+        now: Optional[datetime] = None,
+    ) -> Optional[WeatherSnapshot]:
+        snapshot = self.load_cached()
+        if snapshot is None:
+            return None
+        max_age = self.max_age_hours if max_age_hours is None else max_age_hours
+        now = now or datetime.now()
+        age_hours = (now - snapshot.fetched_at).total_seconds() / 3600.0
+        if max_age is not None and age_hours > max_age:
+            return None
+        return snapshot
+
+    def hours_for_day(
+        self,
+        day: date,
+        *,
+        max_age_hours: Optional[float] = None,
+        now: Optional[datetime] = None,
+    ) -> list[WeatherHour]:
+        snapshot = self.latest(max_age_hours=max_age_hours, now=now)
+        return snapshot.hours_for_day(day) if snapshot is not None else []
+
+    # -- parsing and cache ---------------------------------------------
+
+    def _parse(
+        self, payload: dict, *, at: Optional[datetime] = None
+    ) -> WeatherSnapshot:
+        hourly = payload.get("hourly") or {}
+        times = hourly.get("time") or []
+        rows = []
+        for index, text in enumerate(times):
+            try:
+                when = datetime.fromisoformat(str(text))
+            except ValueError:
+                continue
+            rows.append(
+                WeatherHour(
+                    time=when,
+                    temperature_c=self._value(
+                        hourly, "temperature_2m", index
+                    ),
+                    shortwave_radiation_wm2=self._value(
+                        hourly, "shortwave_radiation", index
+                    ),
+                    direct_normal_irradiance_wm2=self._value(
+                        hourly, "direct_normal_irradiance", index
+                    ),
+                    diffuse_radiation_wm2=self._value(
+                        hourly, "diffuse_radiation", index
+                    ),
+                    tilted_irradiance_wm2=self._value(
+                        hourly, "global_tilted_irradiance", index
+                    ),
+                    cloud_cover_pct=self._value(
+                        hourly, "cloud_cover", index
+                    ),
+                )
+            )
+        return WeatherSnapshot(
+            fetched_at=at or datetime.now(),
+            latitude=float(payload.get("latitude", 0.0)),
+            longitude=float(payload.get("longitude", 0.0)),
+            panel_azimuth=float(config.WEATHER_PANEL_AZIMUTH),
+            panel_tilt=float(config.WEATHER_PANEL_TILT),
+            timezone=str(payload.get("timezone", "")),
+            hours=tuple(rows),
+            model=str(payload.get("model", "best_match")),
+        )
+
+    @staticmethod
+    def _value(hourly: dict, key: str, index: int) -> Optional[float]:
+        values = hourly.get(key)
+        if not isinstance(values, list) or index >= len(values):
+            return None
+        return _optional_float(values[index])
+
+    def _write_cache(self, snapshot: WeatherSnapshot) -> None:
+        path = self.cache_file
+        payload = {
+            "source": snapshot.source,
+            "model": snapshot.model,
+            "fetched_at": snapshot.fetched_at.isoformat(),
+            "latitude": snapshot.latitude,
+            "longitude": snapshot.longitude,
+            "panel_azimuth": snapshot.panel_azimuth,
+            "panel_tilt": snapshot.panel_tilt,
+            "timezone": snapshot.timezone,
+            "hours": [
+                {
+                    "time": hour.time.isoformat(),
+                    "temperature_c": hour.temperature_c,
+                    "shortwave_radiation_wm2": hour.shortwave_radiation_wm2,
+                    "direct_normal_irradiance_wm2": (
+                        hour.direct_normal_irradiance_wm2
+                    ),
+                    "diffuse_radiation_wm2": hour.diffuse_radiation_wm2,
+                    "tilted_irradiance_wm2": hour.tilted_irradiance_wm2,
+                    "cloud_cover_pct": hour.cloud_cover_pct,
+                }
+                for hour in snapshot.hours
+            ],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(json.dumps(payload, indent=2) + "\n")
+            temporary.replace(path)
+            debug(f"WEATHER: Wrote {path}")
+        except OSError as exc:
+            warning(f"WEATHER: Could not write {path}: {exc}")
+
+    @staticmethod
+    def _from_dict(payload: dict) -> WeatherSnapshot:
+        hours = []
+        for row in payload.get("hours") or []:
+            hours.append(
+                WeatherHour(
+                    time=datetime.fromisoformat(row["time"]),
+                    temperature_c=row.get("temperature_c"),
+                    shortwave_radiation_wm2=row.get(
+                        "shortwave_radiation_wm2"
+                    ),
+                    direct_normal_irradiance_wm2=row.get(
+                        "direct_normal_irradiance_wm2"
+                    ),
+                    diffuse_radiation_wm2=row.get(
+                        "diffuse_radiation_wm2"
+                    ),
+                    tilted_irradiance_wm2=row.get(
+                        "tilted_irradiance_wm2"
+                    ),
+                    cloud_cover_pct=row.get("cloud_cover_pct"),
+                )
+            )
+        return WeatherSnapshot(
+            fetched_at=datetime.fromisoformat(payload["fetched_at"]),
+            latitude=float(payload["latitude"]),
+            longitude=float(payload["longitude"]),
+            panel_azimuth=float(payload["panel_azimuth"]),
+            panel_tilt=float(payload["panel_tilt"]),
+            timezone=str(payload.get("timezone", "")),
+            hours=tuple(hours),
+            source=str(payload.get("source", "open-meteo")),
+            model=str(payload.get("model", "best_match")),
+        )

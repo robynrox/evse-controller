@@ -896,3 +896,58 @@ class TestExplicitSocLimits:
         }
 
         assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 60
+
+
+class TestWeatherConfig:
+    """Weather geometry is optional and has no hidden defaults."""
+
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data.pop("weather", None)
+        return config
+
+    def test_weather_is_unconfigured_without_all_four_values(self):
+        config = self._config()
+        assert config.WEATHER_CONFIGURED is False
+        assert config.WEATHER_LATITUDE is None
+        assert config.WEATHER_LONGITUDE is None
+        assert config.WEATHER_PANEL_AZIMUTH is None
+        assert config.WEATHER_PANEL_TILT is None
+
+        config.WEATHER_LATITUDE = 51.5
+        config.WEATHER_LONGITUDE = -3.2
+        config.WEATHER_PANEL_AZIMUTH = 180
+        assert config.WEATHER_CONFIGURED is False
+        config.WEATHER_PANEL_TILT = 35
+        assert config.WEATHER_CONFIGURED is True
+
+    def test_weather_values_round_trip(self):
+        config = self._config()
+        config.WEATHER_LATITUDE = 51.5
+        config.WEATHER_LONGITUDE = -3.2
+        config.WEATHER_PANEL_AZIMUTH = 180
+        config.WEATHER_PANEL_TILT = 35
+
+        assert config.WEATHER_LATITUDE == pytest.approx(51.5)
+        assert config.WEATHER_LONGITUDE == pytest.approx(-3.2)
+        assert config.WEATHER_PANEL_AZIMUTH == pytest.approx(180.0)
+        assert config.WEATHER_PANEL_TILT == pytest.approx(35.0)
+
+        again = Config()
+        again._config_data = config._config_data
+        assert again.WEATHER_CONFIGURED is True
+
+    def test_invalid_weather_values_become_none(self):
+        config = self._config()
+        config.WEATHER_LATITUDE = 100
+        config.WEATHER_LONGITUDE = -200
+        config.WEATHER_PANEL_AZIMUTH = 400
+        config.WEATHER_PANEL_TILT = -5
+
+        assert config.WEATHER_LATITUDE is None
+        assert config.WEATHER_LONGITUDE is None
+        assert config.WEATHER_PANEL_AZIMUTH is None
+        assert config.WEATHER_PANEL_TILT is None
+        assert config.WEATHER_CONFIGURED is False

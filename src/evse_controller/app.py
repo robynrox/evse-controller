@@ -666,6 +666,17 @@ def config_page():
             if export_low is not None:
                 config.EXPORT_LOW = float(export_low)
 
+            # Optional weather geometry.  Blank values clear the setting.
+            for field, attribute in (
+                ("latitude", "WEATHER_LATITUDE"),
+                ("longitude", "WEATHER_LONGITUDE"),
+                ("panel_azimuth", "WEATHER_PANEL_AZIMUTH"),
+                ("panel_tilt", "WEATHER_PANEL_TILT"),
+            ):
+                key = f"weather[{field}]"
+                if key in request.form:
+                    setattr(config, attribute, request.form.get(key))
+
             # Save the updated configuration
             config.save()
 

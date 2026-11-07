@@ -198,6 +198,11 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       tls_enabled: false
       username: ''
       password: ''
+    weather:                            # Optional; no defaults
+      latitude: 51.500000               # WGS84
+      longitude: -3.200000              # WGS84
+      panel_azimuth: 180                # compass bearing (0=N, 90=E, 180=S, 270=W)
+      panel_tilt: 35                    # degrees from horizontal
     ```
 
   B. Web Interface:
@@ -244,6 +249,13 @@ Detailed explanation of each configuration option:
 - `max_charge_percent`: Maximum battery charge percentage (0-100). The IOCTGO_AGILEOUT tariff hard-limits the effective ceiling to **97%** even if this is set higher, leaving headroom at the top of the pack; set a lower value to stop earlier. The ceiling applies to solar charging too, not just off-peak grid charging — at or above it the charge range is set to zero and the dashboard says `Do not charge — SoC at N% cap`
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
+
+#### Weather Section
+The optional `weather` section is used only for reports and forecast research. It has no defaults: all four values must be supplied before the controller will fetch weather, and leaving the section out disables it entirely.
+- `latitude`: Location latitude in decimal degrees (WGS84)
+- `longitude`: Location longitude in decimal degrees (WGS84)
+- `panel_azimuth`: Panel azimuth as a compass bearing: 0° north, 90° east, 180° south, 270° west
+- `panel_tilt`: Panel tilt in degrees from horizontal (0° horizontal, 90° vertical)
 
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.

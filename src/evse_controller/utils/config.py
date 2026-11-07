@@ -150,6 +150,98 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "load_profile"
 
+    @property
+    def WEATHER_CACHE_FILE(self):
+        """Cached Open-Meteo snapshot, or absent until the first fetch."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "weather_cache.json"
+
+    def _optional_weather_float(
+        self, key: str, minimum: float, maximum: float
+    ) -> Optional[float]:
+        """Read an optional numeric weather setting.
+
+        There are deliberately no defaults for the location or panel
+        geometry.  A missing or invalid value means "weather is not
+        configured", not "use a guess".
+        """
+        value = self.get(f"weather.{key}", None)
+        if value is None or value == "":
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not (minimum <= number <= maximum):
+            return None
+        return number
+
+    def _set_optional_weather_float(
+        self,
+        key: str,
+        value,
+        minimum: float,
+        maximum: float,
+    ) -> None:
+        if value is None or value == "":
+            self._set_config_value("weather", key, None)
+            return
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = None
+        if number is not None and not (minimum <= number <= maximum):
+            number = None
+        self._set_config_value("weather", key, number)
+
+    # Weather location and panel geometry.  Azimuth is degrees clockwise
+    # from north (0=N, 90=E, 180=S, 270=W); tilt is degrees from horizontal.
+    WEATHER_LATITUDE = property(
+        lambda self: self._optional_weather_float("latitude", -90.0, 90.0),
+        lambda self, value: self._set_optional_weather_float(
+            "latitude", value, -90.0, 90.0
+        ),
+    )
+
+    WEATHER_LONGITUDE = property(
+        lambda self: self._optional_weather_float(
+            "longitude", -180.0, 180.0
+        ),
+        lambda self, value: self._set_optional_weather_float(
+            "longitude", value, -180.0, 180.0
+        ),
+    )
+
+    WEATHER_PANEL_AZIMUTH = property(
+        lambda self: self._optional_weather_float(
+            "panel_azimuth", 0.0, 360.0
+        ),
+        lambda self, value: self._set_optional_weather_float(
+            "panel_azimuth", value, 0.0, 360.0
+        ),
+    )
+
+    WEATHER_PANEL_TILT = property(
+        lambda self: self._optional_weather_float(
+            "panel_tilt", 0.0, 90.0
+        ),
+        lambda self, value: self._set_optional_weather_float(
+            "panel_tilt", value, 0.0, 90.0
+        ),
+    )
+
+    WEATHER_CONFIGURED = property(
+        lambda self: all(
+            value is not None
+            for value in (
+                self.WEATHER_LATITUDE,
+                self.WEATHER_LONGITUDE,
+                self.WEATHER_PANEL_AZIMUTH,
+                self.WEATHER_PANEL_TILT,
+            )
+        )
+    )
+
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         try:
@@ -803,6 +895,12 @@ class Config:
             },
             'octopus': {
                 'region': self.OCTOPUS_REGION
+            },
+            'weather': {
+                'latitude': self.WEATHER_LATITUDE,
+                'longitude': self.WEATHER_LONGITUDE,
+                'panel_azimuth': self.WEATHER_PANEL_AZIMUTH,
+                'panel_tilt': self.WEATHER_PANEL_TILT,
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

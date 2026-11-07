@@ -229,6 +229,13 @@ completed fixes.
   constants when there is not enough history.  A graceful SIGINT/SIGTERM
   flushes the daily report and the open profile slot; the next run reloads
   both and continues the same half-hour.
+- Weather is an optional reporting/research input, never a control
+  dependency. `weather.py` wraps Open-Meteo (temperature, GHI, DNI, DHI,
+  tilted irradiance and cloud cover), converts the configured compass panel
+  azimuth to Open-Meteo's south-zero convention, and caches the normalised
+  snapshot at `data/state/weather_cache.json`. There are no default
+  coordinates or panel geometry: all four values must be configured before a
+  request is made.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts
