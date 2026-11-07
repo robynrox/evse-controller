@@ -759,6 +759,24 @@ does not cover the day. CSV is at
 `/reports/component/YYYY-MM-DD.csv?series=...` and JSON at
 `/api/reports/component/YYYY-MM-DD?series=...`.
 
+##### Export performance (`/reports/export`)
+
+The **Export** link asks not just how much was exported, but whether it was
+sold well. Over 7, 30 or 90 days it compares measured export revenue with:
+
+- the achieved energy-weighted price;
+- each day's simple average export price;
+- each day's best price and the best slot in the window;
+- the share of export energy that landed in the day's top price quartile;
+- export at zero or negative prices;
+- a capacity-limited perfect-foresight ceiling: the same exported energy moved
+  into the highest-priced slots, capped at the day's largest half-hour export.
+
+The ceiling is hindsight, not a plan. The difference between it and actual
+revenue is useful for finding days when the controller exported into a weak
+part of the curve, but it is not achievable in advance. CSV is at
+`/reports/export.csv?days=30` and JSON at `/api/reports/export?days=30`.
+
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

@@ -321,10 +321,14 @@ completed fixes.
   cached temperature/tilted-irradiance overlay. It never fetches weather on a
   page load and falls back to the first configured series if the query is
   unknown.
+- `web/export_report_routes.py` serves `/reports/export`: achieved versus day
+  average/best export price, top-quartile energy share, zero-price export and a
+  capacity-limited perfect-foresight ceiling over 7/30/90 days. The ceiling is
+  explicitly hindsight, not a control target.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **709 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **714 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
