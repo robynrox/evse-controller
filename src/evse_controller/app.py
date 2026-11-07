@@ -37,6 +37,9 @@ from evse_controller.web.plan_report_routes import (
 from evse_controller.web.value_report_routes import (
     register_value_report_routes,
 )
+from evse_controller.web.component_report_routes import (
+    register_component_report_routes,
+)
 from evse_controller.energy_sessions import (
     EV_AWAY,
     FREE_IMPORT,
@@ -974,6 +977,7 @@ register_daily_report_routes(app)
 register_load_profile_routes(app)
 register_plan_report_routes(app)
 register_value_report_routes(app)
+register_component_report_routes(app)
 
 
 # Run the Flask app in a separate thread

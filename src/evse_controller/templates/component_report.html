@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Component — {{ series_label or 'no series' }} — {{ selected_date }}</title>
+{% if is_today %}
+<meta http-equiv="refresh" content="300">
+{% endif %}
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .spacer { flex: 1; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 9px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 150px;
+        flex: 1 1 150px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 23px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+        margin-bottom: 14px;
+    }
+    .chart { width: 100%; height: auto; display: block; }
+    .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .zero { stroke: #b8bec6; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .in-bar { fill: #0b5cad; opacity: .8; }
+    .out-bar { fill: #2e7d32; opacity: .8; }
+    .irr-bar { fill: #f2b705; opacity: .55; }
+    .temp-line { fill: none; stroke: #e65100; stroke-width: 2.2; }
+    .legend { font-size: 11px; font-weight: 700; }
+    .in-legend { fill: #0b5cad; }
+    .out-legend { fill: #2e7d32; }
+    .irr-legend { fill: #a97c00; }
+    .temp-legend { fill: #e65100; }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 950px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    details summary {
+        cursor: pointer;
+        color: #0b5cad;
+        font-weight: 600;
+        margin: 8px 0;
+    }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>Component energy{% if series_label %}: {{ series_label }}{% endif %}</h1>
+        <p>
+            Measured half-hour energy for one configured series. The weather
+            panel shows the cached Open-Meteo snapshot for this day; it is
+            reporting-only and is never used by live control.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/load-profile">Load profile</a>
+        <a href="/reports/plan">Plan vs actual</a>
+        <a href="/reports/value">Battery value</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Day</span>
+        {% for day in available_days %}
+            {% if day == selected_date %}
+                <span class="current">{{ day }}</span>
+            {% else %}
+                <a href="/reports/component/{{ day }}{% if series %}?series={{ series }}{% endif %}">{{ day }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if selected_date not in available_days %}
+            <span class="current">{{ selected_date }}</span>
+        {% endif %}
+    </div>
+
+    <div class="picker">
+        <span class="label">Series</span>
+        {% for key, label, in_label, out_label in series_options %}
+            {% if key == series %}
+                <span class="current">{{ label }}</span>
+            {% else %}
+                <a href="/reports/component/{{ selected_date }}?series={{ key }}">{{ label }}</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    {% if series %}
+        <div class="cards">
+            <div class="card">
+                <div class="label">{{ in_label }}</div>
+                <div class="value">{{ fmt_kwh(totals.energy_in) }} kWh</div>
+                <div class="note">Total for the day</div>
+            </div>
+            <div class="card">
+                <div class="label">{{ out_label }}</div>
+                <div class="value">{{ fmt_kwh(totals.energy_out) }} kWh</div>
+                <div class="note">Total for the day</div>
+            </div>
+            <div class="card">
+                <div class="label">Net (in − out)</div>
+                <div class="value">{{ fmt_kwh(totals.net) }} kWh</div>
+                <div class="note">Positive is net consumption</div>
+            </div>
+            <div class="card">
+                <div class="label">Coverage</div>
+                <div class="value">{{ fmt_pct(totals.coverage) }}</div>
+                <div class="note">{{ totals.measured_slots }} measured slots</div>
+            </div>
+            <div class="card">
+                <div class="label">Temperature</div>
+                <div class="value">
+                    {{ fmt_temp(totals.temperature_min) }}
+                    {% if totals.temperature_max is not none %}
+                        – {{ fmt_temp(totals.temperature_max) }}
+                    {% endif %}
+                </div>
+                <div class="note">Cached weather</div>
+            </div>
+            <div class="card">
+                <div class="label">Peak irradiance</div>
+                <div class="value">{{ fmt_wm2(totals.irradiance_peak) }}</div>
+                <div class="note">Tilted plane</div>
+            </div>
+        </div>
+
+        <h2>Half-hour energy</h2>
+        <div class="panel">{{ energy_chart|safe }}</div>
+
+        <h2>Weather</h2>
+        {% if not weather_configured %}
+            <div class="empty">
+                Weather is not configured. Add latitude, longitude, panel
+                azimuth and panel tilt to show temperature and irradiance here.
+            </div>
+        {% else %}
+            <div class="panel">{{ weather_chart|safe }}</div>
+        {% endif %}
+
+        <h2>Last 14 days</h2>
+        <div class="table-wrap">
+            <table class="detail">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>{{ in_label }}</th>
+                        <th>{{ out_label }}</th>
+                        <th>Net</th>
+                        <th>Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in trend_rows %}
+                        <tr>
+                            <td><a href="/reports/daily/{{ row.day }}">{{ row.day }}</a></td>
+                            <td>{{ fmt_kwh(row.energy_in) }}</td>
+                            <td>{{ fmt_kwh(row.energy_out) }}</td>
+                            <td>
+                                {% if row.energy_in is not none and row.energy_out is not none %}
+                                    {{ fmt_kwh(row.energy_in - row.energy_out) }}
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>{{ fmt_pct(row.coverage) }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <h2>Slot detail</h2>
+        <details>
+            <summary>Show all 48 slots</summary>
+            <div class="table-wrap">
+                <table class="detail">
+                    <thead>
+                        <tr>
+                            <th>Slot</th>
+                            <th>{{ in_label }}</th>
+                            <th>{{ out_label }}</th>
+                            <th>Coverage</th>
+                            <th>Import price</th>
+                            <th>Export price</th>
+                            <th>Session</th>
+                            <th>Temperature</th>
+                            <th>Irradiance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                            <tr>
+                                <td>{{ row.label }}</td>
+                                <td>{{ fmt_kwh(row.energy_in) }}</td>
+                                <td>{{ fmt_kwh(row.energy_out) }}</td>
+                                <td>{{ row.coverage_s|round(0)|int }} s</td>
+                                <td>{{ fmt_price(row.import_p) }}</td>
+                                <td>{{ fmt_price(row.export_p) }}</td>
+                                <td>{{ row.session or '—' }}</td>
+                                <td>{{ fmt_temp(row.temperature_c) }}</td>
+                                <td>{{ fmt_wm2(row.irradiance_wm2) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        <p class="footer-link">
+            <a href="/reports/component/{{ selected_date }}.csv?series={{ series }}">
+                Download this report as CSV
+            </a>
+        </p>
+    {% else %}
+        <p class="empty">No configured energy series were found.</p>
+    {% endif %}
+</div>
+{% endblock %}

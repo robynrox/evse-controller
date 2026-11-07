@@ -739,6 +739,26 @@ table links each day back to its energy report. CSV is at
 measurements stay blank: efficiency is not inferred from a missing counter,
 and a day with no throughput contributes no cycles.
 
+##### Component energy and weather (`/reports/component`)
+
+The **Components** link opens a per-series view for any configured energy
+channel: a solar CT clamp, a heat-pump meter, the grid, the Wallbox or the
+battery DC channel. It shows:
+
+- half-hour energy in and out for the selected series, as bars around zero;
+- the day's totals, net flow and measurement coverage;
+- a 14-day history of the same series;
+- all 48 slots with prices, session, temperature and irradiance;
+- the cached Open-Meteo temperature line and tilted-irradiance bars when
+  weather is configured and a cached snapshot covers the day.
+
+The series picker uses the labels and direction words stored with the day, so
+a solar meter can read “Generated” rather than “Out”. Weather is never fetched
+on page load: the report shows the cache and leaves the panel blank when it
+does not cover the day. CSV is at
+`/reports/component/YYYY-MM-DD.csv?series=...` and JSON at
+`/api/reports/component/YYYY-MM-DD?series=...`.
+
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
