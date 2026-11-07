@@ -317,3 +317,80 @@ class OpenMeteoClient:
             source=str(payload.get("source", "open-meteo")),
             model=str(payload.get("model", "best_match")),
         )
+
+
+def main(argv=None) -> int:
+    """Manual smoke test for the configured location and panel geometry."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Fetch or print the optional Open-Meteo snapshot."
+    )
+    parser.add_argument(
+        "--cached",
+        action="store_true",
+        help="print the cached snapshot without fetching",
+    )
+    parser.add_argument(
+        "--day",
+        type=date.fromisoformat,
+        default=None,
+        help="local day to print (YYYY-MM-DD; default today)",
+    )
+    args = parser.parse_args(argv)
+
+    client = OpenMeteoClient()
+    if not client.configured:
+        print(
+            "Weather is not configured. Set weather.latitude, "
+            "weather.longitude, weather.panel_azimuth and weather.panel_tilt."
+        )
+        return 1
+
+    snapshot = client.load_cached() if args.cached else None
+    if snapshot is None:
+        try:
+            snapshot = client.fetch()
+        except Exception as exc:
+            print(f"Weather fetch failed: {exc}")
+            snapshot = client.load_cached()
+            if snapshot is None:
+                return 2
+            print("Using the cached snapshot.")
+
+    day = args.day or datetime.now().date()
+    hours = snapshot.hours_for_day(day)
+    print(
+        f"Open-Meteo snapshot fetched {snapshot.fetched_at:%Y-%m-%d %H:%M} "
+        f"for {snapshot.latitude:.5f}, {snapshot.longitude:.5f}"
+    )
+    print(
+        f"Panel azimuth {snapshot.panel_azimuth:.0f}°, "
+        f"tilt {snapshot.panel_tilt:.0f}°, timezone {snapshot.timezone}"
+    )
+    if not hours:
+        print(f"No hourly rows for {day.isoformat()} in the snapshot.")
+        return 0
+
+    print(
+        f"{'Time':<16} {'Temp °C':>8} {'GTI W/m²':>10} "
+        f"{'GHI W/m²':>10} {'Cloud %':>8}"
+    )
+    for hour in hours:
+        def fmt(value, width, places=1):
+            if value is None:
+                return f"{'-':>{width}}"
+            return f"{value:{width}.{places}f}"
+
+        print(
+            f"{hour.time:%Y-%m-%d %H:%M} "
+            f"{fmt(hour.temperature_c, 8)} "
+            f"{fmt(hour.tilted_irradiance_wm2, 10, 0)} "
+            f"{fmt(hour.shortwave_radiation_wm2, 10, 0)} "
+            f"{fmt(hour.cloud_cover_pct, 8, 0)}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

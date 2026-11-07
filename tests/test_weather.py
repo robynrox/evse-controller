@@ -12,6 +12,8 @@ from evse_controller.weather import (
 )
 
 
+# Test-only geometry.  Production has no weather defaults; these values are
+# injected with monkeypatch and never written to the real config.
 DAY = date(2026, 11, 7)
 FETCHED = datetime(2026, 11, 7, 12, 0)
 

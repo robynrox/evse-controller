@@ -257,6 +257,16 @@ The optional `weather` section is used only for reports and forecast research. I
 - `panel_azimuth`: Panel azimuth as a compass bearing: 0° north, 90° east, 180° south, 270° west
 - `panel_tilt`: Panel tilt in degrees from horizontal (0° horizontal, 90° vertical)
 
+To check the configured geometry against the live API, run:
+
+```bash
+poetry run python -m evse_controller.weather
+poetry run python -m evse_controller.weather --cached
+poetry run python -m evse_controller.weather --day 2026-11-07
+```
+
+The command falls back to the cached snapshot when the fetch fails.
+
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
