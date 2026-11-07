@@ -570,7 +570,6 @@ class TestWallboxThread(TestCase):
             self.thread.stop()
             self.thread.join(timeout=1)
 
-    @unittest.skip("Timing tests need review after communication failure handling changes - TODO: Fix in next iteration")
     def test_state_change_timing(self):
         """Test that state changes respect the required delays"""
         # Use a very short time scale for faster testing
@@ -582,31 +581,67 @@ class TestWallboxThread(TestCase):
         )
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)  # Initial startup
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
 
-            # Try to set current to 16A
+            # Start from a disconnected EV so the first SET_CURRENT is a real
+            # change.  A command that matches the current state is deliberately
+            # ignored and would not start a delay.
+            self.mock_client._registers[self.thread._READ_STATE_REG] = [
+                EvseState.DISCONNECTED.value
+            ]
+            self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [0]
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.DISCONNECTED,
+                "the debounced disconnected state",
+            )
+            self._wait_until(
+                lambda: self.thread.get_state().current == 0,
+                "the reported current to reach 0 A",
+            )
+
+            # Starting from zero uses the long start-charging delay.
             self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
-            time.sleep(self.thread._poll_interval)
-            state = self.thread.get_state()
-            self.assertEqual(state.current, 16)
+            self._wait_until(
+                lambda: self.thread.get_time_until_current_change_allowed() > 0,
+                "the start-charging delay",
+            )
+            self._wait_until(
+                lambda: self.thread.get_state().current == 16,
+                "the reported current to reach 16 A",
+            )
 
-            # Try to immediately change to 17A - should be ignored
+            # Try to immediately change to 17A.  It must be ignored while the
+            # delay is running.  Wait for a poll cycle so the command has
+            # definitely been processed.
             self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
-            time.sleep(self.thread._poll_interval)
-            state = self.thread.get_state()
-            self.assertEqual(state.current, 16)  # Should still be 16
+            before_update = self.thread.get_state().last_update
+            self._wait_until(
+                lambda: self.thread.get_state().last_update != before_update,
+                "a poll cycle to process the blocked command",
+            )
+            self.assertEqual(self.thread.get_state().current, 16)  # Still 16
 
-            # Wait for small change delay (5.9 * 0.1 = 0.59 seconds)
-            time.sleep(0.59)
+            # Once the delay expires the same change is allowed.
+            self._wait_until(
+                lambda: self.thread.get_time_until_current_change_allowed() == 0,
+                "the start-charging delay to expire",
+                timeout=self.thread._state_change_delays['start_charging']
+                * self.thread._time_scale + 2,
+            )
             self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 17))
-            time.sleep(self.thread._poll_interval)
-            state = self.thread.get_state()
-            self.assertEqual(state.current, 17)  # Now should be 17
+            self._wait_until(
+                lambda: self.thread.get_state().current == 17,
+                "the reported current to reach 17 A",
+            )
         finally:
             self.thread.stop()
             self.thread.join(timeout=1)
 
-    @unittest.skip("Comprehensive timing tests need review after communication failure handling changes - TODO: Fix in next iteration")
     def test_state_change_timing_comprehensive(self):
         """Test all state change timing scenarios with scaled time"""
         self.thread = WallboxThread(
@@ -617,7 +652,11 @@ class TestWallboxThread(TestCase):
         )
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)  # Initial startup
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
 
             test_scenarios = [
                 # (current_state, new_state, expected_delay, description)
@@ -632,29 +671,76 @@ class TestWallboxThread(TestCase):
 
             for current, new, delay, scenario in test_scenarios:
                 with self.subTest(scenario=scenario):
-                    # Set initial state
-                    self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [current]
-                    time.sleep(self.thread._poll_interval)
-                    
-                    # Attempt state change
-                    self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, new))
-                    time.sleep(self.thread._poll_interval)
-                    
+                    # The tier calculation itself is deterministic, so assert
+                    # it exactly instead of measuring the wall clock.
+                    now = time.time()
+                    allowed_at = self.thread._calculate_next_state_change_time(
+                        current, new
+                    )
+                    self.assertAlmostEqual(
+                        allowed_at - now,
+                        delay * self.thread._time_scale,
+                        delta=0.05,
+                    )
+
+                    # Commands sent during an earlier delay are dropped, so
+                    # let the previous scenario's delay expire first.
+                    self._wait_until(
+                        lambda: self.thread.get_time_until_current_change_allowed()
+                        == 0,
+                        "the previous current change delay to expire",
+                    )
+
+                    # Put the charger at the scenario's starting current.
+                    self.mock_client._registers[
+                        self.thread._CONTROL_CURRENT_REG
+                    ] = [
+                        WallboxThread.convert_to_16_bit_twos_complement(current)
+                    ]
+                    self._wait_until(
+                        lambda: self.thread.get_state().current == current,
+                        f"the reported current to reach {current} A",
+                    )
+
+                    # A real change starts the delay.
+                    self.thread.send_command(
+                        EvseCommandData(EvseCommand.SET_CURRENT, new)
+                    )
+                    self._wait_until(
+                        lambda: self.thread.get_time_until_current_change_allowed()
+                        > 0,
+                        "the current change delay",
+                    )
+
                     # Verify timing
                     scaled_delay = delay * self.thread._time_scale
-                    remaining_time = self.thread.get_time_until_current_change_allowed()
+                    remaining_time = (
+                        self.thread.get_time_until_current_change_allowed()
+                    )
                     self.assertGreater(remaining_time, 0)
-                    self.assertLess(remaining_time, scaled_delay + 0.1)  # Allow small timing variance
-                    
-                    # Verify immediate retry fails
-                    initial_current = self.thread.get_state().current
-                    self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, new + 1))
-                    time.sleep(self.thread._poll_interval)
-                    self.assertEqual(self.thread.get_state().current, initial_current)
-                    
-                    # Wait for delay and verify change is then allowed
-                    time.sleep(scaled_delay + 0.1)
-                    self.assertAlmostEqual(self.thread.get_time_until_current_change_allowed(), 0)
+                    self.assertLess(remaining_time, scaled_delay + 0.1)
+
+                    # Verify an immediate retry is ignored.  Wait for a poll
+                    # cycle so the command has definitely been processed.
+                    self.thread.send_command(
+                        EvseCommandData(EvseCommand.SET_CURRENT, new + 1)
+                    )
+                    before_update = self.thread.get_state().last_update
+                    self._wait_until(
+                        lambda: self.thread.get_state().last_update
+                        != before_update,
+                        "a poll cycle to process the blocked command",
+                    )
+                    self.assertEqual(self.thread.get_state().current, new)
+
+                    # Wait for the delay to expire; the next scenario starts
+                    # from a clean slate.
+                    self._wait_until(
+                        lambda: self.thread.get_time_until_current_change_allowed()
+                        == 0,
+                        "the current change delay to expire",
+                        timeout=scaled_delay + 2,
+                    )
         finally:
             # Ensure thread is stopped even if test fails
             self.thread.stop()
