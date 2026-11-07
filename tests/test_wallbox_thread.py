@@ -135,6 +135,22 @@ class TestWallboxThread(TestCase):
         if hasattr(self, 'mock_client'):
             self.mock_client.simulate_communication_failure(False)
 
+    def _wait_until(self, predicate, message, timeout=5.0, interval=0.02):
+        """Wait for ``predicate`` to become true, then return.
+
+        The Wallbox thread updates its published state asynchronously, so a
+        fixed sleep is only ever a guess at how many poll cycles have run.
+        Under load that guess is wrong and the test fails for reasons that
+        have nothing to do with the code under test.  Poll the condition and
+        fail with a useful message if it never happens.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if predicate():
+                return
+            time.sleep(interval)
+        self.fail(f"Timed out after {timeout:.1f}s waiting for {message}")
+
     def test_read_state(self):
         """Test basic state reading functionality"""
         try:
@@ -303,22 +319,38 @@ class TestWallboxThread(TestCase):
         """Test behavior when communication fails repeatedly"""
         try:
             self.thread.start()
-            time.sleep(0.1)  # Allow thread to start
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
+
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
-            
-            # Wait for enough cycles to accumulate errors (10 errors * 0.1s poll interval)
-            time.sleep(self.thread._poll_interval * 12)  # Wait for >10 errors
-            
+
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                >= 10,
+                "10 consecutive connection errors",
+            )
+
             state = self.thread.get_state()
             self.assertGreaterEqual(state.consecutive_connection_errors, 10)
             self.assertEqual(state.evse_state, EvseState.COMMS_FAILURE)
-            
+
             # Restore communication and verify recovery
             self.mock_client.simulate_communication_failure(False)
-            time.sleep(self.thread._poll_interval * 2)  # Wait for two poll cycles
-            
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                == 0,
+                "the connection error count to reset",
+            )
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.DISCONNECTED,
+                "the debounced disconnected state",
+            )
+
             state = self.thread.get_state()
             self.assertEqual(state.consecutive_connection_errors, 0)
             self.assertEqual(state.evse_state, EvseState.DISCONNECTED)  # Should be DISCONNECTED during recovery
@@ -361,30 +393,34 @@ class TestWallboxThread(TestCase):
         
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)  # Initial startup
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
+
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
-            
-            # Wait for reset to be attempted (with timeout)
-            timeout = time.time() + 3  # 3 seconds max wait
-            reset_attempted = False
-            while time.time() < timeout:
-                if mock_api.reset_called:
-                    reset_attempted = True
-                    break
-                time.sleep(0.05)
-            
-            self.assertTrue(reset_attempted, "Reset was not called within timeout")
-            
+
+            # Wait for reset to be attempted
+            self._wait_until(
+                lambda: mock_api.reset_called,
+                "the API reset attempt",
+                timeout=3,
+            )
+
             # Verify reset was attempted
             self.assertTrue(mock_api.reset_called)
             self.assertEqual(mock_api.reset_serial, "TEST123")
-            
+
             # Restore communication and verify recovery
             self.mock_client.simulate_communication_failure(False)
-            time.sleep(self.thread._poll_interval * 2)
-            
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                == 0,
+                "the connection error count to reset",
+            )
+
             state = self.thread.get_state()
             self.assertEqual(state.consecutive_connection_errors, 0)
             self.assertNotEqual(state.evse_state, EvseState.COMMS_FAILURE)
@@ -397,7 +433,12 @@ class TestWallboxThread(TestCase):
     def test_reset_failure_handling(self):
         """Test handling of failed reset attempts"""
         class FailingMockWallboxApi(MockWallboxApi):
+            def __init__(self, username: str, password: str):
+                super().__init__(username, password)
+                self.reset_attempts = 0
+
             def restartCharger(self, serial: str):
+                self.reset_attempts += 1
                 raise Exception("API Error")
 
         mock_api = FailingMockWallboxApi("test_user", "test_pass")
@@ -414,12 +455,20 @@ class TestWallboxThread(TestCase):
         try:
             self.thread.start()
             self.mock_client.simulate_communication_failure(True)
-            
-            # Wait for reset attempt
-            time.sleep(self.thread._poll_interval * 12)
-            
-            # If reset failed, we should maintain high consecutive connection errors
-            # so that another attempt to reset can be made after the cooldown period
+
+            # Wait for the reset attempt to fail and leave the error count
+            # high.  A failed reset must not clear the errors, so another
+            # attempt can be made after the cooldown period.
+            self._wait_until(
+                lambda: mock_api.reset_attempts > 0,
+                "an API reset attempt",
+            )
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                >= 10,
+                "10 consecutive connection errors after the failed reset",
+            )
+
             state = self.thread.get_state()
             self.assertGreaterEqual(state.consecutive_connection_errors, 10)
             self.assertEqual(state.evse_state, EvseState.COMMS_FAILURE)
@@ -470,14 +519,26 @@ class TestWallboxThread(TestCase):
         
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)  # Initial startup
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
+
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
-            
-            # Wait for enough cycles to trigger reset (10 errors + buffer)
-            time.sleep(self.thread._poll_interval * 12)
-            
+
+            # Wait for enough errors to trigger the reset.
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                >= 10,
+                "10 consecutive connection errors",
+            )
+            self._wait_until(
+                lambda: mock_api.reset_called,
+                "the API reset attempt",
+            )
+
             # Verify comms error is flagged
             state = self.thread.get_state()
             self.assertGreaterEqual(state.consecutive_connection_errors, 10)
@@ -486,11 +547,20 @@ class TestWallboxThread(TestCase):
             # Verify reset was attempted
             self.assertTrue(mock_api.reset_called)
             self.assertEqual(mock_api.reset_serial, "TEST123")
-            
+
             # Restore communication and verify recovery
             self.mock_client.simulate_communication_failure(False)
-            time.sleep(self.thread._poll_interval * 2)
-            
+            self._wait_until(
+                lambda: self.thread.get_state().consecutive_connection_errors
+                == 0,
+                "the connection error count to reset",
+            )
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.DISCONNECTED,
+                "the debounced disconnected state",
+            )
+
             # Should show DISCONNECTED during init which is where the mock functionality ends
             state = self.thread.get_state()
             self.assertEqual(state.consecutive_connection_errors, 0)
@@ -600,27 +670,53 @@ class TestWallboxThread(TestCase):
         )
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
 
             # Initially should be allowed
             self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
-            # After change, should return positive delay
+            # After a change is processed, a positive delay applies.  Wait for
+            # the polling thread to execute the command rather than assuming
+            # one poll interval is always enough.
             self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 15))
-            time.sleep(self.thread._poll_interval)
-            self.assertGreater(self.thread.get_time_until_current_change_allowed(), 0)
+            self._wait_until(
+                lambda: self.thread.get_time_until_current_change_allowed() > 0,
+                "the current change delay to start",
+            )
 
-            # After delay expires, should return 0
-            time.sleep(self.thread._state_change_delays['start_charging'] * self.thread._time_scale + 0.1)
+            # After the delay expires, the delay should be 0 again.
+            self._wait_until(
+                lambda: self.thread.get_time_until_current_change_allowed() == 0,
+                "the current change delay to expire",
+                timeout=self.thread._state_change_delays['large_change']
+                * self.thread._time_scale + 2,
+            )
             self.assertEqual(self.thread.get_time_until_current_change_allowed(), 0)
 
-            # Test decreasing value over time
-            self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 16))
-            time.sleep(self.thread._poll_interval)
+            # The remaining delay decreases as time passes.
+            self.thread.send_command(EvseCommandData(EvseCommand.SET_CURRENT, 10))
+            self._wait_until(
+                lambda: self.thread.get_time_until_current_change_allowed() > 0,
+                "the second current change delay to start",
+            )
             initial_wait = self.thread.get_time_until_current_change_allowed()
-            time.sleep(0.2)  # Wait a bit
+            # A 15 A -> 10 A change uses the large-change delay, so there is
+            # plenty of headroom for the countdown assertion below.
+            self.assertGreater(initial_wait, 0.5)
+
+            self._wait_until(
+                lambda: 0
+                < self.thread.get_time_until_current_change_allowed()
+                <= initial_wait - 0.05,
+                "the remaining delay to count down",
+                timeout=1.0,
+            )
             later_wait = self.thread.get_time_until_current_change_allowed()
-            self.assertGreater(initial_wait, later_wait)
+            self.assertLess(later_wait, initial_wait)
         finally:
             # Ensure thread is stopped even if test fails
             self.thread.stop()
@@ -758,52 +854,69 @@ class TestWallboxThread(TestCase):
         """Test the FREERUN state functionality"""
         try:
             self.thread.start()
-            time.sleep(self.thread._poll_interval * 2)
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                == EvseState.CHARGING,
+                "the initial charging state",
+            )
+
             # Set initial state
             self.mock_client._registers[self.thread._READ_STATE_REG] = [1]  # Charging
             self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [16]
-            time.sleep(self.thread._poll_interval * 2)
-            
+            self._wait_until(
+                lambda: self.thread.get_state().current == 16,
+                "the reported current to reach 16 A",
+            )
+
             # Verify initial state
             state = self.thread.get_state()
             self.assertEqual(state.evse_state, EvseState.CHARGING)
             self.assertEqual(state.current, 16)
-            
+
             # Send SET_FREERUN command
             cmd = EvseCommandData(command=EvseCommand.SET_FREERUN)
             success = self.thread.send_command(cmd)
             self.assertTrue(success)
-            time.sleep(0.1)  # Allow command to process
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state == EvseState.FREERUN,
+                "the FREERUN state",
+            )
+
             # Verify we're in FREERUN state
             state = self.thread.get_state()
             self.assertEqual(state.evse_state, EvseState.FREERUN)
-            
+
             # Even though we're in FREERUN state, the Wallbox should still report its actual state
             # Update the mock registers to simulate the Wallbox changing state on its own
             self.mock_client._registers[self.thread._READ_STATE_REG] = [4]  # Paused
             self.mock_client._registers[self.thread._CONTROL_CURRENT_REG] = [0]
-            time.sleep(self.thread._poll_interval * 2)
-            
+            self._wait_until(
+                lambda: self.thread.get_state().current == 0,
+                "the reported current to reach 0 A",
+            )
+
             # We should still be in FREERUN state internally, but with updated values
             state = self.thread.get_state()
             self.assertEqual(state.evse_state, EvseState.FREERUN)
             self.assertEqual(state.current, 0)
             self.assertEqual(state.battery_level, 80)  # Should still have battery level
-            
+
             # Send a SET_CURRENT command to transition out of FREERUN state
             cmd = EvseCommandData(command=EvseCommand.SET_CURRENT, value=10)
             success = self.thread.send_command(cmd)
             self.assertTrue(success)
-            time.sleep(0.2)  # Allow command to process
-            
+            self._wait_until(
+                lambda: self.thread.get_state().evse_state
+                != EvseState.FREERUN,
+                "the transition out of FREERUN",
+            )
+
             # Should now be in charging state (or at least attempting to charge)
             state = self.thread.get_state()
             # The state might not immediately reflect CHARGING as it depends on the Wallbox response
             # but it should no longer be FREERUN
             self.assertNotEqual(state.evse_state, EvseState.FREERUN)
-            
+
         finally:
             # Ensure thread is stopped even if test fails
             self.thread.stop()
@@ -825,33 +938,40 @@ class TestWallboxThread(TestCase):
         
         try:
             thread.start()
-            time.sleep(thread._poll_interval * 2)  # Initial startup
-            
+            self._wait_until(
+                lambda: thread.get_state().evse_state == EvseState.CHARGING,
+                "the initial charging state",
+            )
+
             # Put the thread in FREERUN state
             cmd = EvseCommandData(command=EvseCommand.SET_FREERUN)
             success = thread.send_command(cmd)
             self.assertTrue(success)
-            time.sleep(0.1)  # Allow command to process
-            
-            # Verify we're in FREERUN state
-            state = thread.get_state()
-            self.assertEqual(state.evse_state, EvseState.FREERUN)
-            
+            self._wait_until(
+                lambda: thread.get_state().evse_state == EvseState.FREERUN,
+                "the FREERUN state",
+            )
+
             # Simulate communication failure
             self.mock_client.simulate_communication_failure(True)
-            
-            # Wait for enough cycles to potentially trigger reset (10 errors + buffer)
-            time.sleep(thread._poll_interval * 12)
-            
+
+            # Wait until the error count is past the reset threshold and a
+            # few more poll cycles have run, so the reset path would have
+            # fired if FREERUN did not suppress it.
+            self._wait_until(
+                lambda: thread.get_state().consecutive_connection_errors >= 12,
+                "the reset threshold to be exceeded in FREERUN",
+            )
+
             # Verify that despite having enough errors, no reset was attempted
             # because we're in FREERUN state
             self.assertFalse(mock_api.reset_called)
-            
+
             # State should not be COMMS_FAILURE because we're in FREERUN state
             state = thread.get_state()
             self.assertEqual(state.evse_state, EvseState.FREERUN)
             self.assertGreaterEqual(state.consecutive_connection_errors, 10)
-            
+
         finally:
             # Clean up
             thread.stop()
