@@ -45,7 +45,7 @@ version 1, so I would suggest installing as per the official instructions on the
 All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
-- `data/state/` - State files including schedule, supplier energy sessions, EVSE state and the Agile rate cache
+- `data/state/` - State files including schedule, supplier energy sessions and EV-availability windows, EVSE state and the Agile rate cache
 - `data/reports/daily/` - One JSON half-hour energy report per day
 
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
@@ -114,20 +114,11 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
   Before configuring, you may want to use the discovery tool to find your devices.
   See `evse-discovery/README.md` for detailed information about the discovery process.
 
-  There are two ways to configure the application:
+  If `data/config/config.yaml` does not exist, the controller creates one
+  with safe defaults (simulator enabled) on first start. There are two ways
+  to configure the application:
 
-  A. Interactive Configuration:
-  ```bash
-  poetry run python -m evse_controller.configure
-  ```
-  This will guide you through setting up:
-  - Wallbox connection details
-  - Shelly EM configuration
-  - InfluxDB settings (optional)
-  - Charging preferences
-  Some configurations are not supported but it will be possible to use a web interface to complete those.
-
-  B. Manual Configuration:
+  A. Manual Configuration (recommended):
   - Edit or create `data/config/config.yaml` directly
   - Configuration structure:
     ```yaml
@@ -186,8 +177,10 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     tariffs:
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
-        min_agile_discharge_soc: 60     # Bulk-export SoC floor and 23:30 target
-        house_load_margin_percent: 5   # Flexibility below the target before conservative
+        aggressive_soc_lower_limit: 50    # Aggressive house discharge floor and 23:30 target
+        conservative_soc_lower_limit: 45  # Conservative house discharge floor
+        bulk_discharge_soc_lower_limit: 40 # High-value/priority export floor
+        absolute_min_soc_percent: 25      # Hard protection floor (cannot be below 25)
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
         soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
@@ -206,6 +199,11 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       username: ''
       password: ''
     ```
+
+  B. Web Interface:
+  Once the controller is running, the common settings can be changed at
+  http://localhost:5000/config. Some settings are only available by editing
+  `config.yaml` directly.
 
   Note: The old `configuration.py`/`secret.py` method has been removed. You should remove any existing `configuration.py` and `secret.py` files.
 
@@ -248,12 +246,15 @@ Detailed explanation of each configuration option:
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
 
 #### Intelligent Octopus Go Tariff Section
-The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. These parameters **cannot be configured using the interactive text-based configuration tool** and must be edited directly in `config.yaml` when using that approach instead of the web interface.
+The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
-- `min_agile_discharge_soc`: Bulk-export SoC floor and 23:30 target (whole percent, 0-100). Export slots are planned down to this figure
-- `house_load_margin_percent`: Flexibility below `min_agile_discharge_soc` before the house-load strategy becomes conservative (whole percent, default 5). The floor is clamped above the 25% protection reserve, and bulk export planning still uses `min_agile_discharge_soc` itself
+- `aggressive_soc_lower_limit`: Aggressive house-discharge floor and the 23:30 target (whole percent, default 50, 0-100). Aggressive discharge stops here. It must be at or above the conservative lower limit
+- `conservative_soc_lower_limit`: Conservative house-discharge floor (whole percent, default 45). Between this and the aggressive lower limit the controller covers most of the house load; below this the house imports. It must be at or above the bulk discharge lower limit
+- `bulk_discharge_soc_lower_limit`: SoC floor for high-value/priority exports (whole percent, defaults to the hard protection floor). These slots may spend the reserve down to this figure, but not below the hard protection floor
+- `absolute_min_soc_percent`: Hard protection floor for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve. Scheduled events may override the three economic limits above, but never this one. Surplus solar may still charge the pack below this level
+- `house_load_margin_percent`: Deprecated migration setting. If `conservative_soc_lower_limit` is absent, it is used to derive the conservative floor from the old `min_agile_discharge_soc` value
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -267,6 +268,7 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during bulk export (0 = use calculated value based on export power). Set this to your measured value for more accurate export planning
 - `max_export_power_kw`: Upper bound on export power in kW (default 7.2, the non-derated Wallbox limit). The planner also caps this at the measured AC power for the configured discharge current (~3.53 kW at 16 A, ~7.07 kW at 32 A)
 - `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
+- `full_charge_slot_soc_gain_percent`: State of charge gain percentage per 30-minute slot while a free-import session is charging at full rate (0 = calculate it from charge power, charge efficiency and battery capacity). Free-import and grid-support session slots are both included in the 23:30 SoC projection; grid-support slots use `export_slot_soc_loss_percent`
 - `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure
 
 ##### IOCTGO_AGILEOUT dashboard
@@ -334,13 +336,25 @@ cell on a phone, where the badge alone is too small to rely on.
   energy costs more than the import it avoids`. Detailed SoC projections and
   slot analysis remain in the text log; hover the line for a fuller
   explanation.
-- **Aggressive vs conservative** is decided against a house-load floor, not the
-  bulk-export target. Bulk export slots are planned down to
-  `min_agile_discharge_soc`; the house-load strategy stays aggressive until the
-  projected 23:30 SoC would fall below that target minus
-  `house_load_margin_percent` (default 5%, clamped above the 25% reserve). A
-  bulk export that finishes at the target therefore does not by itself force
-  conservative mode.
+- **Aggressive vs conservative** follows the projected 23:30 SoC. Aggressive
+  house discharge runs while the projection is at or above
+  `aggressive_soc_lower_limit`. Between that and
+  `conservative_soc_lower_limit` it discharges conservatively. Below the
+  conservative floor it stops and the house imports; below
+  `absolute_min_soc_percent` even committed exports are inhibited. Priority
+  exports get first claim and may spend down to
+  `bulk_discharge_soc_lower_limit`. Conservative coverage comes next; surplus
+  exports and aggressive discharge only use headroom above the aggressive
+  floor that conservative does not need.
+- **Export priority** applies when the quoted export price clears the
+  house-offset break-even:
+  `η_house ÷ η_export × import price`, using the measured discharge
+  efficiencies at the ~3 A self-use reference and the export reference current
+  (about 77.8% of the import price at the default table). Both options consume
+  the same stored energy, so the ratio is a pure efficiency comparison and no
+  profit margin is added. Such a slot is exported at maximum rate and is
+  selected before surplus export slots when energy is limited; it may spend
+  the reserve down to `bulk_discharge_soc_lower_limit`.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
   current-dependent, so there is no single global minimum figure. The solar
@@ -356,6 +370,43 @@ cell on a phone, where the badge alone is too small to rely on.
   already committed, the surplus is exported now even with a strong harvest,
   and the reason says which slot is committed and what the next unused rate
   would yield. `Do not charge` does not mean the day has no higher price left.
+- **Aggressive slots are conditional, not guaranteed.** Remaining high-value
+  slots can be planned for aggressive load-following only when the rolling
+  house-load forecast says conservative coverage would not activate there and
+  the running minimum stays above `aggressive_soc_lower_limit`. The house is
+  covered and the small surplus is exported. The SoC cost is estimated from
+  the forecasted load and the integer current the Wallbox would choose, not a
+  flat constant, so it fits when a full export no longer does. These slots
+  are ranked by export price and labelled `AGGRESSIVE` in the plan table. The
+  planner uses a rolling persistence forecast from the last 28 days (minimum
+  14); each row still carries its live break-even gate: the slot only starts
+  once the live house import reaches that load. Below it, the forced output would export more than it
+  saves. The scan evaluates the integer current the Wallbox would actually
+  choose, so a load that only pays at 4 A or 5 A is found even when 3 A is
+  uneconomic. The reason names the gate and the stored-energy hurdle: the
+  higher of the energy's ledger cost and its best **uncommitted** export price
+  (converted to DC), delivered at that current, plus the profit margin.
+  Planned sales are already committed to the pack, so they do not raise the
+  gate; an unplanned higher-priced slot does, because spending the energy now
+  could put it out of reach. If even the full output cannot repay the pack,
+  the slot is not planned as aggressive at all; it falls through to
+  conservative coverage or idle. A planned aggressive slot only forces the
+  aggressive mode while the policy is still in the aggressive band; if the
+  projection has fallen below the aggressive floor, the current policy wins
+  and the pack is conserved. See `evse.log`'s
+  `CONTROL Setting discharge activation power to N W` line for the live
+  value.
+- **House-load forecast.** The controller keeps sparse 25 W time-weighted
+  power histograms per half-hour slot and CT clamp under
+  `data/state/load_profile/`. The forecast target is the net grid load before
+  the Wallbox (`grid − Wallbox AC`), so EV and battery activity are removed.
+  The planner merges the last 28 days where available (minimum 14) and uses
+  the 90th percentile for conservative coverage and the median for aggressive
+  discharge. With too little history it falls back to the flat configured
+  losses. The same histograms are the raw material for future house-load
+  reports. A graceful SIGINT/SIGTERM flushes the open slot as well as the
+  completed ones, so a restart continues the same half-hour rather than
+  losing it; the downtime itself is not bridged.
 - **The charge floor and its activation are calculated, not fixed.** When the
   decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
@@ -380,6 +431,12 @@ cell on a phone, where the badge alone is too small to rely on.
   the surplus reaches it. The charge and discharge ranges are independent, so
   a strong surplus can charge while the house is still covered at 3 A. 6 A is
   an illustrative break-even point, not a policy constant.
+
+  The same break-even test applies when the pack is in conservative,
+  reserve-for-export or absolute-floor mode. Those states stop discharge, but
+  they do not accept an unconditional 3 A trickle: the charge floor follows
+  the live export price, and closes entirely when selling the surplus now is
+  worth more than storing it.
 - **The charge floor also gates activation.** `LOAD_FOLLOW_BIDIRECTIONAL`
   treats the charge minimum as a floor and tops up from the grid once charging
   starts, so the activation power is set to `floor × 240 W` rather than the
@@ -437,11 +494,16 @@ numbers the control loop used:
 - It declares the state at the moment of the decision: time and half-hour
   slot, SoC, charge cap, import and export prices, the best later export slot,
   harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
-  output, the projected 23:30 SoC and the house floor where relevant.
+  output, the projected 23:30 SoC, and the aggressive, conservative, bulk
+  discharge and hard protection floors.
 - It walks through the checks in order: whether the pack will last to 23:30,
   what the surplus is worth exported now, what it is worth kept for the house,
   what it is worth stored for a later sale, where each break-even lies, whether
-  today's surplus can reach the charge floor, and where discharge starts.
+  today's surplus can reach the charge floor, and where discharge starts. An
+  export-priority decision also shows the break-even arithmetic against
+  offsetting house load; an absolute-floor decision says that discharge and
+  export have stopped and what the current break-even solar floor is, which
+  can be above 3 A or closed when exporting now pays more.
 - It states the answer for both directions. For example: *“Answer 242 W
   because that is the point where the import avoided plus the exported surplus
   exactly covers the cost of the stored energy.”* or *“Do not charge yet; the
@@ -470,11 +532,12 @@ The page is specific to `IOCTGO_AGILEOUT`, which records the snapshot. Other
 tariffs show a short “this tariff does not record a decision explanation”
 message rather than failing.
 
-##### Supplier energy sessions
+##### Supplier energy sessions and EV availability
 
 Utilities occasionally offer a whole half-hour settlement period on special
-terms. Two kinds are supported, named for what they do rather than for one
-supplier's marketing:
+terms. The same page can also record when the EV is expected to be away. Three
+kinds are supported, named for what they do rather than for one supplier's
+marketing:
 
 - **Free Energy Session** (`free_import`): import costs 0p for the window. The
   controller charges at maximum up to the 97% charge cap, the import price used
@@ -484,25 +547,30 @@ supplier's marketing:
   energy and the Wallbox cannot do both.
 - **Save Energy Session** (`grid_support`): the supplier has asked for less
   grid demand. For a battery-backed installation the useful response is maximum
-  export for the window, regardless of the quoted export price, down to the 25%
-  battery protection reserve. The supplier's reward is not a price the tariff
-  can see, so it is deliberately not modelled or booked; the dashboard says the
-  request is the reason for exporting.
+  export for the window, regardless of the quoted export price, down to
+  `absolute_min_soc_percent` (25% by default). The supplier's reward is not a
+  price the tariff can see, so it is deliberately not modelled or booked; the
+  dashboard says the request is the reason for exporting.
+- **EV Away** (`ev_away`): the EV is expected to be disconnected. These slots
+  are left out of the 23:30 SoC projection and the export plan, because the
+  pack cannot supply the house or charge. This is a planning assumption only:
+  if the EV is still connected, the normal heuristic keeps running and may
+  charge or discharge it until the plug is removed or the slot ends.
 
-Both kinds are selected on the **Energy Sessions** page (`/sessions`, linked
-from the dashboard and the schedule page). Click a half-hour cell, or drag
-across several, choose the kind, and add the window. On a touch screen, tap one
-end and then the other. Selections are quantised to half-hour slots — `start`
-is floored and the exclusive `end` is ceiled — because utilities settle on
-half-hour periods. Overlapping windows are rejected rather than resolved.
-Sessions persist in `data/state/sessions.json`, only apply while the controller
-is in smart mode, and a manual command still takes priority. Sessions may be
-conceptually related (for example, two saving sessions earning a free hour),
-but nothing links them automatically.
+All three kinds are selected on the **Energy Sessions & EV Availability** page
+(`/sessions`, linked from the dashboard and the schedule page). Click a
+half-hour cell, or drag across several, choose the kind, and add the window. On
+a touch screen, tap one end and then the other. Selections are quantised to
+half-hour slots — `start` is floored and the exclusive `end` is ceiled —
+because utilities settle on half-hour periods. Overlapping windows are rejected
+rather than resolved. Windows persist in `data/state/sessions.json`. Supplier
+sessions only apply while the controller is in smart mode, and a manual command
+still takes priority. Sessions may be conceptually related (for example, two
+saving sessions earning a free hour), but nothing links them automatically.
 
-On the tariff strip, session slots carry a blue bar (free import) or an amber
-bar (grid support) and appear in a legend below it, in addition to the mode and
-reason in the decision line.
+On the tariff strip, session slots carry a blue bar (free import), an amber bar
+(grid support) or a grey bar (EV away) and appear in a legend below it, in
+addition to the mode and reason in the decision line.
 
 ##### Daily energy report (`/reports/daily`)
 
@@ -629,7 +697,7 @@ If using VS Code (recommended):
 
 - Currently only supports Wallbox Quasar for EVSE and Shelly EM for power monitoring. Other devices would require new interface implementations.
 - The scheduling system supports Octopus Go, Cosy Octopus, and Octopus Flux tariff patterns. Agile tariff support is not implemented. Tariffs from other suppliers are also not implemented. There is an interface allowing for reasonably straightforward implementation of additional tariff support.
-- The Wallbox occasionally requires automatic restarts due to Modbus communication issues, causing approximately 6 minutes of downtime when this occurs. Manual power cycling might be needed 3-4 times per year.
+- The Wallbox occasionally requires automatic restarts due to Modbus communication issues, causing approximately 6 minutes of downtime when this occurs. Manual power cycling might be needed 3-4 times per year. The reset log names the last Modbus error, all documented Wallbox status codes are mapped, and a single raw state-0 read is treated as transient until the next poll confirms it.
 - The web interface is designed for local network use and doesn't include authentication or security features for remote access.
 - The web interface currently has limited accessibility features. Users requiring screen readers or keyboard-only navigation may experience difficulties. If you need accessibility features, please open an issue on GitHub to discuss your requirements.
 

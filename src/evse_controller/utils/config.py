@@ -76,11 +76,16 @@ class Config:
                                 'bulk_discharge_end_time': '19:00',
                                 'enable_bulk_discharge': True,
                                 'soc_threshold_for_strategy': 50,
-                                'min_agile_discharge_soc': 60,
+                                'aggressive_soc_lower_limit': 50,
+                                'conservative_soc_lower_limit': 45,
+                                'bulk_discharge_soc_lower_limit': 25,
+                                'min_agile_discharge_soc': 50,
+                                'absolute_min_soc_percent': 25,
                                 'house_load_margin_percent': 5,
                                 'max_export_power_kw': 7.2,
                                 'export_slot_soc_loss_percent': 0,
                                 'non_export_slot_soc_loss_percent': 1.0,
+                                'full_charge_slot_soc_gain_percent': 0,
                                 'min_profit_margin_p_per_kwh': 0.3,
                                 'grid_import_threshold_high_soc': 0,
                                 'grid_import_threshold_low_soc': 720,
@@ -138,6 +143,12 @@ class Config:
         """Directory holding the per-day Agile Outgoing rate cache."""
         self._ensure_initialized()
         return get_data_dir() / "state" / "agile_rates"
+
+    @property
+    def LOAD_PROFILE_DIR(self):
+        """Directory holding sparse per-slot power histograms per day."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "load_profile"
 
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -413,15 +424,103 @@ class Config:
     # Minimum SoC for Agile Outgoing discharge.  This is the bulk-export
     # target: export slots are planned down to it.
     MIN_AGILE_DISCHARGE_SOC = property(
-        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 60),
-        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 60)
+        lambda self: self._get_config_int("tariffs.ioctgo", "min_agile_discharge_soc", 50),
+        lambda self, value: self._set_config_int("tariffs.ioctgo", "min_agile_discharge_soc", value, 50)
+    )
+
+    # Absolute lower SoC limit for discharge and export.  This is the hard
+    # floor: the controller will not go below it, regardless of export price.
+    # It cannot be set below the 25% physical protection reserve, and it can be
+    # raised (for example to 40%) to avoid draining the pack every winter day.
+    # Default 25 preserves the previous protection-reserve behaviour.
+    IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = property(
+        lambda self: max(
+            25,
+            min(
+                100,
+                self._get_config_int(
+                    "tariffs.ioctgo", "absolute_min_soc_percent", 25
+                ),
+            ),
+        ),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "absolute_min_soc_percent",
+            max(25, min(100, self._as_int(value, 25))),
+            25,
+        ),
     )
 
     # Flexibility below MIN_AGILE_DISCHARGE_SOC for the aggressive/conservative
-    # house-load decision.  Bulk export planning still uses the target itself.
+    # house-load decision.  Retained for migration: new installations use the
+    # explicit conservative_soc_lower_limit.
     HOUSE_LOAD_MARGIN_PERCENT = property(
         lambda self: self._get_config_int("tariffs.ioctgo", "house_load_margin_percent", 5),
         lambda self, value: self._set_config_int("tariffs.ioctgo", "house_load_margin_percent", value, 5)
+    )
+
+    def _ioctgo_soc_setting(self, key: str) -> Optional[int]:
+        """Read an explicit SoC limit, or ``None`` when it is not configured."""
+        value = self.get(f"tariffs.ioctgo.{key}", None)
+        if value is None:
+            return None
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return None
+
+    def _bulk_discharge_soc_lower_limit(self) -> int:
+        absolute = self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT
+        raw = self._ioctgo_soc_setting("bulk_discharge_soc_lower_limit")
+        if raw is None:
+            raw = absolute
+        return max(absolute, min(100, raw))
+
+    def _conservative_soc_lower_limit(self) -> int:
+        raw = self._ioctgo_soc_setting("conservative_soc_lower_limit")
+        if raw is None:
+            margin = max(0, int(self.HOUSE_LOAD_MARGIN_PERCENT))
+            raw = self.MIN_AGILE_DISCHARGE_SOC - margin
+        bulk = self.BULK_DISCHARGE_SOC_LOWER_LIMIT
+        return max(bulk, min(100, raw))
+
+    def _aggressive_soc_lower_limit(self) -> int:
+        raw = self._ioctgo_soc_setting("aggressive_soc_lower_limit")
+        if raw is None:
+            raw = self.MIN_AGILE_DISCHARGE_SOC
+        conservative = self.CONSERVATIVE_SOC_LOWER_LIMIT
+        return max(conservative, min(100, raw))
+
+    # The three economic SoC limits.  They are independent of the hard
+    # protection floor, which remains absolute_min_soc_percent.
+    BULK_DISCHARGE_SOC_LOWER_LIMIT = property(
+        lambda self: self._bulk_discharge_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "bulk_discharge_soc_lower_limit",
+            self._as_int(value, self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT),
+            self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT,
+        ),
+    )
+
+    CONSERVATIVE_SOC_LOWER_LIMIT = property(
+        lambda self: self._conservative_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "conservative_soc_lower_limit",
+            self._as_int(value, self.CONSERVATIVE_SOC_LOWER_LIMIT),
+            self.CONSERVATIVE_SOC_LOWER_LIMIT,
+        ),
+    )
+
+    AGGRESSIVE_SOC_LOWER_LIMIT = property(
+        lambda self: self._aggressive_soc_lower_limit(),
+        lambda self, value: self._set_config_int(
+            "tariffs.ioctgo",
+            "aggressive_soc_lower_limit",
+            self._as_int(value, self.AGGRESSIVE_SOC_LOWER_LIMIT),
+            self.AGGRESSIVE_SOC_LOWER_LIMIT,
+        ),
     )
 
     # Maximum export power for Agile Outgoing (kW).  Default is the non-derated
@@ -443,6 +542,13 @@ class Config:
     IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", 1.0),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "non_export_slot_soc_loss_percent", value)
+    )
+
+    # Agile Outgoing full-charge (free-import) slot SoC gain percentage (per
+    # 30-min slot, 0 = use calculated value from charge power and efficiency)
+    IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = property(
+        lambda self: self._get_config_value("tariffs.ioctgo", "full_charge_slot_soc_gain_percent", 0),
+        lambda self, value: self._set_config_value("tariffs.ioctgo", "full_charge_slot_soc_gain_percent", value)
     )
 
     # Minimum profit margin, p/kWh delivered, required before the controller
@@ -675,11 +781,16 @@ class Config:
                     'bulk_discharge_end_time': self.IOCTGO_BULK_DISCHARGE_END_TIME,
                     'enable_bulk_discharge': self.IOCTGO_ENABLE_BULK_DISCHARGE,
                     'soc_threshold_for_strategy': self.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+                    'aggressive_soc_lower_limit': self.AGGRESSIVE_SOC_LOWER_LIMIT,
+                    'conservative_soc_lower_limit': self.CONSERVATIVE_SOC_LOWER_LIMIT,
+                    'bulk_discharge_soc_lower_limit': self.BULK_DISCHARGE_SOC_LOWER_LIMIT,
                     'min_agile_discharge_soc': self.MIN_AGILE_DISCHARGE_SOC,
+                    'absolute_min_soc_percent': self.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT,
                     'house_load_margin_percent': self.HOUSE_LOAD_MARGIN_PERCENT,
                     'max_export_power_kw': self.MAX_EXPORT_POWER_KW,
                     'export_slot_soc_loss_percent': self.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
                     'non_export_slot_soc_loss_percent': self.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                    'full_charge_slot_soc_gain_percent': self.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT,
                     'min_profit_margin_p_per_kwh': self.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH,
                     'grid_import_threshold_high_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
                     'grid_import_threshold_low_soc': self.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,

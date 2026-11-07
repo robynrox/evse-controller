@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import pytest
+import yaml
 from evse_controller.utils.paths import get_data_dir, get_log_dir, ensure_data_dirs, get_config_file
 
 @pytest.fixture
@@ -130,24 +131,20 @@ def test_get_config_file_copies_from_cwd(temp_dir, temp_cwd):
     # Clean up not strictly necessary as tmp_path will be removed
     cwd_config.unlink()
 
-def test_get_config_file_no_config_exists(temp_dir, temp_cwd):
-    """Test that get_config_file exits when no config exists."""
-    with pytest.raises(SystemExit) as exc_info:
-        get_config_file()
-    assert exc_info.value.code == 1
+def test_get_config_file_creates_default_when_missing(temp_dir, temp_cwd):
+    """A first run must get a usable default config instead of exiting."""
+    result = get_config_file()
 
-def test_get_config_file_no_config_exists_required(temp_dir, temp_cwd):
-    """Test that get_config_file exits when no config exists and require_exists=True."""
-    with pytest.raises(SystemExit) as exc_info:
-        get_config_file(require_exists=True)
-    assert exc_info.value.code == 1
-
-def test_get_config_file_no_config_exists_not_required(temp_dir, temp_cwd):
-    """Test that get_config_file returns expected path when require_exists=False."""
-    result = get_config_file(require_exists=False)
     expected_path = get_data_dir() / "config" / "config.yaml"
     assert result == expected_path
-    assert not result.exists()  # Confirms file wasn't created
+    assert result.exists()
+
+    with result.open("r") as f:
+        saved = yaml.safe_load(f)
+
+    assert saved["wallbox"]["use_simulator"] is True
+    assert saved["shelly"]["grid"]["device"] == "primary"
+    assert saved["charging"]["startup_state"] == "FREERUN"
 
 def test_data_dir_environment_handling(temp_dir, temp_cwd):
     """Verify that environment variable handling doesn't affect real config."""

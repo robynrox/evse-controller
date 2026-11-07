@@ -11,13 +11,28 @@ class EvseState(Enum):
     WAITING_FOR_CAR_DEMAND = 2
     WAITING_FOR_SCHEDULE = 3
     PAUSED = 4
+    CONNECTED_END_OF_SCHEDULE = 5
+    NO_CAR_CONNECTED_AND_CHARGER_LOCKED = 6
     STANDBY = 7
+    CONNECTED_IN_QUEUE_POWER_SHARING = 8
+    ERROR_UNCONFIGURED_POWER_SHARING = 9
     POWER_DEMAND_TOO_HIGH = 10
     DISCHARGING = 11
     ERROR = 12
     FREERUN = 997
     COMMS_FAILURE = 998
     UNKNOWN = 999
+
+
+# Codes that mean the vehicle is not available to the controller.  Code 6 is
+# "no car connected and charger locked": the connector may be physically
+# present, but the charger is telling us there is no vehicle session.
+DISCONNECTED_STATES = frozenset(
+    {
+        EvseState.DISCONNECTED,
+        EvseState.NO_CAR_CONNECTED_AND_CHARGER_LOCKED,
+    }
+)
 
 
 class EvseCommand(Enum):

@@ -133,7 +133,8 @@
 
     /* Session markers stay visible over the selection highlight. */
     .cell.session-free::before,
-    .cell.session-grid::before {
+    .cell.session-grid::before,
+    .cell.session-away::before {
         content: '';
         position: absolute;
         left: 0;
@@ -149,6 +150,10 @@
 
     .cell.session-grid::before {
         background: #d97706;
+    }
+
+    .cell.session-away::before {
+        background: #6b7280;
     }
 
     .cell.selected {
@@ -229,6 +234,10 @@
         background: #d97706;
     }
 
+    .legend .swatch-away::before {
+        background: #6b7280;
+    }
+
     .legend .swatch-selected::before {
         background: #28a745;
     }
@@ -289,6 +298,10 @@
         background: #d97706;
     }
 
+    .badge-ev_away {
+        background: #6b7280;
+    }
+
     .muted {
         color: #666;
         font-size: 12px;
@@ -328,12 +341,13 @@
     <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
 </div>
 
-<h1>Energy Sessions</h1>
+<h1>Energy Sessions &amp; EV Availability</h1>
 
 <p class="intro">
     Your supplier occasionally asks for a whole half-hour period of either free
-    import or reduced grid demand. Select one or more slots below and add the
-    matching session. Sessions only apply while the controller is in
+    import or reduced grid demand. You can also mark slots when the EV is
+    expected to be away. Select one or more slots below and add the matching
+    window. Supplier sessions only apply while the controller is in
     <strong>smart</strong> mode and the <strong>IOCTGO + Agile Outgoing</strong>
     tariff is active; a manual command still takes priority.
 </p>
@@ -363,12 +377,23 @@
                 </span>
             </span>
         </label>
+        <label class="kind-option">
+            <input type="radio" name="kind" value="{{ away_kind }}">
+            <span>
+                <span class="kind-title">EV Away</span>
+                <span class="kind-detail">
+                    The EV is expected to be disconnected. These slots are left
+                    out of the 23:30 SoC projection and export plan, but the
+                    normal heuristic still runs if the EV remains connected.
+                </span>
+            </span>
+        </label>
     </div>
 
     <div class="strip-wrap">
         <div id="strip" class="strip">
             {% for slot in slots %}
-            <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
+            <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot in away_slots %} session-away{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
                  data-slot="{{ slot.slot }}"
                  style="background: {{ slot.colour }}"
                  title="{{ slot.time }}{% if slot.rate is not none %} · {{ '%.1f'|format(slot.rate) }}p export{% endif %}">
@@ -396,6 +421,7 @@
     <div class="legend">
         <span class="swatch-free">Free Energy Session</span>
         <span class="swatch-grid">Save Energy Session</span>
+        <span class="swatch-away">EV Away</span>
         <span class="swatch-selected">Selected</span>
         <span class="swatch-now">Now</span>
     </div>

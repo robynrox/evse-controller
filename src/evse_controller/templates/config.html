@@ -405,16 +405,28 @@
             <small>Select your UK region for accurate Agile Outgoing export rates</small>
         </div>
         <div class="form-group">
-            <label for="min_agile_discharge_soc">Target SoC for Agile Discharge (%):</label>
-            <input type="number" id="min_agile_discharge_soc" name="tariffs.ioctgo[min_agile_discharge_soc]" 
-                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('min_agile_discharge_soc', 60) }}" min="0" max="100" step="1">
-            <small>SoC to target near the end of the day. If there is plenty of charge available, bulk exporting is possible within slots to aim for this target.</small>
+            <label for="aggressive_soc_lower_limit">Aggressive discharge SoC lower limit (%):</label>
+            <input type="number" id="aggressive_soc_lower_limit" name="tariffs.ioctgo[aggressive_soc_lower_limit]"
+                   value="{{ config.AGGRESSIVE_SOC_LOWER_LIMIT }}" min="0" max="100" step="1">
+            <small>Aggressive house discharge stops here, and this is the 23:30 target. Default 50%. Raise it to keep more reserve; lower it to allow more aggressive discharge.</small>
         </div>
         <div class="form-group">
-            <label for="house_load_margin_percent">House-load flexibility below the target (%):</label>
-            <input type="number" id="house_load_margin_percent" name="tariffs.ioctgo[house_load_margin_percent]"
-                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('house_load_margin_percent', 5) }}" min="0" max="50" step="1">
-            <small>House-load discharge stays aggressive until the projected 23:30 SoC would fall this far below the target. Bulk export planning still uses the target itself. The floor never enters the 25% protection reserve.</small>
+            <label for="conservative_soc_lower_limit">Conservative discharge SoC lower limit (%):</label>
+            <input type="number" id="conservative_soc_lower_limit" name="tariffs.ioctgo[conservative_soc_lower_limit]"
+                   value="{{ config.CONSERVATIVE_SOC_LOWER_LIMIT }}" min="0" max="100" step="1">
+            <small>Conservative house coverage stops here. Between this and the aggressive lower limit the controller covers most of the house load; below it the house imports. It cannot be below the bulk discharge lower limit.</small>
+        </div>
+        <div class="form-group">
+            <label for="bulk_discharge_soc_lower_limit">Bulk/priority export SoC lower limit (%):</label>
+            <input type="number" id="bulk_discharge_soc_lower_limit" name="tariffs.ioctgo[bulk_discharge_soc_lower_limit]"
+                   value="{{ config.BULK_DISCHARGE_SOC_LOWER_LIMIT }}" min="25" max="100" step="1">
+            <small>High-value priority exports may spend down to this limit. It must be at or above the hard protection floor, and at or below the conservative lower limit. Defaults to the hard floor.</small>
+        </div>
+        <div class="form-group">
+            <label for="absolute_min_soc_percent">Hard protection floor for discharge and export (%):</label>
+            <input type="number" id="absolute_min_soc_percent" name="tariffs.ioctgo[absolute_min_soc_percent]"
+                   value="{{ config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT }}" min="25" max="100" step="1">
+            <small>Hard floor for discharge and export, including scheduled Save Energy sessions. Defaults to 25%, the physical protection reserve. Raise it (for example to 40%) to avoid draining the pack on winter days. Scheduled events can override the three economic limits above, but never this one. Surplus solar can still charge the pack below this level.</small>
         </div>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
@@ -433,6 +445,12 @@
             <input type="number" id="non_export_slot_soc_loss_percent" name="tariffs.ioctgo[non_export_slot_soc_loss_percent]"
                    value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('non_export_slot_soc_loss_percent', 1.0) }}" min="0" max="10" step="0.1">
             <small>State of charge loss percentage during load-following (non-export) slots. Used to project available SoC for export planning.</small>
+        </div>
+        <div class="form-group">
+            <label for="full_charge_slot_soc_gain_percent">Full-Charge Slot SoC Gain (% per 30-min slot):</label>
+            <input type="number" id="full_charge_slot_soc_gain_percent" name="tariffs.ioctgo[full_charge_slot_soc_gain_percent]"
+                   value="{{ config.get('tariffs', {}).get('ioctgo', {}).get('full_charge_slot_soc_gain_percent', 0) }}" min="0" max="30" step="0.1">
+            <small>State of charge gain during a free-import session that is charging at full rate. Set to 0 to use the calculated value from charge power, charge efficiency and battery capacity.</small>
         </div>
         <div class="form-group">
             <label for="min_profit_margin_p_per_kwh">Minimum Profit Margin (p/kWh):</label>

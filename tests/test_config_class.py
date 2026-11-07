@@ -755,6 +755,7 @@ class TestWholeNumberSocSettings:
         ("IOCTGO_OCPP_ENABLE_SOC_THRESHOLD", 29.6, 30),
         ("IOCTGO_OCPP_DISABLE_SOC_THRESHOLD", 94.6, 95),
         ("MIN_AGILE_DISCHARGE_SOC", 59.6, 60),
+        ("IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 39.6, 40),
         ("HOUSE_LOAD_MARGIN_PERCENT", 4.6, 5),
     ]
 
@@ -777,6 +778,31 @@ class TestWholeNumberSocSettings:
 
         assert config.HOUSE_LOAD_MARGIN_PERCENT == 5
 
+    def test_absolute_minimum_defaults_to_the_physical_reserve(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {}).pop(
+            "absolute_min_soc_percent", None
+        )
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+
+    def test_absolute_minimum_cannot_be_set_below_the_physical_reserve(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 10
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+
+    def test_absolute_minimum_is_capped_at_one_hundred(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 120
+
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 100
+
     def test_non_numeric_value_falls_back_to_the_default(self):
         config = Config()
         _ = config.WALLBOX_URL
@@ -784,7 +810,7 @@ class TestWholeNumberSocSettings:
             "min_agile_discharge_soc"
         ] = "not a number"
 
-        assert config.MIN_AGILE_DISCHARGE_SOC == 60
+        assert config.MIN_AGILE_DISCHARGE_SOC == 50
 
     def test_per_slot_soc_loss_rates_stay_fractional(self):
         """These are rates, not thresholds, so 0.5%/slot must survive."""
@@ -793,6 +819,80 @@ class TestWholeNumberSocSettings:
 
         config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = 0.5
         config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.5
+        config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = 6.5
 
         assert config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(0.5)
         assert config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT == pytest.approx(1.5)
+        assert config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT == pytest.approx(6.5)
+
+
+class TestExplicitSocLimits:
+    """The three economic limits and the separate hard protection floor."""
+
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_new_keys_override_the_old_derived_settings(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "aggressive_soc_lower_limit": 55,
+            "conservative_soc_lower_limit": 48,
+            "bulk_discharge_soc_lower_limit": 42,
+            "absolute_min_soc_percent": 40,
+            "min_agile_discharge_soc": 60,
+            "house_load_margin_percent": 5,
+        }
+
+        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 55
+        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 48
+        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 42
+        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 40
+
+    def test_old_keys_migrate(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "min_agile_discharge_soc": 60,
+            "house_load_margin_percent": 5,
+            "absolute_min_soc_percent": 40,
+        }
+
+        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 60
+        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 55
+        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 40
+
+    def test_limits_are_clamped_into_order(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "aggressive_soc_lower_limit": 20,
+            "conservative_soc_lower_limit": 20,
+            "bulk_discharge_soc_lower_limit": 20,
+            "absolute_min_soc_percent": 25,
+        }
+
+        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 25
+        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 25
+        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 25
+
+    def test_aggressive_cannot_sit_below_conservative(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "aggressive_soc_lower_limit": 45,
+            "conservative_soc_lower_limit": 50,
+            "bulk_discharge_soc_lower_limit": 40,
+            "absolute_min_soc_percent": 25,
+        }
+
+        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 50
+
+    def test_old_negative_margin_is_treated_as_zero(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "min_agile_discharge_soc": 60,
+            "house_load_margin_percent": -5,
+            "absolute_min_soc_percent": 25,
+        }
+
+        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 60

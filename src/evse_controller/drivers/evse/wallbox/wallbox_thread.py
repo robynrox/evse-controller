@@ -7,7 +7,10 @@ from pyModbusTCP.client import ModbusClient
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
-from evse_controller.drivers.evse.async_interface import EvseState
+from evse_controller.drivers.evse.async_interface import (
+    DISCONNECTED_STATES,
+    EvseState,
+)
 from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
 from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
@@ -82,6 +85,24 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+        # Diagnostics: keep the most recent Modbus failure so the reset log
+        # can say why the charger is being rebooted, and remember an unknown
+        # state code so it is logged once rather than every poll.
+        self._last_modbus_error: Optional[str] = None
+        self._last_unknown_state_reg: Optional[int] = None
+        # A single raw 0 while the car is connected is usually the charger
+        # rebooting or a one-poll transition.  Require two consecutive reads
+        # before publishing DISCONNECTED; a real unplug lasts longer than that.
+        self._disconnected_streak = 0
+
+        # A single lost Modbus transaction should not abort the whole poll.
+        # pyModbusTCP closes the socket on a transport error and reopens it on
+        # the next request, so retrying the same register is effectively a
+        # reconnect.  Keep the retry budget small: the poll loop runs every
+        # second, and a dead link should still reach the reset logic promptly.
+        # The same budget applies to reads and writes.
+        self.MODBUS_ATTEMPTS = 2
+        self.MODBUS_RETRY_DELAY_SECONDS = 0.05
         
         # Add tracking for OCPP state change to implement 2-minute delay for resets
         self._last_ocpp_change_time = 0
@@ -176,7 +197,15 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._update_state()
                 self._process_commands()
                 #debug("Completed Wallbox state update cycle")  # New log
-                                    
+
+            except ConnectionError as e:
+                # A read failure is usually a transport problem, not a bug.
+                # Log it once and then keep the per-poll detail at DEBUG so
+                # an intermittent link does not fill the log with stack
+                # traces.  The underlying Modbus error code is included in
+                # the message so timeouts can be told apart from exceptions.
+                self._log_connection_error(e)
+                self._handle_error()
             except Exception as e:
                 error(f"Error in Wallbox thread: {e}")
                 error(f"Stack trace: {traceback.format_exc()}")  # Add stack trace
@@ -251,11 +280,18 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 warning("Skipping comms failure handling in FREERUN state - not attempting API reset")
                 return False
             
+            consecutive_errors = self._state.consecutive_connection_errors
             self._state.evse_state = EvseState.COMMS_FAILURE
 
         if not all([self._wallbox_username, self._wallbox_password, self._wallbox_serial]):
             error("Cannot reset via API - missing credentials or serial number")
             return False
+
+        warning(
+            f"Resetting Wallbox after {consecutive_errors} consecutive "
+            f"Modbus error(s); last error: "
+            f"{self._last_modbus_error or 'not recorded'}"
+        )
 
         try:
             info("Attempting to reset charger via Wallbox API")
@@ -280,6 +316,134 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._execute_command(cmd)
         except queue.Empty:
             pass
+
+    def _modbus_error_code(self) -> Optional[int]:
+        """Return pyModbusTCP's last error code, if the client exposes one."""
+        wrapped = getattr(self._client, "_client", None)
+        if wrapped is None:
+            return None
+        try:
+            return int(getattr(wrapped, "last_error", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+
+    def _modbus_failure_detail(self) -> str:
+        """Return the underlying Modbus error, if the client exposes one.
+
+        ``read_holding_registers`` returns ``None`` for several different
+        failures, so the bare register address cannot distinguish a timeout
+        from a refused connection or a Modbus exception.  pyModbusTCP keeps
+        the last error on the client; include it when available.  Test and
+        third-party clients may not have these attributes, hence the
+        defensive ``getattr`` calls.
+        """
+        wrapped = getattr(self._client, "_client", None)
+        error_code = self._modbus_error_code()
+        if wrapped is None or not error_code:
+            return ""
+        text = getattr(wrapped, "last_error_as_txt", "") or str(error_code)
+        if error_code == 7:  # Modbus exception response
+            except_text = getattr(wrapped, "last_except_as_full_txt", "")
+            if except_text:
+                return f"{text}: {except_text}"
+        return text
+
+    def _read_holding_registers(self, reg: int) -> Optional[list[int]]:
+        """Read one register, retrying a transport failure once.
+
+        The Kotlin proof of concept reconnects and retries the same register
+        when the link is lost, but does not retry a Modbus exception (which
+        will simply happen again).  ``pyModbusTCP`` returns ``None`` rather
+        than raising, and its ``auto_open`` mode reconnects on the next
+        request, so closing the socket and calling the same read is the
+        equivalent here.  Limit this to one retry so a genuinely dead link
+        still reaches the existing reset logic quickly.
+        """
+        last_error: Optional[ConnectionError] = None
+        for attempt in range(1, self.MODBUS_ATTEMPTS + 1):
+            try:
+                output = self._client.read_holding_registers(reg)
+            except ConnectionError as exc:
+                output = None
+                last_error = exc
+
+            if output is not None:
+                return output
+
+            # A Modbus exception is a valid response from the device, not a
+            # lost connection.  Retrying it just repeats the same error.
+            if self._modbus_error_code() == 7:
+                return None
+
+            if attempt < self.MODBUS_ATTEMPTS:
+                try:
+                    self._client.close()
+                except Exception:
+                    # A client that was never opened may not have a socket.
+                    pass
+                time.sleep(self.MODBUS_RETRY_DELAY_SECONDS)
+
+        if last_error is not None:
+            raise last_error
+        return None
+
+    def _write_single_register(self, reg: int, value: int) -> bool:
+        """Write one register, retrying a transport failure once.
+
+        This mirrors :meth:`_read_holding_registers`.  ``write_single_register``
+        returns ``True`` on success and ``None`` on failure; the previous code
+        ignored that result, so a failed command could silently do nothing and
+        still leave the controller believing the setpoint had changed.
+        """
+        last_error: Optional[ConnectionError] = None
+        for attempt in range(1, self.MODBUS_ATTEMPTS + 1):
+            try:
+                result = self._client.write_single_register(reg, value)
+            except ConnectionError as exc:
+                result = None
+                last_error = exc
+
+            if result:
+                return True
+
+            # A Modbus exception is a valid response from the device, not a
+            # lost connection.  Retrying it just repeats the same error.
+            if self._modbus_error_code() == 7:
+                break
+
+            if attempt < self.MODBUS_ATTEMPTS:
+                try:
+                    self._client.close()
+                except Exception:
+                    # A client that was never opened may not have a socket.
+                    pass
+                time.sleep(self.MODBUS_RETRY_DELAY_SECONDS)
+
+        detail = self._modbus_failure_detail()
+        message = f"Failed to write register {hex(reg)}"
+        if detail:
+            message += f" ({detail})"
+        elif last_error is not None:
+            message += f" ({last_error})"
+        raise ConnectionError(message)
+
+    def _log_connection_error(self, exc: ConnectionError) -> None:
+        """Log a Modbus read failure at a rate that matches its severity."""
+        self._last_modbus_error = str(exc)
+        with self._state_lock:
+            count = self._state.consecutive_connection_errors
+        if count <= 1:
+            warning(f"WALLBOX Modbus communication failed: {exc}")
+        elif count == self._reset_attempt_threshold or count % 100 == 0:
+            warning(
+                f"WALLBOX Modbus still failing "
+                f"({count} consecutive errors): {exc}"
+            )
+        else:
+            debug(
+                f"WALLBOX Modbus read failed "
+                f"({count} consecutive errors): {exc}"
+            )
 
     def _battery_percentage_valid(self, value: int) -> bool:
         return 5 <= value <= 100
@@ -307,6 +471,30 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             # Efficiency = |AC power| / |DC power|
             return (abs(ac_power) / abs(dc_power)) * 100 if dc_power != 0 else 0.0
 
+    def _state_from_register(self, state_reg: int) -> EvseState:
+        """Map a raw Wallbox state register to :class:`EvseState`.
+
+        The Wallbox defines more codes than this application needs to act on.
+        An unhandled code is a valid Modbus response, not a communication
+        failure, so map it to ``UNKNOWN`` and log it once instead of raising.
+        Raising here used to count towards the reset threshold and could reboot
+        the charger simply because it reported an unrecognised status.
+        """
+        try:
+            state = EvseState(state_reg)
+        except ValueError:
+            state = EvseState.UNKNOWN
+            if state_reg != self._last_unknown_state_reg:
+                warning(
+                    f"WALLBOX reported unknown EVSE state register "
+                    f"{state_reg}; treating it as UNKNOWN rather than a "
+                    "communication failure"
+                )
+                self._last_unknown_state_reg = state_reg
+        else:
+            self._last_unknown_state_reg = None
+        return state
+
     def _update_state(self):
         try:
             # Read all registers including efficiency monitoring
@@ -322,10 +510,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 self._READ_DC_CURRENT_REG
             ]
             for reg in regs_to_read:
-                output = self._client.read_holding_registers(reg)
+                output = self._read_holding_registers(reg)
                 if output is None:
-                    error(f"Failed to read register {hex(reg)}")
-                    raise ConnectionError(f"Failed to read register {hex(reg)}")
+                    detail = self._modbus_failure_detail()
+                    message = f"Failed to read register {hex(reg)}"
+                    if detail:
+                        message += f" ({detail})"
+                    raise ConnectionError(message)
                 reg_contents.append(output)
 
             state_reg = reg_contents[0][0]
@@ -363,21 +554,60 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             #debug(f"Update state successful. State: {state_reg}, Battery: {battery_reg}, Current: {current}")
 
             with self._state_lock:
+                previous_errors = self._state.consecutive_connection_errors
                 # If we're in FREERUN state, we don't override our tracked state with the Modbus state
                 # but we still update other values like battery level and current
                 if self._state.evse_state == EvseState.FREERUN:
                     # In FREERUN state, we preserve our internal state but still update
                     # battery level and current for monitoring purposes
                     # We also store the actual Modbus state for when we transition out of FREERUN
-                    self._state._actual_modbus_state = EvseState(state_reg)
+                    self._state._actual_modbus_state = self._state_from_register(
+                        state_reg
+                    )
                 else:
-                    # Direct construction instead of using from_modbus_register
-                    new_state = EvseState(state_reg)
+                    previous_state = self._state.evse_state
+                    new_state = self._state_from_register(state_reg)
+                    # A one-poll raw 0 from a connected charger is usually a
+                    # reboot or a transitional read.  Confirm it on the next
+                    # poll before telling the rest of the system the car is
+                    # gone.  Real disconnects persist.
+                    if (
+                        state_reg == EvseState.DISCONNECTED.value
+                        and previous_state not in DISCONNECTED_STATES
+                        and previous_state
+                        not in (
+                            EvseState.UNKNOWN,
+                            EvseState.COMMS_FAILURE,
+                            EvseState.FREERUN,
+                        )
+                    ):
+                        self._disconnected_streak += 1
+                        if self._disconnected_streak < 2:
+                            debug(
+                                "WALLBOX raw state 0 ignored as a transient "
+                                f"disconnect (previous {previous_state.name})"
+                            )
+                            new_state = previous_state
+                    else:
+                        self._disconnected_streak = 0
+
                     # Update power model with new current
                     if new_state != self._state.evse_state or current != self._state.current:
                         self._power_model.set_current(float(current))
 
                     self._state.evse_state = new_state
+                    if new_state != previous_state:
+                        if new_state in DISCONNECTED_STATES:
+                            warning(
+                                f"WALLBOX state {previous_state.name} -> "
+                                f"{new_state.name} (raw {state_reg}, "
+                                f"battery {battery_reg}%)"
+                            )
+                        else:
+                            info(
+                                f"WALLBOX state {previous_state.name} -> "
+                                f"{new_state.name} (raw {state_reg})"
+                            )
 
                 if self._battery_percentage_valid(battery_reg):
                     self._state.battery_level = battery_reg
@@ -397,6 +627,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 
                 self._state.last_update = time.time()
                 self._state.consecutive_connection_errors = 0
+
+            if previous_errors:
+                info(
+                    "WALLBOX Modbus communication recovered after "
+                    f"{previous_errors} consecutive error(s)"
+                )
 
         except ConnectionError:
             with self._state_lock:
@@ -418,6 +654,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
             error(f"Error reading EVSE state: {str(e)}")
+            debug(traceback.format_exc())
             raise ConnectionError(f"Communication error: {str(e)}")
 
     def _get_scaled_delay(self, delay: float) -> float:
@@ -497,19 +734,27 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
     def _set_current(self, current: int):
         try:
             # Take control
-            self._client.write_single_register(self._CONTROL_LOCKOUT_REG, self._MODBUS_CONTROL)
+            self._write_single_register(
+                self._CONTROL_LOCKOUT_REG, self._MODBUS_CONTROL
+            )
             # If current is zero, stop charging
             if current == 0:
-                self._client.write_single_register(self._CONTROL_STATE_REG, self._STOP_CHARGING)
-                self._client.write_single_register(self._CONTROL_CURRENT_REG, 0)
+                self._write_single_register(
+                    self._CONTROL_STATE_REG, self._STOP_CHARGING
+                )
+                self._write_single_register(self._CONTROL_CURRENT_REG, 0)
                 # Update power model
                 self._power_model.set_current(0.0)
             else:
                 # Set charging current as 16-bit value
                 reg_value = self.convert_to_16_bit_twos_complement(current)
-                self._client.write_single_register(self._CONTROL_CURRENT_REG, reg_value)
+                self._write_single_register(
+                    self._CONTROL_CURRENT_REG, reg_value
+                )
                 # Start charging
-                self._client.write_single_register(self._CONTROL_STATE_REG, self._START_CHARGING)
+                self._write_single_register(
+                    self._CONTROL_STATE_REG, self._START_CHARGING
+                )
                 # Update power model
                 self._power_model.set_current(float(current))
 
@@ -525,10 +770,12 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         finally:
             try:
                 # Always attempt to return control to user, even if previous operations failed
-                self._client.write_single_register(self._CONTROL_LOCKOUT_REG, self._USER_CONTROL)
+                self._write_single_register(
+                    self._CONTROL_LOCKOUT_REG, self._USER_CONTROL
+                )
                 # Don't close the client here as we will be reading the state in the next step
                 # (don't do self._client.close())
-            except:
+            except Exception:
                 pass
 
     def _set_freerun(self):

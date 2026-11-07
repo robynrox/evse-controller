@@ -24,6 +24,7 @@ GRID = SeriesSpec("grid", "Grid", "Imported", "Exported")
 def report_client(tmp_path):
     log = DailyEnergyLog()
     log.set_directory(tmp_path / "reports")
+    log.set_profile_directory(tmp_path / "load_profile")
     log.configure([GRID])
 
     templates = (
