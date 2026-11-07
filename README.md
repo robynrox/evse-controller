@@ -634,6 +634,27 @@ rows and is flagged: spring's missing hour has no coverage, and autumn's
 repeated hour lands in the same two rows. Daily totals remain correct because
 they sum measured energy.
 
+##### Load-profile and forecast-accuracy report (`/reports/load-profile`)
+
+The **Load profile** link in the energy-report navigation opens the rolling
+house-load report. It compares the persistence forecast that would have been
+available on the previous day with the actual distribution recorded on the
+selected day:
+
+- a p10/p50/p90 fan chart for the selected series, with the actual band and
+  median overlaid;
+- a 48-slot × 14-day heatmap of median load;
+- forecast MAE, bias and p90 coverage;
+- the forecast history depth and the number of matched slots;
+- a per-slot table and CSV download;
+- cached Open-Meteo temperature and irradiance when weather is configured.
+
+The series selector includes the derived `house` series (grid minus Wallbox
+AC), the grid and EVSE channels, the battery DC channel, and every named
+in-use CT clamp. The report reads the sparse histograms under
+`data/state/load_profile/`; it does not interpolate missing data or treat a
+blank slot as zero.
+
 The same data is available as JSON at
 `/api/reports/daily/YYYY-MM-DD` and as a CSV download at
 `/reports/daily/YYYY-MM-DD.csv`. Today's page refreshes once a minute;

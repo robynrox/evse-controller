@@ -236,6 +236,10 @@ completed fixes.
   snapshot at `data/state/weather_cache.json`. There are no default
   coordinates or panel geometry: all four values must be configured before a
   request is made.
+- `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
+  forecast-versus-actual fan chart, a 14-day heatmap, MAE/bias/p90 coverage,
+  per-slot detail, CSV, and cached weather when configured. It is the first
+  report built on the sparse histograms and is read-only.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts

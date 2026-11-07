@@ -33,12 +33,14 @@ DEFAULT_MIN_COVERAGE_S = 600.0  # ten minutes of valid samples
 
 @dataclass(frozen=True)
 class SlotLoad:
-    """House-load estimate for one half-hour slot."""
+    """One half-hour distribution, or a merged forecast for it."""
 
     median_w: Optional[float]
     p90_w: Optional[float]
     days: int
     coverage_s: float
+    p10_w: Optional[float] = None
+    mean_w: Optional[float] = None
 
     @property
     def available(self) -> bool:
@@ -62,8 +64,7 @@ class LoadProfile:
         self.min_days = max(1, int(min_days))
         self.min_coverage_s = max(0.0, float(min_coverage_s))
         self.bin_width_w = float(bin_width_w)
-        self._cached_day: Optional[date] = None
-        self._cached_profile: Optional[list[SlotLoad]] = None
+        self._cache: dict[tuple[date, str], list[SlotLoad]] = {}
 
     @property
     def directory(self) -> Path:
@@ -76,17 +77,21 @@ class LoadProfile:
         self.reset()
 
     def reset(self) -> None:
-        self._cached_day = None
-        self._cached_profile = None
+        self._cache.clear()
 
-    def for_date(self, day: date) -> list[SlotLoad]:
+    def for_date(
+        self, day: date, series: str = "house"
+    ) -> list[SlotLoad]:
         """Per-slot estimates for *day*, newest data first.
 
-        The cache is keyed by the requested day.  The planner calls this at
-        slot boundaries, so a day's worth of files is read at most once.
+        The cache is keyed by the requested day and series.  The planner calls
+        this at slot boundaries, so a day's worth of files is read at most
+        once.
         """
-        if self._cached_day == day and self._cached_profile is not None:
-            return self._cached_profile
+        key = (day, series)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
 
         merged: list[dict[int, float]] = [dict() for _ in range(SLOTS_PER_DAY)]
         days = [0] * SLOTS_PER_DAY
@@ -100,45 +105,109 @@ class LoadProfile:
             for index, slot in enumerate(data["slots"]):
                 if not slot.get("closed"):
                     continue
-                house_coverage = float(
-                    (slot.get("coverage_s") or {}).get("house", 0.0)
+                series_coverage = float(
+                    (slot.get("coverage_s") or {}).get(series, 0.0)
                 )
-                if house_coverage < self.min_coverage_s:
+                if series_coverage < self.min_coverage_s:
                     continue
-                house_bins = (slot.get("bins_s") or {}).get("house") or {}
-                if not house_bins:
+                series_bins = (slot.get("bins_s") or {}).get(series) or {}
+                if not series_bins:
                     continue
                 target = merged[index]
-                for bin_index, seconds in house_bins.items():
+                for bin_index, seconds in series_bins.items():
                     target[bin_index] = target.get(bin_index, 0.0) + seconds
                 days[index] += 1
-                coverage[index] += house_coverage
+                coverage[index] += series_coverage
 
         profile: list[SlotLoad] = []
         for index in range(SLOTS_PER_DAY):
             if days[index] < self.min_days or not merged[index]:
-                profile.append(SlotLoad(None, None, days[index], coverage[index]))
+                profile.append(
+                    SlotLoad(None, None, days[index], coverage[index])
+                )
                 continue
-            median = self._percentile(merged[index], 0.50)
-            p90 = self._percentile(merged[index], 0.90)
             profile.append(
-                SlotLoad(
-                    median_w=median,
-                    p90_w=p90,
+                self._slot_load(
+                    merged[index],
                     days=days[index],
                     coverage_s=coverage[index],
                 )
             )
 
-        self._cached_day = day
-        self._cached_profile = profile
+        self._cache[key] = profile
         if any(item.available for item in profile):
             used = sum(1 for item in profile if item.available)
             debug(
                 f"LOAD_PROFILE: {used}/{SLOTS_PER_DAY} slots have a forecast "
-                f"from up to {self.window_days} day(s)"
+                f"for {series} from up to {self.window_days} day(s)"
             )
         return profile
+
+    def day_stats(
+        self, day: date, series: str = "house"
+    ) -> list[SlotLoad]:
+        """The actual distribution on *day* for every slot.
+
+        Unlike :meth:`for_date`, this is a single day and is not merged with
+        previous days, so it is the right input for a forecast-accuracy report.
+        """
+        data = self._read_day(day)
+        profile: list[SlotLoad] = []
+        for index in range(SLOTS_PER_DAY):
+            slot = data["slots"][index] if data is not None else {}
+            bins = (slot.get("bins_s") or {}).get(series) or {}
+            coverage = float(
+                (slot.get("coverage_s") or {}).get(series, 0.0)
+            )
+            if not bins:
+                profile.append(SlotLoad(None, None, 0, coverage))
+                continue
+            profile.append(
+                self._slot_load(bins, days=1, coverage_s=coverage)
+            )
+        return profile
+
+    def available_days(self) -> list[date]:
+        """Days with a profile file, newest first."""
+        days = []
+        try:
+            for path in self.directory.glob("*.json"):
+                try:
+                    days.append(date.fromisoformat(path.stem))
+                except ValueError:
+                    continue
+        except OSError:
+            return []
+        return sorted(set(days), reverse=True)
+
+    def _slot_load(
+        self,
+        bins: dict[int, float],
+        *,
+        days: int,
+        coverage_s: float,
+    ) -> SlotLoad:
+        return SlotLoad(
+            median_w=self._percentile(bins, 0.50),
+            p90_w=self._percentile(bins, 0.90),
+            days=days,
+            coverage_s=coverage_s,
+            p10_w=self._percentile(bins, 0.10),
+            mean_w=self._mean(bins),
+        )
+
+    def _mean(self, bins: dict[int, float]) -> float:
+        total = sum(value for value in bins.values() if value > 0)
+        if total <= 0:
+            return 0.0
+        return (
+            sum(
+                (bin_index + 0.5) * self.bin_width_w * seconds
+                for bin_index, seconds in bins.items()
+                if seconds > 0
+            )
+            / total
+        )
 
     def _read_day(self, day: date) -> Optional[dict]:
         path = self.directory / f"{day.isoformat()}.json"

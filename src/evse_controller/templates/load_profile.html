@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Load profile — {{ selected_date }}</title>
+{% if is_today %}
+<meta http-equiv="refresh" content="300">
+{% endif %}
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .spacer { flex: 1; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 9px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 150px;
+        flex: 1 1 150px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 24px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+    }
+    .fan-chart { width: 100%; height: auto; display: block; }
+    .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .forecast-band { fill: #0b5cad; opacity: .16; }
+    .actual-band { fill: #e65100; opacity: .12; }
+    .forecast-line { fill: none; stroke: #0b5cad; stroke-width: 2.5; }
+    .actual-line { fill: none; stroke: #e65100; stroke-width: 2; }
+    .legend { font-size: 11px; font-weight: 700; }
+    .forecast-legend { fill: #0b5cad; }
+    .actual-legend { fill: #e65100; }
+    .heatmap-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.heatmap {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1200px;
+        font-size: 10px;
+    }
+    table.heatmap th, table.heatmap td {
+        padding: 0;
+        border: 1px solid #fff;
+        height: 22px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+    }
+    table.heatmap th.day {
+        position: sticky;
+        left: 0;
+        background: #f4f5f7;
+        z-index: 1;
+        padding: 0 6px;
+        text-align: left;
+        white-space: nowrap;
+        color: #444;
+        font-weight: 600;
+    }
+    table.heatmap th.slot {
+        color: #666;
+        font-weight: 600;
+        background: #f4f5f7;
+        white-space: nowrap;
+    }
+    table.heatmap td.cell { width: 20px; }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        background: #fff;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+    }
+    table.detail th { color: #666; font-weight: 600; text-align: right; }
+    table.detail th:first-child, table.detail td:first-child { text-align: left; }
+    details summary {
+        cursor: pointer;
+        color: #0b5cad;
+        font-weight: 600;
+        margin: 8px 0;
+    }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>Load profile and forecast accuracy</h1>
+        <p>
+            The forecast is the persistence profile that would have been
+            available on the previous day. The actual band is the measured
+            distribution on {{ selected_date }}. The DP uses the p50 for
+            planning and the p90 as its conservative reserve.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <span class="spacer"></span>
+        <a href="/reports/load-profile">Today</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Day</span>
+        {% for day in available_days %}
+            {% if day == selected_date %}
+                <span class="current">{{ day }}</span>
+            {% else %}
+                <a href="/reports/load-profile/{{ day }}?series={{ series }}">{{ day }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if selected_date not in available_days %}
+            <span class="current">{{ selected_date }}</span>
+        {% endif %}
+    </div>
+
+    <div class="picker">
+        <span class="label">Series</span>
+        {% for key, label in series_options %}
+            {% if key == series %}
+                <span class="current">{{ label }}</span>
+            {% else %}
+                <a href="/reports/load-profile/{{ selected_date }}?series={{ key }}">{{ label }}</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Forecast MAE</div>
+            <div class="value">{{ fmt_w(metrics.mae_w) }}</div>
+            <div class="note">{{ metrics.slots }} matched slots</div>
+        </div>
+        <div class="card">
+            <div class="label">Forecast bias</div>
+            <div class="value">{{ fmt_signed_w(metrics.bias_w) }}</div>
+            <div class="note">Forecast minus actual</div>
+        </div>
+        <div class="card">
+            <div class="label">p90 coverage</div>
+            <div class="value">{{ fmt_pct(metrics.p90_coverage) }}</div>
+            <div class="note">Actual p50 at or below forecast p90</div>
+        </div>
+        <div class="card">
+            <div class="label">Forecast history</div>
+            <div class="value">{{ metrics.forecast_days }} d</div>
+            <div class="note">{{ metrics.forecast_slots }} slots with a forecast</div>
+        </div>
+        <div class="card">
+            <div class="label">Actual data</div>
+            <div class="value">{{ metrics.actual_slots }} slots</div>
+            <div class="note">Selected day</div>
+        </div>
+    </div>
+
+    <h2>Forecast and actual</h2>
+    <div class="panel">
+        {{ chart|safe }}
+    </div>
+
+    <h2>Weather</h2>
+    {% if weather_configured and weather_hours %}
+        <details>
+            <summary>Show cached hourly weather for {{ selected_date }}</summary>
+            <table class="detail">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Temperature</th>
+                        <th>Tilted irradiance</th>
+                        <th>GHI</th>
+                        <th>Cloud cover</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for hour in weather_hours %}
+                        <tr>
+                            <td>{{ hour.time.strftime('%H:%M') }}</td>
+                            <td>
+                                {% if hour.temperature_c is not none %}
+                                    {{ '%.1f'|format(hour.temperature_c) }} °C
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if hour.tilted_irradiance_wm2 is not none %}
+                                    {{ '%.0f'|format(hour.tilted_irradiance_wm2) }} W/m²
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if hour.shortwave_radiation_wm2 is not none %}
+                                    {{ '%.0f'|format(hour.shortwave_radiation_wm2) }} W/m²
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if hour.cloud_cover_pct is not none %}
+                                    {{ '%.0f'|format(hour.cloud_cover_pct) }}%
+                                {% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </details>
+    {% elif weather_configured %}
+        <p class="empty">
+            Weather is configured, but there is no cached snapshot for
+            {{ selected_date }}. Run
+            <code>python -m evse_controller.weather</code> to fetch one.
+        </p>
+    {% else %}
+        <p class="empty">
+            Weather is not configured. Add latitude, longitude, panel azimuth
+            and panel tilt in the configuration to overlay temperature and
+            irradiance here.
+        </p>
+    {% endif %}
+
+    <h2>Last 14 days</h2>
+    <p>
+        Median load for each half-hour slot. Darker cells are higher load;
+        blank cells have no recorded data.
+    </p>
+    <div class="heatmap-wrap">
+        <table class="heatmap">
+            <thead>
+                <tr>
+                    <th class="day">Day</th>
+                    {% for slot in range(48) %}
+                        <th class="slot">
+                            {% if slot % 4 == 0 %}{{ slot_label(slot) }}{% endif %}
+                        </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in heatmap %}
+                    <tr>
+                        <th class="day">{{ row.date }}</th>
+                        {% for cell in row.cells %}
+                            <td class="cell" style="{{ cell.style }}" title="{{ cell.title }}">
+                                {{ cell.label }}
+                            </td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Slot detail</h2>
+    <details>
+        <summary>Show all 48 slots</summary>
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Slot</th>
+                    <th>Forecast p10</th>
+                    <th>Forecast p50</th>
+                    <th>Forecast p90</th>
+                    <th>Actual p10</th>
+                    <th>Actual p50</th>
+                    <th>Actual p90</th>
+                    <th>Actual mean</th>
+                    <th>Coverage</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in slot_rows %}
+                    <tr>
+                        <td>{{ row.label }}</td>
+                        <td>{{ fmt_w(row.forecast.p10_w) }}</td>
+                        <td>{{ fmt_w(row.forecast.median_w) }}</td>
+                        <td>{{ fmt_w(row.forecast.p90_w) }}</td>
+                        <td>{{ fmt_w(row.actual.p10_w) }}</td>
+                        <td>{{ fmt_w(row.actual.median_w) }}</td>
+                        <td>{{ fmt_w(row.actual.p90_w) }}</td>
+                        <td>{{ fmt_w(row.actual.mean_w) }}</td>
+                        <td>{{ row.actual.coverage_s|round(0)|int }} s</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </details>
+
+    <p class="footer-link">
+        <a href="/reports/load-profile/{{ selected_date }}.csv?series={{ series }}">
+            Download this report as CSV
+        </a>
+    </p>
+</div>
+{% endblock %}

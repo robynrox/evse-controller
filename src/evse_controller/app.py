@@ -28,6 +28,9 @@ from evse_controller.web.daily_report_routes import (
     register_daily_report_routes,
     slot_label as _slot_label,
 )
+from evse_controller.web.load_profile_routes import (
+    register_load_profile_routes,
+)
 from evse_controller.energy_sessions import (
     EV_AWAY,
     FREE_IMPORT,
@@ -962,6 +965,7 @@ def get_tariff_dashboard_html():
 
 
 register_daily_report_routes(app)
+register_load_profile_routes(app)
 
 
 # Run the Flask app in a separate thread
