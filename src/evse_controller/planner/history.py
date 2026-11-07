@@ -8,11 +8,13 @@ The format is one JSON object per line, one file per local day:
 
     data/state/planner_history/YYYY-MM-DD.runs.jsonl
     data/state/planner_history/YYYY-MM-DD.soc.jsonl
+    data/state/planner_history/YYYY-MM-DD.decisions.jsonl
 
 JSONL is deliberate for the first slice: it is append-only, trivially
 inspectable, and needs no schema migration.  The volume is small because a run
-is stored once per half-hour, not once per control cycle, and SoC samples are
-stored once per slot.
+is stored once per half-hour, not once per control cycle, SoC samples are
+stored once per slot, and decisions are stored only when the slot or mode
+changes.
 """
 
 from __future__ import annotations
@@ -49,11 +51,17 @@ class PlannerHistory:
     def record_soc_sample(self, day: date, sample: dict) -> None:
         self._append(self._path(day, "soc"), sample)
 
+    def record_decision(self, day: date, decision: dict) -> None:
+        self._append(self._path(day, "decisions"), decision)
+
     def runs_for_day(self, day: date) -> list[dict]:
         return self._read(self._path(day, "runs"))
 
     def soc_samples_for_day(self, day: date) -> list[dict]:
         return self._read(self._path(day, "soc"))
+
+    def decisions_for_day(self, day: date) -> list[dict]:
+        return self._read(self._path(day, "decisions"))
 
     def available_days(self) -> list[date]:
         days = []

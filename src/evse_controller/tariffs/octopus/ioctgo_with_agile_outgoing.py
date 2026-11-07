@@ -544,6 +544,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_reported_soc = None
         self._last_estimator_at = None
         self._last_soc_history_slot = -1
+        self._last_decision_history_key = None
         self._last_shadow_slot = -1
         self._last_shadow_soc = None
         self._shadow_enabled = self.ENABLE_SHADOW_PLANNER
@@ -952,6 +953,45 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._last_soc_history_slot = slot
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
+
+    def _record_decision_history(self, snapshot) -> None:
+        """Record the heuristic's mode once per slot, or when it changes."""
+        if not self._shadow_enabled:
+            return
+        updated_at = snapshot.updated_at
+        if updated_at is None:
+            return
+        slot = updated_at.hour * 2 + (1 if updated_at.minute >= 30 else 0)
+        key = (slot, snapshot.mode)
+        if key == self._last_decision_history_key:
+            return
+        try:
+            self._history.record_decision(
+                updated_at.date(),
+                {
+                    "ts": updated_at.isoformat(),
+                    "slot": slot,
+                    "mode": snapshot.mode,
+                    "reason": snapshot.reason,
+                    "soc": snapshot.soc_percent,
+                    "target_soc": snapshot.target_soc_percent,
+                    "projected_soc_2330": snapshot.projected_soc_at_2330,
+                    "current_rate_p": snapshot.current_rate_p,
+                    "target_rate_p": snapshot.target_rate_p,
+                    "target_slot": snapshot.target_slot,
+                    "charge_min_a": snapshot.charge_min_a,
+                    "charge_max_a": snapshot.charge_max_a,
+                    "discharge_min_a": snapshot.discharge_min_a,
+                    "discharge_max_a": snapshot.discharge_max_a,
+                    "shortfall": snapshot.shortfall,
+                    "tier": snapshot.decision_tier,
+                },
+            )
+            self._last_decision_history_key = key
+        except Exception as exc:  # history must not break control
+            warning(
+                f"IOCTGO_AGILEOUT: Could not record decision history: {exc}"
+            )
 
     def _shadow_plan(self, state, current_slot: int, now) -> None:
         """Run the DP as an observer and record its plan.  Never actuate it."""
@@ -3676,6 +3716,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ledger_saved_today_gbp=float(self._saved_today_gbp),
         )
         self._decision_snapshot = snapshot
+        self._record_decision_history(snapshot)
         self._log_decision_summary(snapshot)
         return snapshot
 

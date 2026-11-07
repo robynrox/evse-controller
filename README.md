@@ -685,13 +685,38 @@ History is append-only JSONL, one file per local day, under
 
 - `YYYY-MM-DD.runs.jsonl` — one line per shadow plan;
 - `YYYY-MM-DD.soc.jsonl` — one line per slot with the estimate, variance,
-  reported value and innovation.
+  reported value and innovation;
+- `YYYY-MM-DD.decisions.jsonl` — the heuristic mode in force, written once per
+  slot and whenever the mode changes within a slot.
 
 Set `ENABLE_SHADOW_PLANNER = False` on
 `IOctGoWithAgileOutgoingTariff` to stop both the shadow plan and the estimator;
 tests do this by default so a control test does not pay for a plan. The
-plan-versus-actual report will read this history before the live control is
+plan-versus-actual report reads this history before the live control is
 switched over.
+
+##### Plan-versus-actual report (`/reports/plan`)
+
+The **Plan vs Actual** link opens the report that joins the three histories
+for a day:
+
+- the shadow plan in force for each half-hour slot, and its planned SoC;
+- the continuous SoC estimate and the Wallbox's reported SoC;
+- the heuristic mode that was actually running;
+- actual EVSE charged and discharged energy, prices and session;
+- the planner's slot cost beside the measured net cost.
+
+It shows SoC MAE, bias and worst error over the slots where a plan and an
+estimate both exist, how many plan runs there were, the forecast depth, and
+planned versus actual energy. The SoC chart draws the planned trajectory in
+blue, the estimate in green and the coarse Wallbox reports as an orange dashed
+line. A later plan run supersedes an earlier one for the slots it covers, so
+the page reflects what was believed at the time rather than a hindsight fit.
+CSV is available at `/reports/plan/YYYY-MM-DD.csv`.
+
+The DP and actual net costs both include the house load and are from different
+sources (forecast versus measured), so treat the cost cards as a sanity check,
+not as an exact saving.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

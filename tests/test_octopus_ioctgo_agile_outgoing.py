@@ -4860,6 +4860,11 @@ class TestShadowPlannerAndEstimator:
         assert run["inputs"][0]["slot"] == 24
         assert run["inputs"][-1]["slot"] == 47
 
+        decisions = tariff._history.decisions_for_day(today)
+        assert len(decisions) == 1
+        assert decisions[0]["slot"] == 24
+        assert decisions[0]["mode"]
+
     def test_shadow_plan_runs_once_per_slot_until_the_soc_moves(
         self, tmp_path
     ):

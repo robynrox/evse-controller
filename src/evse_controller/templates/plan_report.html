@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Plan vs actual — {{ selected_date }}</title>
+{% if is_today %}
+<meta http-equiv="refresh" content="120">
+{% endif %}
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .spacer { flex: 1; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 9px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 145px;
+        flex: 1 1 145px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 23px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+    }
+    .soc-chart { width: 100%; height: auto; display: block; }
+    .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .planned-line polyline { fill: none; stroke: #0b5cad; stroke-width: 2.6; }
+    .estimated-line polyline { fill: none; stroke: #2e7d32; stroke-width: 2; }
+    .reported-line polyline {
+        fill: none;
+        stroke: #e65100;
+        stroke-width: 1.6;
+        stroke-dasharray: 4 3;
+    }
+    .legend { font-size: 11px; font-weight: 700; }
+    .planned-legend { fill: #0b5cad; }
+    .estimated-legend { fill: #2e7d32; }
+    .reported-legend { fill: #e65100; }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1250px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    table.detail td.mode {
+        text-align: left;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .action-charge { color: #0b5cad; font-weight: 700; }
+    .action-discharge { color: #e65100; font-weight: 700; }
+    .action-idle { color: #777; }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>Plan versus actual</h1>
+        <p>
+            The shadow DP plans without actuating. This page joins each plan
+            with the continuous SoC estimate, the Wallbox's reported SoC and
+            what the heuristic actually did. For a slot with more than one plan
+            run, the latest run that had started by that slot is shown.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/load-profile">Load profile</a>
+        <span class="spacer"></span>
+        <a href="/reports/plan">Today</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Day</span>
+        {% for day in available_days %}
+            {% if day == selected_date %}
+                <span class="current">{{ day }}</span>
+            {% else %}
+                <a href="/reports/plan/{{ day }}">{{ day }}</a>
+            {% endif %}
+        {% endfor %}
+        {% if selected_date not in available_days %}
+            <span class="current">{{ selected_date }}</span>
+        {% endif %}
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">SoC MAE</div>
+            <div class="value">
+                {% if metrics.soc_mae is not none %}
+                    {{ '%.1f'|format(metrics.soc_mae) }}%
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">{{ metrics.soc_slots }} matched slots</div>
+        </div>
+        <div class="card">
+            <div class="label">SoC bias</div>
+            <div class="value">
+                {% if metrics.soc_bias is not none %}
+                    {{ '%+.1f'|format(metrics.soc_bias) }}%
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">Planned minus estimated</div>
+        </div>
+        <div class="card">
+            <div class="label">Worst SoC error</div>
+            <div class="value">
+                {% if metrics.soc_max_abs is not none %}
+                    {{ '%.1f'|format(metrics.soc_max_abs) }}%
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">Largest absolute difference</div>
+        </div>
+        <div class="card">
+            <div class="label">Plan runs</div>
+            <div class="value">{{ metrics.plan_runs }}</div>
+            <div class="note">{{ metrics.planned_slots }} planned slots</div>
+        </div>
+        <div class="card">
+            <div class="label">Forecast depth</div>
+            <div class="value">{{ metrics.forecast_days }} d</div>
+            <div class="note">Deepest profile used</div>
+        </div>
+        <div class="card">
+            <div class="label">Reported final SoC</div>
+            <div class="value">
+                {% if metrics.reported_final_soc is not none %}
+                    {{ '%.0f'|format(metrics.reported_final_soc) }}%
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">Last Wallbox report</div>
+        </div>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">DP slot cost</div>
+            <div class="value">{{ fmt_pence(metrics.planned_cost_p) }}</div>
+            <div class="note">{{ metrics.cost_slots }} comparable slots</div>
+        </div>
+        <div class="card">
+            <div class="label">Actual net cost</div>
+            <div class="value">{{ fmt_pence(metrics.actual_cost_p) }}</div>
+            <div class="note">Same slots, from the energy report</div>
+        </div>
+        <div class="card">
+            <div class="label">Planned energy</div>
+            <div class="value">
+                {{ '%.2f'|format(metrics.planned_charge_kwh) }} /
+                {{ '%.2f'|format(metrics.planned_discharge_kwh) }}
+            </div>
+            <div class="note">Charge / discharge kWh</div>
+        </div>
+        <div class="card">
+            <div class="label">Actual energy</div>
+            <div class="value">
+                {{ '%.2f'|format(metrics.actual_charge_kwh) }} /
+                {{ '%.2f'|format(metrics.actual_discharge_kwh) }}
+            </div>
+            <div class="note">Charged / discharged kWh</div>
+        </div>
+    </div>
+
+    <h2>SoC through the day</h2>
+    <div class="panel">
+        {{ chart|safe }}
+    </div>
+
+    <h2>Slot detail</h2>
+    <p>
+        The DP cost is the planner's model of grid cost for that slot. The
+        actual net cost comes from measured import and export, so the two
+        include the house load and are not a like-for-like measure of the
+        Wallbox alone.
+    </p>
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Plan</th>
+                    <th>Plan A</th>
+                    <th>Planned SoC</th>
+                    <th>Estimated SoC</th>
+                    <th>Reported SoC</th>
+                    <th>Actual</th>
+                    <th>Charged</th>
+                    <th>Discharged</th>
+                    <th>Import</th>
+                    <th>Export</th>
+                    <th>Session</th>
+                    <th>Plan cost</th>
+                    <th>Actual cost</th>
+                    <th>Heuristic mode</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td>{{ row.label }}</td>
+                        <td class="action-{{ row.planned_kind or 'idle' }}">
+                            {{ row.planned_kind or '—' }}
+                        </td>
+                        <td>{{ fmt_current(row.planned_current_a) }}</td>
+                        <td>{{ fmt_soc(row.planned_soc) }}</td>
+                        <td>{{ fmt_soc(row.estimated_soc) }}</td>
+                        <td>{{ fmt_soc(row.reported_soc) }}</td>
+                        <td>{{ row.actual_kind or '—' }}</td>
+                        <td>{{ fmt_kwh(row.actual_charged_kwh) }}</td>
+                        <td>{{ fmt_kwh(row.actual_discharged_kwh) }}</td>
+                        <td>{{ fmt_price(row.import_p) }}</td>
+                        <td>{{ fmt_price(row.export_p) }}</td>
+                        <td>{{ row.session or '—' }}</td>
+                        <td>{{ fmt_pence(row.planned_cost_p) }}</td>
+                        <td>{{ fmt_pence(row.actual_net_cost_p) }}</td>
+                        <td class="mode"
+                            title="{{ row.mode or 'No decision recorded' }}{% if row.mode_changes > 1 %} ({{ row.mode_changes }} modes in this slot){% endif %}">
+                            {{ row.mode or '—' }}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <p class="footer-link">
+        <a href="/reports/plan/{{ selected_date }}.csv">
+            Download this report as CSV
+        </a>
+    </p>
+</div>
+{% endblock %}

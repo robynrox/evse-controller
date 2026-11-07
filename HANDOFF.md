@@ -302,14 +302,20 @@ completed fixes.
   measured Wallbox AC power through the efficiency model and anchors to the
   coarse Wallbox report with a capped Kalman correction. It is persisted in
   the tariff state so a restart resumes from the same estimate.
-- `planner/history.py` appends what the planner saw and chose, plus one SoC
-  sample per slot, to `data/state/planner_history/YYYY-MM-DD.{runs,soc}.jsonl`.
-  The plan-versus-actual report will read this; JSONL was chosen over SQLite
-  for the first slice so files stay inspectable and need no migration.
+- `planner/history.py` appends what the planner saw and chose, one SoC sample
+  per slot, and the heuristic mode in force, to
+  `data/state/planner_history/YYYY-MM-DD.{runs,soc,decisions}.jsonl`. JSONL was
+  chosen over SQLite for the first slice so files stay inspectable and need no
+  migration.
+- `web/plan_report_routes.py` serves `/reports/plan`: planned versus estimated
+  versus reported SoC, actual EVSE energy, heuristic mode, prices and sessions,
+  SoC MAE/bias/worst error, planned versus actual cost and energy, CSV and JSON.
+  It uses the latest plan run that had started by each slot, so the page shows
+  what was believed at the time rather than a hindsight fit.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **690 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **697 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
