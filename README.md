@@ -634,6 +634,16 @@ rows and is flagged: spring's missing hour has no coverage, and autumn's
 repeated hour lands in the same two rows. Daily totals remain correct because
 they sum measured energy.
 
+The same data is available as JSON at
+`/api/reports/daily/YYYY-MM-DD` and as a CSV download at
+`/reports/daily/YYYY-MM-DD.csv`. Today's page refreshes once a minute;
+historical pages are static.
+
+The Agile rate cache lives in `data/state/agile_rates/YYYY-MM-DD.json`. The
+tariff and the report share one fetch/parse implementation, so the report can
+still price a slot while the tariff is stopped. If the cache is absent, the
+report fetches the day once and writes it.
+
 ##### Load-profile and forecast-accuracy report (`/reports/load-profile`)
 
 The **Load profile** link in the energy-report navigation opens the rolling
@@ -655,15 +665,33 @@ in-use CT clamp. The report reads the sparse histograms under
 `data/state/load_profile/`; it does not interpolate missing data or treat a
 blank slot as zero.
 
-The same data is available as JSON at
-`/api/reports/daily/YYYY-MM-DD` and as a CSV download at
-`/reports/daily/YYYY-MM-DD.csv`. Today's page refreshes once a minute;
-historical pages are static.
+##### Shadow DP and SoC estimation
 
-The Agile rate cache lives in `data/state/agile_rates/YYYY-MM-DD.json`. The
-tariff and the report share one fetch/parse implementation, so the report can
-still price a slot while the tariff is stopped. If the cache is absent, the
-report fetches the day once and writes it.
+While the heuristic still executes every command, the tariff also runs the
+dynamic-programming planner as an observer. It runs at most once per half-hour
+slot, and again within a slot only if the reported SoC moves by more than 3%.
+It never actuates the Wallbox, so a bug in the planner cannot affect the car
+or the house. Each run records the horizon it saw, its chosen actions, the
+estimated and reported SoC, the cost and whether the target was reachable.
+
+The SoC estimate is continuous: the estimator integrates measured Wallbox AC
+power through the current-dependent efficiency model, then applies a capped
+Kalman correction when the Wallbox reports a new integer percentage. The
+2–3% steps in those reports therefore do not cause the estimate to jump. The
+estimate is saved in the tariff state and restored after a restart.
+
+History is append-only JSONL, one file per local day, under
+`data/state/planner_history/`:
+
+- `YYYY-MM-DD.runs.jsonl` — one line per shadow plan;
+- `YYYY-MM-DD.soc.jsonl` — one line per slot with the estimate, variance,
+  reported value and innovation.
+
+Set `ENABLE_SHADOW_PLANNER = False` on
+`IOctGoWithAgileOutgoingTariff` to stop both the shadow plan and the estimator;
+tests do this by default so a control test does not pay for a plan. The
+plan-versus-actual report will read this history before the live control is
+switched over.
 
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

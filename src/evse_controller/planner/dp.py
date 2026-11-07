@@ -57,6 +57,10 @@ class PlannerSlot:
     import_p: float
     export_p: float
     load_kw: float = 0.0
+    #: Absolute half-hour slot within the local day (0-47).  The DP may be
+    #: given only the remaining horizon, but its actions still refer to the
+    #: real slot so history and reports can line them up with the day.
+    slot: int = -1
     max_charge_current_a: float = 32.0
     max_discharge_current_a: float = 32.0
     forced: Optional[str] = None
@@ -564,7 +568,11 @@ class DpPlanner:
                 return []
             actions.append(
                 PlannerAction(
-                    slot=index,
+                    slot=(
+                        slots[index].slot
+                        if slots[index].slot >= 0
+                        else index
+                    ),
                     start=slots[index].start,
                     kind=template.kind,
                     current_a=template.current_a,

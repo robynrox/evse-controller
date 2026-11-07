@@ -4769,3 +4769,133 @@ class TestExplicitSocLimitsInTheTariff:
         assert agile_tariff._apply_discharge_policy(50) == "conservative"
         assert agile_tariff._apply_discharge_policy(47) == "idle"
         assert agile_tariff._apply_discharge_policy(39) == "inhibited"
+
+
+class TestShadowPlannerAndEstimator:
+    """The DP observes and records; the heuristic still decides."""
+
+    @staticmethod
+    def _write_profile_day(directory, day):
+        directory.mkdir(parents=True, exist_ok=True)
+        slots = []
+        for index in range(48):
+            has_data = index == 24
+            slots.append(
+                {
+                    "index": index,
+                    "closed": True,
+                    "coverage_s": {"house": 1800.0} if has_data else {},
+                    "bins_s": (
+                        {"house": {"24": 1800.0}} if has_data else {}
+                    ),
+                }
+            )
+        (directory / f"{day.isoformat()}.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "date": day.isoformat(),
+                    "bin_width_w": 25.0,
+                    "slots": slots,
+                }
+            )
+        )
+
+    def test_soc_estimator_seeds_and_tracks_reports(self, tmp_path):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._history.set_directory(tmp_path / "history")
+        now = datetime.now().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: now)
+
+        state = create_test_state(60)
+        estimator = tariff._update_soc_estimator(state, now)
+        assert estimator.soc_percent == pytest.approx(60.0)
+
+        state.ac_power = 3600.0
+        state.current = 10.0
+        estimator = tariff._update_soc_estimator(
+            state, now + timedelta(minutes=30)
+        )
+        assert estimator.soc_percent > 60.0
+
+        state.battery_level = 63
+        estimator = tariff._update_soc_estimator(
+            state, now + timedelta(minutes=31)
+        )
+        assert 60.0 < estimator.soc_percent <= 63.0
+
+        samples = tariff._history.soc_samples_for_day(now.date())
+        assert samples
+        assert samples[0]["estimate"] == pytest.approx(60.0, abs=0.5)
+
+    def test_shadow_plan_records_a_run(self, tmp_path):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        profile_dir = tmp_path / "profiles"
+        for offset in range(14):
+            self._write_profile_day(
+                profile_dir, today - timedelta(days=offset)
+            )
+        tariff._load_profile.set_directory(profile_dir)
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        runs = tariff._history.runs_for_day(today)
+        assert len(runs) == 1
+        run = runs[0]
+        assert run["slot"] == 24
+        assert run["reported_soc"] == 60
+        assert run["estimate_soc"] == pytest.approx(60.0)
+        assert run["forecast_days"] >= 14
+        assert len(run["actions"]) == 24
+        assert len(run["inputs"]) == 24
+        assert run["actions"][0]["slot"] == 24
+        assert run["actions"][-1]["slot"] == 47
+        assert run["inputs"][0]["slot"] == 24
+        assert run["inputs"][-1]["slot"] == 47
+
+    def test_shadow_plan_runs_once_per_slot_until_the_soc_moves(
+        self, tmp_path
+    ):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        profile_dir = tmp_path / "profiles"
+        for offset in range(14):
+            self._write_profile_day(
+                profile_dir, today - timedelta(days=offset)
+            )
+        tariff._load_profile.set_directory(profile_dir)
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+        assert len(tariff._history.runs_for_day(today)) == 1
+
+        # A report more than 3% away means the old plan is no longer about
+        # the same battery state, so plan again in the same slot.
+        tariff.get_control_state(create_test_state(64), 12 * 60)
+        assert len(tariff._history.runs_for_day(today)) == 2
+
+    def test_disabled_shadow_planner_records_nothing(self, tmp_path):
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        assert tariff._shadow_enabled is False
+        assert tariff._history.runs_for_day(today) == []
+        assert tariff._history.soc_samples_for_day(today) == []
+
+    def test_shadow_planner_is_disabled_by_default(self):
+        tariff = _build_tariff()
+        assert tariff._shadow_enabled is False

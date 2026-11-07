@@ -11,6 +11,11 @@ from evse_controller.energy_sessions import (
 )
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.load_profile import LoadProfile, SlotLoad
+from evse_controller.planner.dp import DpPlanner
+from evse_controller.planner.history import PlannerHistory
+from evse_controller.planner.inputs import build_planner_input
+from evse_controller.planner.soc_estimator import SocEstimator
+from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
 import queue
@@ -232,6 +237,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: Export prices come from the fetched Agile Outgoing series, not the
     #: fixed ``time_of_use`` bands.
     dynamic_export = True
+
+    #: Run the DP in shadow mode and record its plan.  It never changes the
+    #: heuristic's control decision.  Tests disable it by default.
+    ENABLE_SHADOW_PLANNER = True
 
     # Agile Outgoing tariff codes by region
     AGILE_TARIFF_CODES = {
@@ -526,6 +535,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._load_profile = LoadProfile()
         self._profile_day = None
         self._profile_slots = None
+
+        # Shadow DP and estimator history.  The planner never changes the
+        # heuristic's control decision; it records what it would have chosen so
+        # the plan-versus-actual report can build confidence before a switch.
+        self._history = PlannerHistory()
+        self._soc_estimator = None
+        self._last_reported_soc = None
+        self._last_estimator_at = None
+        self._last_soc_history_slot = -1
+        self._last_shadow_slot = -1
+        self._last_shadow_soc = None
+        self._shadow_enabled = self.ENABLE_SHADOW_PLANNER
 
         # House-load discharge policy, derived from the projected 23:30 SoC:
         # ``aggressive`` at or above the aggressive lower limit,
@@ -853,6 +874,206 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return max(0.0, stats.p90_w) >= (
             float(self.MIN_DISCHARGE_CURRENT) * 240.0
         )
+
+    def _update_soc_estimator(self, state, now):
+        """Integrate the pack estimate and anchor it to the latest report."""
+        if not self._shadow_enabled:
+            return self._soc_estimator
+        battery = getattr(state, "battery_level", -1)
+        if battery is None or battery < 0:
+            return self._soc_estimator
+
+        if self._soc_estimator is None:
+            self._soc_estimator = SocEstimator(
+                initial_soc_percent=float(battery),
+                capacity_kwh=self.SOC_CAPACITY_KWH,
+                at=now,
+            )
+            self._last_reported_soc = float(battery)
+            self._last_estimator_at = now
+        else:
+            if self._last_estimator_at is not None:
+                elapsed_hours = (
+                    now - self._last_estimator_at
+                ).total_seconds() / 3600.0
+                # A control gap longer than five minutes is not integrated as
+                # if the Wallbox had been running continuously.
+                elapsed_hours = max(0.0, min(elapsed_hours, 5.0 / 60.0))
+                ac_power = getattr(state, "ac_power", None)
+                if elapsed_hours > 0 and ac_power is not None:
+                    try:
+                        current = abs(
+                            float(getattr(state, "current", 0.0) or 0.0)
+                        )
+                    except (TypeError, ValueError):
+                        current = 0.0
+                    current = max(
+                        current, float(self.MIN_DISCHARGE_CURRENT)
+                    )
+                    self._soc_estimator.update_from_ac_power(
+                        float(ac_power) / 1000.0,
+                        elapsed_hours,
+                        charge_efficiency=(
+                            self.EFFICIENCY_MODEL.charge_efficiency(current)
+                        ),
+                        discharge_efficiency=(
+                            self.EFFICIENCY_MODEL.discharge_efficiency(current)
+                        ),
+                        at=now,
+                    )
+            if battery != self._last_reported_soc:
+                self._soc_estimator.observe(float(battery), at=now)
+                self._last_reported_soc = float(battery)
+            self._last_estimator_at = now
+
+        self._record_soc_history(now)
+        return self._soc_estimator
+
+    def _record_soc_history(self, now) -> None:
+        if self._soc_estimator is None:
+            return
+        slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        if slot == self._last_soc_history_slot:
+            return
+        state = self._soc_estimator.state
+        try:
+            self._history.record_soc_sample(
+                now.date(),
+                {
+                    "ts": now.isoformat(),
+                    "slot": slot,
+                    "estimate": round(state.soc_percent, 3),
+                    "variance": round(state.variance, 4),
+                    "sigma": round(self._soc_estimator.sigma_percent, 3),
+                    "reported": self._last_reported_soc,
+                    "innovation": state.last_innovation,
+                },
+            )
+            self._last_soc_history_slot = slot
+        except Exception as exc:  # history must not break control
+            warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
+
+    def _shadow_plan(self, state, current_slot: int, now) -> None:
+        """Run the DP as an observer and record its plan.  Never actuate it."""
+        if not self._shadow_enabled:
+            return
+        battery = getattr(state, "battery_level", -1)
+        if battery is None or battery < 0 or current_slot > 47:
+            return
+        if (
+            self._last_shadow_slot == current_slot
+            and self._last_shadow_soc is not None
+            and abs(self._last_shadow_soc - battery) <= 3
+        ):
+            return
+
+        try:
+            source = TariffSourceAdapter(self)
+            initial_soc = (
+                self._soc_estimator.soc_percent
+                if self._soc_estimator is not None
+                else float(battery)
+            )
+            planner_input = build_planner_input(
+                source,
+                self._load_profile,
+                now.date(),
+                current_slot,
+                initial_soc,
+                target_soc=float(config.AGGRESSIVE_SOC_LOWER_LIMIT),
+                max_charge_current_a=float(
+                    config.WALLBOX_MAX_CHARGE_CURRENT
+                ),
+                max_discharge_current_a=float(
+                    config.WALLBOX_MAX_DISCHARGE_CURRENT
+                ),
+                load_fallback_kw=0.0,
+                unknown_export_p=0.0,
+            )
+            planner = DpPlanner(
+                efficiency_model=self.EFFICIENCY_MODEL,
+                capacity_kwh=self.SOC_CAPACITY_KWH,
+                soc_step_percent=0.5,
+                min_current_a=float(self.MIN_DISCHARGE_CURRENT),
+                charge_cap_percent=self.charge_cap_percent(),
+                protection_floor_percent=self.absolute_min_soc_percent(),
+                target_soc_percent=float(config.AGGRESSIVE_SOC_LOWER_LIMIT),
+                degradation_p_per_kwh=0.0,
+            )
+            result = planner.plan(
+                planner_input.slots, planner_input.initial_soc
+            )
+            self._history.record_run(
+                now.date(),
+                self._shadow_run_dict(
+                    now,
+                    current_slot,
+                    battery,
+                    planner_input,
+                    result,
+                ),
+            )
+            self._last_shadow_slot = current_slot
+            self._last_shadow_soc = battery
+            debug(
+                f"IOCTGO_AGILEOUT: Shadow DP plan for slot {current_slot}: "
+                f"SoC {result.final_soc:.1f}%, cost {result.total_cost_p:.1f}p, "
+                f"success={result.success}"
+            )
+        except Exception as exc:  # a shadow plan must never break control
+            warning(f"IOCTGO_AGILEOUT: Shadow DP plan failed: {exc}")
+
+    @staticmethod
+    def _shadow_run_dict(
+        now,
+        current_slot: int,
+        reported_soc: float,
+        planner_input,
+        result,
+    ) -> dict:
+        return {
+            "ts": now.isoformat(),
+            "day": now.date().isoformat(),
+            "slot": current_slot,
+            "reported_soc": reported_soc,
+            "estimate_soc": planner_input.initial_soc,
+            "target_soc": planner_input.target_soc,
+            "forecast_days": planner_input.forecast_days,
+            "source": planner_input.source_name,
+            "success": result.success,
+            "relaxed": result.relaxed,
+            "final_soc": result.final_soc,
+            "total_cost_p": result.total_cost_p,
+            "actions": [
+                {
+                    "slot": action.slot,
+                    "start": action.start.isoformat(),
+                    "kind": action.kind,
+                    "current_a": round(action.current_a, 3),
+                    "commanded_current_a": action.commanded_current_a,
+                    "ac_power_kw": round(action.ac_power_kw, 3),
+                    "soc_before": action.soc_before,
+                    "soc_after": action.soc_after,
+                    "cost_p": round(action.cost_p, 3),
+                    "session": action.session,
+                }
+                for action in result.actions
+            ],
+            "inputs": [
+                {
+                    "slot": (
+                        slot.slot if slot.slot >= 0 else index
+                    ),
+                    "start": slot.start.isoformat(),
+                    "import_p": slot.import_p,
+                    "export_p": slot.export_p,
+                    "load_kw": slot.load_kw,
+                    "session": slot.session,
+                    "forced": slot.forced,
+                }
+                for index, slot in enumerate(planner_input.slots)
+            ],
+        }
 
     def _aggressive_extra_soc_loss_percent(self) -> float:
         """Extra SoC spent by aggressive discharge over conservative coverage."""
@@ -2071,6 +2292,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "saved_by_slot_gbp": saved_by_slot,
             },
             "exported_slots": sorted(set(exported_slots)),
+            "soc_estimator": (
+                self._soc_estimator.as_dict()
+                if self._soc_estimator is not None
+                else None
+            ),
         }
 
     def save_state(self) -> bool:
@@ -2233,6 +2459,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._savings_rate_gbp_per_hour = 0.0
         self._ledger_direction = 0
         self._ledger_settle_until = None
+
+        estimator_payload = data.get("soc_estimator")
+        if isinstance(estimator_payload, dict):
+            try:
+                self._soc_estimator = SocEstimator.from_dict(
+                    estimator_payload,
+                    capacity_kwh=self.SOC_CAPACITY_KWH,
+                )
+                self._last_reported_soc = (
+                    self._soc_estimator.state.last_reported_soc
+                )
+                self._last_estimator_at = self.get_current_datetime()
+            except (TypeError, ValueError) as exc:
+                warning(
+                    f"IOCTGO_AGILEOUT: Ignoring invalid SoC estimator "
+                    f"state in {path}: {exc}"
+                )
+                self._soc_estimator = None
 
         info(
             f"IOCTGO_AGILEOUT: Restored tariff state from {path} "
@@ -6632,6 +6876,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         current_slot = dayMinute // 30
         target_soc = config.AGGRESSIVE_SOC_LOWER_LIMIT
         charge_cap = self.charge_cap_percent()
+        now = self.get_current_datetime()
+
+        # Keep the continuous SoC estimate warm even when the DP is only
+        # running in shadow mode.
+        self._update_soc_estimator(state, now)
 
         # Roll the dashboard saving forward with the latest power sample.
         self._accumulate_daily_savings()
@@ -6670,6 +6919,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         debug(f"IOCTGO_AGILEOUT: get_control_state - SoC={battery_level}%, dayMinute={dayMinute}, current_slot={current_slot}, planned_slots={self._planned_export_slots}")
 
         self._prev_battery_level = battery_level
+
+        # The DP observes; the heuristic below still decides what to execute.
+        self._shadow_plan(state, current_slot, now)
 
         power_snapshot = self._read_power_snapshot()
         surplus_w = power_snapshot["surplus_w"] if power_snapshot else None

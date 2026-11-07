@@ -46,6 +46,7 @@ def slot(
 ) -> PlannerSlot:
     return PlannerSlot(
         start=DAY + timedelta(minutes=30 * index),
+        slot=index,
         import_p=import_p,
         export_p=export_p,
         load_kw=load_kw,
@@ -68,6 +69,16 @@ def planner(**kwargs) -> DpPlanner:
     )
     params.update(kwargs)
     return DpPlanner(**params)
+
+
+def test_actions_keep_absolute_slots_when_the_horizon_starts_mid_day():
+    result = planner().plan(
+        [slot(24), slot(25)],
+        initial_soc_percent=50,
+    )
+
+    assert [action.slot for action in result.actions] == [24, 25]
+    assert [action.start.hour for action in result.actions] == [12, 12]
 
 
 def test_flat_prices_leave_the_pack_alone():

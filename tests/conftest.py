@@ -57,6 +57,31 @@ def isolated_tariff_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolated_planner_history(tmp_path, monkeypatch):
+    """Keep shadow-planner history out of the live data directory.
+
+    The shadow DP is disabled by default in tests: it is deliberately slow
+    enough to be realistic and would otherwise add a plan to every control
+    test.  The dedicated shadow tests enable it on their own instance.
+    """
+    from evse_controller.planner.history import PlannerHistory
+    from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
+        IOctGoWithAgileOutgoingTariff,
+    )
+
+    def temp_directory(self):
+        if self._dir_override is not None:
+            return self._dir_override
+        return tmp_path / "planner_history"
+
+    monkeypatch.setattr(PlannerHistory, "directory", property(temp_directory))
+    monkeypatch.setattr(
+        IOctGoWithAgileOutgoingTariff, "ENABLE_SHADOW_PLANNER", False
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_daily_report(tmp_path):
     """Keep the per-day energy log out of the live data directory.
 

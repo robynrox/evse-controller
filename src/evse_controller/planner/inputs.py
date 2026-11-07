@@ -129,6 +129,7 @@ def build_planner_input(
         slots.append(
             PlannerSlot(
                 start=rate.start,
+                slot=index,
                 import_p=import_p,
                 export_p=export_p,
                 load_kw=load_kw,

@@ -151,6 +151,12 @@ class Config:
         return get_data_dir() / "state" / "load_profile"
 
     @property
+    def PLANNER_HISTORY_DIR(self):
+        """Directory holding planner-run and SoC-estimator history."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "planner_history"
+
+    @property
     def WEATHER_CACHE_FILE(self):
         """Cached Open-Meteo snapshot, or absent until the first fetch."""
         self._ensure_initialized()

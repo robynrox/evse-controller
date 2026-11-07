@@ -33,6 +33,9 @@ def ensure_data_dirs():
     (data_dir / "state").mkdir(parents=True, exist_ok=True)
     (data_dir / "state" / "agile_rates").mkdir(parents=True, exist_ok=True)
     (data_dir / "state" / "load_profile").mkdir(parents=True, exist_ok=True)
+    (data_dir / "state" / "planner_history").mkdir(
+        parents=True, exist_ok=True
+    )
     (data_dir / "reports" / "daily").mkdir(parents=True, exist_ok=True)
 
 def get_config_file() -> Path:

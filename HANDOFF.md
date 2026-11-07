@@ -291,9 +291,25 @@ completed fixes.
   channel and power model as fallbacks. Not implemented for control. The daily
   report already uses the configured Shelly EVSE channel when present and the
   fresh Wallbox `ac_power` otherwise.
-- The DP planner has **not** been started. That is the next piece of work
-  (sections 5–7).
-- Local full test suite: **511 passed, 4 skipped, 10 subtests passed**.
+- The DP is implemented in `planner/dp.py` (pure Python, integer currents,
+  measured current-dependent efficiency) with the input builder in
+  `planner/inputs.py`. It is running in **shadow mode** from
+  `IOctGoWithAgileOutgoingTariff.get_control_state`: it runs at most once per
+  slot, or again if the reported SoC moves by more than 3%, and it never
+  changes the heuristic's control decision. `ENABLE_SHADOW_PLANNER` turns it
+  off globally; tests disable it and enable it per instance.
+- The continuous SoC estimator (`planner/soc_estimator.py`) integrates the
+  measured Wallbox AC power through the efficiency model and anchors to the
+  coarse Wallbox report with a capped Kalman correction. It is persisted in
+  the tariff state so a restart resumes from the same estimate.
+- `planner/history.py` appends what the planner saw and chose, plus one SoC
+  sample per slot, to `data/state/planner_history/YYYY-MM-DD.{runs,soc}.jsonl`.
+  The plan-versus-actual report will read this; JSONL was chosen over SQLite
+  for the first slice so files stay inspectable and need no migration.
+- The live heuristic still executes every command. Do not switch it over
+  until the shadow plans have been backtested against both the heuristic and
+  the outcomes (sections 5–7).
+- Local full test suite: **690 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
