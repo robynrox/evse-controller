@@ -325,10 +325,14 @@ completed fixes.
   average/best export price, top-quartile energy share, zero-price export and a
   capacity-limited perfect-foresight ceiling over 7/30/90 days. The ceiling is
   explicitly hindsight, not a control target.
+- `web/data_quality_routes.py` serves `/reports/data-quality`: daily report,
+  slot, price, SoC, load-profile, plan, estimator, decision and weather-cache
+  coverage over 7/30/90 days. A completed day is good only when all 48 slots
+  have measured data, a grid reading and a frozen price; today is not scored.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **714 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **720 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

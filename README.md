@@ -777,6 +777,24 @@ revenue is useful for finding days when the controller exported into a weak
 part of the curve, but it is not achievable in advance. CSV is at
 `/reports/export.csv?days=30` and JSON at `/api/reports/export?days=30`.
 
+##### Data-quality report (`/reports/data-quality`)
+
+The **Data Quality** link checks the inputs behind the other reports and the
+shadow planner over 7, 30 or 90 days:
+
+- daily report presence and measured, grid, priced and SoC slot coverage;
+- whether a load-profile file exists for the day;
+- whether a shadow plan, SoC samples and heuristic decisions were recorded;
+- clock-change days;
+- weather-cache presence, age and cached hours.
+
+A completed day is **good** only when all 48 slots have measured data, a grid
+reading and a frozen price; otherwise it is **partial** or **missing**. Today
+is displayed but not scored. Missing measurements are never counted as zero,
+so a broken day cannot look like a cheap day. CSV is at
+`/reports/data-quality.csv?days=30` and JSON at
+`/api/reports/data-quality?days=30`.
+
 #### Logging Section
 - `file_level`: Logging level for file output (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - `console_level`: Logging level for console output (DEBUG, INFO, WARNING, ERROR, CRITICAL)

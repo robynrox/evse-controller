@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>Data quality</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 8px 0 18px;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 150px;
+        flex: 1 1 150px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 23px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+        margin-bottom: 14px;
+    }
+    .chart { width: 100%; height: auto; display: block; }
+    .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .axis { fill: #666; font-size: 11px; }
+    .measured-line { fill: none; stroke: #0b5cad; stroke-width: 2.4; }
+    .grid-line { fill: none; stroke: #2e7d32; stroke-width: 1.5; }
+    .priced-line { fill: none; stroke: #e65100; stroke-width: 1.5; }
+    .soc-line {
+        fill: none;
+        stroke: #7b1fa2;
+        stroke-width: 1.5;
+        stroke-dasharray: 4 3;
+    }
+    .legend { font-size: 11px; font-weight: 700; }
+    .measured-legend { fill: #0b5cad; }
+    .grid-legend { fill: #2e7d32; }
+    .priced-legend { fill: #e65100; }
+    .soc-legend { fill: #7b1fa2; }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1200px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    .badge {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    .badge.good { background: #e3f4e6; color: #1b5e20; }
+    .badge.partial { background: #fff3d6; color: #7a4b00; }
+    .badge.missing { background: #fde7e7; color: #a31515; }
+    .badge.today { background: #e6eef8; color: #0b5cad; }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+    .footer-link { margin-top: 18px; }
+    .footer-link a { color: #0b5cad; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>Data quality</h1>
+        <p>
+            Coverage of the inputs behind the reports and the shadow planner.
+            A completed day is <strong>good</strong> when all 48 slots have
+            measured data, a grid reading and a frozen price; otherwise it is
+            <strong>partial</strong> or <strong>missing</strong>. Today is
+            shown but not scored because it is still filling up.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/load-profile">Load profile</a>
+        <a href="/reports/plan">Plan vs actual</a>
+        <a href="/reports/value">Battery value</a>
+        <a href="/reports/component">Components</a>
+        <a href="/reports/export">Export</a>
+    </div>
+
+    <div class="picker">
+        <span class="label">Window</span>
+        {% for choice in window_choices %}
+            {% if choice == days %}
+                <span class="current">{{ choice }} days</span>
+            {% else %}
+                <a href="/reports/data-quality?days={{ choice }}">{{ choice }} days</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Good days</div>
+            <div class="value">{{ metrics.good_days }}</div>
+            <div class="note">Complete, scored days</div>
+        </div>
+        <div class="card">
+            <div class="label">Partial days</div>
+            <div class="value">{{ metrics.partial_days }}</div>
+            <div class="note">Some data is missing</div>
+        </div>
+        <div class="card">
+            <div class="label">Missing days</div>
+            <div class="value">{{ metrics.missing_days }}</div>
+            <div class="note">No usable report</div>
+        </div>
+        <div class="card">
+            <div class="label">Measured coverage</div>
+            <div class="value">{{ fmt_pct(metrics.measured_coverage) }}</div>
+            <div class="note">Any channel, per report day</div>
+        </div>
+        <div class="card">
+            <div class="label">Grid coverage</div>
+            <div class="value">{{ fmt_pct(metrics.grid_coverage) }}</div>
+            <div class="note">Slots with a grid reading</div>
+        </div>
+        <div class="card">
+            <div class="label">Priced coverage</div>
+            <div class="value">{{ fmt_pct(metrics.priced_coverage) }}</div>
+            <div class="note">Slots with frozen prices</div>
+        </div>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">SoC coverage</div>
+            <div class="value">{{ fmt_pct(metrics.soc_coverage) }}</div>
+            <div class="note">Slots with a start or end SoC</div>
+        </div>
+        <div class="card">
+            <div class="label">Profile days</div>
+            <div class="value">
+                {{ metrics.profile_days }} / {{ metrics.completed_days }}
+            </div>
+            <div class="note">Load-profile files present</div>
+        </div>
+        <div class="card">
+            <div class="label">Shadow-plan days</div>
+            <div class="value">
+                {{ metrics.plan_days }} / {{ metrics.completed_days }}
+            </div>
+            <div class="note">Days with a recorded plan</div>
+        </div>
+        <div class="card">
+            <div class="label">SoC-sample days</div>
+            <div class="value">
+                {{ metrics.soc_sample_days }} / {{ metrics.completed_days }}
+            </div>
+            <div class="note">Days with estimator samples</div>
+        </div>
+        <div class="card">
+            <div class="label">Weather cache</div>
+            <div class="value">
+                {% if metrics.weather_cached %}
+                    {{ '%.0f'|format(metrics.weather_age_hours) }} h
+                {% else %}—{% endif %}
+            </div>
+            <div class="note">
+                {% if not metrics.weather_configured %}
+                    Not configured
+                {% elif metrics.weather_cached %}
+                    {{ metrics.weather_hours }} cached hours
+                {% else %}
+                    No cached snapshot
+                {% endif %}
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">Clock-change days</div>
+            <div class="value">{{ metrics.clock_change_days }}</div>
+            <div class="note">Flagged in the 48-row day</div>
+        </div>
+    </div>
+
+    <h2>Daily coverage</h2>
+    <div class="panel">{{ chart|safe }}</div>
+
+    <h2>Day detail</h2>
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th>Report</th>
+                    <th>Measured</th>
+                    <th>Grid</th>
+                    <th>Priced</th>
+                    <th>SoC</th>
+                    <th>Measured %</th>
+                    <th>Grid %</th>
+                    <th>Priced %</th>
+                    <th>SoC %</th>
+                    <th>Profile</th>
+                    <th>Plans</th>
+                    <th>SoC samples</th>
+                    <th>Mode slots</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows|reverse %}
+                    <tr>
+                        <td><a href="/reports/daily/{{ row.day }}">{{ row.day }}</a></td>
+                        <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+                        <td>{{ 'yes' if row.report_present else 'no' }}</td>
+                        <td>{{ row.measured_slots }}</td>
+                        <td>{{ row.grid_slots }}</td>
+                        <td>{{ row.priced_slots }}</td>
+                        <td>{{ row.soc_slots }}</td>
+                        <td>{{ fmt_pct(row.measured_coverage) }}</td>
+                        <td>{{ fmt_pct(row.grid_coverage) }}</td>
+                        <td>{{ fmt_pct(row.priced_coverage) }}</td>
+                        <td>{{ fmt_pct(row.soc_coverage) }}</td>
+                        <td>{{ 'yes' if row.profile_present else 'no' }}</td>
+                        <td>{{ row.plan_runs }}</td>
+                        <td>{{ row.soc_samples }}</td>
+                        <td>{{ row.decision_slots }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <p class="footer-link">
+        <a href="/reports/data-quality.csv?days={{ days }}">
+            Download this window as CSV
+        </a>
+    </p>
+</div>
+{% endblock %}
