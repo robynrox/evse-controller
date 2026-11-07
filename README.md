@@ -695,6 +695,25 @@ tests do this by default so a control test does not pay for a plan. The
 plan-versus-actual report reads this history before the live control is
 switched over.
 
+The first plan of each day can also be replayed against the measured house
+load and frozen prices:
+
+```bash
+poetry run python -m evse_controller.tools.dp_backtest --days 30
+poetry run python -m evse_controller.tools.dp_backtest \
+    --start 2026-10-01 --end 2026-10-31 --json
+```
+
+The replay replaces the EVSE term with the plan's AC power, prices the
+resulting grid flow at the recorded slot prices, and compares it with the
+heuristic's actual net cost over the same slots. It also reports SoC MAE and
+bias against the estimator and the match rate between planned and actual
+charge/discharge/idle action. A positive delta means the DP plan would have
+been cheaper on grid cost than what happened. The replay is first-order: it
+does not re-solve battery constraints or model supplier rewards, and it is a
+sanity check rather than a promise that the plan could have been executed
+exactly.
+
 ##### Plan-versus-actual report (`/reports/plan`)
 
 The **Plan vs Actual** link opens the report that joins the three histories

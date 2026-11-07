@@ -329,10 +329,15 @@ completed fixes.
   slot, price, SoC, load-profile, plan, estimator, decision and weather-cache
   coverage over 7/30/90 days. A completed day is good only when all 48 slots
   have measured data, a grid reading and a frozen price; today is not scored.
+- `planner/backtest.py` and `tools/dp_backtest.py` replay the first shadow plan
+  of each day against the measured house load and frozen prices. The tool
+  compares DP grid cost with the heuristic's actual cost, SoC MAE/bias and the
+  planned-versus-actual action match rate. It is first-order: it does not
+  re-solve battery constraints or supplier rewards.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **720 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **727 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):
