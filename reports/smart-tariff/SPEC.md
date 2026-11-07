@@ -151,7 +151,11 @@ oracle until the general path reproduces it slot for slot.
 
 **Phase 4 — Planner consumes the source.**
 The DP reads prices and sessions from the contract only. The heuristic remains
-the executor.
+the executor.  The planner starts from a continuous SoC estimate, not the raw
+integer Wallbox report: the estimate integrates AC power through the measured
+efficiency and applies a capped correction when the BMS reports a value.  It
+carries a variance and exposes lower/upper bounds for robust discharge/charge
+decisions.
 *Exit:* offline plan parity with the roadmap's backtests, no tariff class
 referenced by the planner.
 

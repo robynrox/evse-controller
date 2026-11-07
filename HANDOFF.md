@@ -473,6 +473,13 @@ prices need no special case; maximum charge simply becomes optimal.
   (clamped to ≥ the floor, soft constraint), and the **terminal target**. SoC may
   legitimately sit below the floor (after a drive); that is charge-only, not
   infeasible. Grid-support sessions may cross the reserve down to the floor.
+- The planner's SoC input is a continuous estimate, not the raw Wallbox
+  integer.  Wallbox reports often step by 2–3%, so the estimator integrates AC
+  power through the measured efficiency and applies a capped scalar Kalman
+  correction when a report changes.  It carries a variance and exposes
+  lower/upper bounds for discharge/charge decisions; the state is persisted so
+  a restart continues from the same estimate.  The DP starts from the
+  estimate, while the reported value remains the anchor.
 - Minimum sustained AC current is about 3 A (~0.7 kW). Model allowed power as
   `0 ∪ [P_min, P_max]`, or allow fractional average power and cost the
   efficiency penalty.
