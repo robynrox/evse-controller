@@ -2918,6 +2918,10 @@ class TestDashboardModeLine:
 
     def test_export_plan_is_named_in_text(self, agile_tariff):
         """A planned slot is marked on the strip and named in words."""
+        # The strip marks planned future slots, so pin the time before the
+        # 16:00/17:00 fixtures.  A wall-clock time after those slots would
+        # (correctly) render them as past and suppress the EX badge.
+        TestDecisionSnapshot._set_time(agile_tariff, 9, 0)
         agile_tariff._planned_export_slots = [32, 34]
         agile_tariff._record_decision(
             mode="Do not charge · aggressive discharge",
