@@ -5,6 +5,8 @@ These types are deliberately free of hardware imports so the ownership rules
 can be unit-tested without starting the controller, MQTT or OCPP threads.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -23,6 +25,58 @@ class ExecState(Enum):
     PAUSE_UNTIL_DISCONNECT = 9
     FREERUN = 10
     OCPP = 11
+    SOC_PROBE = 12
+
+
+#: Human-readable labels for the dashboard.  These modes are temporary
+#: overrides, not tariff modes, so the text says who owns the Wallbox.
+OVERRIDE_LABELS = {
+    ExecState.PAUSE: "Pause",
+    ExecState.CHARGE: "Charge at maximum",
+    ExecState.DISCHARGE: "Discharge at maximum",
+    ExecState.FIXED: "Fixed current",
+    ExecState.SOLAR: "Solar only",
+    ExecState.POWER_HOME: "Power home",
+    ExecState.BALANCE: "Bidirectional",
+    ExecState.PAUSE_UNTIL_DISCONNECT: (
+        "Remove plug — waiting for car to disconnect"
+    ),
+    ExecState.FREERUN: "Freerun",
+    ExecState.OCPP: "OCPP handoff",
+    ExecState.SOC_PROBE: "Checking battery level — 3 A probe",
+}
+
+
+def describe_override(
+    override: ControlOverride,
+    tariff_name: str = "no tariff",
+) -> str:
+    """Dashboard text for an active override."""
+    label = OVERRIDE_LABELS.get(override.mode, override.mode.name.title())
+    if override.mode == ExecState.FIXED and override.fixed_current is not None:
+        label = f"Fixed current {override.fixed_current} A"
+    return f"{label} (override; {tariff_name} observing)"
+
+
+def soc_probe_complete(
+    start_soc: Optional[float],
+    current_soc: Optional[float],
+    elapsed_seconds: float,
+    timeout_seconds: float = 120.0,
+) -> bool:
+    """Whether the post-reconnect 3 A probe has learned a new SoC.
+
+    It ends early when a previously unknown SoC becomes valid, or when a
+    valid SoC changes.  If the pack reports the same value throughout, the
+    timeout returns control to the tariff rather than charging indefinitely.
+    """
+    if elapsed_seconds >= timeout_seconds:
+        return True
+    if current_soc is None or current_soc < 0:
+        return False
+    if start_soc is None or start_soc < 0:
+        return True
+    return float(current_soc) != float(start_soc)
 
 
 @dataclass

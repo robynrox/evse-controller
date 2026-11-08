@@ -101,3 +101,56 @@ def test_unplugging_does_not_release_other_overrides():
             )
             is None
         ), f"{mode.name} must wait for an explicit SMART command"
+
+
+def test_override_labels_say_who_owns_the_wallbox():
+    from evse_controller.execution_state import describe_override
+
+    text = describe_override(
+        _override(mode=ExecState.PAUSE_UNTIL_DISCONNECT), "IOCTGO"
+    )
+
+    assert "Remove plug" in text
+    assert "waiting for car to disconnect" in text
+    assert "override" in text
+    assert "IOCTGO observing" in text
+
+
+def test_fixed_override_label_includes_the_current():
+    from evse_controller.execution_state import describe_override
+
+    text = describe_override(
+        _override(mode=ExecState.FIXED, fixed_current=-6), "COSY"
+    )
+
+    assert "Fixed current -6 A" in text
+
+
+def test_soc_probe_label_is_explicit():
+    from evse_controller.execution_state import describe_override
+
+    text = describe_override(_override(mode=ExecState.SOC_PROBE), "FLUX")
+
+    assert "3 A probe" in text
+    assert "override" in text
+
+
+def test_soc_probe_ends_when_unknown_soc_becomes_valid():
+    from evse_controller.execution_state import soc_probe_complete
+
+    assert soc_probe_complete(-1, 42, 5) is True
+    assert soc_probe_complete(-1, -1, 5) is False
+
+
+def test_soc_probe_ends_when_the_reported_soc_changes():
+    from evse_controller.execution_state import soc_probe_complete
+
+    assert soc_probe_complete(50, 50, 30) is False
+    assert soc_probe_complete(50, 51, 30) is True
+
+
+def test_soc_probe_times_out_if_the_soc_never_changes():
+    from evse_controller.execution_state import soc_probe_complete
+
+    assert soc_probe_complete(50, 50, 89, 90) is False
+    assert soc_probe_complete(50, 50, 90, 90) is True

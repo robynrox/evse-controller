@@ -5,7 +5,9 @@ import threading
 from evse_controller.execution_state import (
     ControlOverride,
     ExecState,
+    describe_override,
     override_release_reason,
+    soc_probe_complete,
 )
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
 from evse_controller.drivers.Shelly import PowerMonitorShelly
@@ -14,7 +16,7 @@ import time
 import math
 import queue
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -55,6 +57,17 @@ active_override: Optional[ControlOverride] = None
 #: A control session the user explicitly dismissed by choosing SMART.  It is
 #: skipped until its window ends, so the manual command really does win.
 _dismissed_session_id: Optional[str] = None
+
+#: Last Wallbox state seen by the 1-second transition watcher.
+_last_evse_state: Optional[EvseState] = None
+#: True after a disconnect until the car is seen again.
+_awaiting_reconnect = False
+#: The 3 A post-reconnect SoC probe, if one is running.
+_soc_probe_started_at: Optional[datetime] = None
+_soc_probe_start_soc: Optional[int] = None
+
+SOC_PROBE_CURRENT_A = 3
+SOC_PROBE_TIMEOUT_SECONDS = 90.0
 
 def ensure_ocpp_disabled():
     """Ensure OCPP is disabled by using the OCPPManager.
@@ -210,6 +223,125 @@ def _clear_override(reason: str = "cleared") -> None:
     info(f"CONTROL OVERRIDE CLEARED: {reason}")
     active_override = None
     _save_exec_state()
+
+
+def _tariff_display_name() -> str:
+    tariff = tariffManager.get_tariff()
+    if tariff is None:
+        return "no tariff"
+    return tariff.__class__.__name__.replace("Tariff", "")
+
+
+def _begin_soc_probe() -> None:
+    """Charge briefly at 3 A so a reconnected car reports its new SoC."""
+    global _soc_probe_started_at, _soc_probe_start_soc
+
+    if active_override is not None:
+        return
+    _soc_probe_started_at = datetime.now()
+    _soc_probe_start_soc = evseController.getBatteryChargeLevel()
+    _set_override(
+        ExecState.SOC_PROBE,
+        "checking battery level after reconnect",
+        source="system",
+        expires_at=_soc_probe_started_at
+        + timedelta(seconds=SOC_PROBE_TIMEOUT_SECONDS),
+    )
+    info(
+        f"CONTROL SOC PROBE: charging at {SOC_PROBE_CURRENT_A} A to read the "
+        f"battery level (previous {_soc_probe_start_soc}%)"
+    )
+    # Start the small charge now rather than waiting for the next 20 s tick.
+    _apply_override(active_override)
+
+
+def _finish_soc_probe(reason: str) -> None:
+    global _soc_probe_started_at, _soc_probe_start_soc
+
+    _clear_override(reason)
+    _soc_probe_started_at = None
+    _soc_probe_start_soc = None
+    _ensure_tariff_active()
+    _set_exec_state(ExecState.SMART)
+    _apply_exec_state(ExecState.SMART)
+
+
+def _check_evse_transition() -> None:
+    """Fast watch for unplug/reconnect while the 20 s control tick waits.
+
+    A short unplug can fall entirely between two control ticks.  The Wallbox
+    state updates about once a second, so the transition is handled here and
+    the 20 s loop only deals with tariff control and timed overrides.
+    """
+    global _last_evse_state, _awaiting_reconnect
+
+    try:
+        state = evseController.getEvseState()
+    except Exception as exc:
+        debug(f"Could not read EVSE state for transition check: {exc}")
+        return
+
+    disconnected = state in DISCONNECTED_STATES
+    previous = _last_evse_state
+    _last_evse_state = state
+
+    if (
+        active_override is not None
+        and active_override.mode == ExecState.PAUSE_UNTIL_DISCONNECT
+    ):
+        if disconnected:
+            info("Vehicle disconnected; resuming smart tariff control")
+            _clear_override("vehicle disconnected")
+            _ensure_tariff_active()
+            _set_exec_state(ExecState.SMART)
+            _apply_exec_state(ExecState.SMART)
+            _awaiting_reconnect = True
+        elif state != previous:
+            debug(
+                "Remove plug: still waiting for disconnect; Wallbox reports "
+                f"{state.name}"
+            )
+        return
+
+    if (
+        active_override is not None
+        and active_override.mode == ExecState.SOC_PROBE
+    ):
+        if disconnected:
+            # The car left again before the probe finished; wait for the next
+            # reconnect rather than charging into nothing.
+            _awaiting_reconnect = True
+            _finish_soc_probe("vehicle disconnected during probe")
+            return
+        elapsed = 0.0
+        if _soc_probe_started_at is not None:
+            elapsed = (
+                datetime.now() - _soc_probe_started_at
+            ).total_seconds()
+        current_soc = evseController.getBatteryChargeLevel()
+        if soc_probe_complete(
+            _soc_probe_start_soc,
+            current_soc,
+            elapsed,
+            SOC_PROBE_TIMEOUT_SECONDS,
+        ):
+            info(f"SoC probe complete (battery now {current_soc}%)")
+            _awaiting_reconnect = False
+            _finish_soc_probe("SoC probe complete")
+        return
+
+    if active_override is not None or execState != ExecState.SMART:
+        return
+
+    if _awaiting_reconnect and not disconnected:
+        _awaiting_reconnect = False
+        _begin_soc_probe()
+        return
+
+    # Catch a disconnect/reconnect cycle even when the car was never under
+    # the explicit "Remove plug" override.
+    if previous in DISCONNECTED_STATES and not disconnected:
+        _begin_soc_probe()
 
 
 _SESSION_CONTROL_MODES = {
@@ -387,6 +519,12 @@ def _apply_override(override: ControlOverride) -> None:
         evseController.setDischargeCurrentRange(
             3, config.WALLBOX_MAX_DISCHARGE_CURRENT
         )
+    elif mode == ExecState.SOC_PROBE:
+        info(f"CONTROL SOC_PROBE (override, {SOC_PROBE_CURRENT_A} A)")
+        evseController.setControlState(ControlState.CHARGE)
+        evseController.setChargeCurrentRange(
+            SOC_PROBE_CURRENT_A, SOC_PROBE_CURRENT_A
+        )
     elif mode in (ExecState.FREERUN, ExecState.OCPP):
         # The EVSE owns the actuator in these modes; sending commands would
         # fight the OCPP/free-running handoff.
@@ -424,6 +562,15 @@ def _apply_exec_state(state, fixed_current=None):
             else:
                 evseController.setControlState(ControlState.DORMANT)
             info(f"Restored FIXED state with current: {fixed_current}A")
+    elif state == ExecState.SOC_PROBE:
+        try:
+            ocpp_manager.set_state(False)
+        except Exception as e:
+            error(f"Failed to disable OCPP for SoC probe: {e}")
+        evseController.setControlState(ControlState.CHARGE)
+        evseController.setChargeCurrentRange(
+            SOC_PROBE_CURRENT_A, SOC_PROBE_CURRENT_A
+        )
     elif state in [ExecState.CHARGE, ExecState.DISCHARGE, ExecState.PAUSE, ExecState.PAUSE_UNTIL_DISCONNECT, ExecState.SMART, ExecState.SOLAR, ExecState.POWER_HOME, ExecState.BALANCE]:
         # Ensure OCPP is disabled for non-OCPP states
         try:
@@ -497,27 +644,28 @@ def get_system_state():
     """
     Returns the current system state information including active mode and tariff if applicable.
     """
-    current_state = execState.name
+    tariff_name = _tariff_display_name()
+
     if active_override is not None:
-        tariff = tariffManager.get_tariff()
-        current_tariff = (
-            tariff.__class__.__name__.replace('Tariff', '')
-            if tariff is not None
-            else "no tariff"
-        )
-        current_state = (
-            f"{active_override.mode.name} (override; "
-            f"{current_tariff} observing)"
-        )
-    elif execState == ExecState.SMART:
-        tariff = tariffManager.get_tariff()
-        current_tariff = (
-            tariff.__class__.__name__.replace('Tariff', '')
-            if tariff is not None
-            else "no tariff"
-        )
-        current_state = f"SMART ({current_tariff})"
-    return current_state
+        return describe_override(active_override, tariff_name)
+
+    if execState == ExecState.SMART:
+        current_state = f"SMART ({tariff_name})"
+        try:
+            if evseController.getEvseState() in DISCONNECTED_STATES:
+                current_state += " — car disconnected"
+                if _awaiting_reconnect:
+                    current_state += "; will check battery on reconnect"
+        except Exception as exc:
+            debug(f"Could not describe EVSE connection state: {exc}")
+        return current_state
+
+    if execState == ExecState.PAUSE_UNTIL_DISCONNECT:
+        return "Remove plug — waiting for car to disconnect"
+    if execState == ExecState.SOC_PROBE:
+        return "Checking battery level — 3 A probe"
+
+    return execState.name
 
 class InputParser(threading.Thread):
     def __init__(self):
@@ -786,6 +934,10 @@ def main():
         except queue.Empty:
             pass
 
+        # Watch unplug/reconnect once a second.  A short unplug can fall
+        # entirely between two 20-second control ticks.
+        _check_evse_transition()
+
         now = time.localtime()
         nowInSeconds = time.time()
         if nowInSeconds >= nextStateCheck:
@@ -797,18 +949,9 @@ def main():
             # cannot both leave the Wallbox ownerless.
             _sync_session_override(datetime.now())
 
-            # Release an override when it has expired or when
-            # pause-until-disconnect sees the cable leave.  In both cases the
-            # configured tariff takes the actuator back; it has been observing.
-            vehicle_disconnected = (
-                active_override is not None
-                and active_override.mode == ExecState.PAUSE_UNTIL_DISCONNECT
-                and evseController.getEvseState() in DISCONNECTED_STATES
-            )
-            release_reason = override_release_reason(
-                active_override,
-                vehicle_disconnected=vehicle_disconnected,
-            )
+            # Timed overrides expire here.  Unplug and SoC-probe transitions
+            # are handled by the 1 s watcher above.
+            release_reason = override_release_reason(active_override)
             if release_reason is not None:
                 info(f"CONTROL OVERRIDE RELEASED: {release_reason}")
                 released_mode = active_override.mode

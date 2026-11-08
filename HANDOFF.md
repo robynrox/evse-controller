@@ -262,7 +262,11 @@ completed fixes.
   paused, solar-only, bidirectional, OCPP-driven or held until unplugged.
   `stop_tariff()` is reserved for a real tariff switch or shutdown. A manual
   command outranks a scheduled control session. Pause-until-disconnect is a
-  button/override, not a session, and releases to SMART when the cable leaves.
+  button/override, not a session. A one-second transition watcher releases it
+  as soon as the cable leaves, records that the car is disconnected, and
+  starts a temporary 3 A SoC probe when the car returns; the probe ends when
+  the reported SoC changes or after 90 seconds. The dashboard names every
+  override, including "waiting for car to disconnect" and the probe.
   The pure ownership rules live in `execution_state.py` so they are testable
   without starting MQTT, OCPP or hardware threads.
 - **Control sessions.** `home_only`, `bidirectional`, `solar_only`, `pause` and

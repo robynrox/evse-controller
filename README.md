@@ -684,6 +684,14 @@ manual dashboard command outranks a session and lasts until **smart** or a
 tariff switch. The pause-for-unplug command (`unplug`) is deliberately a
 button rather than a session; it also keeps the tariff observing.
 
+The unplug transition is watched once a second, not only on the 20-second
+control tick, so a short unplug cannot be missed. The dashboard says
+`Remove plug — waiting for car to disconnect` while waiting, then
+`SMART (...) — car disconnected` once it sees the car leave. When the car is
+plugged back in, a temporary 3 A SoC probe runs until the reported charge
+level changes (or a 90-second timeout), then control returns to SMART. Every
+other override also names itself in the dashboard state line.
+
 All kinds are selected on the **Energy Sessions & EV Availability** page
 (`/sessions`, linked from the dashboard and the schedule page). Click a
 half-hour cell, or drag across several, choose the kind, and add the window. On
