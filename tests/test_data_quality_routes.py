@@ -17,7 +17,7 @@ TEMPLATES = (
     / "evse_controller"
     / "templates"
 )
-TODAY = date(2026, 11, 7)
+TODAY = datetime.now().date()
 GOOD = TODAY - timedelta(days=3)
 PARTIAL = TODAY - timedelta(days=1)
 
@@ -163,6 +163,7 @@ def test_page_renders_cards_chart_and_table(client):
     assert "<svg" in body
     assert "Day detail" in body
     assert "Download this window as CSV" in body
+    assert body.count("data-chart-zoom") == 1
 
 
 def test_api_classifies_and_aggregates_the_window(client):

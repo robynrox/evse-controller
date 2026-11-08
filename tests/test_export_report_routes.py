@@ -105,6 +105,7 @@ def test_page_renders_cards_and_charts(client):
     assert "<svg" in body
     assert "Daily detail" in body
     assert "Download this window as CSV" in body
+    assert body.count("data-chart-zoom") == 2
 
 
 def test_metrics_compare_revenue_with_prices(client):

@@ -193,6 +193,7 @@ def test_page_renders_the_chart_and_metrics(client):
     assert "Slot detail" in body
     assert "Charge at 10 A" in body
     assert "Bidirectional self-use" in body
+    assert body.count("data-chart-zoom") == 1
 
 
 def test_api_returns_rows_and_metrics(client):

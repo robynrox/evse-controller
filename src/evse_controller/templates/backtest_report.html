@@ -209,7 +209,10 @@
         </div>
 
         <h2>Daily delta</h2>
-        <div class="panel">{{ chart|safe }}</div>
+        <div class="panel chart-panel">
+            <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+            {{ chart|safe }}
+        </div>
 
         <h2>Daily detail</h2>
         <div class="table-wrap">

@@ -246,10 +246,16 @@
     </div>
 
     <h2>Daily export and achieved price</h2>
-    <div class="panel">{{ export_chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ export_chart|safe }}
+    </div>
 
     <h2>Price capture</h2>
-    <div class="panel">{{ capture_chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ capture_chart|safe }}
+    </div>
 
     <h2>Daily detail</h2>
     <div class="table-wrap">

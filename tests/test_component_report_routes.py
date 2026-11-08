@@ -131,6 +131,7 @@ def test_page_renders_component_and_weather(client):
     assert "420 W/m²" in body
     assert "Last 14 days" in body
     assert "Download this report as CSV" in body
+    assert body.count("data-chart-zoom") == 2
 
 
 def test_api_returns_slot_energy_and_weather(client):

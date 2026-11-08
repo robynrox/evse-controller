@@ -255,13 +255,22 @@
     </div>
 
     <h2>State of charge</h2>
-    <div class="panel">{{ soc_chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ soc_chart|safe }}
+    </div>
 
     <h2>Equivalent full cycles</h2>
-    <div class="panel">{{ cycles_chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ cycles_chart|safe }}
+    </div>
 
     <h2>Daily money</h2>
-    <div class="panel">{{ money_chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ money_chart|safe }}
+    </div>
 
     <h2>Daily detail</h2>
     <div class="table-wrap">

@@ -204,3 +204,135 @@ button {
 .no-spinner {
     -moz-appearance: textfield;
 }
+
+/* Chart zoom --------------------------------------------------------- */
+.chart-panel {
+    position: relative;
+}
+
+.chart-zoom-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.4;
+    color: #0b5cad;
+    background: #fff;
+    border: 1px solid #c9d2dc;
+    border-radius: 4px;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+
+.chart-zoom-button:hover {
+    background: #eef4fb;
+    color: #084a8a;
+}
+
+html.chart-zoom-open,
+html.chart-zoom-open body {
+    overflow: hidden;
+}
+
+.chart-zoom-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    background: rgba(20, 28, 38, .72);
+}
+
+.chart-zoom-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    background: #fff;
+    border: 1px solid #d9dde2;
+    border-bottom: none;
+    border-radius: 7px 7px 0 0;
+}
+
+.chart-zoom-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: #222;
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chart-zoom-controls {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.chart-zoom-control {
+    width: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+    color: #0b5cad;
+    background: #fff;
+    border: 1px solid #c9d2dc;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.chart-zoom-control:hover {
+    background: #eef4fb;
+}
+
+.chart-zoom-control:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+.chart-zoom-close {
+    color: #fff;
+    background: #0b5cad;
+    border-color: #0b5cad;
+}
+
+.chart-zoom-close:hover {
+    background: #084a8a;
+}
+
+.chart-zoom-body {
+    flex: 1;
+    overflow: auto;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #d9dde2;
+    border-radius: 0 0 7px 7px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.chart-zoom-svg {
+    display: block;
+    height: auto;
+    max-width: none;
+}
+
+@media (max-width: 600px) {
+    .chart-zoom-overlay {
+        padding: 0;
+    }
+
+    .chart-zoom-toolbar {
+        border-radius: 0;
+    }
+
+    .chart-zoom-body {
+        border-radius: 0;
+    }
+}

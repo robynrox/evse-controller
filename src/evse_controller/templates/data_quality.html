@@ -280,7 +280,10 @@
     </div>
 
     <h2>Daily coverage</h2>
-    <div class="panel">{{ chart|safe }}</div>
+    <div class="panel chart-panel">
+        <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+        {{ chart|safe }}
+    </div>
 
     <h2>Day detail</h2>
     <div class="table-wrap">

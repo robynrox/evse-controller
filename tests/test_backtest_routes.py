@@ -116,6 +116,7 @@ def test_page_renders_cards_chart_and_table():
     assert "Action match" in body
     assert "<svg" in body
     assert "Daily detail" in body
+    assert body.count("data-chart-zoom") == 1
 
 
 def test_api_returns_summary_and_days():

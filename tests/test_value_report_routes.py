@@ -122,6 +122,7 @@ def test_page_renders_cards_charts_and_table(client):
     assert "<svg" in body
     assert "Daily detail" in body
     assert "Download this window as CSV" in body
+    assert body.count("data-chart-zoom") == 3
 
 
 def test_api_aggregates_the_window(client):
