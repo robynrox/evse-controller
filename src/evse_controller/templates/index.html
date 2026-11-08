@@ -2,7 +2,7 @@
 
 {% block head %}
 <title>EVSE Control</title>
-<script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+<script src="{{ url_for('static', filename='js/plotly-2.29.1.min.js') }}"></script>
 <script>
     // Icon filename constants
         const ICONS = {
@@ -338,38 +338,38 @@
 
 <div class="svg-button-container">
     <button class="svg-button" onclick="sendCommand('unplug')" title="Pause charging to allow the plug to be removed">
-        <img src="" id="unplug-icon" alt="Pause to remove plug">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="unplug-icon" alt="Pause to remove plug">
     </button>
     <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
-        <img src="" id="solar-icon" alt="Solar only charging">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="solar-icon" alt="Solar only charging">
     </button>
     <button class="svg-button" onclick="sendCommand('charge')"
         title="Charge battery at maximum rate using all power sources">
-        <img src="" id="charge-icon" alt="Charge at maximum rate">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="charge-icon" alt="Charge at maximum rate">
     </button>
     <button class="svg-button" onclick="sendCommand('discharge')"
         title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
-        <img src="" id="discharge-icon" alt="Discharge">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="discharge-icon" alt="Discharge">
     </button>
     <button class="svg-button" onclick="sendCommand('power-home')"
         title="Discharge battery when necessary to power the home only">
-        <img src="" id="power-home-icon" alt="Power Home">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="power-home-icon" alt="Power Home">
     </button>
     <button class="svg-button" onclick="sendCommand('balance')"
         title="Minimise use of the grid (charge from solar and power the home)">
-        <img src="" id="balance-icon" alt="Balance">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="balance-icon" alt="Balance">
     </button>
     <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
-        <img src="" id="pause-icon" alt="Pause">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="pause-icon" alt="Pause">
     </button>
     <button class="svg-button" onclick="sendCommand('smart')" title="Use configured smart tariff (set in Configuration)">
-        <img src="" id="smart-icon" alt="Smart Tariff">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="smart-icon" alt="Smart Tariff">
     </button>
     <button class="svg-button" onclick="sendCommand('freerun')" title="Allow EVSE to operate independently without Modbus control">
-        <img src="" id="free-run-icon" alt="Free Run Mode">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="free-run-icon" alt="Free Run Mode">
     </button>
     <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
-        <img src="" id="ocpp-icon" alt="OCPP Mode">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="ocpp-icon" alt="OCPP Mode">
     </button>
     <button onclick="toggleLegend()">Help</button>
 </div>
@@ -379,62 +379,62 @@
         <h2>Command Reference</h2>
         <div class="legend-grid">
             <div class="legend-item">
-                <img src="" id="legend-unplug-icon" alt="Remove plug icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-unplug-icon" alt="Remove plug icon">
                 <div class="legend-text">
                     <strong>Remove Plug:</strong> Pause charging to allow the plug to be removed
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-solar-icon" alt="Solar charging icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-solar-icon" alt="Solar charging icon">
                 <div class="legend-text">
                     <strong>Solar Only:</strong> Charge using only solar power
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-charge-icon" alt="Maximum charge icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-charge-icon" alt="Maximum charge icon">
                 <div class="legend-text">
                     <strong>Charge:</strong> Charge battery at maximum rate using all power sources
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-discharge-icon" alt="Discharge icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-discharge-icon" alt="Discharge icon">
                 <div class="legend-text">
                     <strong>Discharge:</strong> Discharge battery at maximum rate to power the home and send any
                     excess back to the grid
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-power-home-icon" alt="Power Home icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-power-home-icon" alt="Power Home icon">
                 <div class="legend-text">
                     <strong>Power Home:</strong> Discharge battery when necessary to power the home only
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-balance-icon" alt="Balance icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-balance-icon" alt="Balance icon">
                 <div class="legend-text">
                     <strong>Balance:</strong> Minimise use of the grid (charge from solar and power the home)
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-pause-icon" alt="Pause icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-pause-icon" alt="Pause icon">
                 <div class="legend-text">
                     <strong>Pause:</strong> Pause all charging/discharging
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-smart-icon" alt="Smart Tariff icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-smart-icon" alt="Smart Tariff icon">
                 <div class="legend-text">
                     <strong>Smart Tariff:</strong> Use configured smart tariff (set in Configuration page)
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-free-run-icon" alt="Free Run icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-free-run-icon" alt="Free Run icon">
                 <div class="legend-text">
                     <strong>Free Run:</strong> Turn off OCPP mode if it is on and allow EVSE to operate independently without Modbus control
                 </div>
             </div>
             <div class="legend-item">
-                <img src="" id="legend-ocpp-icon" alt="OCPP Mode icon">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-ocpp-icon" alt="OCPP Mode icon">
                 <div class="legend-text">
                     <strong>OCPP Mode:</strong> Enter OCPP mode - EVSE controlled via OCPP protocol
                 </div>
@@ -1017,9 +1017,9 @@
         }
 
         // Set up update intervals
-        setInterval(updateChart, 2000);  // Every 2 seconds
+        setInterval(updateChart, 5000);  // Every 5 seconds; Plotly re-render is the heaviest request
         setInterval(updateStatus, 1000); // Every 1 second to match measurement updates
-        setInterval(updateTariffDisplay, 5000); // Every 5 seconds for tariff display
+        setInterval(updateTariffDisplay, 10000); // Every 10 seconds for tariff display
 
         // Initial calls
         loadChannelMetadata(); // Load metadata first
