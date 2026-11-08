@@ -4,6 +4,7 @@ from typing import Callable
 
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface
+from evse_controller.poll_health import PollHealth
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 
 
@@ -37,6 +38,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.MAX_RETRIES = 2
         self.BASE_TIMEOUT = 0.1
         self.MAX_TIMEOUT = 1.0
+        self.poll_health = PollHealth()
 
     @property
     def ENDPOINT(self) -> str:
@@ -53,6 +55,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
 
     def fetch_data(self):
         max_attempts = self.MAX_RETRIES
+        ok = False
         for attempt in range(max_attempts):
             try:
                 # Increase timeout with each retry, but cap at MAX_TIMEOUT
@@ -69,6 +72,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.unixtime = reqJson["unixtime"]
                 self.lastUpdate = time.time()
                 self._consecutive_failures = 0  # Reset on success
+                ok = True
                 break  # Exit the loop if the request is successful
             except ValueError as e:
                 if not self._had_config_error:
@@ -82,6 +86,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                     debug(f"Consecutive failures: {self._consecutive_failures}")
                 else:
                     debug(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
+        self.poll_health.record(ok)
 
     def last_power(self) -> Power:
         """The most recent reading without touching the network.

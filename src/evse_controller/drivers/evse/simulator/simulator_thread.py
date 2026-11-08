@@ -8,6 +8,7 @@ from evse_controller.drivers.evse.async_interface import (
 )
 from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.event_bus import EventBus, EventType
+from evse_controller.poll_health import PollHealth
 
 class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
     """
@@ -97,6 +98,7 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
 
         # Command queue
         self.command_queue = queue.Queue()
+        self.poll_health = PollHealth()
 
         # Thread control
         self.running = False
@@ -133,6 +135,7 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
 
                 # Update state timestamp
                 self.state.last_update = now
+                self.poll_health.record(True)
 
                 # Log state periodically (every simulated minute)
                 if int(now) % 60 == 0:
@@ -147,6 +150,7 @@ class SimulatedWallboxThread(threading.Thread, EvseThreadInterface):
                     time.sleep(sleep_time)
 
             except Exception as e:
+                self.poll_health.record(False)
                 error(f"SIMULATOR: Error in simulation loop: {e}")
                 time.sleep(1)  # Sleep longer on error
 

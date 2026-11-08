@@ -343,6 +343,20 @@ product's prices. Some controller-specific behaviour, such as Flux's 16:00
 discharge ramp, still uses its built-in timing.
 
 
+##### Link health
+
+The dashboard status panel carries a compact **Link health** row, fed by the
+existing one-second `/api/ext_status` poll. For each configured device it shows
+the percentage of successful polls over the last 1, 5 and 60 minutes and how
+long ago the last success was. The secondary Shelly is hidden when no URL is
+configured; the Wallbox is shown as `Wallbox` or `Wallbox (sim)`.
+
+A poll is one complete device read. Internal TCP retries are not counted as
+separate polls. Green is at least 98%, amber at least 90%, and red below that.
+A device with no attempts yet shows `—`, not 0%, so a first start is not
+mistaken for a dead link. The tracker keeps a bounded rolling history in
+memory and does not add any extra network polling.
+
 ##### IOCTGO_AGILEOUT dashboard
 
 The tariff dashboard shows a compact decision line above the 48-slot Agile

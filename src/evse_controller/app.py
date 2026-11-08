@@ -69,6 +69,7 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.price_tiers import PRESETS
+from evse_controller.poll_health import poll_health_payload
 
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
@@ -1166,7 +1167,12 @@ def get_extended_status():
             'max_soc': next_event.max_soc
         } if next_event else None,
         'measurements': latest_measurements,
-        'ocpp_state': ocpp_state
+        'ocpp_state': ocpp_state,
+        'poll_health': poll_health_payload(
+            evseController,
+            config.SHELLY_PRIMARY_URL,
+            config.SHELLY_SECONDARY_URL,
+        ),
     })
 
 @app.route('/api/tariff/dashboard_html', methods=['GET'])

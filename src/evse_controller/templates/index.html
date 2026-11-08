@@ -25,7 +25,70 @@
         margin: 10px;
         /* Keep some margin from the window edges */
     }
-    
+
+    /* Compact rolling poll-health row under the status panel. */
+    .link-health {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 14px;
+        margin: 0 0 8px 0;
+        padding: 6px 10px;
+        font-size: 12px;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+    }
+
+    .health-title {
+        font-weight: 600;
+        color: #495057;
+    }
+
+    .health-device {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .health-device strong {
+        color: #495057;
+        font-weight: 600;
+    }
+
+    .health-pill {
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    .health-pill.good {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    .health-pill.warn {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .health-pill.bad {
+        background: #f8d7da;
+        color: #721c24;
+    }
+
+    .health-pill.unknown {
+        background: #e9ecef;
+        color: #6c757d;
+    }
+
+    .health-age {
+        color: #6c757d;
+        white-space: nowrap;
+    }
+
     @media (max-width: 600px) {
         body {
             margin: 4px;
@@ -248,6 +311,7 @@
                 <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
             </div>
         </div>
+        <div id="link-health" class="link-health" hidden></div>
         <div class="nav-links">
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
             <a href="{{ url_for('daily_report_today') }}">Energy Report →</a>
@@ -795,6 +859,75 @@
             }
         }
 
+        function healthClass(pct) {
+            if (pct === null || pct === undefined || Number.isNaN(pct)) {
+                return 'unknown';
+            }
+            if (pct >= 98) {
+                return 'good';
+            }
+            if (pct >= 90) {
+                return 'warn';
+            }
+            return 'bad';
+        }
+
+        function renderLinkHealth(devices) {
+            const box = document.getElementById('link-health');
+            if (!box) {
+                return;
+            }
+            const visible = Array.isArray(devices)
+                ? devices.filter(function (device) { return device.configured; })
+                : [];
+            if (visible.length === 0) {
+                box.hidden = true;
+                box.innerHTML = '';
+                return;
+            }
+
+            const parts = ['<span class="health-title">Link health</span>'];
+            const windows = [['1m', '60'], ['5m', '300'], ['1h', '3600']];
+
+            for (const device of visible) {
+                const pills = windows.map(function (pair) {
+                    const label = pair[0];
+                    const key = pair[1];
+                    const window = (device.windows || {})[key] || {};
+                    const pct = (window.pct === null || window.pct === undefined)
+                        ? null : Number(window.pct);
+                    const text = pct === null
+                        ? '—'
+                        : (pct >= 99.95 ? '100%' : pct.toFixed(1) + '%');
+                    const title = window.total
+                        ? window.success + '/' + window.total + ' polls'
+                        : 'no polls yet';
+                    return '<span class="health-pill ' + healthClass(pct) +
+                        '" title="' + label + ': ' + title + '">' +
+                        label + ' ' + text + '</span>';
+                }).join('');
+
+                const age = device.last_ok_seconds;
+                let ageText;
+                if (age === null || age === undefined) {
+                    ageText = 'no success yet';
+                } else if (age < 60) {
+                    ageText = 'last good ' + Math.round(age) + 's ago';
+                } else {
+                    ageText = 'last good ' + Math.round(age / 60) + 'm ago';
+                }
+
+                parts.push(
+                    '<span class="health-device"><strong>' + device.label +
+                    '</strong>' + pills +
+                    '<span class="health-age">' + ageText + '</span></span>'
+                );
+            }
+
+            box.innerHTML = parts.join('');
+            box.hidden = false;
+        }
+
         async function updateStatus() {
             try {
                 const response = await fetch('/api/ext_status');
@@ -846,7 +979,9 @@
                 } else {
                     nextEventElement.textContent = 'No events scheduled';
                 }
-                
+
+                renderLinkHealth(data.poll_health);
+
                 // Update measurements display if available
                 if (data.measurements) {
                     // Add OCPP state to the measurements object

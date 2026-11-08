@@ -270,6 +270,12 @@ completed fixes.
   `data/state/sessions.json`. `TariffManager.observe(dayMinute)` runs the
   active tariff without applying its actuator tuple. OCPP slots are flagged in
   the daily report and booked at the tariff's off-peak import price.
+- **Link health.** `poll_health.py` keeps a bounded rolling history of
+  successful/failed polls for each Shelly and the Wallbox. `/api/ext_status`
+  returns 1/5/60-minute success rates and the age of the last success, so the
+  existing one-second dashboard poll renders a compact status row without any
+  extra device traffic. A poll is one complete read; internal retries are not
+  counted separately.
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,

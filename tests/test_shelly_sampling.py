@@ -1,7 +1,7 @@
 """Sampling must not block the whole loop when a Shelly is slow."""
 
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import requests
 
@@ -56,3 +56,42 @@ def test_get_power_levels_uses_the_cache_within_the_same_second():
 
     get.assert_not_called()
     assert power.ch1Watts == 510.0
+
+
+def test_failed_fetch_records_a_failed_poll():
+    monitor = _monitor()
+
+    with patch(
+        "evse_controller.drivers.Shelly.requests.get",
+        side_effect=requests.exceptions.ConnectTimeout("slow"),
+    ):
+        monitor.fetch_data()
+
+    snapshot = monitor.poll_health.snapshot()
+    assert snapshot["windows"]["60"]["success"] == 0
+    assert snapshot["windows"]["60"]["total"] == 1
+    assert snapshot["consecutive_failures"] == 1
+
+
+def test_successful_fetch_records_a_successful_poll():
+    monitor = _monitor()
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {
+        "emeters": [
+            {"power": 400.0, "pf": 0.9, "voltage": 240.0},
+            {"power": -80.0, "pf": 0.8},
+        ],
+        "unixtime": 1001,
+    }
+
+    with patch(
+        "evse_controller.drivers.Shelly.requests.get",
+        return_value=response,
+    ):
+        monitor.fetch_data()
+
+    snapshot = monitor.poll_health.snapshot()
+    assert snapshot["windows"]["60"]["success"] == 1
+    assert snapshot["windows"]["60"]["total"] == 1
+    assert snapshot["consecutive_failures"] == 0

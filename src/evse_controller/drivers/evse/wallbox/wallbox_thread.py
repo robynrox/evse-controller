@@ -15,6 +15,7 @@ from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
 from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
+from evse_controller.poll_health import PollHealth
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
     _instance = None
@@ -70,6 +71,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._state_lock = threading.Lock()
         self._command_queue = queue.Queue()
         self._state = EvseAsyncState()
+        self.poll_health = PollHealth()
         self._client = modbus_client if modbus_client else ModbusClientWrapper(host=host)
         
         # Initialize power model
@@ -194,7 +196,13 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
 
                 #debug("Starting Wallbox state update cycle")  # New log
                 self._check_and_handle_comms_failures()
-                self._update_state()
+                try:
+                    self._update_state()
+                except Exception:
+                    self.poll_health.record(False)
+                    raise
+                else:
+                    self.poll_health.record(True)
                 self._process_commands()
                 #debug("Completed Wallbox state update cycle")  # New log
 
