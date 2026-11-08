@@ -124,6 +124,24 @@ def test_page_renders_policy_map_and_tables(client):
     assert "predates planner-parameter capture" not in body
 
 
+def test_heatmap_puts_high_soc_at_the_top(client):
+    import re
+
+    body = client.get(
+        f"/reports/policy?date={DAY.isoformat()}"
+    ).get_data(as_text=True)
+    labels = {
+        int(percent): float(y)
+        for y, percent in re.findall(
+            r'<text x="[^"]*" y="([0-9.]+)" text-anchor="end" '
+            r'class="axis">(\d+)%</text>',
+            body,
+        )
+    }
+
+    assert labels[90] < labels[30]
+
+
 def test_page_supports_resolution_and_view_switch(client):
     response = client.get(
         f"/reports/policy?date={DAY.isoformat()}&step=0.5&view=advantage"

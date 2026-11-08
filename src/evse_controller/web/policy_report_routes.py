@@ -351,7 +351,12 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     max_export = max((slot.export_p for slot in ctx.slots), default=1.0)
     max_import = max(max_import, 1.0)
     max_export = max(max_export, 1.0)
-    state_rows = {state: index for index, (state, _) in enumerate(states)}
+    # Higher SoC is at the top of the chart, matching the axis labels and
+    # the SoC lines.  ``states`` is kept ascending for the data tables.
+    state_rows = {
+        state: len(states) - 1 - index
+        for index, (state, _) in enumerate(states)
+    }
 
     svg = [
         f'<svg class="policy-map" viewBox="0 0 {width} {height}" '
@@ -482,17 +487,24 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     )
 
     # Planned and actual SoC paths.
+    # Step line: each action holds the SoC at the start of its slot and
+    # changes at the slot boundary, so the end-of-slot point sits on the
+    # right edge of the column rather than half a cell early.
     planned_points = []
-    for index, action in enumerate(ctx.policy.actions):
+    for action in ctx.policy.actions:
         column = _slot_index_for_absolute(ctx, action.slot)
         if column >= n_cols:
             continue
-        x = left + column * cell_w + cell_w / 2
-        planned_points.append((x, action.soc_after, action.soc_before))
+        x_start = left + column * cell_w
+        x_end = left + (column + 1) * cell_w
+        if not planned_points:
+            planned_points.append((x_start, action.soc_before))
+        planned_points.append((x_end, action.soc_before))
+        planned_points.append((x_end, action.soc_after))
     if planned_points:
         path = " ".join(
-            f"{x:.1f},{_soc_y(ctx, states, soc_after, top, cell_h):.1f}"
-            for x, soc_after, _ in planned_points
+            f"{x:.1f},{_soc_y(ctx, states, soc, top, cell_h):.1f}"
+            for x, soc in planned_points
         )
         svg.append(
             f'<polyline points="{path}" class="planned-soc-line"/>'
@@ -510,7 +522,8 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
         value = samples.get(slot.slot)
         if value is None:
             continue
-        x = left + index * cell_w + cell_w / 2
+        # A sample is recorded at the start of its slot.
+        x = left + index * cell_w
         sample_points.append(
             f"{x:.1f},{_soc_y(ctx, states, value, top, cell_h):.1f}"
         )
