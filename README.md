@@ -334,9 +334,13 @@ separate controllers:
 - `iog_no_export`: no export tariff; export price is unknown rather than 0p.
 
 `export_source` overrides the preset's export choice. The import side keeps the
-Intelligent Octopus Go cheap window. Octopus Go, Cosy and Flux keep their own
-control logic and built-in windows; their presets are reserved for a later
-migration, so no other controller's behaviour changes.
+Intelligent Octopus Go cheap window. Octopus Go, Cosy and Flux also use the
+table when their own preset is selected, so their prices and cheap/peak
+decision windows are editable without changing their control strategies. A
+preset that does not match the running tariff leaves that tariff on its
+built-in bands, which keeps a tariff switch from silently applying another
+product's prices. Some controller-specific behaviour, such as Flux's 16:00
+discharge ramp, still uses its built-in timing.
 
 
 ##### IOCTGO_AGILEOUT dashboard

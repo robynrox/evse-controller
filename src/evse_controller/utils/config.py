@@ -945,7 +945,13 @@ class Config:
             ("export", "peak"): self.EXPORT_HIGH,
         }.get((side, tier), 0.0)
 
-        if self.get("tariffs.preset", None) is None:
+        if (
+            self.get("tariffs.preset", None) is None
+            and self._default_price_preset() == "iog_agile"
+        ):
+            # The original IOctGo installs stored their rates in the legacy
+            # import/export bands.  Keep honouring those until a preset is
+            # chosen explicitly.
             return legacy
 
         from evse_controller.price_tiers import PRESETS

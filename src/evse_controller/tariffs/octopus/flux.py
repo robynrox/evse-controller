@@ -13,6 +13,9 @@ class OctopusFluxTariff(Tariff):
     - Standard rates at other times
     """
 
+    uses_price_tiers = True
+    price_presets = frozenset({"flux"})
+
     def __init__(self, command_queue=None):
         """Initialize Flux tariff with specific time periods and rates. Rates provided are for South Wales March 2025.
         
@@ -37,6 +40,9 @@ class OctopusFluxTariff(Tariff):
         Returns:
             bool: True if time is between 02:00-05:00
         """
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_cheap(dayMinute)
         return 120 <= dayMinute < 300  # 02:00-05:00
 
     def is_expensive_period(self, dayMinute: int) -> bool:
@@ -48,6 +54,9 @@ class OctopusFluxTariff(Tariff):
         Returns:
             bool: True if time is between 16:00-19:00
         """
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_peak(dayMinute)
         return 960 <= dayMinute < 1140  # 16:00-19:00
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:

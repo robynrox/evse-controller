@@ -43,6 +43,10 @@ class Tariff:
     #: Opt in to the three-tier standard/cheap/peak price table.  Tariffs with
     #: their own hard-coded bands leave this False and keep their old pricing.
     uses_price_tiers = False
+    #: Presets this tariff understands.  ``None`` accepts any configured
+    #: preset; a set keeps a mismatched selection on the legacy bands so a
+    #: tariff switch never silently applies another product's prices.
+    price_presets = None
 
     def __init__(self, command_queue: Optional[queue.Queue] = None):
         """Initialize base tariff with default time-of-use rates.
@@ -57,9 +61,19 @@ class Tariff:
         self._time_function = lambda: __import__('time').time()  # Default to real time
         self._datetime_function = lambda: __import__('datetime').datetime.now()  # Default to real datetime
 
-    def resolved_price_table(self):
-        """The configured tier table, or ``None`` for legacy tariffs."""
+    def price_preset_accepted(self) -> bool:
+        """Whether the configured preset belongs to this tariff."""
         if not self.uses_price_tiers:
+            return False
+        if self.price_presets is None:
+            return True
+        from evse_controller.utils.config import config
+
+        return config.TARIFF_PRESET in self.price_presets
+
+    def resolved_price_table(self):
+        """The configured tier table, or ``None`` for legacy/mismatched."""
+        if not self.price_preset_accepted():
             return None
         table = getattr(self, "_resolved_price_table", None)
         if table is None:
@@ -145,6 +159,11 @@ class Tariff:
         Returns:
             float: Import rate in £/kWh
         """
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.import_price_p(
+                current_time.hour * 60 + current_time.minute
+            ) / 100.0
         for period in self.time_of_use.values():
             if self.is_in_period(current_time, period["start"], period["end"]):
                 return period["import_rate"]
@@ -152,6 +171,12 @@ class Tariff:
 
     def get_export_rate(self, current_time):
         """Get the export rate at the given time in £/kWh"""
+        table = self.resolved_price_table()
+        if table is not None and not table.dynamic_export:
+            price_p = table.export_price_p(
+                current_time.hour * 60 + current_time.minute
+            )
+            return None if price_p is None else price_p / 100.0
         for period in self.time_of_use.values():
             if self.is_in_period(current_time, period["start"], period["end"]):
                 return period["export_rate"]

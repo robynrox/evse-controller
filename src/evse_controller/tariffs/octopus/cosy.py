@@ -7,6 +7,9 @@ from evse_controller.utils.logging_config import debug, info, warning, error
 class CosyOctopusTariff(Tariff):
     """Implementation of Cosy Octopus tariff logic."""
 
+    uses_price_tiers = True
+    price_presets = frozenset({"cosy"})
+
     def __init__(self, command_queue=None):
         """Initialize Cosy Octopus tariff.
         
@@ -36,12 +39,18 @@ class CosyOctopusTariff(Tariff):
 
     def is_off_peak(self, dayMinute: int) -> bool:
         """Check if current time is during off-peak periods"""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_cheap(dayMinute)
         return (240 <= dayMinute < 420 or  # 04:00-07:00
                 780 <= dayMinute < 960 or   # 13:00-16:00
                 1320 <= dayMinute < 1440)   # 22:00-24:00
 
     def is_expensive_period(self, dayMinute: int) -> bool:
         """Check if current time is during peak period (16:00-19:00)"""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_peak(dayMinute)
         return 960 <= dayMinute < 1140
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:

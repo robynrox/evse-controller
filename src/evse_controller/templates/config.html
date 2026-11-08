@@ -582,7 +582,9 @@
             </select>
             <small>
                 Agile preset uses the fetched Agile Outgoing export series.
-                Outgoing and Prime use the export tiers below.
+                Outgoing and Prime use the export tiers below. The preset must
+                match the tariff selected under Charging; a mismatch leaves
+                that tariff on its built-in prices.
             </small>
         </div>
         <div class="form-group">
@@ -649,6 +651,9 @@
                 Leave blank to use the preset. Use comma-separated
                 <code>HH:MM-HH:MM</code> windows; an end earlier than the start
                 wraps past midnight. Cheap and peak windows may not overlap.
+                These windows drive both prices and the cheap/peak decision
+                windows. Controller-specific behaviour such as Flux's 16:00
+                discharge ramp still uses its built-in timing.
             </p>
             <div class="form-group">
                 <label for="import_cheap_windows">Import cheap windows</label>

@@ -273,11 +273,14 @@ completed fixes.
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,
-  `iog_outgoing`, `iog_prime`, `iog_no_export`, plus reserved Go/Cosy/Flux
-  presets); the six `prices` values are what users normally edit. The IOctGo
+  `iog_outgoing`, `iog_prime`, `iog_no_export`, `octopus_go`, `cosy`,
+  `flux`); the six `prices` values are what users normally edit. The IOctGo
   variants use the same table, so Agile/fixed/prime/no-export differ only in
-  export pricing, not control logic. Go, Cosy and Flux keep their existing
-  hard-coded bands and control for now.
+  export pricing, not control logic. Go, Cosy and Flux opt in when their own
+  preset is selected: prices and cheap/peak decision windows come from the
+  table, but their control strategies are unchanged. A mismatched preset
+  leaves a tariff on its legacy bands rather than applying another product's
+  prices.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

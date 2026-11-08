@@ -5006,13 +5006,17 @@ class TestTieredExportVariants:
     def _tariff_with(self, preset, export_prices, monkeypatch):
         from evse_controller.price_tiers import build_price_table
 
-        monkeypatch.setattr(config, "IMPORT_STANDARD_P", 30.0)
-        monkeypatch.setattr(config, "IMPORT_CHEAP_P", 7.5)
-        monkeypatch.setattr(config, "IMPORT_PEAK_P", 30.0)
-        for tier, value in export_prices.items():
-            monkeypatch.setattr(
-                config, f"EXPORT_{tier.upper()}_P", value
+        def set_price(side, tier, value):
+            prices = config._config_data.setdefault("prices", {}).setdefault(
+                side, {}
             )
+            monkeypatch.setitem(prices, tier, value)
+
+        set_price("import", "standard", 30.0)
+        set_price("import", "cheap", 7.5)
+        set_price("import", "peak", 30.0)
+        for tier, value in export_prices.items():
+            set_price("export", tier, value)
 
         tariff = _build_tariff()
         table = build_price_table(
@@ -5063,3 +5067,17 @@ class TestTieredExportVariants:
 
         assert tariff._current_import_rate_p(0) == pytest.approx(7.5)
         assert tariff._current_import_rate_p(12 * 60) == pytest.approx(30.0)
+
+    def test_other_product_preset_falls_back_to_the_legacy_bands(
+        self, monkeypatch
+    ):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "cosy")
+
+        tariff = _build_tariff()
+
+        assert tariff.resolved_price_table() is None
+        assert tariff.dynamic_export is True
+        assert tariff.import_price_p(datetime.now().date(), 0) == pytest.approx(
+            config.IMPORT_LOW
+        )

@@ -22,6 +22,11 @@ SIDES = ("import", "export")
 EXPORT_SOURCES = ("agile", "tiers", "none")
 DAY_MINUTES = 24 * 60
 
+#: Presets that use the Intelligent Octopus Go import/control strategy.
+IOG_PRESETS = frozenset(
+    {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export"}
+)
+
 
 def parse_clock(text: str) -> int:
     """Parse ``HH:MM`` into minutes since midnight.
@@ -189,6 +194,20 @@ class PriceTierTable:
             return None
         return self._lookup(prices, self.export_windows, day_minute)
 
+    def is_cheap(self, day_minute: int) -> bool:
+        """Whether the import side is inside a cheap window."""
+        return any(
+            window.covers(day_minute)
+            for window in self.import_windows.get("cheap", ())
+        )
+
+    def is_peak(self, day_minute: int) -> bool:
+        """Whether the import side is inside a peak window."""
+        return any(
+            window.covers(day_minute)
+            for window in self.import_windows.get("peak", ())
+        )
+
     @property
     def dynamic_export(self) -> bool:
         return self.export_source == "agile"
@@ -249,8 +268,12 @@ PRESETS: dict[str, PricePreset] = {
         label="Octopus Go",
         import_windows={"cheap": ("00:30-05:30",), "peak": ()},
         export_windows={"cheap": (), "peak": ()},
-        default_import_prices={"standard": 30.0, "cheap": 10.0, "peak": 30.0},
-        default_export_prices={"standard": 8.0, "cheap": 8.0, "peak": 12.0},
+        default_import_prices={
+            "standard": 31.42,
+            "cheap": 8.50,
+            "peak": 31.42,
+        },
+        default_export_prices={"standard": 15.0, "cheap": 15.0, "peak": 15.0},
         export_source="tiers",
     ),
     "cosy": PricePreset(

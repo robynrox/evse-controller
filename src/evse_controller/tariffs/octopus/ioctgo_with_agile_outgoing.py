@@ -18,6 +18,7 @@ from evse_controller.planner.inputs import (
     uniform_load_prior,
 )
 from evse_controller.planner.soc_estimator import SocEstimator
+from evse_controller.price_tiers import IOG_PRESETS
 from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
 import threading
@@ -245,6 +246,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: Use the configured standard/cheap/peak import and export tiers.
     uses_price_tiers = True
 
+    #: The outgoing-product presets all share this controller.
+    price_presets = IOG_PRESETS
+
     #: Run the DP in shadow mode and record its plan.  It never changes the
     #: heuristic's control decision.  Tests disable it by default.
     ENABLE_SHADOW_PLANNER = True
@@ -382,9 +386,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Resolve the configured standard/cheap/peak table once.  The Agile
         # preset keeps the dynamic export series; Outgoing/Prime/no-export
-        # presets use the fixed tiers instead.
-        self._resolved_price_table = config.build_price_table()
-        self.dynamic_export = self._resolved_price_table.dynamic_export
+        # presets use the fixed tiers instead.  A preset for another product
+        # (e.g. Cosy) leaves this controller on its legacy bands so a tariff
+        # switch cannot silently apply someone else's prices.
+        if self.price_preset_accepted():
+            self._resolved_price_table = config.build_price_table()
+        else:
+            self._resolved_price_table = None
+        self.dynamic_export = (
+            self._resolved_price_table.dynamic_export
+            if self._resolved_price_table is not None
+            else True
+        )
 
         # Where the ledger and today's saving are kept between runs.  Tests
         # pass a temporary file; production uses config.IOCTGO_AGILE_STATE_FILE.
@@ -656,6 +669,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return hours * 60 + minutes
 
     def _config_import_prices(self) -> dict:
+        if getattr(self, "_resolved_price_table", None) is None:
+            # A preset for another product is configured.  Stay on this
+            # controller's legacy bands rather than borrowing its prices.
+            return {
+                "standard": float(config.IMPORT_HIGH),
+                "cheap": float(config.IMPORT_LOW),
+                "peak": float(config.IMPORT_HIGH),
+            }
         return {
             "standard": float(config.IMPORT_STANDARD_P),
             "cheap": float(config.IMPORT_CHEAP_P),
@@ -663,6 +684,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         }
 
     def _config_export_prices(self) -> dict:
+        if getattr(self, "_resolved_price_table", None) is None:
+            return {
+                "standard": float(config.EXPORT_MID),
+                "cheap": float(config.EXPORT_MID),
+                "peak": float(config.EXPORT_HIGH),
+            }
         return {
             "standard": float(config.EXPORT_STANDARD_P),
             "cheap": float(config.EXPORT_CHEAP_P),
@@ -2055,7 +2082,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return table.import_price_with(
                 self._config_import_prices(), slot * 30
             )
-        rate = self.get_import_rate(_slot_start(day, slot))
+        start = datetime.combine(day, time()) + timedelta(minutes=30 * slot)
+        rate = self.get_import_rate(start)
         return None if rate is None else rate * 100.0
 
     def export_price_p(self, day: date, slot: int) -> Optional[float]:

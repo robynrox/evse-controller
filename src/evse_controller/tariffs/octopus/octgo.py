@@ -32,6 +32,9 @@ class OctopusGoTariff(Tariff):
         time_of_use (dict): Dictionary defining Octopus Go time periods and rates
     """
 
+    uses_price_tiers = True
+    price_presets = frozenset({"octopus_go"})
+
     def __init__(self, command_queue=None, battery_capacity_kwh=None, bulk_discharge_start_time=None, bulk_discharge_end_time=None, enable_bulk_discharge=None):
         """Initialize Octopus Go tariff with specific time periods and rates.
 
@@ -188,10 +191,16 @@ class OctopusGoTariff(Tariff):
 
     def is_off_peak(self, dayMinute: int) -> bool:
         """Check if current time is during off-peak period (00:30-05:30)"""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_cheap(dayMinute)
         return 30 <= dayMinute < 330
 
     def is_expensive_period(self, dayMinute: int) -> bool:
         """No specifically expensive periods in Octopus Go"""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_peak(dayMinute)
         return False
 
     def calculate_target_discharge_current(self, current_soc: float, dayMinute: int) -> float:
