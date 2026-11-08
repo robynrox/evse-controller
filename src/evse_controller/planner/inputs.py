@@ -33,10 +33,12 @@ class PlannerInput:
     day: date
     slots: tuple[PlannerSlot, ...]
     initial_soc: float
-    target_soc: float
+    target_soc: Optional[float]
     source_name: str
     forecast_days: int = 0
     load_fallback_kw: float = 0.0
+    horizon_end_slot: Optional[int] = None
+    horizon_limited_by_export: bool = False
 
 
 def _session_for(slot_start: datetime, sessions: list[EnergySession]):
@@ -87,7 +89,7 @@ def build_planner_input(
     current_slot: int,
     current_soc: float,
     *,
-    target_soc: float,
+    target_soc: Optional[float],
     max_charge_current_a: float,
     max_discharge_current_a: float,
     load_fallback_kw: float = 0.0,
@@ -122,8 +124,23 @@ def build_planner_input(
         default=0,
     )
 
+    # A moving horizon for a dynamic-export tariff ends at the last
+    # contiguous slot with a published export price.  Treating an unknown
+    # future export price as 0p would make the planner dump energy into a
+    # market it cannot see.  Fixed-export tariffs still plan to the end of
+    # the local day.
+    end_slot = SLOTS_PER_DAY
+    horizon_limited = False
+    if getattr(source, "dynamic_export", False):
+        end_slot = current_slot
+        for index in range(current_slot, SLOTS_PER_DAY):
+            if rates[index].export_p is None:
+                break
+            end_slot = index + 1
+        horizon_limited = end_slot < SLOTS_PER_DAY
+
     slots: list[PlannerSlot] = []
-    for index in range(current_slot, SLOTS_PER_DAY):
+    for index in range(current_slot, end_slot):
         rate = rates[index]
         import_p = _price(
             rate.import_p,
@@ -204,8 +221,14 @@ def build_planner_input(
         day=day,
         slots=tuple(slots),
         initial_soc=float(current_soc),
-        target_soc=float(target_soc),
+        target_soc=(
+            None if target_soc is None else float(target_soc)
+        ),
         source_name=source.name,
         forecast_days=forecast_days,
         load_fallback_kw=float(load_fallback_kw),
+        horizon_end_slot=(
+            slots[-1].slot if slots else None
+        ),
+        horizon_limited_by_export=horizon_limited,
     )

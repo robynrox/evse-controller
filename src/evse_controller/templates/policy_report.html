@@ -349,6 +349,19 @@
                 <div class="note">slot {{ run.slot }}</div>
             </div>
             <div class="card">
+                <div class="label">Horizon ends</div>
+                <div class="value">
+                    {{ (context.slots|last).start.strftime('%H:%M') }}
+                </div>
+                <div class="note">
+                    {% if run.horizon_limited_by_export %}
+                        last known export price
+                    {% else %}
+                        end of local day
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card">
                 <div class="label">Load forecast</div>
                 <div class="value">{{ run.forecast_days }} d</div>
                 <div class="note">
@@ -370,7 +383,11 @@
             </div>
             <div class="card">
                 <div class="label">Target</div>
-                <div class="value">{{ fmt_pct(context.target) }}</div>
+                <div class="value">
+                    {% if context.target is not none %}
+                        {{ fmt_pct(context.target) }}
+                    {% else %}none{% endif %}
+                </div>
                 <div class="note">
                     floor {{ fmt_pct(context.floor) }} · cap {{ fmt_pct(context.cap) }}
                 </div>
@@ -379,7 +396,11 @@
                 <div class="label">DP energy cost</div>
                 <div class="value">{{ fmt_money(context.policy.total_cost_p) }}</div>
                 <div class="note">
-                    {{ 'target met' if not context.policy.relaxed else 'target relaxed' }}
+                    {% if context.target is none %}
+                        config limits only
+                    {% else %}
+                        {{ 'target met' if not context.policy.relaxed else 'target relaxed' }}
+                    {% endif %}
                 </div>
             </div>
             <div class="card">
@@ -500,7 +521,10 @@
                             <td>
                                 {{ fmt_pence(band.cell.advantage_p) if band.cell.target_reachable else '—' }}
                             </td>
-                            <td>{{ 'yes' if band.cell.target_reachable else 'relaxed' }}</td>
+                            <td>
+                                {% if context.target is none %}n/a
+                                {% else %}{{ 'yes' if band.cell.target_reachable else 'relaxed' }}{% endif %}
+                            </td>
                             <td>{{ fmt_pct(band.action.soc_after) if band.action else '—' }}</td>
                         </tr>
                     {% endfor %}

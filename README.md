@@ -793,6 +793,20 @@ floor, including the integer-current efficiency scan and the best remaining
 export price. If the gate is unreachable or the mode is uneconomic, that follow
 arc is omitted for the slot.
 
+For a dynamic-export tariff, the moving horizon now ends at the last
+**contiguous slot with a published export price**. Unknown future export prices
+are not treated as 0p. Fixed-export tariffs still plan to the end of the local
+day. The policy page shows the horizon end and whether it was limited by export
+prices.
+
+The shadow DP has **no fixed end-of-day SoC target**. It optimises the priced
+horizon within the configured protection floor and charge cap. The old 50%
+target is gone from the shadow planner; the live heuristic still uses its own
+target until the DP takes over. Because the horizon stops at the last known
+export price, the plan may end near the protection floor when that is the best
+priced outcome. A carry-over value for energy beyond the horizon is a separate
+decision, not currently modelled.
+
 ##### Plan-versus-actual report (`/reports/plan`)
 
 The **Plan vs Actual** link opens the report that joins the three histories

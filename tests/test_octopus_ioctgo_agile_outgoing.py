@@ -4852,6 +4852,7 @@ class TestShadowPlannerAndEstimator:
         assert run["slot"] == 24
         assert run["reported_soc"] == 60
         assert run["estimate_soc"] == pytest.approx(60.0)
+        assert run["target_soc"] is None
         assert run["forecast_days"] >= 14
         assert len(run["actions"]) == 24
         assert len(run["inputs"]) == 24
@@ -4863,6 +4864,7 @@ class TestShadowPlannerAndEstimator:
         assert run["planner"]["soc_step_percent"] == 0.1
         assert run["planner"]["load_fallback_kw"] == pytest.approx(0.72)
         assert run["planner"]["load_prior"] == "uniform_0_400"
+        assert run["planner"]["target_soc_percent"] is None
         assert run["planner"]["efficiency_model"]["points"]
         assert any(
             item["load_source"] == "prior" for item in run["inputs"]

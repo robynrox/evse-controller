@@ -148,7 +148,7 @@ class RunContext:
     step: float
     floor: float
     cap: float
-    target: float
+    target: Optional[float]
     min_current_a: float
     max_charge_a: float
     max_discharge_a: float
@@ -176,9 +176,11 @@ def _build_context(run: dict) -> RunContext:
         params.get("protection_floor_percent"),
         float(config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT),
     )
-    target = _number(
-        params.get("target_soc_percent"),
-        _number(run.get("target_soc"), float(config.AGGRESSIVE_SOC_LOWER_LIMIT)),
+    raw_target = params.get(
+        "target_soc_percent", run.get("target_soc")
+    )
+    target = (
+        None if raw_target is None else _number(raw_target)
     )
     degradation = _number(params.get("degradation_p_per_kwh"), 0.0)
     max_charge = _number(
@@ -647,11 +649,13 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
             )
 
     # Target and protection lines.
-    for value, css, label in (
-        (ctx.target, "target-line", "target"),
+    guide_lines = [
         (ctx.floor, "floor-line", "floor"),
         (ctx.cap, "cap-line", "cap"),
-    ):
+    ]
+    if ctx.target is not None:
+        guide_lines.append((ctx.target, "target-line", "target"))
+    for value, css, label in guide_lines:
         if not (states[0][1] <= value <= states[-1][1]):
             continue
         state = ctx.planner._clamp_state(int(round(value / ctx.step)))
@@ -735,7 +739,9 @@ def _band(ctx, slot_index, state, start_soc, end_soc, states):
 def _selected_state(ctx: RunContext, states, requested_soc) -> int:
     soc = _number(requested_soc)
     if soc is None:
-        soc = _number(ctx.run.get("estimate_soc"), ctx.target)
+        soc = _number(ctx.run.get("estimate_soc"))
+    if soc is None:
+        soc = ctx.target if ctx.target is not None else 50.0
     state = ctx.planner._clamp_state(int(round(soc / ctx.step)))
     available = [item for item, _ in states]
     if state in available:
@@ -757,12 +763,18 @@ def _why_text(ctx, slot_index, cell, options) -> str:
         )
     else:
         comparison = "the only feasible mode"
-    target = (
-        "It can still reach the end-of-day target."
-        if cell.target_reachable
-        else "The end-of-day target is not reachable from this state; "
-        "the planner relaxes to the highest reachable SoC."
-    )
+    if ctx.target is None:
+        target = (
+            "There is no fixed end-of-day target; the planner optimises the "
+            "remaining priced slots within the configured floor and cap."
+        )
+    else:
+        target = (
+            "It can still reach the end-of-day target."
+            if cell.target_reachable
+            else "The end-of-day target is not reachable from this state; "
+            "the planner relaxes to the highest reachable SoC."
+        )
     return (
         f"At {slot.start.strftime('%H:%M')} and {cell.soc_percent:.1f}% SoC, "
         f"{_mode_label(best.kind)} at "

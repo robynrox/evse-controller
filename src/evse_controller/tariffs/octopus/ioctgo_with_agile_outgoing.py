@@ -1108,7 +1108,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 now.date(),
                 current_slot,
                 initial_soc,
-                target_soc=float(config.AGGRESSIVE_SOC_LOWER_LIMIT),
+                target_soc=None,
                 max_charge_current_a=float(
                     config.WALLBOX_MAX_CHARGE_CURRENT
                 ),
@@ -1127,7 +1127,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 min_current_a=float(self.MIN_DISCHARGE_CURRENT),
                 charge_cap_percent=self.charge_cap_percent(),
                 protection_floor_percent=self.absolute_min_soc_percent(),
-                target_soc_percent=float(config.AGGRESSIVE_SOC_LOWER_LIMIT),
+                target_soc_percent=None,
                 degradation_p_per_kwh=0.0,
             )
             result = planner.plan(
@@ -1169,6 +1169,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "estimate_soc": planner_input.initial_soc,
             "target_soc": planner_input.target_soc,
             "forecast_days": planner_input.forecast_days,
+            "horizon_end_slot": planner_input.horizon_end_slot,
+            "horizon_limited_by_export": (
+                planner_input.horizon_limited_by_export
+            ),
             "source": planner_input.source_name,
             "success": result.success,
             "relaxed": result.relaxed,
@@ -1180,9 +1184,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "min_current_a": float(self.MIN_DISCHARGE_CURRENT),
                 "charge_cap_percent": self.charge_cap_percent(),
                 "protection_floor_percent": self.absolute_min_soc_percent(),
-                "target_soc_percent": float(
-                    config.AGGRESSIVE_SOC_LOWER_LIMIT
-                ),
+                "target_soc_percent": None,
                 "degradation_p_per_kwh": 0.0,
                 "load_fallback_kw": float(
                     planner_input.load_fallback_kw

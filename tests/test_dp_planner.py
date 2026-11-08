@@ -175,6 +175,26 @@ def test_policy_only_uses_integer_currents_within_the_wallbox_limit(limit):
     assert all(value.is_integer() for value in charge + discharge)
 
 
+def test_no_terminal_target_optimises_within_the_config_limits():
+    p = planner(target_soc_percent=None)
+    slots = [
+        slot(0, import_p=10.0, export_p=50.0, load_kw=0.0),
+    ]
+
+    plan = p.plan(slots, 60.0)
+    policy = p.policy(slots, 60.0)
+
+    assert plan.success is True
+    assert plan.relaxed is False
+    assert policy.relaxed is False
+    assert all(
+        cell.target_reachable
+        for row in policy.cells
+        for cell in row
+    )
+    assert plan.final_soc >= p.protection_floor_percent
+
+
 def test_grid_cost_uses_the_load_distribution():
     p = planner()
     sample_slot = replace(

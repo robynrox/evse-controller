@@ -21,10 +21,17 @@ class FakeSource:
     dynamic_import = True
     dynamic_export = True
 
-    def __init__(self, import_p=20.0, export_p=10.0, sessions=None):
+    def __init__(
+        self,
+        import_p=20.0,
+        export_p=10.0,
+        sessions=None,
+        dynamic_export=True,
+    ):
         self.import_p = import_p
         self.export_p = export_p
         self.sessions = list(sessions or [])
+        self.dynamic_export = dynamic_export
 
     def rates_for_day(self, day):
         start = datetime.combine(day, time())
@@ -210,9 +217,13 @@ def test_ev_away_forces_idle():
     assert result.slots[0].forced == "idle"
 
 
-def test_unknown_export_uses_the_configured_fallback():
+def test_unknown_export_uses_the_configured_fallback_for_a_fixed_tariff():
     result = build_planner_input(
-        FakeSource(import_p=20.0, export_p=[None] * 48),
+        FakeSource(
+            import_p=20.0,
+            export_p=[None] * 48,
+            dynamic_export=False,
+        ),
         FakeProfile([]),
         DAY,
         current_slot=0,
@@ -224,6 +235,41 @@ def test_unknown_export_uses_the_configured_fallback():
     )
 
     assert result.slots[0].export_p == 0.0
+
+
+def test_dynamic_export_horizon_stops_at_the_last_known_price():
+    prices = [10.0] * 24 + [None] * 24
+    result = build_planner_input(
+        FakeSource(import_p=20.0, export_p=prices),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert len(result.slots) == 24
+    assert result.slots[-1].slot == 23
+    assert result.horizon_end_slot == 23
+    assert result.horizon_limited_by_export is True
+
+
+def test_dynamic_export_with_no_prices_has_an_empty_horizon():
+    result = build_planner_input(
+        FakeSource(import_p=20.0, export_p=[None] * 48),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert result.slots == ()
+    assert result.horizon_end_slot is None
 
 
 def test_unknown_import_without_a_fallback_is_an_error():

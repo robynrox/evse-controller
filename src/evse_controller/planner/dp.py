@@ -216,7 +216,7 @@ class DpPlanner:
         min_current_a: float = 3.0,
         charge_cap_percent: float = 97.0,
         protection_floor_percent: float = 25.0,
-        target_soc_percent: float = 50.0,
+        target_soc_percent: Optional[float] = 50.0,
         degradation_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
     ):
@@ -235,6 +235,10 @@ class DpPlanner:
             raise ValueError("soc_step_percent must be in (0, 100]")
         if min_current_a <= 0:
             raise ValueError("min_current_a must be positive")
+        if target_soc_percent is not None and not (
+            0.0 <= float(target_soc_percent) <= 100.0
+        ):
+            raise ValueError("target_soc_percent must be in [0, 100] or None")
 
         if efficiency_model is None:
             from evse_controller.tariffs.octopus.battery_efficiency import (
@@ -250,7 +254,11 @@ class DpPlanner:
         self.min_current_a = float(min_current_a)
         self.charge_cap_percent = float(charge_cap_percent)
         self.protection_floor_percent = float(protection_floor_percent)
-        self.target_soc_percent = float(target_soc_percent)
+        self.target_soc_percent = (
+            None
+            if target_soc_percent is None
+            else float(target_soc_percent)
+        )
         self.degradation_p_per_kwh = max(0.0, float(degradation_p_per_kwh))
         self.horizon_slots = (
             None if horizon_slots is None else max(0, int(horizon_slots))
@@ -407,14 +415,24 @@ class DpPlanner:
                 ),
                 reachable_values=(
                     tuple(
-                        s * self.soc_step_percent
-                        >= self.target_soc_percent - 1e-9
+                        True
+                        if self.target_soc_percent is None
+                        else (
+                            s * self.soc_step_percent
+                            >= self.target_soc_percent - 1e-9
+                        )
                         for s in range(n_states)
                     ),
                 ),
                 terminal_state=state,
-                relaxed=state * self.soc_step_percent
-                < self.target_soc_percent - 1e-9,
+                relaxed=(
+                    False
+                    if self.target_soc_percent is None
+                    else (
+                        state * self.soc_step_percent
+                        < self.target_soc_percent - 1e-9
+                    )
+                ),
                 initial_soc_percent=float(initial_soc_percent),
                 actions=(),
                 final_soc=state * self.soc_step_percent,
@@ -679,6 +697,8 @@ class DpPlanner:
         return tuple(options)
 
     def _target_state(self) -> int:
+        if self.target_soc_percent is None:
+            return 0
         return self._clamp_state(
             int(
                 math.ceil(
@@ -689,6 +709,8 @@ class DpPlanner:
         )
 
     def _terminal_penalty(self, state: int) -> float:
+        if self.target_soc_percent is None:
+            return 0.0
         target = self._target_state()
         if state >= target:
             return 0.0
@@ -1041,10 +1063,6 @@ class DpPlanner:
     def _choose_terminal(
         self, dp: list[float]
     ) -> tuple[Optional[int], bool]:
-        target_state = int(
-            math.ceil(self.target_soc_percent / self.soc_step_percent - 1e-9)
-        )
-        target_state = self._clamp_state(target_state)
         reachable = [
             (state, cost)
             for state, cost in enumerate(dp)
@@ -1052,6 +1070,18 @@ class DpPlanner:
         ]
         if not reachable:
             return None, False
+        if self.target_soc_percent is None:
+            # No fixed end-of-day SoC target: choose the cheapest reachable
+            # state within the configured floor and cap.
+            return min(reachable, key=lambda item: item[1])[0], False
+        target_state = self._clamp_state(
+            int(
+                math.ceil(
+                    self.target_soc_percent / self.soc_step_percent
+                    - 1e-9
+                )
+            )
+        )
         meeting = [
             (state, cost) for state, cost in reachable if state >= target_state
         ]
