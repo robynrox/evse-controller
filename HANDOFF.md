@@ -358,16 +358,25 @@ completed fixes.
   Policies are replayed from recorded run inputs; old runs without planner
   parameters show a caveat, and a run with no load profile shows a prominent
   no-load warning.
-- The shadow planner now uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`)
-  and a **0.72 kW load fallback** (`SHADOW_LOAD_FALLBACK_KW`) when the profile
-  has no slot forecast. The fine grid removes most integer-current rounding
-  sawtooth; the fallback stops the planner treating missing house load as zero.
-  The DP action space is still fixed half-hour currents; it does not yet model
-  intra-slot load-following.
+- The shadow planner uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`).
+  Missing profile slots use a flat **0–400 W prior** in 25 W bins; the old
+  single fallback remains only when no prior is supplied. The prior is stored
+  per input row as `load_source="prior"`, so the policy page can label it.
+- Fixed actions are scored by expected grid cost over the per-slot load
+  histogram (`load_samples`), not just the median. The sparse histograms are
+  passed through the input builder; slots with many bins are condensed into at
+  most 24 time-balanced groups.
+- The DP now adds follow arcs when the heuristic's follow gates are present:
+  `follow_house_conservative`, `follow_house_aggressive` and `follow_solar`.
+  Gates come from the same `discharge_activation_threshold_w` calculation as
+  the live heuristic and are stored per input row with their floors. Follow
+  arcs use expected cost, expected net SoC change and gross throughput for
+  degradation. This adds arcs, not SoC states, and does not enumerate charge ×
+  discharge current pairs.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **749 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **757 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

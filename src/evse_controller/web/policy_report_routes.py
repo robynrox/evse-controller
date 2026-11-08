@@ -63,6 +63,20 @@ def _fmt_current(value) -> str:
     return "—" if value is None else f"{value:.0f} A"
 
 
+def _fmt_action_current(value, minimum=None, maximum=None) -> str:
+    if minimum is not None and maximum is not None and minimum != maximum:
+        return f"{minimum:.0f}–{maximum:.0f} A"
+    return _fmt_current(value)
+
+
+def _mode_label(kind: Optional[str]) -> str:
+    return {
+        "follow_house_conservative": "follow house (conservative)",
+        "follow_house_aggressive": "follow house (aggressive)",
+        "follow_solar": "follow solar",
+    }.get(kind or "", kind or "—")
+
+
 def _fmt_pence(value) -> str:
     if value is None:
         return "—"
@@ -195,17 +209,39 @@ def _build_context(run: dict) -> RunContext:
             export_p = float(item["export_p"])
         except (KeyError, TypeError, ValueError):
             continue
+        load_kw = _number(item.get("load_kw"), 0.0) or 0.0
+        load_samples = tuple(
+            (float(pair[0]), float(pair[1]))
+            for pair in item.get("load_samples") or []
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        )
+        if not load_samples:
+            load_samples = ((load_kw, 1.0),)
         slots.append(
             PlannerSlot(
                 start=start,
                 slot=slot,
                 import_p=import_p,
                 export_p=export_p,
-                load_kw=_number(item.get("load_kw"), 0.0) or 0.0,
+                load_kw=load_kw,
                 max_charge_current_a=max_charge,
                 max_discharge_current_a=max_discharge,
                 forced=item.get("forced"),
                 session=item.get("session"),
+                load_samples=load_samples,
+                load_source=item.get("load_source") or "",
+                follow_conservative_gate_w=_number(
+                    item.get("follow_conservative_gate_w")
+                ),
+                follow_aggressive_gate_w=_number(
+                    item.get("follow_aggressive_gate_w")
+                ),
+                follow_conservative_floor_percent=_number(
+                    item.get("follow_conservative_floor_percent")
+                ),
+                follow_aggressive_floor_percent=_number(
+                    item.get("follow_aggressive_floor_percent")
+                ),
             )
         )
     if not slots:
@@ -300,6 +336,15 @@ def _mode_color(kind: str, current: float, max_current: float) -> str:
     elif kind == "discharge":
         low = (251, 224, 208)
         high = (216, 67, 21)
+    elif kind == "follow_house_conservative":
+        low = (220, 237, 220)
+        high = (46, 125, 50)
+    elif kind == "follow_house_aggressive":
+        low = (214, 238, 237)
+        high = (0, 105, 92)
+    elif kind == "follow_solar":
+        low = (255, 248, 214)
+        high = (249, 168, 37)
     else:
         return "#e6e9ed"
     rgb = tuple(
@@ -330,6 +375,12 @@ def _current_color(kind: str, current: float, max_current: float) -> str:
     strength = max(0.0, min(1.0, abs(current) / max(max_current, 1.0)))
     if kind == "charge":
         low, high = (213, 231, 248), (8, 69, 130)
+    elif kind == "follow_house_conservative":
+        low, high = (220, 237, 220), (46, 125, 50)
+    elif kind == "follow_house_aggressive":
+        low, high = (214, 238, 237), (0, 105, 92)
+    elif kind == "follow_solar":
+        low, high = (255, 248, 214), (249, 168, 37)
     else:
         low, high = (253, 232, 220), (178, 48, 12)
     rgb = tuple(
@@ -467,7 +518,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
                         action.kind,
                         action.current_a,
                         ctx.max_charge_a
-                        if action.kind == "charge"
+                        if action.kind in ("charge", "follow_solar")
                         else ctx.max_discharge_a,
                     )
                 else:
@@ -475,7 +526,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
                         action.kind,
                         action.current_a,
                         ctx.max_charge_a
-                        if action.kind == "charge"
+                        if action.kind in ("charge", "follow_solar")
                         else ctx.max_discharge_a,
                     )
                 if slot.forced:
@@ -494,7 +545,8 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
                 )
                 title = (
                     f"{slot.start.strftime('%H:%M')} · {soc:.1f}% · "
-                    f"{action.kind} {action.current_a:.0f} A · "
+                    f"{_mode_label(action.kind)} "
+                    f"{_fmt_action_current(action.current_a, action.current_min_a, action.current_max_a)} · "
                     f"immediate {action.immediate_cost_p:.1f}p · "
                     f"future {action.future_cost_p:.1f}p · "
                     f"total {action.total_cost_p:.1f}p{margin}{target}"
@@ -713,10 +765,11 @@ def _why_text(ctx, slot_index, cell, options) -> str:
     )
     return (
         f"At {slot.start.strftime('%H:%M')} and {cell.soc_percent:.1f}% SoC, "
-        f"{best.kind} at {best.current_a:.0f} A is best: "
-        f"{comparison}. Import is {slot.import_p:.1f}p/kWh, export is "
-        f"{slot.export_p:.1f}p/kWh, load is {slot.load_kw:.2f} kW. "
-        f"{target}"
+        f"{_mode_label(best.kind)} at "
+        f"{_fmt_action_current(best.current_a, best.current_min_a, best.current_max_a)} "
+        f"is best: {comparison}. Import is {slot.import_p:.1f}p/kWh, "
+        f"export is {slot.export_p:.1f}p/kWh, load is "
+        f"{slot.load_kw:.2f} kW. {target}"
     )
 
 
@@ -746,10 +799,13 @@ def _render(history: PlannerHistory):
             why="",
             samples=[],
             no_load_forecast=False,
+            load_prior_used=False,
             load_fallback_kw=0.0,
             fmt_pct=_fmt_pct,
             fmt_time=_fmt_time,
             fmt_current=_fmt_current,
+            fmt_action_current=_fmt_action_current,
+            mode_label=_mode_label,
             fmt_pence=_fmt_pence,
             fmt_money=_fmt_money_from_pence,
         )
@@ -776,10 +832,13 @@ def _render(history: PlannerHistory):
             why="",
             samples=[],
             no_load_forecast=False,
+            load_prior_used=False,
             load_fallback_kw=0.0,
             fmt_pct=_fmt_pct,
             fmt_time=_fmt_time,
             fmt_current=_fmt_current,
+            fmt_action_current=_fmt_action_current,
+            mode_label=_mode_label,
             fmt_pence=_fmt_pence,
             fmt_money=_fmt_money_from_pence,
         )
@@ -799,6 +858,10 @@ def _render(history: PlannerHistory):
     forecast_days = int(run.get("forecast_days") or 0)
     fallback_kw = _number(
         (run.get("planner") or {}).get("load_fallback_kw"), 0.0
+    )
+    load_prior_used = any(
+        (item.get("load_source") == "prior")
+        for item in run.get("inputs") or []
     )
     return render_template(
         "policy_report.html",
@@ -820,10 +883,13 @@ def _render(history: PlannerHistory):
         why=_why_text(ctx, slot_index, cell, options),
         samples=samples,
         no_load_forecast=forecast_days <= 0,
+        load_prior_used=load_prior_used,
         load_fallback_kw=fallback_kw or 0.0,
         fmt_pct=_fmt_pct,
         fmt_time=_fmt_time,
         fmt_current=_fmt_current,
+        fmt_action_current=_fmt_action_current,
+        mode_label=_mode_label,
         fmt_pence=_fmt_pence,
         fmt_money=_fmt_money_from_pence,
     )

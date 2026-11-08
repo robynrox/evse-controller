@@ -745,8 +745,14 @@ action for every half-hour slot and every SoC state:
 - **Near ties:** cells within 1p of the next-best mode are hatched. Their exact
   current is not economically meaningful; a small forecast change can flip it.
 - **Load forecast:** if the run had no house-load profile, the page says so
-  prominently. The shadow planner uses a 0.72 kW fallback per slot instead of
-  assuming zero load.
+  prominently. Until profile history exists, the shadow planner uses a flat
+  0–400 W prior per slot, in 25 W bins; the page labels this as a prior. Once
+  real histograms exist they are used directly.
+- **Follow modes:** where the heuristic's economic gate is available, the map
+  can choose *follow house conservative*, *follow house aggressive* or *follow
+  solar*. Fixed charge/discharge arcs remain available, so the planner can
+  still prefer an exact current. The selected slot shows the conservative and
+  aggressive house-import gates and floors.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future
@@ -768,10 +774,24 @@ The shadow planner currently uses a 0.1% SoC grid. A 0.5% grid combined with
 integer currents made several currents round to the same SoC step, producing
 sawtooth current choices where the alternatives were economically almost
 identical. The finer grid removes most of that artefact; near-ties are still
-marked. The policy action space is still **fixed half-hour currents** (idle,
-charge or discharge); it does not yet model the heuristic's intra-slot
-load-following, where the Wallbox continuously tracks house load or solar
-surplus. Adding a load-follow action is a separate modelling step.
+marked.
+
+The policy action space now includes fixed half-hour currents plus follow
+modes. Each fixed arc is scored using the **expected grid cost over the slot's
+house-load histogram**, not just the median. The follow arcs apply a per-sample
+rule: follow-house discharges to cover positive house load above the
+heuristic's conservative/aggressive activation gate; follow-solar charges from
+negative net load (surplus). The DP still keeps only the SoC state; load is
+exogenous, so these are additional arcs, not additional dimensions. The
+expected cost and net SoC change are computed in one pass over the histogram,
+so the algorithm stays linear in the number of arcs and samples.
+
+The follow-house gates are the same `discharge_activation_threshold_w`
+calculation used by the live heuristic. The conservative mode uses the
+conservative gate and floor; the aggressive mode uses the aggressive gate and
+floor, including the integer-current efficiency scan and the best remaining
+export price. If the gate is unreachable or the mode is uneconomic, that follow
+arc is omitted for the slot.
 
 ##### Plan-versus-actual report (`/reports/plan`)
 

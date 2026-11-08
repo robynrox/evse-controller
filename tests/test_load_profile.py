@@ -187,6 +187,26 @@ def test_a_series_can_be_selected_for_forecast_and_actual(tmp_path):
     assert actual_solar[0].median_w == pytest.approx(3000.0, abs=BIN_WIDTH)
 
 
+def test_slot_samples_keep_the_time_weighting(tmp_path):
+    # 200-225 W for 300 s, 225-250 W for 600 s, 250-275 W for 900 s.
+    _write_day(
+        tmp_path,
+        DAY,
+        {0: {8: 300.0, 9: 600.0, 10: 900.0}},
+    )
+
+    slot = LoadProfile(tmp_path, min_days=1).for_date(DAY)[0]
+
+    assert len(slot.samples) == 3
+    assert slot.samples[0][0] == pytest.approx(212.5)
+    assert slot.samples[1][0] == pytest.approx(237.5)
+    assert slot.samples[2][0] == pytest.approx(262.5)
+    assert [weight for _, weight in slot.samples] == pytest.approx(
+        [1 / 6, 1 / 3, 1 / 2]
+    )
+    assert sum(weight for _, weight in slot.samples) == pytest.approx(1.0)
+
+
 def test_available_days_are_newest_first(tmp_path):
     _write_day(tmp_path, DAY, {0: {24: 1800.0}})
     _write_day(tmp_path, DAY - timedelta(days=1), {0: {24: 1800.0}})

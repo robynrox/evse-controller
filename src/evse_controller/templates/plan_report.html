@@ -344,15 +344,15 @@
                 {% for row in rows %}
                     <tr>
                         <td>{{ row.label }}</td>
-                        <td class="action-{{ row.planned_kind or 'idle' }}">
-                            {{ row.planned_kind or '—' }}
+                        <td class="action-{{ 'discharge' if row.planned_follow and 'house' in (row.planned_kind or '') else ('charge' if row.planned_follow else (row.planned_kind or 'idle')) }}">
+                            {{ mode_label(row.planned_kind) if row.planned_kind else '—' }}
                             {% if row.planned_kind %}
                                 <a class="why-link"
                                    href="/reports/policy?date={{ selected_date }}&amp;slot={{ row.slot }}{% if row.run_ts %}&amp;run={{ row.run_ts|urlencode }}{% endif %}{% if row.planned_soc is not none %}&amp;soc={{ '%.1f'|format(row.planned_soc) }}{% endif %}"
                                    title="Inspect this cell in the DP policy map">why</a>
                             {% endif %}
                         </td>
-                        <td>{{ fmt_current(row.planned_current_a) }}</td>
+                        <td>{{ fmt_plan_current(row.planned_current_a, row.planned_current_min_a, row.planned_current_max_a) }}</td>
                         <td>{{ fmt_soc(row.planned_soc) }}</td>
                         <td>{{ fmt_soc(row.estimated_soc) }}</td>
                         <td>{{ fmt_soc(row.reported_soc) }}</td>

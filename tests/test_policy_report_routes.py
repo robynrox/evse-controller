@@ -189,6 +189,54 @@ def test_page_warns_when_planner_params_are_missing(tmp_path):
     )
 
 
+def test_page_shows_follow_modes_and_their_gates(tmp_path):
+    run = _run(with_params=True)
+    run["forecast_days"] = 1
+    for item in run["inputs"]:
+        item["load_samples"] = [[0.1, 0.5], [0.8, 0.5]]
+        item["load_source"] = "profile"
+        item["follow_conservative_gate_w"] = 0.0
+        item["follow_aggressive_gate_w"] = 0.0
+        item["follow_conservative_floor_percent"] = 45.0
+        item["follow_aggressive_floor_percent"] = 50.0
+    store = PlannerHistory(tmp_path / "follow")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(
+        f"/reports/policy?date={DAY.isoformat()}&slot=0&soc=60"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Follow gates for this slot" in body
+    assert "follow house conservative" in body
+    assert "follow house aggressive" in body
+    assert "Starts at house import" in body
+
+
+def test_page_labels_a_prior_as_a_prior(tmp_path):
+    run = _run(with_params=True)
+    run["forecast_days"] = 0
+    for item in run["inputs"]:
+        item["load_samples"] = [[0.0125 + 0.025 * i, 1 / 16] for i in range(16)]
+        item["load_source"] = "prior"
+        item["load_kw"] = 0.2
+    store = PlannerHistory(tmp_path / "prior")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(f"/reports/policy?date={DAY.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "0–400 W prior" in body
+
+
 def test_page_warns_when_the_run_had_no_load_forecast(tmp_path):
     run = _run(with_params=True)
     run["forecast_days"] = 0

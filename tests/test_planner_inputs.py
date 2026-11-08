@@ -6,7 +6,10 @@ import pytest
 
 from evse_controller.energy_sessions import EnergySession
 from evse_controller.load_profile import SlotLoad
-from evse_controller.planner.inputs import build_planner_input
+from evse_controller.planner.inputs import (
+    build_planner_input,
+    uniform_load_prior,
+)
 from evse_controller.tariffs.source import SlotRate
 
 
@@ -89,6 +92,60 @@ def test_builds_only_the_remaining_slots():
     assert result.initial_soc == pytest.approx(60.0)
     assert result.target_soc == pytest.approx(50.0)
     assert result.forecast_days == 14
+
+
+def test_missing_profile_uses_the_uniform_prior():
+    result = build_planner_input(
+        FakeSource(import_p=20.0, export_p=10.0),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+        load_prior=uniform_load_prior(),
+    )
+
+    first = result.slots[0]
+    assert first.load_source == "prior"
+    assert len(first.load_samples) == 16
+    assert sum(weight for _, weight in first.load_samples) == pytest.approx(1)
+    assert first.load_kw == pytest.approx(0.2)
+
+
+def test_profile_samples_are_passed_through():
+    loads = [
+        SlotLoad(
+            median_w=250.0,
+            p90_w=400.0,
+            days=14,
+            coverage_s=1800,
+            samples=((200.0, 0.25), (300.0, 0.75)),
+        )
+    ] + [
+        SlotLoad(median_w=None, p90_w=None, days=0, coverage_s=0)
+        for _ in range(47)
+    ]
+    result = build_planner_input(
+        FakeSource(import_p=20.0, export_p=10.0),
+        FakeProfile(loads),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    first = result.slots[0]
+    assert first.load_source == "profile"
+    assert [kw for kw, _ in first.load_samples] == pytest.approx(
+        [0.2, 0.3]
+    )
+    assert [weight for _, weight in first.load_samples] == pytest.approx(
+        [0.25, 0.75]
+    )
 
 
 def test_free_import_overlays_the_price_but_keeps_the_session():

@@ -329,7 +329,9 @@
             <div class="banner">
                 This run had <strong>no house-load forecast</strong>
                 (forecast depth 0).
-                {% if load_fallback_kw > 0 %}
+                {% if load_prior_used %}
+                    Every slot used a flat 0–400 W prior.
+                {% elif load_fallback_kw > 0 %}
                     Every slot used the {{ '%.2f'|format(load_fallback_kw) }} kW
                     fallback.
                 {% else %}
@@ -350,8 +352,12 @@
                 <div class="label">Load forecast</div>
                 <div class="value">{{ run.forecast_days }} d</div>
                 <div class="note">
-                    {% if no_load_forecast %}
+                    {% if no_load_forecast and load_prior_used %}
+                        none · flat 0–400 W prior
+                    {% elif no_load_forecast %}
                         none · {{ '%.2f'|format(load_fallback_kw) }} kW fallback
+                    {% elif load_prior_used %}
+                        profile + prior for gaps
                     {% else %}
                         profile depth
                     {% endif %}
@@ -405,6 +411,9 @@
             <span><span class="swatch" style="background:#e6e9ed"></span>idle</span>
             <span><span class="swatch" style="background:#fbe0d0"></span>discharge, low current</span>
             <span><span class="swatch" style="background:#d84315"></span>discharge, high current</span>
+            <span><span class="swatch" style="background:#2e7d32"></span>follow house conservative</span>
+            <span><span class="swatch" style="background:#00695c"></span>follow house aggressive</span>
+            <span><span class="swatch" style="background:#f9a825"></span>follow solar</span>
             <span><span class="swatch" style="background:#7b1fa2"></span>free import</span>
             <span><span class="swatch" style="background:#00796b"></span>grid support</span>
             <span><span class="swatch hatch"></span>near-tie (&lt;1p)</span>
@@ -421,6 +430,41 @@
             <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
             {{ heatmap|safe }}
         </div>
+
+        {% if selected_slot and (selected_slot.follow_conservative_gate_w is not none or selected_slot.follow_aggressive_gate_w is not none) %}
+            <h2>Follow gates for this slot</h2>
+            <div class="table-wrap">
+                <table class="detail">
+                    <thead>
+                        <tr>
+                            <th>Mode</th>
+                            <th>Starts at house import</th>
+                            <th>SoC floor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="action-charge">follow house conservative</td>
+                            <td>
+                                {% if selected_slot.follow_conservative_gate_w is not none %}
+                                    {{ selected_slot.follow_conservative_gate_w|round(0)|int }} W
+                                {% else %}never{% endif %}
+                            </td>
+                            <td>{{ fmt_pct(selected_slot.follow_conservative_floor_percent) }}</td>
+                        </tr>
+                        <tr>
+                            <td class="action-discharge">follow house aggressive</td>
+                            <td>
+                                {% if selected_slot.follow_aggressive_gate_w is not none %}
+                                    {{ selected_slot.follow_aggressive_gate_w|round(0)|int }} W
+                                {% else %}never{% endif %}
+                            </td>
+                            <td>{{ fmt_pct(selected_slot.follow_aggressive_floor_percent) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
 
         <h2>Slot {{ selected_slot.start.strftime('%H:%M') if selected_slot else '' }} policy bands</h2>
         <div class="table-wrap">
@@ -443,9 +487,13 @@
                         <tr>
                             <td>{{ fmt_pct(band.soc_from) }} – {{ fmt_pct(band.soc_to) }}</td>
                             <td class="action-{{ band.action.kind if band.action else 'idle' }}">
-                                {{ band.action.kind if band.action else '—' }}
+                                {{ mode_label(band.action.kind) if band.action else '—' }}
                             </td>
-                            <td>{{ fmt_current(band.action.current_a) if band.action else '—' }}</td>
+                            <td>
+                                {% if band.action %}
+                                    {{ fmt_action_current(band.action.current_a, band.action.current_min_a, band.action.current_max_a) }}
+                                {% else %}—{% endif %}
+                            </td>
                             <td>{{ fmt_pence(band.action.immediate_cost_p) if band.action else '—' }}</td>
                             <td>{{ fmt_pence(band.action.future_cost_p) if band.action else '—' }}</td>
                             <td>{{ fmt_pence(band.action.total_cost_p) if band.action else '—' }}</td>
@@ -495,8 +543,8 @@
                 <tbody>
                     {% for option in options %}
                         <tr>
-                            <td class="action-{{ option.kind }}">{{ option.kind }}</td>
-                            <td>{{ fmt_current(option.current_a) }}</td>
+                            <td class="action-{{ option.kind }}">{{ mode_label(option.kind) }}</td>
+                            <td>{{ fmt_action_current(option.current_a, option.current_min_a, option.current_max_a) }}</td>
                             <td>{{ '%.2f'|format(option.ac_power_kw) }}</td>
                             <td>{{ fmt_pence(option.immediate_cost_p) }}</td>
                             <td>{{ fmt_pence(option.future_cost_p) }}</td>

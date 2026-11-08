@@ -40,6 +40,20 @@ def _fmt_current(value) -> str:
     return "—" if value is None else f"{value:,.0f} A"
 
 
+def _fmt_plan_current(value, minimum=None, maximum=None) -> str:
+    if minimum is not None and maximum is not None and minimum != maximum:
+        return f"{minimum:,.0f}–{maximum:,.0f} A"
+    return _fmt_current(value)
+
+
+def _mode_label(kind: Optional[str]) -> str:
+    return {
+        "follow_house_conservative": "follow house (conservative)",
+        "follow_house_aggressive": "follow house (aggressive)",
+        "follow_solar": "follow solar",
+    }.get(kind or "", kind or "—")
+
+
 def _fmt_kwh(value) -> str:
     return "—" if value is None else f"{value:.3f} kWh"
 
@@ -166,6 +180,9 @@ class SlotComparison:
     label: str
     planned_kind: Optional[str]
     planned_current_a: Optional[float]
+    planned_current_min_a: Optional[float]
+    planned_current_max_a: Optional[float]
+    planned_follow: bool
     planned_ac_power_kw: Optional[float]
     planned_soc: Optional[float]
     estimated_soc: Optional[float]
@@ -249,6 +266,19 @@ def _build_rows(
                     _number(action.get("commanded_current_a"))
                     if action is not None
                     else None
+                ),
+                planned_current_min_a=(
+                    _number(action.get("current_min_a"))
+                    if action is not None
+                    else None
+                ),
+                planned_current_max_a=(
+                    _number(action.get("current_max_a"))
+                    if action is not None
+                    else None
+                ),
+                planned_follow=bool(
+                    action is not None and action.get("follow")
                 ),
                 planned_ac_power_kw=(
                     _number(action.get("ac_power_kw"))
@@ -475,6 +505,8 @@ def _render_report(history: PlannerHistory, log, day: date):
         chart=_soc_chart(rows),
         fmt_soc=_fmt_soc,
         fmt_current=_fmt_current,
+        fmt_plan_current=_fmt_plan_current,
+        mode_label=_mode_label,
         fmt_kwh=_fmt_kwh,
         fmt_price=_fmt_price,
         fmt_pence=_fmt_pence,
@@ -557,6 +589,9 @@ def register_plan_report_routes(
                         "slot": row.slot,
                         "planned_kind": row.planned_kind,
                         "planned_current_a": row.planned_current_a,
+                        "planned_current_min_a": row.planned_current_min_a,
+                        "planned_current_max_a": row.planned_current_max_a,
+                        "planned_follow": row.planned_follow,
                         "planned_soc": row.planned_soc,
                         "estimated_soc": row.estimated_soc,
                         "reported_soc": row.reported_soc,

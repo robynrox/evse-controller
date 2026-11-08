@@ -13,7 +13,10 @@ from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.load_profile import LoadProfile, SlotLoad
 from evse_controller.planner.dp import DpPlanner
 from evse_controller.planner.history import PlannerHistory
-from evse_controller.planner.inputs import build_planner_input
+from evse_controller.planner.inputs import (
+    build_planner_input,
+    uniform_load_prior,
+)
 from evse_controller.planner.soc_estimator import SocEstimator
 from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
@@ -24,7 +27,7 @@ import copy
 from collections import deque
 from typing import Optional
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 import html as html_module
@@ -967,6 +970,63 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
 
+    def _with_follow_gates(self, planner_input):
+        """Attach the heuristic's conservative/aggressive follow gates.
+
+        The gate is the smallest house import at which a minimum-output
+        discharge repays the stored energy.  Computing it here means the
+        planner and the live heuristic share the same economic threshold,
+        including the integer-current efficiency steps, stored-energy cost
+        and profit margin.
+        """
+        slots = list(planner_input.slots)
+        conservative_floor = max(
+            float(config.CONSERVATIVE_SOC_LOWER_LIMIT),
+            self.absolute_min_soc_percent(),
+        )
+        aggressive_floor = max(
+            float(config.AGGRESSIVE_SOC_LOWER_LIMIT),
+            self.absolute_min_soc_percent(),
+        )
+        for index, slot in enumerate(slots):
+            if slot.forced:
+                continue
+            alternative_rate_p = max(
+                (
+                    later.export_p
+                    for later in slots[index + 1:]
+                    if later.export_p is not None
+                ),
+                default=0.0,
+            )
+            conservative_gate = self.discharge_activation_threshold_w(
+                slot.export_p,
+                import_rate_p=slot.import_p,
+                aggressive=False,
+            )
+            aggressive_gate = self.discharge_activation_threshold_w(
+                slot.export_p,
+                import_rate_p=slot.import_p,
+                aggressive=True,
+                alternative_rate_p=alternative_rate_p,
+            )
+            if conservative_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                conservative_gate = None
+            if aggressive_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                aggressive_gate = None
+            slots[index] = replace(
+                slot,
+                follow_conservative_gate_w=(
+                    None if conservative_gate is None else float(conservative_gate)
+                ),
+                follow_aggressive_gate_w=(
+                    None if aggressive_gate is None else float(aggressive_gate)
+                ),
+                follow_conservative_floor_percent=conservative_floor,
+                follow_aggressive_floor_percent=aggressive_floor,
+            )
+        return replace(planner_input, slots=tuple(slots))
+
     def _record_decision_history(self, snapshot, result=None) -> None:
         """Record the heuristic's mode once per slot, or when it changes.
 
@@ -1056,8 +1116,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     config.WALLBOX_MAX_DISCHARGE_CURRENT
                 ),
                 load_fallback_kw=float(self.SHADOW_LOAD_FALLBACK_KW),
+                load_prior=uniform_load_prior(),
                 unknown_export_p=0.0,
             )
+            planner_input = self._with_follow_gates(planner_input)
             planner = DpPlanner(
                 efficiency_model=self.EFFICIENCY_MODEL,
                 capacity_kwh=self.SOC_CAPACITY_KWH,
@@ -1125,6 +1187,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "load_fallback_kw": float(
                     planner_input.load_fallback_kw
                 ),
+                "load_prior": "uniform_0_400",
                 "max_charge_current_a": float(
                     config.WALLBOX_MAX_CHARGE_CURRENT
                 ),
@@ -1145,6 +1208,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "soc_after": action.soc_after,
                     "cost_p": round(action.cost_p, 3),
                     "session": action.session,
+                    "current_min_a": action.current_min_a,
+                    "current_max_a": action.current_max_a,
+                    "follow": action.follow,
                 }
                 for action in result.actions
             ],
@@ -1157,8 +1223,25 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "import_p": slot.import_p,
                     "export_p": slot.export_p,
                     "load_kw": slot.load_kw,
+                    "load_samples": [
+                        [round(kw, 6), round(weight, 6)]
+                        for kw, weight in slot.load_samples
+                    ],
+                    "load_source": slot.load_source,
                     "session": slot.session,
                     "forced": slot.forced,
+                    "follow_conservative_gate_w": (
+                        slot.follow_conservative_gate_w
+                    ),
+                    "follow_aggressive_gate_w": (
+                        slot.follow_aggressive_gate_w
+                    ),
+                    "follow_conservative_floor_percent": (
+                        slot.follow_conservative_floor_percent
+                    ),
+                    "follow_aggressive_floor_percent": (
+                        slot.follow_aggressive_floor_percent
+                    ),
                 }
                 for index, slot in enumerate(planner_input.slots)
             ],

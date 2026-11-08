@@ -4862,7 +4862,16 @@ class TestShadowPlannerAndEstimator:
         assert run["planner"]["capacity_kwh"] > 0
         assert run["planner"]["soc_step_percent"] == 0.1
         assert run["planner"]["load_fallback_kw"] == pytest.approx(0.72)
+        assert run["planner"]["load_prior"] == "uniform_0_400"
         assert run["planner"]["efficiency_model"]["points"]
+        assert any(
+            item["load_source"] == "prior" for item in run["inputs"]
+        )
+        assert run["inputs"][0]["load_samples"]
+        assert any(
+            item["follow_aggressive_gate_w"] is not None
+            for item in run["inputs"]
+        )
 
         decisions = tariff._history.decisions_for_day(today)
         assert len(decisions) == 1

@@ -32,6 +32,8 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 SLOT_HOURS = 0.5
+VOLTAGE_V = 240.0
+AGGRESSIVE_DISCHARGE_BIAS_A = 0.5
 
 #: Ranking penalty for ending below the target SoC.  It is not a real cost;
 #: it makes the backward policy prefer a feasible target over a cheaper path
@@ -69,6 +71,16 @@ class PlannerSlot:
     max_discharge_current_a: float = 32.0
     forced: Optional[str] = None
     session: Optional[str] = None
+    #: Time-weighted net house-load samples as ``(load_kw, weight)``.  Empty
+    #: means the planner uses ``load_kw`` alone.
+    load_samples: tuple[tuple[float, float], ...] = ()
+    load_source: str = ""
+    #: House-import gates from the heuristic's conservative/aggressive
+    #: discharge calculation.  ``None`` disables that follow arc.
+    follow_conservative_gate_w: Optional[float] = None
+    follow_aggressive_gate_w: Optional[float] = None
+    follow_conservative_floor_percent: Optional[float] = None
+    follow_aggressive_floor_percent: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -85,9 +97,12 @@ class PlannerAction:
     soc_after: float
     cost_p: float
     session: Optional[str] = None
+    current_min_a: Optional[float] = None
+    current_max_a: Optional[float] = None
+    follow: bool = False
 
     @property
-    def commanded_current_a(self) -> int:
+    def commanded_current_a(self) -> Optional[int]:
         """The nearest whole-amp command for the Wallbox.
 
         ``current_a`` is the continuous optimum from the measured curve.  The
@@ -97,6 +112,8 @@ class PlannerAction:
         """
         if self.kind == "idle":
             return 0
+        if self.follow:
+            return None
         return max(0, int(round(self.current_a)))
 
 
@@ -124,6 +141,9 @@ class PolicyOption:
     future_cost_p: float
     total_cost_p: float
     policy_cost_p: float
+    current_min_a: Optional[float] = None
+    current_max_a: Optional[float] = None
+    follow: bool = False
     feasible: bool = True
     reason: str = ""
 
@@ -178,6 +198,10 @@ class _ActionTemplate:
     delta_steps: int
     cost_p: float
     session: Optional[str]
+    current_min_a: Optional[float] = None
+    current_max_a: Optional[float] = None
+    floor_percent: Optional[float] = None
+    follow: bool = False
 
 
 class DpPlanner:
@@ -510,6 +534,9 @@ class DpPlanner:
                     future_cost_p=future_energy,
                     total_cost_p=template.cost_p + future_energy,
                     policy_cost_p=template.cost_p + future_policy,
+                    current_min_a=template.current_min_a,
+                    current_max_a=template.current_max_a,
+                    follow=template.follow,
                 )
 
                 mode_best: dict[str, float] = {}
@@ -578,6 +605,9 @@ class DpPlanner:
                     soc_after=next_state * self.soc_step_percent,
                     cost_p=template.cost_p,
                     session=template.session,
+                    current_min_a=template.current_min_a,
+                    current_max_a=template.current_max_a,
+                    follow=template.follow,
                 )
             )
             state = next_state
@@ -640,6 +670,9 @@ class DpPlanner:
                     future_cost_p=future_energy,
                     total_cost_p=template.cost_p + future_energy,
                     policy_cost_p=template.cost_p + future_policy,
+                    current_min_a=template.current_min_a,
+                    current_max_a=template.current_max_a,
+                    follow=template.follow,
                 )
             )
         options.sort(key=lambda option: option.policy_cost_p)
@@ -691,7 +724,24 @@ class DpPlanner:
             and next_soc > self.charge_cap_percent + 1e-9
         ):
             return None
-        if next_state == state and template.kind != "idle":
+        if template.floor_percent is not None and (
+            next_soc < template.floor_percent - 1e-9
+        ):
+            return None
+        if template.follow:
+            if template.delta_steps > 0 and (
+                next_soc > self.charge_cap_percent + 1e-9
+            ):
+                return None
+            if template.delta_steps < 0 and (
+                next_soc < self.protection_floor_percent - 1e-9
+            ):
+                return None
+        if (
+            next_state == state
+            and template.kind != "idle"
+            and not template.follow
+        ):
             return None
         return next_state
 
@@ -729,7 +779,168 @@ class DpPlanner:
         if forced:
             raise ValueError(f"Unknown forced action: {slot.forced}")
 
-        return [idle] + self._integer_templates(slot)
+        templates = [idle] + self._integer_templates(slot)
+        if slot.follow_conservative_gate_w is not None:
+            template = self._follow_house_template(
+                slot,
+                gate_w=slot.follow_conservative_gate_w,
+                aggressive=False,
+                floor_percent=slot.follow_conservative_floor_percent,
+                kind="follow_house_conservative",
+            )
+            if template is not None:
+                templates.append(template)
+        if slot.follow_aggressive_gate_w is not None:
+            template = self._follow_house_template(
+                slot,
+                gate_w=slot.follow_aggressive_gate_w,
+                aggressive=True,
+                floor_percent=slot.follow_aggressive_floor_percent,
+                kind="follow_house_aggressive",
+            )
+            if template is not None:
+                templates.append(template)
+        solar = self._follow_solar_template(slot)
+        if solar is not None:
+            templates.append(solar)
+        return templates
+
+    def _follow_house_template(
+        self,
+        slot: PlannerSlot,
+        *,
+        gate_w: float,
+        aggressive: bool,
+        floor_percent: Optional[float],
+        kind: str,
+    ) -> Optional[_ActionTemplate]:
+        samples = slot.load_samples or ((slot.load_kw, 1.0),)
+        if gate_w is None or gate_w >= 1e8:
+            return None
+        minimum = int(math.ceil(self.min_current_a - 1e-9))
+        maximum = int(math.floor(slot.max_discharge_current_a + 1e-9))
+        if maximum < minimum:
+            return None
+
+        expected_cost = 0.0
+        net_stored = 0.0
+        gross_stored = 0.0
+        signed_ac = 0.0
+        currents = []
+        for load_kw, weight in samples:
+            load_w = max(0.0, float(load_kw) * 1000.0)
+            if load_w <= 0 or load_w + 1e-9 < gate_w:
+                expected_cost += weight * self._grid_energy_cost_at(
+                    slot, load_kw, 0.0
+                )
+                continue
+            raw = load_w / VOLTAGE_V
+            if aggressive:
+                raw += AGGRESSIVE_DISCHARGE_BIAS_A
+                current = int(round(raw))
+            else:
+                current = int(math.floor(raw))
+            current = max(minimum, min(maximum, current))
+            ac_kw = float(
+                self.efficiency_model.discharge_ac_power_kw(current)
+            )
+            efficiency = float(
+                self.efficiency_model.discharge_efficiency(current)
+            )
+            stored = ac_kw * SLOT_HOURS / max(efficiency, 1e-9)
+            expected_cost += weight * self._grid_energy_cost_at(
+                slot, load_kw, -ac_kw
+            )
+            net_stored += weight * stored
+            gross_stored += weight * stored
+            signed_ac -= weight * ac_kw
+            currents.append(current)
+
+        if not currents:
+            return None
+        delta_soc = -net_stored / self.capacity_kwh * 100.0
+        steps = int(round(delta_soc / self.soc_step_percent))
+        return _ActionTemplate(
+            kind=kind,
+            current_a=sum(currents) / len(currents),
+            ac_power_kw=signed_ac,
+            stored_kwh=net_stored,
+            delta_soc=steps * self.soc_step_percent,
+            delta_steps=steps,
+            cost_p=(
+                expected_cost
+                + self.degradation_p_per_kwh * gross_stored
+            ),
+            session=slot.session,
+            current_min_a=float(min(currents)),
+            current_max_a=float(max(currents)),
+            floor_percent=floor_percent,
+            follow=True,
+        )
+
+    def _follow_solar_template(
+        self, slot: PlannerSlot
+    ) -> Optional[_ActionTemplate]:
+        samples = slot.load_samples or ((slot.load_kw, 1.0),)
+        minimum = int(math.ceil(self.min_current_a - 1e-9))
+        maximum = int(math.floor(slot.max_charge_current_a + 1e-9))
+        if maximum < minimum:
+            return None
+
+        expected_cost = 0.0
+        net_stored = 0.0
+        gross_stored = 0.0
+        signed_ac = 0.0
+        currents = []
+        for load_kw, weight in samples:
+            if load_kw >= 0:
+                expected_cost += weight * self._grid_energy_cost_at(
+                    slot, load_kw, 0.0
+                )
+                continue
+            surplus_w = -float(load_kw) * 1000.0
+            current = int(math.floor(surplus_w / VOLTAGE_V))
+            if current < minimum:
+                expected_cost += weight * self._grid_energy_cost_at(
+                    slot, load_kw, 0.0
+                )
+                continue
+            current = min(maximum, current)
+            ac_kw = float(
+                self.efficiency_model.charge_ac_power_kw(current)
+            )
+            efficiency = float(
+                self.efficiency_model.charge_efficiency(current)
+            )
+            stored = ac_kw * SLOT_HOURS * efficiency
+            expected_cost += weight * self._grid_energy_cost_at(
+                slot, load_kw, ac_kw
+            )
+            net_stored += weight * stored
+            gross_stored += weight * stored
+            signed_ac += weight * ac_kw
+            currents.append(current)
+
+        if not currents:
+            return None
+        delta_soc = net_stored / self.capacity_kwh * 100.0
+        steps = int(round(delta_soc / self.soc_step_percent))
+        return _ActionTemplate(
+            kind="follow_solar",
+            current_a=sum(currents) / len(currents),
+            ac_power_kw=signed_ac,
+            stored_kwh=net_stored,
+            delta_soc=steps * self.soc_step_percent,
+            delta_steps=steps,
+            cost_p=(
+                expected_cost
+                + self.degradation_p_per_kwh * gross_stored
+            ),
+            session=slot.session,
+            current_min_a=float(min(currents)),
+            current_max_a=float(max(currents)),
+            follow=True,
+        )
 
     def _integer_templates(
         self, slot: PlannerSlot
@@ -794,18 +1005,34 @@ class DpPlanner:
             session=slot.session,
         )
 
+    @staticmethod
+    def _grid_energy_cost_at(
+        slot: PlannerSlot,
+        load_kw: float,
+        wallbox_ac_kw: float,
+    ) -> float:
+        net_kw = float(load_kw) + wallbox_ac_kw
+        import_kw = max(net_kw, 0.0)
+        export_kw = max(-net_kw, 0.0)
+        return (
+            float(slot.import_p) * import_kw * SLOT_HOURS
+            - float(slot.export_p) * export_kw * SLOT_HOURS
+        )
+
     def _grid_cost(
         self,
         slot: PlannerSlot,
         wallbox_ac_kw: float,
         stored_kwh: float,
     ) -> float:
-        net_kw = float(slot.load_kw) + wallbox_ac_kw
-        import_kw = max(net_kw, 0.0)
-        export_kw = max(-net_kw, 0.0)
+        samples = slot.load_samples or ((slot.load_kw, 1.0),)
+        expected = sum(
+            weight
+            * self._grid_energy_cost_at(slot, load_kw, wallbox_ac_kw)
+            for load_kw, weight in samples
+        )
         return (
-            float(slot.import_p) * import_kw * SLOT_HOURS
-            - float(slot.export_p) * export_kw * SLOT_HOURS
+            expected
             + self.degradation_p_per_kwh * abs(stored_kwh)
         )
 
@@ -868,6 +1095,9 @@ class DpPlanner:
                     soc_after=state * self.soc_step_percent,
                     cost_p=template.cost_p,
                     session=template.session,
+                    current_min_a=template.current_min_a,
+                    current_max_a=template.current_max_a,
+                    follow=template.follow,
                 )
             )
             state = previous

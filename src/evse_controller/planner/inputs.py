@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from evse_controller.energy_sessions import EnergySession
 from evse_controller.planner.dp import PlannerSlot
@@ -60,6 +60,26 @@ def _price(
     raise ValueError(f"No {label} price for slot {slot}")
 
 
+def uniform_load_prior(
+    min_kw: float = 0.0,
+    max_kw: float = 0.4,
+    step_kw: float = 0.025,
+) -> tuple[tuple[float, float], ...]:
+    """A flat 0–400 W prior, one sample per 25 W bin midpoint."""
+    if max_kw <= min_kw or step_kw <= 0:
+        return ()
+    samples = []
+    value = min_kw
+    while value < max_kw - 1e-12:
+        upper = min(max_kw, value + step_kw)
+        samples.append(((value + upper) / 2.0, 0.0))
+        value = upper
+    if not samples:
+        return ()
+    weight = 1.0 / len(samples)
+    return tuple((load_kw, weight) for load_kw, _ in samples)
+
+
 def build_planner_input(
     source: "TariffSource",
     load_profile,
@@ -71,6 +91,7 @@ def build_planner_input(
     max_charge_current_a: float,
     max_discharge_current_a: float,
     load_fallback_kw: float = 0.0,
+    load_prior: Optional[Sequence[tuple[float, float]]] = None,
     unknown_import_p: Optional[float] = None,
     unknown_export_p: Optional[float] = 0.0,
 ) -> PlannerInput:
@@ -117,10 +138,39 @@ def build_planner_input(
             slot=index,
         )
         load_kw = load_fallback_kw
+        load_samples: tuple[tuple[float, float], ...] = ()
+        load_source = "fallback"
         if index < len(loads):
             stats = loads[index]
             if stats is not None and stats.median_w is not None:
                 load_kw = max(0.0, float(stats.median_w) / 1000.0)
+                load_source = "profile"
+                if stats.samples:
+                    load_samples = tuple(
+                        (max(0.0, watts) / 1000.0, weight)
+                        for watts, weight in stats.samples
+                    )
+                else:
+                    load_samples = ((load_kw, 1.0),)
+        if not load_samples:
+            if load_prior:
+                load_samples = tuple(
+                    (max(0.0, float(kw)), max(0.0, float(weight)))
+                    for kw, weight in load_prior
+                )
+                total_weight = sum(weight for _, weight in load_samples)
+                if total_weight > 0:
+                    load_samples = tuple(
+                        (kw, weight / total_weight)
+                        for kw, weight in load_samples
+                    )
+                    load_kw = sum(
+                        kw * weight for kw, weight in load_samples
+                    )
+                    load_source = "prior"
+            if not load_samples:
+                load_samples = ((load_kw, 1.0),)
+                load_source = "fallback"
 
         session = _session_for(rate.start, sessions)
         forced = None
@@ -145,6 +195,8 @@ def build_planner_input(
                 max_discharge_current_a=max_discharge_current_a,
                 forced=forced,
                 session=session_name,
+                load_samples=load_samples,
+                load_source=load_source,
             )
         )
 

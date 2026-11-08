@@ -41,6 +41,9 @@ class SlotLoad:
     coverage_s: float
     p10_w: Optional[float] = None
     mean_w: Optional[float] = None
+    #: Sparse time-weighted samples as ``(watts, weight)``.  Condensed into a
+    #: small number of adjacent-bin groups when a slot contains many bins.
+    samples: tuple[tuple[float, float], ...] = ()
 
     @property
     def available(self) -> bool:
@@ -194,7 +197,56 @@ class LoadProfile:
             coverage_s=coverage_s,
             p10_w=self._percentile(bins, 0.10),
             mean_w=self._mean(bins),
+            samples=self._samples(bins),
         )
+
+    def _samples(
+        self, bins: dict[int, float]
+    ) -> tuple[tuple[float, float], ...]:
+        """Time-weighted load samples for expected-cost planning.
+
+        The histograms are already a time distribution.  Keeping the bins as
+        samples preserves their relative weights exactly; a slot with more
+        than 24 bins is grouped into adjacent time-balanced buckets so the
+        history and the planner stay compact.
+        """
+        items = [
+            (index, seconds)
+            for index, seconds in sorted(bins.items())
+            if seconds > 0
+        ]
+        total = sum(seconds for _, seconds in items)
+        if total <= 0:
+            return ()
+
+        max_samples = 24
+        if len(items) <= max_samples:
+            return tuple(
+                ((index + 0.5) * self.bin_width_w, seconds / total)
+                for index, seconds in items
+            )
+
+        target = total / max_samples
+        samples: list[tuple[float, float]] = []
+        group_seconds = 0.0
+        group_weighted_w = 0.0
+        for index, seconds in items:
+            group_seconds += seconds
+            group_weighted_w += (index + 0.5) * self.bin_width_w * seconds
+            if (
+                group_seconds >= target
+                and len(samples) < max_samples - 1
+            ):
+                samples.append(
+                    (group_weighted_w / group_seconds, group_seconds / total)
+                )
+                group_seconds = 0.0
+                group_weighted_w = 0.0
+        if group_seconds > 0:
+            samples.append(
+                (group_weighted_w / group_seconds, group_seconds / total)
+            )
+        return tuple(samples)
 
     def _mean(self, bins: dict[int, float]) -> float:
         total = sum(value for value in bins.values() if value > 0)

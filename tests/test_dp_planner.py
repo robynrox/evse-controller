@@ -1,5 +1,6 @@
 """Synthetic optima for the pure-Python DP planner."""
 
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 
 import pytest
@@ -172,6 +173,59 @@ def test_policy_only_uses_integer_currents_within_the_wallbox_limit(limit):
     assert sorted(charge) == expected
     assert sorted(discharge) == expected
     assert all(value.is_integer() for value in charge + discharge)
+
+
+def test_grid_cost_uses_the_load_distribution():
+    p = planner()
+    sample_slot = replace(
+        slot(0, import_p=20.0, export_p=0.0, load_kw=0.1),
+        load_samples=((0.1, 0.5), (0.9, 0.5)),
+    )
+
+    # Mean load is 0.5 kW for half an hour at 20p.
+    assert p._grid_cost(sample_slot, 0.0, 0.0) == pytest.approx(5.0)
+
+
+def test_follow_house_arcs_use_gates_and_load_samples():
+    p = planner()
+    sample_slot = replace(
+        slot(0, import_p=20.0, export_p=5.0, load_kw=0.3),
+        load_samples=((0.3, 0.5), (1.0, 0.5)),
+        follow_conservative_gate_w=0.0,
+        follow_aggressive_gate_w=0.0,
+        follow_conservative_floor_percent=45.0,
+        follow_aggressive_floor_percent=50.0,
+    )
+    policy = p.policy([sample_slot], 60.0)
+    options = p.options(policy, 0, 120)
+
+    by_kind = {option.kind: option for option in options}
+    assert "follow_house_conservative" in by_kind
+    assert "follow_house_aggressive" in by_kind
+    conservative = by_kind["follow_house_conservative"]
+    aggressive = by_kind["follow_house_aggressive"]
+    assert conservative.current_min_a == pytest.approx(3.0)
+    assert conservative.current_max_a == pytest.approx(4.0)
+    assert aggressive.current_min_a == pytest.approx(3.0)
+    assert aggressive.current_max_a == pytest.approx(5.0)
+    assert conservative.follow and aggressive.follow
+
+
+def test_follow_solar_charges_only_from_negative_load():
+    p = planner()
+    sample_slot = replace(
+        slot(0, import_p=20.0, export_p=5.0, load_kw=-0.5),
+        load_samples=((-0.8, 0.5), (0.2, 0.5)),
+    )
+    policy = p.policy([sample_slot], 50.0)
+    options = p.options(policy, 0, 100)
+
+    solar = next(
+        option for option in options if option.kind == "follow_solar"
+    )
+    assert solar.follow
+    assert solar.current_min_a == pytest.approx(3.0)
+    assert solar.current_max_a == pytest.approx(3.0)
 
 
 def test_flat_prices_leave_the_pack_alone():
