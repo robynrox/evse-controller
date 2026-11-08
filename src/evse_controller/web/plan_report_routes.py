@@ -81,10 +81,12 @@ def _latest_per_slot(samples: list[dict]) -> dict[int, dict]:
 
 
 def _decision_per_slot(decisions: list[dict]) -> dict[int, dict]:
-    """The decision that was in force in each slot.
+    """The decision in force at the end of each slot that has one.
 
-    A mode typically carries over from the slot where it was chosen until it
-    changes, so slots without their own entry inherit the previous one.
+    Do not carry a decision into later slots.  A missing entry means the
+    controller has not reached that slot yet, or did not record a decision;
+    showing the previous slot's mode there would describe the future with
+    hindsight the system did not have.
     """
     by_slot: dict[int, list[dict]] = {}
     for decision in decisions:
@@ -93,20 +95,34 @@ def _decision_per_slot(decisions: list[dict]) -> dict[int, dict]:
             by_slot.setdefault(slot, []).append(decision)
 
     result: dict[int, dict] = {}
-    current = None
     for slot in range(SLOTS_PER_DAY):
-        entries = by_slot.get(slot)
-        if entries:
-            current = entries[0]
-        if current is not None:
-            result[slot] = {
-                "mode": current.get("mode"),
-                "soc": current.get("soc"),
-                "target_soc": current.get("target_soc"),
-                "projected_soc_2330": current.get("projected_soc_2330"),
-                "shortfall": current.get("shortfall"),
-                "changes": len(entries) if entries else 0,
-            }
+        entries = sorted(
+            by_slot.get(slot, []),
+            key=lambda item: str(item.get("ts") or ""),
+        )
+        if not entries:
+            continue
+        last = entries[-1]
+        result[slot] = {
+            "mode": last.get("mode"),
+            "control_state": last.get("control_state"),
+            "message": last.get("message"),
+            "reason": last.get("reason"),
+            "soc": last.get("soc"),
+            "target_soc": last.get("target_soc"),
+            "projected_soc_2330": last.get("projected_soc_2330"),
+            "shortfall": last.get("shortfall"),
+            "changes": len(entries),
+            "history": [
+                {
+                    "ts": item.get("ts"),
+                    "mode": item.get("mode"),
+                    "control_state": item.get("control_state"),
+                    "reason": item.get("reason"),
+                }
+                for item in entries
+            ],
+        }
     return result
 
 
@@ -163,7 +179,10 @@ class SlotComparison:
     planned_cost_p: Optional[float]
     actual_net_cost_p: Optional[float]
     mode: Optional[str]
+    control_state: Optional[str]
     mode_changes: int
+    mode_detail: str
+    run_ts: Optional[str]
 
 
 def _actual_kind(charged, discharged, covered: bool) -> Optional[str]:
@@ -194,7 +213,7 @@ def _build_rows(
 
     rows: list[SlotComparison] = []
     for slot in range(SLOTS_PER_DAY):
-        action = planned.get(slot, (None, None))[1]
+        run, action = planned.get(slot, (None, None))
         sample = samples.get(slot)
         mode = modes.get(slot) or {}
         daily = daily_slots[slot] if slot < len(daily_slots) else {}
@@ -256,7 +275,22 @@ def _build_rows(
                     actual_cost * 100.0 if actual_cost is not None else None
                 ),
                 mode=mode.get("mode"),
+                control_state=mode.get("control_state"),
                 mode_changes=int(mode.get("changes") or 0),
+                mode_detail="\n".join(
+                    " · ".join(
+                        part
+                        for part in (
+                            item.get("ts"),
+                            item.get("control_state"),
+                            item.get("mode"),
+                            item.get("reason"),
+                        )
+                        if part
+                    )
+                    for item in mode.get("history") or []
+                ),
+                run_ts=(run or {}).get("ts"),
             )
         )
     return rows
@@ -535,6 +569,9 @@ def register_plan_report_routes(
                         "planned_cost_p": row.planned_cost_p,
                         "actual_net_cost_p": row.actual_net_cost_p,
                         "mode": row.mode,
+                        "control_state": row.control_state,
+                        "mode_changes": row.mode_changes,
+                        "run_ts": row.run_ts,
                     }
                     for row in rows
                 ],

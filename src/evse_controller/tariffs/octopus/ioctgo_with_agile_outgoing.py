@@ -958,15 +958,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
 
-    def _record_decision_history(self, snapshot) -> None:
-        """Record the heuristic's mode once per slot, or when it changes."""
+    def _record_decision_history(self, snapshot, result=None) -> None:
+        """Record the heuristic's mode once per slot, or when it changes.
+
+        The mode is written after ``get_control_state`` returns, so the record
+        carries the actual ``ControlState`` and message, not just the intent
+        built before the return.  Every change within a slot is retained; the
+        report can then show the sequence rather than guessing from the first
+        line.
+        """
         if not self._shadow_enabled:
             return
         updated_at = snapshot.updated_at
         if updated_at is None:
             return
         slot = updated_at.hour * 2 + (1 if updated_at.minute >= 30 else 0)
-        key = (slot, snapshot.mode)
+        control_state = None
+        message = ""
+        if result is not None:
+            control_state = getattr(result[0], "name", str(result[0]))
+            if len(result) > 3:
+                message = str(result[3])
+        key = (slot, control_state, snapshot.mode)
         if key == self._last_decision_history_key:
             return
         try:
@@ -976,6 +989,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "ts": updated_at.isoformat(),
                     "slot": slot,
                     "mode": snapshot.mode,
+                    "control_state": control_state,
+                    "message": message,
                     "reason": snapshot.reason,
                     "soc": snapshot.soc_percent,
                     "target_soc": snapshot.target_soc_percent,
@@ -1067,8 +1082,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # a shadow plan must never break control
             warning(f"IOCTGO_AGILEOUT: Shadow DP plan failed: {exc}")
 
-    @staticmethod
     def _shadow_run_dict(
+        self,
         now,
         current_slot: int,
         reported_soc: float,
@@ -1088,6 +1103,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "relaxed": result.relaxed,
             "final_soc": result.final_soc,
             "total_cost_p": result.total_cost_p,
+            "planner": {
+                "capacity_kwh": self.SOC_CAPACITY_KWH,
+                "soc_step_percent": 0.5,
+                "min_current_a": float(self.MIN_DISCHARGE_CURRENT),
+                "charge_cap_percent": self.charge_cap_percent(),
+                "protection_floor_percent": self.absolute_min_soc_percent(),
+                "target_soc_percent": float(
+                    config.AGGRESSIVE_SOC_LOWER_LIMIT
+                ),
+                "degradation_p_per_kwh": 0.0,
+                "max_charge_current_a": float(
+                    config.WALLBOX_MAX_CHARGE_CURRENT
+                ),
+                "max_discharge_current_a": float(
+                    config.WALLBOX_MAX_DISCHARGE_CURRENT
+                ),
+                "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
+            },
             "actions": [
                 {
                     "slot": action.slot,
@@ -3720,7 +3753,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ledger_saved_today_gbp=float(self._saved_today_gbp),
         )
         self._decision_snapshot = snapshot
-        self._record_decision_history(snapshot)
         self._log_decision_summary(snapshot)
         return snapshot
 
@@ -6900,6 +6932,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return required_amps
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
+        """Return the heuristic decision and record what was actually chosen.
+
+        The decision builder is kept separate so history can be written after
+        it returns: the mode, ``ControlState`` and message then describe the
+        action that will really be applied, not an intermediate branch.
+        """
+        previous = self._decision_snapshot
+        result = self._decide_control_state(state, dayMinute)
+        if self._decision_snapshot is not previous:
+            self._record_decision_history(self._decision_snapshot, result)
+        return result
+
+    def _decide_control_state(
+        self, state: EvseAsyncState, dayMinute: int
+    ) -> tuple:
         """Determine charging strategy based on time, battery level, and export plan.
 
         Logic:

@@ -49,6 +49,9 @@ from evse_controller.web.data_quality_routes import (
 from evse_controller.web.backtest_routes import (
     register_backtest_routes,
 )
+from evse_controller.web.policy_report_routes import (
+    register_policy_report_routes,
+)
 from evse_controller.energy_sessions import (
     EV_AWAY,
     FREE_IMPORT,
@@ -990,6 +993,7 @@ register_component_report_routes(app)
 register_export_report_routes(app)
 register_data_quality_routes(app)
 register_backtest_routes(app)
+register_policy_report_routes(app)
 
 
 # Run the Flask app in a separate thread

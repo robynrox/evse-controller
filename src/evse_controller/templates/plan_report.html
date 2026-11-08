@@ -141,10 +141,38 @@
     table.detail td:first-child { text-align: left; }
     table.detail td.mode {
         text-align: left;
-        max-width: 260px;
+        max-width: 320px;
         overflow: hidden;
         text-overflow: ellipsis;
     }
+    .control-state {
+        display: inline-block;
+        padding: 0 5px;
+        margin-right: 4px;
+        border-radius: 3px;
+        background: #eef2f7;
+        color: #33475b;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .03em;
+    }
+    .mode-count {
+        color: #888;
+        font-size: 10px;
+        margin-left: 3px;
+    }
+    .why-link {
+        display: inline-block;
+        margin-left: 4px;
+        padding: 0 4px;
+        border: 1px solid #c9d2dc;
+        border-radius: 3px;
+        color: #0b5cad;
+        font-size: 10px;
+        font-weight: 700;
+        text-decoration: none;
+    }
+    .why-link:hover { background: #eef4fb; }
     .action-charge { color: #0b5cad; font-weight: 700; }
     .action-discharge { color: #e65100; font-weight: 700; }
     .action-idle { color: #777; }
@@ -181,6 +209,7 @@
         <a href="/reports/export">Export</a>
         <a href="/reports/data-quality">Data quality</a>
         <a href="/reports/backtest">DP backtest</a>
+        <a href="/reports/policy">DP policy</a>
         <span class="spacer"></span>
         <a href="/reports/plan">Today</a>
     </div>
@@ -317,6 +346,11 @@
                         <td>{{ row.label }}</td>
                         <td class="action-{{ row.planned_kind or 'idle' }}">
                             {{ row.planned_kind or '—' }}
+                            {% if row.planned_kind %}
+                                <a class="why-link"
+                                   href="/reports/policy?date={{ selected_date }}&amp;slot={{ row.slot }}{% if row.run_ts %}&amp;run={{ row.run_ts|urlencode }}{% endif %}{% if row.planned_soc is not none %}&amp;soc={{ '%.1f'|format(row.planned_soc) }}{% endif %}"
+                                   title="Inspect this cell in the DP policy map">why</a>
+                            {% endif %}
                         </td>
                         <td>{{ fmt_current(row.planned_current_a) }}</td>
                         <td>{{ fmt_soc(row.planned_soc) }}</td>
@@ -331,8 +365,14 @@
                         <td>{{ fmt_pence(row.planned_cost_p) }}</td>
                         <td>{{ fmt_pence(row.actual_net_cost_p) }}</td>
                         <td class="mode"
-                            title="{{ row.mode or 'No decision recorded' }}{% if row.mode_changes > 1 %} ({{ row.mode_changes }} modes in this slot){% endif %}">
+                            title="{{ row.mode_detail or 'No decision recorded for this slot' }}">
+                            {% if row.control_state %}
+                                <span class="control-state">{{ row.control_state }}</span>
+                            {% endif %}
                             {{ row.mode or '—' }}
+                            {% if row.mode_changes > 1 %}
+                                <span class="mode-count">×{{ row.mode_changes }}</span>
+                            {% endif %}
                         </td>
                     </tr>
                 {% endfor %}

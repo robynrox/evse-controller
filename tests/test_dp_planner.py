@@ -81,6 +81,68 @@ def test_actions_keep_absolute_slots_when_the_horizon_starts_mid_day():
     assert [action.start.hour for action in result.actions] == [12, 12]
 
 
+def test_policy_exposes_a_cell_for_every_slot_and_soC():
+    p = planner()
+    slots = [
+        slot(0, import_p=10.0, export_p=0.0, load_kw=0.0),
+        slot(1, import_p=10.0, export_p=50.0, load_kw=0.0),
+    ]
+    policy = p.policy(slots, 50.0)
+
+    assert len(policy.cells) == 2
+    assert len(policy.cells[0]) == p._state_count + 1
+    assert len(policy.energy_values) == 3
+    assert len(policy.policy_values) == 3
+    cell = policy.cells[0][100]  # 50%
+    assert cell.action is not None
+    assert cell.soc_percent == pytest.approx(50.0)
+    assert cell.target_reachable is True
+    assert cell.cost_to_go_p is not None
+    assert cell.advantage_p is not None
+
+
+def test_policy_options_match_the_chosen_cell_action():
+    p = planner()
+    slots = [
+        slot(0, import_p=10.0, export_p=0.0, load_kw=0.0),
+        slot(1, import_p=10.0, export_p=50.0, load_kw=0.0),
+    ]
+    policy = p.policy(slots, 50.0)
+    cell = policy.cells[0][100]
+    options = p.options(policy, 0, 100)
+
+    assert options
+    assert options[0].kind == cell.action.kind
+    assert options[0].current_a == pytest.approx(cell.action.current_a)
+    assert {option.kind for option in options} >= {"idle", "charge"}
+    costs = [option.policy_cost_p for option in options]
+    assert costs == sorted(costs)
+
+
+def test_policy_cost_matches_the_forward_plan():
+    p = planner()
+    slots = [
+        slot(0, import_p=10.0, export_p=0.0, load_kw=0.0),
+        slot(1, import_p=10.0, export_p=50.0, load_kw=0.0),
+    ]
+    plan = p.plan(slots, 50.0)
+    policy = p.policy(slots, 50.0)
+
+    assert policy.total_cost_p == pytest.approx(plan.total_cost_p)
+    assert policy.final_soc == pytest.approx(plan.final_soc)
+
+
+def test_policy_marks_an_unreachable_target():
+    p = planner(target_soc_percent=95.0)
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    policy = p.policy(slots, 40.0)
+
+    assert policy.relaxed is True
+    cell = policy.cells[0][80]
+    assert cell.target_reachable is False
+
+
 def test_flat_prices_leave_the_pack_alone():
     result = planner().plan(
         [slot(0), slot(1)],

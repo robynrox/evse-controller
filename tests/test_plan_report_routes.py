@@ -12,6 +12,41 @@ from evse_controller.web.plan_report_routes import (
 )
 
 
+def test_mode_is_last_in_slot_and_not_carried_forward(tmp_path, log):
+    store = PlannerHistory(tmp_path / "history")
+    store.record_decision(
+        DAY,
+        {
+            "ts": "2026-11-07T12:00:00",
+            "slot": 24,
+            "mode": "reserve for export",
+            "control_state": "LOAD_FOLLOW_BIDIRECTIONAL",
+        },
+    )
+    store.record_decision(
+        DAY,
+        {
+            "ts": "2026-11-07T12:05:00",
+            "slot": 24,
+            "mode": "Max discharge (14 A)",
+            "control_state": "DISCHARGE",
+        },
+    )
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_plan_report_routes(app, history=store, log=log)
+    app.config.update(TESTING=True)
+
+    payload = app.test_client().get(
+        f"/api/reports/plan/{DAY.isoformat()}"
+    ).get_json()
+    rows = {row["slot"]: row for row in payload["rows"]}
+
+    assert rows[24]["mode"] == "Max discharge (14 A)"
+    assert rows[24]["control_state"] == "DISCHARGE"
+    assert rows[24]["mode_changes"] == 2
+    assert rows[25]["mode"] is None
+
+
 DAY = date(2026, 11, 7)
 TEMPLATES = (
     Path(__file__).resolve().parents[1]
@@ -228,7 +263,7 @@ def test_actual_energy_and_mode_are_joined_in(client):
     assert rows[24]["actual_charged_kwh"] == pytest.approx(1.15)
     assert rows[30]["actual_kind"] == "discharged"
     assert rows[30]["mode"] == "Bidirectional self-use"
-    assert rows[47]["mode"] == "Bidirectional self-use"
+    assert rows[47]["mode"] is None
 
 
 def test_csv_has_the_expected_headers(client):

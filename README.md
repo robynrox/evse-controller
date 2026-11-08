@@ -686,8 +686,10 @@ History is append-only JSONL, one file per local day, under
 - `YYYY-MM-DD.runs.jsonl` — one line per shadow plan;
 - `YYYY-MM-DD.soc.jsonl` — one line per slot with the estimate, variance,
   reported value and innovation;
-- `YYYY-MM-DD.decisions.jsonl` — the heuristic mode in force, written once per
-  slot and whenever the mode changes within a slot.
+- `YYYY-MM-DD.decisions.jsonl` — the heuristic mode and the actual returned
+  `ControlState`, written whenever either changes. The plan report shows the
+  last decision in each slot and does not carry it into slots the controller
+  has not reached yet.
 
 Set `ENABLE_SHADOW_PLANNER = False` on
 `IOctGoWithAgileOutgoingTariff` to stop both the shadow plan and the estimator;
@@ -717,6 +719,39 @@ exactly.
 The same result is on the **DP Backtest** page (`/reports/backtest`, with 7,
 30 or 90-day windows, CSV and JSON). It appears only after the shadow planner
 has recorded at least one run.
+
+##### DP policy map (`/reports/policy`)
+
+The **DP Policy** link replays a recorded shadow run and shows the optimal
+action for every half-hour slot and every SoC state:
+
+- **X axis:** slot time; **Y axis:** SoC from the protection floor to the
+  charge cap.
+- **Colour:** charge, idle, discharge, free-import charge, grid-support
+  discharge or EV-away idle. Shade shows the commanded current.
+- **Overlays:** import/export price strip, session strip, target/floor/cap
+  lines, the run's planned SoC path and the estimated SoC that actually
+  happened.
+- **Views:** Mode, Decision margin (how much better the chosen mode is than
+  the next-best mode), and Current.
+- **Resolution:** 1% by default, 0.5% for boundary inspection, with the same
+  zoom control as the other charts.
+
+Below the map, the selected slot is collapsed into contiguous SoC bands, and
+a selected cell lists every feasible action with its immediate cost, future
+cost, total energy cost, ranking score and margin over the best action. The
+"Why this action?" box explains the chosen mode from the slot price, load,
+session and target.
+
+The policy is computed from the run's recorded inputs, not today's forecast,
+and from the planner parameters stored with the run. Runs recorded before
+parameter capture show a banner: they are replayed with the current efficiency
+model and limits, so they can differ from the stored plan. New runs store the
+model table, capacity, step, current limits, floors and target.
+
+For today the page defaults to the latest run; for a past day it defaults to
+the first run of that day. The run selector allows any recorded run to be
+inspected.
 
 ##### Plan-versus-actual report (`/reports/plan`)
 

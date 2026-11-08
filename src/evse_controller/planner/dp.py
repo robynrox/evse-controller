@@ -31,13 +31,17 @@ import math
 from datetime import datetime
 from typing import Optional, Sequence
 
-from evse_controller.tariffs.octopus.battery_efficiency import (
-    BatteryEfficiencyModel,
-    DASHBOARD_SOC_CAPACITY_KWH,
-)
-
-
 SLOT_HOURS = 0.5
+
+#: Ranking penalty for ending below the target SoC.  It is not a real cost;
+#: it makes the backward policy prefer a feasible target over a cheaper path
+#: that misses it, and prefer the highest reachable SoC when the target itself
+#: is unreachable — the same behaviour as the forward planner's relaxation.
+TARGET_SHORTFALL_PENALTY_P_PER_STEP = 1_000_000.0
+
+
+def _finite_or_none(value: float) -> Optional[float]:
+    return float(value) if math.isfinite(value) else None
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,62 @@ class PlanResult:
 
 
 @dataclass(frozen=True)
+class PolicyOption:
+    """One action considered at a slot and starting SoC."""
+
+    kind: str
+    current_a: float
+    ac_power_kw: float
+    soc_after: float
+    immediate_cost_p: float
+    future_cost_p: float
+    total_cost_p: float
+    policy_cost_p: float
+    feasible: bool = True
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class PolicyCell:
+    """The best action and its margin at one slot/SoC point."""
+
+    slot: int
+    state_index: int
+    soc_percent: float
+    action: Optional[PolicyOption]
+    cost_to_go_p: Optional[float]
+    advantage_p: Optional[float]
+    second_best_p: Optional[float]
+    target_reachable: bool
+
+
+@dataclass(frozen=True)
+class PolicyResult:
+    """A complete optimal policy over a horizon.
+
+    ``cells[slot][state]`` is the best action from that state.  The value
+    layers are indexed by slot and then state, with one extra final layer:
+    ``energy_values[n][state]`` is zero (the real energy cost ends there) while
+    ``policy_values[n][state]`` carries the terminal target penalty.
+    ``energy_values`` is the real cost of following the chosen policy; it is
+    not the unconstrained minimum, because the policy may pay to meet the
+    target.
+    """
+
+    slots: tuple[PlannerSlot, ...]
+    cells: tuple[tuple[PolicyCell, ...], ...]
+    energy_values: tuple[tuple[float, ...], ...]
+    policy_values: tuple[tuple[float, ...], ...]
+    reachable_values: tuple[tuple[bool, ...], ...]
+    terminal_state: int
+    relaxed: bool
+    initial_soc_percent: float
+    actions: tuple[PlannerAction, ...]
+    final_soc: float
+    total_cost_p: float
+
+
+@dataclass(frozen=True)
 class _ActionTemplate:
     kind: str
     current_a: float
@@ -127,7 +187,7 @@ class DpPlanner:
         self,
         *,
         efficiency_model: Optional[object] = None,
-        capacity_kwh: float = DASHBOARD_SOC_CAPACITY_KWH,
+        capacity_kwh: Optional[float] = None,
         soc_step_percent: float = 0.5,
         min_current_a: float = 3.0,
         charge_cap_percent: float = 97.0,
@@ -136,6 +196,15 @@ class DpPlanner:
         degradation_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
     ):
+        if capacity_kwh is None:
+            # Imported lazily: the octopus package imports the planner, so a
+            # module-level import here would create a cycle.
+            from evse_controller.tariffs.octopus.battery_efficiency import (
+                DASHBOARD_SOC_CAPACITY_KWH,
+            )
+
+            capacity_kwh = DASHBOARD_SOC_CAPACITY_KWH
+        capacity_kwh = float(capacity_kwh)
         if capacity_kwh <= 0:
             raise ValueError("capacity_kwh must be positive")
         if soc_step_percent <= 0 or soc_step_percent > 100:
@@ -143,11 +212,15 @@ class DpPlanner:
         if min_current_a <= 0:
             raise ValueError("min_current_a must be positive")
 
-        self.efficiency_model = (
-            efficiency_model
-            if efficiency_model is not None
-            else BatteryEfficiencyModel(capacity_kwh=capacity_kwh)
-        )
+        if efficiency_model is None:
+            from evse_controller.tariffs.octopus.battery_efficiency import (
+                BatteryEfficiencyModel,
+            )
+
+            efficiency_model = BatteryEfficiencyModel(
+                capacity_kwh=capacity_kwh
+            )
+        self.efficiency_model = efficiency_model
         self.capacity_kwh = float(capacity_kwh)
         self.soc_step_percent = float(soc_step_percent)
         self.min_current_a = float(min_current_a)
@@ -220,35 +293,11 @@ class DpPlanner:
             for state, base_cost in enumerate(dp):
                 if not math.isfinite(base_cost):
                     continue
-                soc = state * self.soc_step_percent
                 for template in templates:
-                    if template.kind == "charge":
-                        if soc >= self.charge_cap_percent - 1e-9:
-                            continue
-                    elif template.kind == "discharge":
-                        if soc <= self.protection_floor_percent + 1e-9:
-                            continue
-
-                    next_state = self._clamp_state(
-                        state + template.delta_steps
+                    next_state = self._feasible_next_state(
+                        state, template
                     )
-                    next_soc = next_state * self.soc_step_percent
-
-                    # The hard protection floor and charge cap are end-state
-                    # constraints as well as action masks.
-                    if (
-                        template.kind == "discharge"
-                        and next_soc < self.protection_floor_percent - 1e-9
-                    ):
-                        continue
-                    if (
-                        template.kind == "charge"
-                        and next_soc > self.charge_cap_percent + 1e-9
-                    ):
-                        continue
-                    # A transition that rounds to the same state is a no-op;
-                    # do not charge for doing nothing.
-                    if next_state == state and template.kind != "idle":
+                    if next_state is None:
                         continue
 
                     candidate = base_cost + template.cost_p
@@ -289,6 +338,352 @@ class DpPlanner:
                 "kept the highest reachable SoC"
             ),
         )
+
+    def policy(
+        self,
+        slots: Sequence[PlannerSlot],
+        initial_soc_percent: float = 0.0,
+    ) -> PolicyResult:
+        """Return the optimal action for every slot and starting SoC.
+
+        The backward pass is independent of the starting SoC, so one call gives
+        the whole policy surface for a run.  ``policy_values`` carries the
+        terminal-target penalty used for ranking; ``energy_values`` is the
+        real energy cost of following the chosen policy.
+        """
+        horizon = list(slots)
+        if self.horizon_slots is not None:
+            horizon = horizon[: self.horizon_slots]
+        n_slots = len(horizon)
+        n_states = self._state_count + 1
+
+        if n_slots == 0:
+            state = self._clamp_state(
+                int(round(initial_soc_percent / self.soc_step_percent))
+            )
+            return PolicyResult(
+                slots=(),
+                cells=(),
+                energy_values=((0.0,) * n_states,),
+                policy_values=(
+                    tuple(
+                        self._terminal_penalty(s)
+                        for s in range(n_states)
+                    ),
+                ),
+                reachable_values=(
+                    tuple(
+                        s * self.soc_step_percent
+                        >= self.target_soc_percent - 1e-9
+                        for s in range(n_states)
+                    ),
+                ),
+                terminal_state=state,
+                relaxed=state * self.soc_step_percent
+                < self.target_soc_percent - 1e-9,
+                initial_soc_percent=float(initial_soc_percent),
+                actions=(),
+                final_soc=state * self.soc_step_percent,
+                total_cost_p=0.0,
+            )
+
+        target_state = self._target_state()
+        energy_next: list[float] = [0.0] * n_states
+        policy_next: list[float] = [
+            self._terminal_penalty(state) for state in range(n_states)
+        ]
+        reachable_next: list[bool] = [
+            state >= target_state for state in range(n_states)
+        ]
+
+        energy_layers: list[Optional[tuple[float, ...]]] = [
+            None
+        ] * (n_slots + 1)
+        policy_layers: list[Optional[tuple[float, ...]]] = [
+            None
+        ] * (n_slots + 1)
+        reachable_layers: list[Optional[tuple[bool, ...]]] = [
+            None
+        ] * (n_slots + 1)
+        energy_layers[n_slots] = tuple(energy_next)
+        policy_layers[n_slots] = tuple(policy_next)
+        reachable_layers[n_slots] = tuple(reachable_next)
+
+        choices: list[Optional[list[Optional[tuple[_ActionTemplate, int]]]]] = [
+            None
+        ] * n_slots
+
+        for index in range(n_slots - 1, -1, -1):
+            templates = self._action_templates(horizon[index])
+            energy_cur: list[float] = [float("inf")] * n_states
+            policy_cur: list[float] = [float("inf")] * n_states
+            reachable_cur: list[bool] = [False] * n_states
+            choice_cur: list[Optional[tuple[_ActionTemplate, int]]] = [
+                None
+            ] * n_states
+
+            for state in range(n_states):
+                best_policy = float("inf")
+                best_energy = float("inf")
+                best_template = None
+                best_next = None
+                for template in templates:
+                    next_state = self._feasible_next_state(
+                        state, template
+                    )
+                    if next_state is None:
+                        continue
+                    policy_cost = (
+                        template.cost_p + policy_next[next_state]
+                    )
+                    energy_cost = (
+                        template.cost_p + energy_next[next_state]
+                    )
+                    if policy_cost < best_policy - 1e-12 or (
+                        abs(policy_cost - best_policy) <= 1e-12
+                        and energy_cost < best_energy - 1e-12
+                    ):
+                        best_policy = policy_cost
+                        best_energy = energy_cost
+                        best_template = template
+                        best_next = next_state
+                if best_template is None:
+                    continue
+                policy_cur[state] = best_policy
+                energy_cur[state] = best_energy
+                reachable_cur[state] = reachable_next[best_next]
+                choice_cur[state] = (best_template, best_next)
+
+            energy_next = energy_cur
+            policy_next = policy_cur
+            reachable_next = reachable_cur
+            choices[index] = choice_cur
+            energy_layers[index] = tuple(energy_cur)
+            policy_layers[index] = tuple(policy_cur)
+            reachable_layers[index] = tuple(reachable_cur)
+
+        cells: list[tuple[PolicyCell, ...]] = []
+        for index in range(n_slots):
+            templates = self._action_templates(horizon[index])
+            choice_cur = choices[index] or []
+            row = []
+            for state in range(n_states):
+                entry = choice_cur[state]
+                if entry is None:
+                    row.append(
+                        PolicyCell(
+                            slot=index,
+                            state_index=state,
+                            soc_percent=state * self.soc_step_percent,
+                            action=None,
+                            cost_to_go_p=_finite_or_none(
+                                energy_layers[index][state]  # type: ignore[index]
+                            ),
+                            advantage_p=None,
+                            second_best_p=None,
+                            target_reachable=bool(
+                                reachable_layers[index][state]  # type: ignore[index]
+                            ),
+                        )
+                    )
+                    continue
+
+                template, next_state = entry
+                future_energy = energy_layers[index + 1][next_state]  # type: ignore[index]
+                future_policy = policy_layers[index + 1][next_state]  # type: ignore[index]
+                action = PolicyOption(
+                    kind=template.kind,
+                    current_a=template.current_a,
+                    ac_power_kw=template.ac_power_kw,
+                    soc_after=next_state * self.soc_step_percent,
+                    immediate_cost_p=template.cost_p,
+                    future_cost_p=future_energy,
+                    total_cost_p=template.cost_p + future_energy,
+                    policy_cost_p=template.cost_p + future_policy,
+                )
+
+                mode_best: dict[str, float] = {}
+                for candidate in templates:
+                    candidate_next = self._feasible_next_state(
+                        state, candidate
+                    )
+                    if candidate_next is None:
+                        continue
+                    policy_cost = (
+                        candidate.cost_p
+                        + policy_layers[index + 1][candidate_next]  # type: ignore[index]
+                    )
+                    current = mode_best.get(candidate.kind)
+                    if current is None or policy_cost < current:
+                        mode_best[candidate.kind] = policy_cost
+                mode_costs = sorted(mode_best.values())
+                second_best = (
+                    mode_costs[1] if len(mode_costs) > 1 else None
+                )
+                advantage = (
+                    second_best - mode_costs[0]
+                    if second_best is not None
+                    else None
+                )
+
+                row.append(
+                    PolicyCell(
+                        slot=index,
+                        state_index=state,
+                        soc_percent=state * self.soc_step_percent,
+                        action=action,
+                        cost_to_go_p=_finite_or_none(
+                            energy_layers[index][state]  # type: ignore[index]
+                        ),
+                        advantage_p=advantage,
+                        second_best_p=second_best,
+                        target_reachable=bool(
+                            reachable_layers[index][state]  # type: ignore[index]
+                        ),
+                    )
+                )
+            cells.append(tuple(row))
+
+        initial = self._clamp_state(
+            int(round(initial_soc_percent / self.soc_step_percent))
+        )
+        state = initial
+        actions = []
+        for index, slot in enumerate(horizon):
+            entry = (choices[index] or [])[state]
+            if entry is None:
+                break
+            template, next_state = entry
+            actions.append(
+                PlannerAction(
+                    slot=(
+                        slot.slot if slot.slot >= 0 else index
+                    ),
+                    start=slot.start,
+                    kind=template.kind,
+                    current_a=template.current_a,
+                    ac_power_kw=template.ac_power_kw,
+                    stored_kwh=template.stored_kwh,
+                    soc_before=state * self.soc_step_percent,
+                    soc_after=next_state * self.soc_step_percent,
+                    cost_p=template.cost_p,
+                    session=template.session,
+                )
+            )
+            state = next_state
+
+        total = energy_layers[0][initial]  # type: ignore[index]
+        return PolicyResult(
+            slots=tuple(horizon),
+            cells=tuple(cells),
+            energy_values=tuple(
+                layer for layer in energy_layers if layer is not None
+            ),
+            policy_values=tuple(
+                layer for layer in policy_layers if layer is not None
+            ),
+            reachable_values=tuple(
+                layer for layer in reachable_layers if layer is not None
+            ),
+            terminal_state=state,
+            relaxed=not bool(reachable_layers[0][initial]),  # type: ignore[index]
+            initial_soc_percent=float(initial_soc_percent),
+            actions=tuple(actions),
+            final_soc=state * self.soc_step_percent,
+            total_cost_p=(
+                float(total) if math.isfinite(total) else 0.0
+            ),
+        )
+
+    def options(
+        self,
+        policy: PolicyResult,
+        slot_index: int,
+        state_index: int,
+    ) -> tuple[PolicyOption, ...]:
+        """Every feasible action at one policy cell, best first."""
+        if not (0 <= slot_index < len(policy.slots)):
+            return ()
+        if not (0 <= state_index <= self._state_count):
+            return ()
+        templates = self._action_templates(policy.slots[slot_index])
+        options = []
+        for template in templates:
+            next_state = self._feasible_next_state(
+                state_index, template
+            )
+            if next_state is None:
+                continue
+            future_energy = policy.energy_values[slot_index + 1][
+                next_state
+            ]
+            future_policy = policy.policy_values[slot_index + 1][
+                next_state
+            ]
+            options.append(
+                PolicyOption(
+                    kind=template.kind,
+                    current_a=template.current_a,
+                    ac_power_kw=template.ac_power_kw,
+                    soc_after=next_state * self.soc_step_percent,
+                    immediate_cost_p=template.cost_p,
+                    future_cost_p=future_energy,
+                    total_cost_p=template.cost_p + future_energy,
+                    policy_cost_p=template.cost_p + future_policy,
+                )
+            )
+        options.sort(key=lambda option: option.policy_cost_p)
+        return tuple(options)
+
+    def _target_state(self) -> int:
+        return self._clamp_state(
+            int(
+                math.ceil(
+                    self.target_soc_percent / self.soc_step_percent
+                    - 1e-9
+                )
+            )
+        )
+
+    def _terminal_penalty(self, state: int) -> float:
+        target = self._target_state()
+        if state >= target:
+            return 0.0
+        return (
+            target - state
+        ) * TARGET_SHORTFALL_PENALTY_P_PER_STEP
+
+    def _feasible_next_state(
+        self, state: int, template: _ActionTemplate
+    ) -> Optional[int]:
+        """Apply the action masks and end-state bounds to one transition."""
+        soc = state * self.soc_step_percent
+        if (
+            template.kind == "charge"
+            and soc >= self.charge_cap_percent - 1e-9
+        ):
+            return None
+        if (
+            template.kind == "discharge"
+            and soc <= self.protection_floor_percent + 1e-9
+        ):
+            return None
+
+        next_state = self._clamp_state(state + template.delta_steps)
+        next_soc = next_state * self.soc_step_percent
+        if (
+            template.kind == "discharge"
+            and next_soc < self.protection_floor_percent - 1e-9
+        ):
+            return None
+        if (
+            template.kind == "charge"
+            and next_soc > self.charge_cap_percent + 1e-9
+        ):
+            return None
+        if next_state == state and template.kind != "idle":
+            return None
+        return next_state
 
     # -- action construction -------------------------------------------
 

@@ -306,7 +306,13 @@ completed fixes.
   per slot, and the heuristic mode in force, to
   `data/state/planner_history/YYYY-MM-DD.{runs,soc,decisions}.jsonl`. JSONL was
   chosen over SQLite for the first slice so files stay inspectable and need no
-  migration.
+  migration. Runs now store the planner parameters and the efficiency model
+  table so the policy can be replayed exactly; decision records store the
+  actual returned `ControlState` and message.
+- The plan report shows the last decision in each slot and deliberately does
+  not carry it into future slots. This matters because the controller has not
+  reached those slots yet; showing the previous mode there described the
+  future with hindsight the system did not have.
 - `web/plan_report_routes.py` serves `/reports/plan`: planned versus estimated
   versus reported SoC, actual EVSE energy, heuristic mode, prices and sessions,
   SoC MAE/bias/worst error, planned versus actual cost and energy, CSV and JSON.
@@ -337,10 +343,18 @@ completed fixes.
 - `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
   7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
   shows an explanation rather than a score before any shadow plan exists.
+- `planner/dp.py` exposes `policy()`, a backward DP over slot × SoC. It returns
+  the chosen action, real energy cost-to-go, a target-penalised ranking value,
+  target reachability and per-cell decision margin, plus `options()` for every
+  feasible current at a selected cell. `web/policy_report_routes.py` serves
+  `/reports/policy` with a mode/margin/current heatmap, price and session
+  strips, planned and estimated SoC paths, selected-slot bands, an action
+  options table and an explanation. Policies are replayed from recorded run
+  inputs; old runs without planner parameters show a caveat.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **733 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **744 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

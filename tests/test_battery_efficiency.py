@@ -14,6 +14,13 @@ def model():
     return BatteryEfficiencyModel()
 
 
+def test_model_round_trips_through_dict(model):
+    restored = BatteryEfficiencyModel.from_dict(model.as_dict())
+
+    assert restored.points == model.points
+    assert restored.capacity_kwh == pytest.approx(model.capacity_kwh)
+
+
 def test_efficiency_is_monotonic_with_current(model):
     charge = [model.charge_efficiency(p.current_a) for p in POINTS]
     discharge = [model.discharge_efficiency(p.current_a) for p in POINTS]

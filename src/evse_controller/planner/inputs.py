@@ -17,11 +17,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from evse_controller.energy_sessions import EnergySession
 from evse_controller.planner.dp import PlannerSlot
-from evse_controller.tariffs.source import SLOTS_PER_DAY, SlotRate, TariffSource
+
+if TYPE_CHECKING:
+    from evse_controller.tariffs.source import TariffSource
 
 
 @dataclass(frozen=True)
@@ -58,7 +60,7 @@ def _price(
 
 
 def build_planner_input(
-    source: TariffSource,
+    source: "TariffSource",
     load_profile,
     day: date,
     current_slot: int,
@@ -79,8 +81,13 @@ def build_planner_input(
     deliberate terminal value.  An unknown import with no fallback is an
     error, because treating it as free would be dangerous.
     """
+    # Imported lazily: ``tariffs`` imports the live tariff, which imports this
+    # module, so a module-level import would be circular when this module is
+    # imported first.
+    from evse_controller.tariffs.source import SLOTS_PER_DAY
+
     current_slot = max(0, min(SLOTS_PER_DAY, int(current_slot)))
-    rates: list[SlotRate] = source.rates_for_day(day)
+    rates = source.rates_for_day(day)
     if len(rates) != SLOTS_PER_DAY:
         raise ValueError(
             f"Tariff source returned {len(rates)} rows, expected "

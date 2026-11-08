@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>DP policy — {{ selected_date }}</title>
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: #f4f5f7;
+        color: #222;
+        margin: 0;
+    }
+    .page {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 24px 20px 60px;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    h2 { margin: 28px 0 10px; font-size: 19px; }
+    p { color: #555; line-height: 1.5; }
+    .nav-links {
+        margin: 14px 0 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+    }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .spacer { flex: 1; }
+    .picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin: 8px 0;
+    }
+    .picker .label {
+        color: #666;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-right: 4px;
+    }
+    .picker a, .picker span.current {
+        display: inline-block;
+        padding: 4px 9px;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        color: #0b5cad;
+        text-decoration: none;
+        font-size: 12px;
+    }
+    .picker span.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 700;
+    }
+    .picker select {
+        width: auto;
+        min-width: 210px;
+        padding: 5px 8px;
+        font-size: 12px;
+    }
+    .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 6px;
+    }
+    .card {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 12px 14px;
+        min-width: 145px;
+        flex: 1 1 145px;
+    }
+    .card .label {
+        color: #666;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 5px;
+    }
+    .card .value {
+        font-size: 22px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .card .note { color: #777; font-size: 12px; margin-top: 4px; }
+    .banner {
+        margin: 16px 0;
+        padding: 10px 14px;
+        border-radius: 6px;
+        background: #fff8e1;
+        border: 1px solid #f0d58c;
+        color: #6d4c00;
+        font-size: 13px;
+    }
+    .panel {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        padding: 10px;
+        margin-bottom: 14px;
+        overflow-x: auto;
+    }
+    .policy-map { width: 100%; min-width: 850px; height: auto; display: block; }
+    .policy-cell { stroke: #fff; stroke-width: .6; }
+    .price-import { fill: #c62828; opacity: .45; }
+    .price-export { fill: #2e7d32; }
+    .session-forced { fill: #7b1fa2; opacity: .75; }
+    .session-kind { fill: #0b5cad; opacity: .40; }
+    .planned-soc-line { fill: none; stroke: #111; stroke-width: 2; }
+    .estimated-soc-line {
+        fill: none;
+        stroke: #e65100;
+        stroke-width: 1.7;
+        stroke-dasharray: 4 3;
+    }
+    .target-line { stroke: #0b5cad; stroke-width: 1.4; stroke-dasharray: 5 3; }
+    .floor-line, .cap-line { stroke: #666; stroke-width: 1.2; }
+    .axis { fill: #666; font-size: 10px; }
+    .axis-unit { fill: #666; font-size: 10px; font-weight: 700; }
+    .legend-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin: 4px 0 16px;
+        color: #555;
+        font-size: 12px;
+        align-items: center;
+    }
+    .legend-bar .swatch {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        margin-right: 5px;
+        vertical-align: -2px;
+    }
+    .legend-bar .line-key {
+        display: inline-block;
+        width: 18px;
+        height: 0;
+        border-top: 2px solid #111;
+        margin-right: 5px;
+        vertical-align: 3px;
+    }
+    .legend-bar .line-key.estimated {
+        border-top: 2px dashed #e65100;
+    }
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        background: #fff;
+    }
+    table.detail {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 860px;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+    table.detail th, table.detail td {
+        border-bottom: 1px solid #eceff2;
+        padding: 5px 7px;
+        text-align: right;
+        white-space: nowrap;
+    }
+    table.detail th {
+        color: #666;
+        font-weight: 600;
+        background: #fafbfc;
+        position: sticky;
+        top: 0;
+    }
+    table.detail th:first-child,
+    table.detail td:first-child { text-align: left; }
+    .action-charge { color: #0b5cad; font-weight: 700; }
+    .action-discharge { color: #d84315; font-weight: 700; }
+    .action-idle { color: #666; }
+    .why {
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-left: 4px solid #0b5cad;
+        border-radius: 7px;
+        padding: 12px 14px;
+        margin: 12px 0 18px;
+        line-height: 1.55;
+    }
+    .inspect-form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: end;
+        margin: 8px 0 14px;
+    }
+    .inspect-form label {
+        font-size: 12px;
+        color: #555;
+        font-weight: 600;
+    }
+    .inspect-form input {
+        width: 80px;
+        padding: 5px 7px;
+        margin-top: 3px;
+    }
+    .inspect-form button {
+        padding: 5px 12px;
+        font-size: 12px;
+    }
+    .empty {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #d9dde2;
+        border-radius: 7px;
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="page-header">
+        <h1>DP policy map</h1>
+        <p>
+            The best action for every half-hour slot and starting SoC, replayed
+            from a recorded shadow run. The black line is the run's own planned
+            path; the dashed orange line is the SoC estimate that actually
+            happened. Hover a cell for its action, cost and decision margin.
+        </p>
+    </div>
+
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/plan">Plan vs actual</a>
+        <a href="/reports/backtest">DP backtest</a>
+        <a href="/reports/value">Battery value</a>
+        <a href="/reports/component">Components</a>
+        <a href="/reports/export">Export</a>
+        <a href="/reports/data-quality">Data quality</a>
+        <span class="spacer"></span>
+    </div>
+
+    <div class="picker">
+        <span class="label">Day</span>
+        {% for day in available_days %}
+            <a href="/reports/policy?date={{ day }}"
+               {% if day == selected_date %}class="current"{% endif %}>{{ day }}</a>
+        {% endfor %}
+        {% if selected_date not in available_days %}
+            <span class="current">{{ selected_date }}</span>
+        {% endif %}
+    </div>
+
+    {% if runs %}
+        <div class="picker">
+            <span class="label">Run</span>
+            <select onchange="if (this.value) window.location = this.value;">
+                {% for candidate in runs %}
+                    <option value="/reports/policy?date={{ selected_date }}&amp;run={{ candidate.ts|urlencode }}&amp;step={{ step }}&amp;view={{ view }}"
+                        {% if run and candidate.ts == run.ts %}selected{% endif %}>
+                        {{ fmt_time(candidate.ts) }}
+                        · slot {{ candidate.slot }}
+                        · SoC {{ '%.1f'|format(candidate.estimate_soc or 0) }}%
+                        · {{ '£%.2f'|format((candidate.total_cost_p or 0) / 100) }}
+                    </option>
+                {% endfor %}
+            </select>
+            <span class="label">Slot</span>
+            {% if context %}
+                <select onchange="if (this.value) window.location = this.value;">
+                    {% for slot in context.slots %}
+                        <option value="/reports/policy?date={{ selected_date }}&amp;run={{ run.ts|urlencode }}&amp;step={{ step }}&amp;view={{ view }}&amp;slot={{ slot.slot }}"
+                            {% if selected_slot and slot.slot == selected_slot.slot %}selected{% endif %}>
+                            {{ slot.start.strftime('%H:%M') }} (slot {{ slot.slot }})
+                        </option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+        </div>
+
+        <div class="picker">
+            <span class="label">Resolution</span>
+            <a href="/reports/policy?date={{ selected_date }}&amp;run={{ run.ts|urlencode }}&amp;step=1&amp;view={{ view }}"
+               {% if step == 1.0 %}class="current"{% endif %}>1%</a>
+            <a href="/reports/policy?date={{ selected_date }}&amp;run={{ run.ts|urlencode }}&amp;step=0.5&amp;view={{ view }}"
+               {% if step == 0.5 %}class="current"{% endif %}>0.5%</a>
+            <span class="label">View</span>
+            {% for key, label in views.items() %}
+                <a href="/reports/policy?date={{ selected_date }}&amp;run={{ run.ts|urlencode }}&amp;step={{ step }}&amp;view={{ key }}"
+                   {% if view == key %}class="current"{% endif %}>{{ label }}</a>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% if error %}
+        <p class="empty">Could not build a policy from this run: {{ error }}</p>
+    {% elif context %}
+        {% if not context.params_recorded %}
+            <div class="banner">
+                This run predates planner-parameter capture. The policy has been
+                recomputed from its recorded inputs with the current efficiency
+                model and limits, so it can differ from the stored plan. New
+                runs record the model and limits and will replay exactly.
+            </div>
+        {% endif %}
+
+        <div class="cards">
+            <div class="card">
+                <div class="label">Run started</div>
+                <div class="value">{{ fmt_time(run.ts) }}</div>
+                <div class="note">slot {{ run.slot }} · {{ run.forecast_days }} forecast days</div>
+            </div>
+            <div class="card">
+                <div class="label">Initial SoC</div>
+                <div class="value">{{ fmt_pct(run.estimate_soc) }}</div>
+                <div class="note">reported {{ fmt_pct(run.reported_soc) }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Target</div>
+                <div class="value">{{ fmt_pct(context.target) }}</div>
+                <div class="note">
+                    floor {{ fmt_pct(context.floor) }} · cap {{ fmt_pct(context.cap) }}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">DP energy cost</div>
+                <div class="value">{{ fmt_money(context.policy.total_cost_p) }}</div>
+                <div class="note">
+                    {{ 'target met' if not context.policy.relaxed else 'target relaxed' }}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">Final SoC</div>
+                <div class="value">{{ fmt_pct(context.policy.final_soc) }}</div>
+                <div class="note">{{ context.capacity_kwh|round(1) }} kWh · {{ context.step }}% steps</div>
+            </div>
+            <div class="card">
+                <div class="label">Policy cells</div>
+                <div class="value">{{ context.slots|length }} × {{ (context.cap - context.floor) / step + 1 }}</div>
+                <div class="note">slots × displayed SoC rows</div>
+            </div>
+        </div>
+
+        <h2>Policy surface</h2>
+        <div class="legend-bar">
+            <span><span class="swatch" style="background:#cfe3f7"></span>charge, low current</span>
+            <span><span class="swatch" style="background:#0b5cad"></span>charge, high current</span>
+            <span><span class="swatch" style="background:#e6e9ed"></span>idle</span>
+            <span><span class="swatch" style="background:#fbe0d0"></span>discharge, low current</span>
+            <span><span class="swatch" style="background:#d84315"></span>discharge, high current</span>
+            <span><span class="swatch" style="background:#7b1fa2"></span>free import</span>
+            <span><span class="swatch" style="background:#00796b"></span>grid support</span>
+            <span><span class="line-key"></span>planned SoC</span>
+            <span><span class="line-key estimated"></span>estimated SoC</span>
+        </div>
+        <div class="panel chart-panel">
+            <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
+            {{ heatmap|safe }}
+        </div>
+
+        <h2>Slot {{ selected_slot.start.strftime('%H:%M') if selected_slot else '' }} policy bands</h2>
+        <div class="table-wrap">
+            <table class="detail">
+                <thead>
+                    <tr>
+                        <th>SoC range</th>
+                        <th>Action</th>
+                        <th>Current</th>
+                        <th>Immediate</th>
+                        <th>Future</th>
+                        <th>Total</th>
+                        <th>Margin</th>
+                        <th>Target</th>
+                        <th>SoC after</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for band in bands %}
+                        <tr>
+                            <td>{{ fmt_pct(band.soc_from) }} – {{ fmt_pct(band.soc_to) }}</td>
+                            <td class="action-{{ band.action.kind if band.action else 'idle' }}">
+                                {{ band.action.kind if band.action else '—' }}
+                            </td>
+                            <td>{{ fmt_current(band.action.current_a) if band.action else '—' }}</td>
+                            <td>{{ fmt_pence(band.action.immediate_cost_p) if band.action else '—' }}</td>
+                            <td>{{ fmt_pence(band.action.future_cost_p) if band.action else '—' }}</td>
+                            <td>{{ fmt_pence(band.action.total_cost_p) if band.action else '—' }}</td>
+                            <td>
+                                {{ fmt_pence(band.cell.advantage_p) if band.cell.target_reachable else '—' }}
+                            </td>
+                            <td>{{ 'yes' if band.cell.target_reachable else 'relaxed' }}</td>
+                            <td>{{ fmt_pct(band.action.soc_after) if band.action else '—' }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <h2>Why this action?</h2>
+        <p class="why">{{ why }}</p>
+
+        <form class="inspect-form" method="get" action="/reports/policy">
+            <input type="hidden" name="date" value="{{ selected_date }}">
+            <input type="hidden" name="run" value="{{ run.ts }}">
+            <input type="hidden" name="step" value="{{ step }}">
+            <input type="hidden" name="view" value="{{ view }}">
+            <input type="hidden" name="slot" value="{{ selected_slot.slot if selected_slot else '' }}">
+            <label>Inspect SoC
+                <input type="number" name="soc" min="0" max="100" step="0.5"
+                       value="{{ '%.1f'|format(selected_cell.soc_percent) if selected_cell else '' }}">
+            </label>
+            <button type="submit">Show options</button>
+        </form>
+
+        {% if options %}
+        <div class="table-wrap">
+            <table class="detail">
+                <thead>
+                    <tr>
+                        <th>Option</th>
+                        <th>Current</th>
+                        <th>AC kW</th>
+                        <th>Immediate</th>
+                        <th>Future</th>
+                        <th>Total</th>
+                        <th>Score</th>
+                        <th>Δ vs best</th>
+                        <th>SoC after</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for option in options %}
+                        <tr>
+                            <td class="action-{{ option.kind }}">{{ option.kind }}</td>
+                            <td>{{ fmt_current(option.current_a) }}</td>
+                            <td>{{ '%.2f'|format(option.ac_power_kw) }}</td>
+                            <td>{{ fmt_pence(option.immediate_cost_p) }}</td>
+                            <td>{{ fmt_pence(option.future_cost_p) }}</td>
+                            <td>{{ fmt_pence(option.total_cost_p) }}</td>
+                            <td>
+                                {% if selected_cell and selected_cell.target_reachable %}
+                                    {{ fmt_pence(option.policy_cost_p) }}
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if selected_cell and selected_cell.target_reachable %}
+                                    {{ fmt_pence(option.policy_cost_p - options[0].policy_cost_p) }}
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>{{ fmt_pct(option.soc_after) }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p style="font-size:12px;color:#777;">
+            Score includes the target penalty used to rank paths; it is hidden
+            when the target is already unreachable. Total is the real immediate
+            plus future energy cost. Future uses the recorded inputs, not
+            today's forecast.
+        </p>
+        {% endif %}
+    {% else %}
+        <p class="empty">
+            No shadow plans are recorded for {{ selected_date }}. Enable the
+            shadow planner and let it run for at least one slot.
+        </p>
+    {% endif %}
+</div>
+{% endblock %}

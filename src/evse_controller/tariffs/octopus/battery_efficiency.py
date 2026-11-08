@@ -40,7 +40,7 @@ arrive; do not tune individual points by hand.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 # Effective DC energy per 100% of reported dashboard SoC in the linear
 # mid-range.  The second 180-day calibration (2026-10-27, 16 A headline bin,
@@ -141,6 +141,20 @@ class BatteryEfficiencyModel:
             raise ValueError("capacity_kwh must be positive")
         self.points = tuple(sorted(points, key=lambda point: point.current_a))
         self.capacity_kwh = capacity_kwh
+
+    def as_dict(self) -> dict:
+        """Serialise the measured table for exact planner replay."""
+        return {
+            "capacity_kwh": self.capacity_kwh,
+            "points": [asdict(point) for point in self.points],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "BatteryEfficiencyModel":
+        points = tuple(
+            EfficiencyPoint(**point) for point in payload["points"]
+        )
+        return cls(points, capacity_kwh=float(payload["capacity_kwh"]))
 
     @property
     def min_current_a(self) -> float:
