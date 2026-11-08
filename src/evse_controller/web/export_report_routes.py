@@ -301,8 +301,16 @@ def _export_chart(rows: list[DayExport]) -> str:
     bar_w = max(2.0, slot_w * 0.55)
     svg = [
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
-        'role="img" aria-label="Daily export energy and achieved price">'
+        'role="img" aria-label="Daily export energy in kWh and achieved price">'
     ]
+    svg.append(
+        f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
+        'class="axis-unit">kWh</text>'
+    )
+    svg.append(
+        f'<text x="{width - right + 8}" y="{top - 4}" '
+        'class="axis-unit">p/kWh</text>'
+    )
     for fraction in (0.0, 0.5, 1.0):
         value = bound * fraction
         y_pos = y_kwh(value)
@@ -352,7 +360,7 @@ def _export_chart(rows: list[DayExport]) -> str:
     )
     svg.append(
         f'<text x="{left + 150}" y="{height - 1}" '
-        'class="legend price-legend">achieved price (line)</text>'
+        'class="legend price-legend">achieved price (p/kWh, line)</text>'
     )
     svg.append("</svg>")
     return "".join(svg)
@@ -392,8 +400,12 @@ def _capture_chart(rows: list[DayExport]) -> str:
 
     svg = [
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
-        'role="img" aria-label="Export price capture">'
+        'role="img" aria-label="Export price capture in p per kWh">'
     ]
+    svg.append(
+        f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
+        'class="axis-unit">p/kWh</text>'
+    )
     for fraction in (0.0, 0.5, 1.0):
         value = price_min + (price_max - price_min) * fraction
         y_pos = y(value)

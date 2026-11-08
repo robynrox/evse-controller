@@ -42,6 +42,13 @@ def _fmt_cycles(value) -> str:
     return "—" if value is None else f"{value:.2f}"
 
 
+def _money_tick(value: float) -> str:
+    if value == 0:
+        return "£0.00"
+    sign = "−" if value < 0 else "+"
+    return f"{sign}£{abs(value):.2f}"
+
+
 def _fmt_soc(value) -> str:
     return "—" if value is None else f"{value:.0f}%"
 
@@ -348,6 +355,10 @@ def _cycles_chart(rows: list[DayValue]) -> str:
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
         'role="img" aria-label="Daily equivalent full cycles">'
     ]
+    svg.append(
+        f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
+        'class="axis-unit">cycles</text>'
+    )
     for fraction in (0.0, 0.5, 1.0):
         value = max_value * fraction
         y_pos = y(value)
@@ -420,7 +431,7 @@ def _money_chart(rows: list[DayValue]) -> str:
         y_pos = y(value)
         svg.append(
             f'<text x="{left - 8}" y="{y_pos + 4:.1f}" '
-            f'text-anchor="end" class="axis">{value:+.2f}</text>'
+            f'text-anchor="end" class="axis">{_money_tick(value)}</text>'
         )
     for index, row in enumerate(rows):
         x_center = left + (index + 0.5) * slot_w

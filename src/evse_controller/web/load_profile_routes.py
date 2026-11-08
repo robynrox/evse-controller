@@ -147,6 +147,10 @@ def _fan_chart(
         f'<svg class="fan-chart" viewBox="0 0 {width} {height}" '
         'role="img" aria-label="House load forecast and actual">'
     ]
+    svg.append(
+        f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
+        'class="axis-unit">W</text>'
+    )
     for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
         value = max_w * fraction
         y_pos = y(value)

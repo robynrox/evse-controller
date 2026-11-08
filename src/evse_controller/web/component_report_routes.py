@@ -231,8 +231,12 @@ def _energy_chart(rows: list[SlotComponent]) -> str:
     bar_w = slot_w * 0.7
     svg = [
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
-        'role="img" aria-label="Half-hourly component energy">'
+        'role="img" aria-label="Half-hourly component energy in kWh">'
     ]
+    svg.append(
+        f'<text x="{left}" y="{top - 4}" '
+        'class="axis-unit">kWh / half-hour</text>'
+    )
     svg.append(
         f'<line x1="{left}" y1="{y(0):.1f}" x2="{width - right}" '
         f'y2="{y(0):.1f}" class="zero"/>'
@@ -266,11 +270,11 @@ def _energy_chart(rows: list[SlotComponent]) -> str:
         )
     svg.append(
         f'<text x="{left}" y="{height - 1}" class="legend in-legend">'
-        "in</text>"
+        "in (kWh)</text>"
     )
     svg.append(
-        f'<text x="{left + 30}" y="{height - 1}" class="legend out-legend">'
-        "out</text>"
+        f'<text x="{left + 68}" y="{height - 1}" class="legend out-legend">'
+        "out (kWh)</text>"
     )
     svg.append("</svg>")
     return "".join(svg)
@@ -322,6 +326,14 @@ def _weather_chart(rows: list[SlotComponent]) -> str:
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
         'role="img" aria-label="Cached temperature and irradiance">'
     ]
+    svg.append(
+        f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
+        'class="axis-unit">°C</text>'
+    )
+    svg.append(
+        f'<text x="{width - right + 8}" y="{top - 4}" '
+        'class="axis-unit">W/m²</text>'
+    )
     for fraction in (0.0, 0.5, 1.0):
         value = irr_max * fraction
         y_pos = y_irr(value)
