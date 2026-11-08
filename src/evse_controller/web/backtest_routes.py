@@ -27,6 +27,13 @@ def _fmt_pct(value) -> str:
     return "—" if value is None else f"{value * 100:.0f}%"
 
 
+def _money_tick(value: float) -> str:
+    if value == 0:
+        return "£0.00"
+    sign = "−" if value < 0 else "+"
+    return f"{sign}£{abs(value):.2f}"
+
+
 def _fmt_pp(value) -> str:
     return "—" if value is None else f"{value:+.2f}pp"
 
@@ -59,7 +66,7 @@ def _delta_chart(rows) -> str:
     bar_w = max(2.0, slot_w * 0.6)
     svg = [
         f'<svg class="chart" viewBox="0 0 {width} {height}" '
-        'role="img" aria-label="Daily DP cost delta">'
+        'role="img" aria-label="Daily DP cost delta in pounds">'
     ]
     svg.append(
         f'<line x1="{left}" y1="{y(0):.1f}" x2="{width - right}" '
@@ -69,7 +76,7 @@ def _delta_chart(rows) -> str:
         value = bound * fraction
         svg.append(
             f'<text x="{left - 8}" y="{y(value) + 4:.1f}" '
-            f'text-anchor="end" class="axis">{value:+.2f}</text>'
+            f'text-anchor="end" class="axis">{_money_tick(value)}</text>'
         )
     for index, row in enumerate(rows):
         if row.delta_gbp is None:

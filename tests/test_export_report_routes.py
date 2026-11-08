@@ -106,6 +106,8 @@ def test_page_renders_cards_and_charts(client):
     assert "Daily detail" in body
     assert "Download this window as CSV" in body
     assert body.count("data-chart-zoom") == 2
+    assert ".export-legend { fill: #2e7d32; }" in body
+    assert "p/kWh" in body
 
 
 def test_metrics_compare_revenue_with_prices(client):

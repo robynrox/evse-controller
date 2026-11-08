@@ -146,6 +146,8 @@ def test_page_renders_the_chart_and_metrics(client):
     assert "<svg" in body
     assert "Last 14 days" in body
     assert "Download this report as CSV" in body
+    assert body.count("data-chart-zoom") == 1
+    assert 'class="axis-unit">W' in body
 
 
 def test_page_accepts_a_series_filter(client):
