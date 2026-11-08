@@ -293,6 +293,52 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 - `full_charge_slot_soc_gain_percent`: State of charge gain percentage per 30-minute slot while a free-import session is charging at full rate (0 = calculate it from charge power, charge efficiency and battery capacity). Free-import and grid-support session slots are both included in the 23:30 SoC projection; grid-support slots use `export_slot_soc_loss_percent`
 - `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure
 
+##### Prices, windows and presets
+
+The smart tariffs share one small price model: a **standard** fallback price,
+plus **cheap** and **peak** prices. Cheap and peak may each have any number of
+half-hour windows; windows may cross midnight, and the end is exclusive.
+Standard has no windows. Cheap and peak windows may not overlap.
+
+A preset supplies the window structure; normally you edit only the six prices
+under `prices` in `config.yaml` or on the config page. The advanced window
+fields are hidden behind a disclosure and accept comma-separated
+`HH:MM-HH:MM` values.
+
+```yaml
+tariffs:
+  preset: iog_prime          # iog_agile | iog_outgoing | iog_prime |
+                             # iog_no_export | octopus_go | cosy | flux
+  export_source: tiers       # optional: agile | tiers | none
+prices:
+  import:
+    standard: 30.0
+    cheap: 10.0
+    peak: 30.0
+    # cheap_windows: ["23:30-05:30"]   # optional override
+    # peak_windows: []
+  export:
+    standard: 9.0
+    cheap: 9.0
+    peak: 16.0
+    # peak_windows: ["16:00-19:00"]
+```
+
+The three outgoing products are presets over the same IOctGo controller, not
+separate controllers:
+
+- `iog_agile`: fetched Agile Outgoing half-hour export prices.
+- `iog_outgoing`: one flat export price for the whole day.
+- `iog_prime`: standard export price, with a peak window (16:00–19:00 by
+  default).
+- `iog_no_export`: no export tariff; export price is unknown rather than 0p.
+
+`export_source` overrides the preset's export choice. The import side keeps the
+Intelligent Octopus Go cheap window. Octopus Go, Cosy and Flux keep their own
+control logic and built-in windows; their presets are reserved for a later
+migration, so no other controller's behaviour changes.
+
+
 ##### IOCTGO_AGILEOUT dashboard
 
 The tariff dashboard shows a compact decision line above the 48-slot Agile
@@ -603,20 +649,39 @@ marketing:
   if the EV is still connected, the normal heuristic keeps running and may
   charge or discharge it until the plug is removed or the slot ends.
 
-All three kinds are selected on the **Energy Sessions & EV Availability** page
+Five further kinds are temporary control sessions rather than price overlays:
+
+- **Home only** (`home_only`): cover the house load conservatively, with no
+  planned export.
+- **Bidirectional** (`bidirectional`): allow load-following charge and
+  discharge.
+- **Solar only** (`solar_only`): charge from solar surplus only.
+- **Pause** (`pause`): hold the Wallbox dormant.
+- **OCPP handoff** (`ocpp`): give the supplier's OCPP schedule the Wallbox.
+  The report books the resulting import at the tariff's off-peak rate.
+
+While a control session owns the Wallbox, the configured tariff keeps running
+as an observer: SoC estimates, planner history and decisions continue. A
+manual dashboard command outranks a session and lasts until **smart** or a
+tariff switch. The pause-for-unplug command (`unplug`) is deliberately a
+button rather than a session; it also keeps the tariff observing.
+
+All kinds are selected on the **Energy Sessions & EV Availability** page
 (`/sessions`, linked from the dashboard and the schedule page). Click a
 half-hour cell, or drag across several, choose the kind, and add the window. On
 a touch screen, tap one end and then the other. Selections are quantised to
 half-hour slots — `start` is floored and the exclusive `end` is ceiled —
 because utilities settle on half-hour periods. Overlapping windows are rejected
-rather than resolved. Windows persist in `data/state/sessions.json`. Supplier
-sessions only apply while the controller is in smart mode, and a manual command
-still takes priority. Sessions may be conceptually related (for example, two
-saving sessions earning a free hour), but nothing links them automatically.
+rather than resolved. Windows persist in `data/state/sessions.json`. Price and
+availability sessions only apply while the controller is in smart mode, and a
+manual command still takes priority. Sessions may be conceptually related (for
+example, two saving sessions earning a free hour), but nothing links them
+automatically.
 
-On the tariff strip, session slots carry a blue bar (free import), an amber bar
-(grid support) or a grey bar (EV away) and appear in a legend below it, in
-addition to the mode and reason in the decision line.
+On the tariff strip, supplier session slots carry a blue bar (free import), an
+amber bar (grid support) or a grey bar (EV away); control sessions carry a
+purple bar. All appear in a legend below the strip, in addition to the mode and
+reason in the decision line.
 
 ##### Daily energy report (`/reports/daily`)
 

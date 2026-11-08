@@ -951,3 +951,70 @@ class TestWeatherConfig:
         assert config.WEATHER_PANEL_AZIMUTH is None
         assert config.WEATHER_PANEL_TILT is None
         assert config.WEATHER_CONFIGURED is False
+
+
+class TestPriceTiers:
+    """The preset carries windows; the six prices are normally the only edit."""
+
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_preset_defaults_from_the_configured_tariff(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {}).pop("preset", None)
+
+        config.STARTUP_STATE = "COSY"
+        assert config.TARIFF_PRESET == "cosy"
+
+        config.STARTUP_STATE = "OCTGO"
+        assert config.TARIFF_PRESET == "octopus_go"
+
+        config.STARTUP_STATE = "IOCTGO_AGILEOUT"
+        assert config.TARIFF_PRESET == "iog_agile"
+
+    def test_explicit_preset_wins(self):
+        config = self._config()
+        config.TARIFF_PRESET = "iog_prime"
+
+        assert config.TARIFF_PRESET == "iog_prime"
+
+    def test_build_table_uses_prices_and_preset_windows(self):
+        config = self._config()
+        config.TARIFF_PRESET = "iog_prime"
+        config.IMPORT_STANDARD_P = 31.0
+        config.IMPORT_CHEAP_P = 7.5
+        config.IMPORT_PEAK_P = 33.0
+        config.EXPORT_STANDARD_P = 9.0
+        config.EXPORT_CHEAP_P = 9.0
+        config.EXPORT_PEAK_P = 16.0
+        config.EXPORT_SOURCE = None
+
+        table = config.build_price_table()
+
+        assert table.import_price_p(0) == pytest.approx(7.5)
+        assert table.import_price_p(12 * 60) == pytest.approx(31.0)
+        assert table.export_price_p(17 * 60) == pytest.approx(16.0)
+        assert table.export_price_p(12 * 60) == pytest.approx(9.0)
+
+    def test_window_override_is_stored_and_can_be_cleared(self):
+        config = self._config()
+        config.TARIFF_PRESET = "iog_agile"
+
+        config.set_price_windows("import", "cheap", ["01:00-02:00"])
+        assert config.IMPORT_CHEAP_WINDOWS == ["01:00-02:00"]
+
+        config.set_price_windows("import", "cheap", None)
+        assert config.IMPORT_CHEAP_WINDOWS is None
+
+    def test_overlapping_windows_are_rejected_before_running(self):
+        config = self._config()
+        config.TARIFF_PRESET = "iog_prime"
+
+        config.set_price_windows("import", "cheap", ["12:00-14:00"])
+        config.set_price_windows("import", "peak", ["13:00-15:00"])
+
+        with pytest.raises(ValueError, match="overlaps"):
+            config.build_price_table()

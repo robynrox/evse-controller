@@ -238,8 +238,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     """
 
     #: Export prices come from the fetched Agile Outgoing series, not the
-    #: fixed ``time_of_use`` bands.
+    #: fixed ``time_of_use`` bands.  ``export_source: tiers`` switches this off
+    #: per instance so Outgoing/Prime can use the price table.
     dynamic_export = True
+
+    #: Use the configured standard/cheap/peak import and export tiers.
+    uses_price_tiers = True
 
     #: Run the DP in shadow mode and record its plan.  It never changes the
     #: heuristic's control decision.  Tests disable it by default.
@@ -375,6 +379,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                  state_path=None):
         """Initialize tariff with IOCTGO logic and Agile Outgoing rate fetching."""
         super().__init__(command_queue=command_queue)
+
+        # Resolve the configured standard/cheap/peak table once.  The Agile
+        # preset keeps the dynamic export series; Outgoing/Prime/no-export
+        # presets use the fixed tiers instead.
+        self._resolved_price_table = config.build_price_table()
+        self.dynamic_export = self._resolved_price_table.dynamic_export
 
         # Where the ledger and today's saving are kept between runs.  Tests
         # pass a temporary file; production uses config.IOCTGO_AGILE_STATE_FILE.
@@ -2002,6 +2012,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     def _current_export_rate_p(self, current_slot: int) -> float:
         """Export price for *current_slot*, or 0p if it is not known."""
+        table = self.resolved_price_table()
+        if table is not None and not table.dynamic_export:
+            value = table.export_price_p(current_slot * 30)
+            return 0.0 if value is None else float(value)
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
             slot_idx = hour * 2 + (1 if rate_data['start'].minute == 30 else 0)
@@ -2010,12 +2024,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return 0.0
 
     def export_price_p(self, day: date, slot: int) -> Optional[float]:
-        """Agile Outgoing price for one slot on *day*, or ``None``.
+        """Export price for one slot on *day*, or ``None``.
 
-        Unlike ``_current_export_rate_p`` this is not tied to today and does
-        not collapse "no rate" into 0p.  The live control logic keeps its
-        existing 0p fallback until the planner takes over pricing.
+        Agile Outgoing uses the fetched series.  Fixed/Prime presets use the
+        configured export tiers, and a no-export preset returns ``None`` so
+        the planner never imagines a paid export.
         """
+        table = self.resolved_price_table()
+        if table is not None and not table.dynamic_export:
+            return table.export_price_p(slot * 30)
+
         match = None
         for rate_data in self.agile_rates:
             start = rate_data['start']
@@ -2034,7 +2052,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         band.  The energy really was bought, so this is a price override for
         the report, not a zero-priced session.
         """
-        return config.IMPORT_LOW
+        return self.resolved_price_table().import_prices["cheap"]
 
     def export_min_rate_p(self) -> float:
         """Minimum export price covering cheap import and the profit margin.
@@ -3113,6 +3131,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         session = self._session_at(self._slot_start_datetime(day_minute))
         if session is not None and session.kind == FREE_IMPORT:
             return 0.0
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.import_price_p(day_minute)
         return (
             config.IMPORT_LOW
             if self.is_off_peak(day_minute)

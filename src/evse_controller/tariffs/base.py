@@ -40,6 +40,9 @@ class Tariff:
     dynamic_import = False
     #: True when export prices change per slot beyond fixed bands.
     dynamic_export = False
+    #: Opt in to the three-tier standard/cheap/peak price table.  Tariffs with
+    #: their own hard-coded bands leave this False and keep their old pricing.
+    uses_price_tiers = False
 
     def __init__(self, command_queue: Optional[queue.Queue] = None):
         """Initialize base tariff with default time-of-use rates.
@@ -53,6 +56,18 @@ class Tariff:
         self.command_queue = command_queue
         self._time_function = lambda: __import__('time').time()  # Default to real time
         self._datetime_function = lambda: __import__('datetime').datetime.now()  # Default to real datetime
+
+    def resolved_price_table(self):
+        """The configured tier table, or ``None`` for legacy tariffs."""
+        if not self.uses_price_tiers:
+            return None
+        table = getattr(self, "_resolved_price_table", None)
+        if table is None:
+            from evse_controller.utils.config import config
+
+            table = config.build_price_table()
+            self._resolved_price_table = table
+        return table
 
     def set_time_functions(self, time_func=None, datetime_func=None):
         """Set custom time functions for testing purposes."""
@@ -149,6 +164,9 @@ class Tariff:
         ``None`` means the tariff has no price for the slot; it is never
         treated as zero.
         """
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.import_price_p(slot * 30)
         rate = self.get_import_rate(_slot_start(day, slot))
         return None if rate is None else rate * 100.0
 
@@ -158,6 +176,14 @@ class Tariff:
         Tariffs with a dynamic export series override this.  The default reads
         the fixed time-of-use bands.
         """
+        table = self.resolved_price_table()
+        if table is not None:
+            # A dynamic-export preset needs the Agile series, which only the
+            # Agile tariff has.  Report it as unknown here rather than
+            # inventing a fixed price from the tier table.
+            if table.dynamic_export:
+                return None
+            return table.export_price_p(slot * 30)
         rate = self.get_export_rate(_slot_start(day, slot))
         return None if rate is None else rate * 100.0
 

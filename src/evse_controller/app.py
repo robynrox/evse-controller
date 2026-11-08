@@ -68,6 +68,7 @@ from evse_controller.energy_sessions import (
     session_from_slots,
     session_store,
 )
+from evse_controller.price_tiers import PRESETS
 
 VALID_COMMANDS = {
     'pause': 'Stop charging/discharging',
@@ -155,6 +156,27 @@ def _session_from_payload(data: dict, now: datetime | None = None) -> EnergySess
         data.get("end_slot"),
         now=now,
     )
+
+
+def _parse_window_list(value):
+    """Parse the advanced comma-separated window field.
+
+    ``None`` means "not submitted", which leaves the preset in charge.  An
+    empty string means the user cleared the tier, so it has no windows.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return []
+    parts = text.replace(";", ",").replace("\n", ",").split(",")
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _form_float(value, default):
+    if value is None or str(value).strip() == "":
+        return default
+    return float(value)
 
 
 # Global variables to cache the latest measurements and OCPP state
@@ -724,26 +746,151 @@ def config_page():
                         config.set_channel_name(device, channel, name)
                         config.set_channel_abbreviation(device, channel, abbr)
 
-            # Get tariff prices
-            import_high = request.form.get('import[high]')
-            if import_high is not None:
-                config.IMPORT_HIGH = float(import_high)
-            import_mid = request.form.get('import[mid]')
-            if import_mid is not None:
-                config.IMPORT_MID = float(import_mid)
-            import_low = request.form.get('import[low]')
-            if import_low is not None:
-                config.IMPORT_LOW = float(import_low)
+            # Three-tier prices.  The preset supplies the windows; the form
+            # normally edits only these six prices.  The old import/export
+            # fields are still accepted from a stale tab so a save cannot
+            # silently discard the live rates.
+            preset = request.form.get('tariffs[preset]') or config.TARIFF_PRESET
+            export_source = (
+                request.form.get('tariffs[export_source]')
+                or config.EXPORT_SOURCE
+            )
 
-            export_high = request.form.get('export[high]')
-            if export_high is not None:
-                config.EXPORT_HIGH = float(export_high)
-            export_mid = request.form.get('export[mid]')
-            if export_mid is not None:
-                config.EXPORT_MID = float(export_mid)
-            export_low = request.form.get('export[low]')
-            if export_low is not None:
-                config.EXPORT_LOW = float(export_low)
+            legacy_import = {
+                'high': request.form.get('import[high]'),
+                'mid': request.form.get('import[mid]'),
+                'low': request.form.get('import[low]'),
+            }
+            legacy_export = {
+                'high': request.form.get('export[high]'),
+                'mid': request.form.get('export[mid]'),
+                'low': request.form.get('export[low]'),
+            }
+            if 'prices[import][standard]' in request.form:
+                import_prices = {
+                    'standard': _form_float(
+                        request.form.get('prices[import][standard]'),
+                        config.IMPORT_STANDARD_P,
+                    ),
+                    'cheap': _form_float(
+                        request.form.get('prices[import][cheap]'),
+                        config.IMPORT_CHEAP_P,
+                    ),
+                    'peak': _form_float(
+                        request.form.get('prices[import][peak]'),
+                        config.IMPORT_PEAK_P,
+                    ),
+                }
+            elif any(value is not None for value in legacy_import.values()):
+                import_prices = {
+                    'standard': _form_float(
+                        legacy_import['mid'], config.IMPORT_STANDARD_P
+                    ),
+                    'cheap': _form_float(
+                        legacy_import['low'], config.IMPORT_CHEAP_P
+                    ),
+                    'peak': _form_float(
+                        legacy_import['high'], config.IMPORT_PEAK_P
+                    ),
+                }
+            else:
+                import_prices = {
+                    'standard': config.IMPORT_STANDARD_P,
+                    'cheap': config.IMPORT_CHEAP_P,
+                    'peak': config.IMPORT_PEAK_P,
+                }
+
+            if 'prices[export][standard]' in request.form:
+                export_prices = {
+                    'standard': _form_float(
+                        request.form.get('prices[export][standard]'),
+                        config.EXPORT_STANDARD_P,
+                    ),
+                    'cheap': _form_float(
+                        request.form.get('prices[export][cheap]'),
+                        config.EXPORT_CHEAP_P,
+                    ),
+                    'peak': _form_float(
+                        request.form.get('prices[export][peak]'),
+                        config.EXPORT_PEAK_P,
+                    ),
+                }
+            elif any(value is not None for value in legacy_export.values()):
+                export_prices = {
+                    'standard': _form_float(
+                        legacy_export['mid'], config.EXPORT_STANDARD_P
+                    ),
+                    'cheap': _form_float(
+                        legacy_export['low'], config.EXPORT_CHEAP_P
+                    ),
+                    'peak': _form_float(
+                        legacy_export['high'], config.EXPORT_PEAK_P
+                    ),
+                }
+            else:
+                export_prices = {
+                    'standard': config.EXPORT_STANDARD_P,
+                    'cheap': config.EXPORT_CHEAP_P,
+                    'peak': config.EXPORT_PEAK_P,
+                }
+
+            import_windows = {
+                'cheap': _parse_window_list(
+                    request.form.get('prices[import][cheap_windows]')
+                )
+                if 'prices[import][cheap_windows]' in request.form
+                else config.IMPORT_CHEAP_WINDOWS,
+                'peak': _parse_window_list(
+                    request.form.get('prices[import][peak_windows]')
+                )
+                if 'prices[import][peak_windows]' in request.form
+                else config.IMPORT_PEAK_WINDOWS,
+            }
+            export_windows = {
+                'cheap': _parse_window_list(
+                    request.form.get('prices[export][cheap_windows]')
+                )
+                if 'prices[export][cheap_windows]' in request.form
+                else config.EXPORT_CHEAP_WINDOWS,
+                'peak': _parse_window_list(
+                    request.form.get('prices[export][peak_windows]')
+                )
+                if 'prices[export][peak_windows]' in request.form
+                else config.EXPORT_PEAK_WINDOWS,
+            }
+
+            # Validate before mutating the running configuration.
+            from evse_controller.price_tiers import build_price_table
+
+            build_price_table(
+                preset,
+                import_prices,
+                export_prices,
+                import_windows=import_windows,
+                export_windows=export_windows,
+                export_source=export_source,
+            )
+
+            config.TARIFF_PRESET = preset
+            config.EXPORT_SOURCE = export_source or None
+            config.IMPORT_STANDARD_P = import_prices['standard']
+            config.IMPORT_CHEAP_P = import_prices['cheap']
+            config.IMPORT_PEAK_P = import_prices['peak']
+            config.EXPORT_STANDARD_P = export_prices['standard']
+            config.EXPORT_CHEAP_P = export_prices['cheap']
+            config.EXPORT_PEAK_P = export_prices['peak']
+            config.set_price_windows('import', 'cheap', import_windows['cheap'])
+            config.set_price_windows('import', 'peak', import_windows['peak'])
+            config.set_price_windows('export', 'cheap', export_windows['cheap'])
+            config.set_price_windows('export', 'peak', export_windows['peak'])
+
+            # Keep the legacy fields in step for anything still reading them.
+            for key, value in legacy_import.items():
+                if value is not None:
+                    setattr(config, f'IMPORT_{key.upper()}', float(value))
+            for key, value in legacy_export.items():
+                if value is not None:
+                    setattr(config, f'EXPORT_{key.upper()}', float(value))
 
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
@@ -770,7 +917,8 @@ def config_page():
     # GET request - display current configuration
     try:
         config_dict = config.as_dict()
-        return render_template('config.html', config=config_dict)
+        return render_template('config.html', config=config_dict,
+                               price_presets=PRESETS)
     except Exception as e:
         logging.error(f"Error loading configuration page: {str(e)}")
         flash(f'Error loading configuration: {str(e)}', 'error')

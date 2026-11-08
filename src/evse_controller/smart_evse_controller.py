@@ -52,6 +52,10 @@ info(f"Using config file: {config.CONFIG_FILE}")
 # Main application
 active_override: Optional[ControlOverride] = None
 
+#: A control session the user explicitly dismissed by choosing SMART.  It is
+#: skipped until its window ends, so the manual command really does win.
+_dismissed_session_id: Optional[str] = None
+
 def ensure_ocpp_disabled():
     """Ensure OCPP is disabled by using the OCPPManager.
     This function can be called even if OCPP is already disabled.
@@ -251,8 +255,12 @@ def _sync_session_override(now: datetime) -> None:
     until they choose SMART or switch tariff.  A session-sourced override is
     refreshed in place and released when its window ends.
     """
+    global _dismissed_session_id
+
     session = session_store.control_session(now)
     if session is not None:
+        if _dismissed_session_id == session.id:
+            return
         if active_override is not None and active_override.source != "session":
             return
 
@@ -281,12 +289,37 @@ def _sync_session_override(now: datetime) -> None:
             )
         return
 
+    if _dismissed_session_id is not None:
+        _dismissed_session_id = None
+
     if active_override is not None and active_override.source == "session":
         info("CONTROL SESSION ENDED, resuming smart tariff control")
         _clear_override("session ended")
         _ensure_tariff_active()
         _set_exec_state(ExecState.SMART)
         _apply_exec_state(ExecState.SMART)
+
+
+def _dismiss_active_session() -> None:
+    """Let an explicit SMART command outrank a running control session."""
+    global _dismissed_session_id
+
+    session = session_store.control_session(datetime.now())
+    _dismissed_session_id = session.id if session is not None else None
+
+
+def _flag_ocpp_slot_if_active() -> None:
+    """Record an OCPP-driven slot for off-peak import pricing."""
+    try:
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+
+        if ocpp_manager.get_state() is not True:
+            return
+        from evse_controller.daily_report import daily_log
+
+        daily_log.flag(datetime.now(), "ocpp")
+    except Exception as exc:
+        debug(f"Could not flag OCPP slot: {exc}")
 
 
 def _observe_tariff(dayMinute: int) -> None:
@@ -361,12 +394,7 @@ def _apply_override(override: ControlOverride) -> None:
         if mode == ExecState.OCPP:
             # The report prices OCPP-driven import at the tariff's off-peak
             # rate, so record which slots were handed to the supplier.
-            try:
-                from evse_controller.daily_report import daily_log
-
-                daily_log.flag(datetime.now(), "ocpp")
-            except Exception as exc:
-                debug(f"Could not flag OCPP slot: {exc}")
+            _flag_ocpp_slot_if_active()
     elif mode == ExecState.SMART:
         # SMART is not a hardware override; fail safe if it is ever stored.
         warning("SMART cannot be an actuator override; leaving EVSE untouched")
@@ -471,9 +499,16 @@ def get_system_state():
     """
     current_state = execState.name
     if active_override is not None:
-        current_state = f"{active_override.mode.name} (override)"
-        if execState == ExecState.SMART:
-            current_state = f"SMART ({active_override.mode.name} override)"
+        tariff = tariffManager.get_tariff()
+        current_tariff = (
+            tariff.__class__.__name__.replace('Tariff', '')
+            if tariff is not None
+            else "no tariff"
+        )
+        current_state = (
+            f"{active_override.mode.name} (override; "
+            f"{current_tariff} observing)"
+        )
     elif execState == ExecState.SMART:
         tariff = tariffManager.get_tariff()
         current_tariff = (
@@ -647,6 +682,7 @@ def main():
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     ensure_ocpp_disabled()
+                    _dismiss_active_session()
                     _clear_override("smart mode")
                     info("Entering smart tariff controller state")
                     tariffManager.start_tariff()
@@ -663,6 +699,13 @@ def main():
                     _clear_override("tariff switch")
                     info("Switching to Intelligent Octopus Go tariff")
                     tariffManager.set_tariff("IOCTGO")
+                    _set_exec_state(ExecState.SMART)
+                    nextStateCheck = time.time()
+                case "ioctgo_agileout":
+                    ensure_ocpp_disabled()
+                    _clear_override("tariff switch")
+                    info("Switching to Intelligent Octopus Go with Agile Outgoing")
+                    tariffManager.set_tariff("IOCTGO_AGILEOUT")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "f" | "flux":
@@ -798,6 +841,8 @@ def main():
                         evseController.setChargeCurrentRange(min_current, max_current)
                     elif control_state == ControlState.DISCHARGE:
                         evseController.setDischargeCurrentRange(min_current, max_current)
+                # The tariff may enable OCPP itself for a supplier handoff.
+                _flag_ocpp_slot_if_active()
             elif execState == ExecState.FREERUN:
                 # In FREERUN state, we don't send any control commands to the EVSE
                 # The EVSE operates independently via the setFreeRun() method

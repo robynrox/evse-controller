@@ -255,6 +255,29 @@ completed fixes.
   manual command still outranks them; overlapping windows are rejected.
   Free-import slots are excluded from the export plan. The tariff strip marks
   each session slot with a coloured bar and a legend entry.
+- **Tariffs observe behind temporary overrides.** Dashboard and schedule
+  commands no longer call `stop_tariff()`; they arm a `ControlOverride` above
+  the tariff. The configured tariff keeps running its decision path, so SoC
+  estimates, planner runs and decision history continue while the car is
+  paused, solar-only, bidirectional, OCPP-driven or held until unplugged.
+  `stop_tariff()` is reserved for a real tariff switch or shutdown. A manual
+  command outranks a scheduled control session. Pause-until-disconnect is a
+  button/override, not a session, and releases to SMART when the cable leaves.
+  The pure ownership rules live in `execution_state.py` so they are testable
+  without starting MQTT, OCPP or hardware threads.
+- **Control sessions.** `home_only`, `bidirectional`, `solar_only`, `pause` and
+  `ocpp` are temporary overrides stored alongside the supplier windows in
+  `data/state/sessions.json`. `TariffManager.observe(dayMinute)` runs the
+  active tariff without applying its actuator tuple. OCPP slots are flagged in
+  the daily report and booked at the tariff's off-peak import price.
+- **Three-tier prices and presets.** `price_tiers.py` resolves a
+  standard/cheap/peak table with multiple wrap-aware windows and rejects
+  cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,
+  `iog_outgoing`, `iog_prime`, `iog_no_export`, plus reserved Go/Cosy/Flux
+  presets); the six `prices` values are what users normally edit. The IOctGo
+  variants use the same table, so Agile/fixed/prime/no-export differ only in
+  export pricing, not control logic. Go, Cosy and Flux keep their existing
+  hard-coded bands and control for now.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

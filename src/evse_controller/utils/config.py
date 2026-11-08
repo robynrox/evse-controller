@@ -803,6 +803,197 @@ class Config:
         lambda self, value: self._set_config_value("export", "low", value)
     )
 
+    # -- three-tier price table ------------------------------------------
+    #
+    # Existing installs keep using import.high/mid/low and export.high/mid/low.
+    # The new ``prices`` block makes the standard/cheap/peak role explicit and
+    # adds optional window overrides.  A preset supplies the windows, so a
+    # normal install edits only these six prices.
+
+    TARIFF_PRESET = property(
+        lambda self: self._get_config_value(
+            "tariffs", "preset", self._default_price_preset()
+        ),
+        lambda self, value: self._set_config_value("tariffs", "preset", value)
+    )
+
+    EXPORT_SOURCE = property(
+        lambda self: self._get_config_value("tariffs", "export_source", None),
+        lambda self, value: self._set_config_value(
+            "tariffs", "export_source", value
+        )
+    )
+
+    IMPORT_STANDARD_P = property(
+        lambda self: self._get_config_value(
+            "prices.import", "standard",
+            self._preset_default_price("import", "standard"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.import", "standard", value
+        )
+    )
+
+    IMPORT_CHEAP_P = property(
+        lambda self: self._get_config_value(
+            "prices.import", "cheap",
+            self._preset_default_price("import", "cheap"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.import", "cheap", value
+        )
+    )
+
+    IMPORT_PEAK_P = property(
+        lambda self: self._get_config_value(
+            "prices.import", "peak",
+            self._preset_default_price("import", "peak"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.import", "peak", value
+        )
+    )
+
+    EXPORT_STANDARD_P = property(
+        lambda self: self._get_config_value(
+            "prices.export", "standard",
+            self._preset_default_price("export", "standard"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.export", "standard", value
+        )
+    )
+
+    EXPORT_CHEAP_P = property(
+        lambda self: self._get_config_value(
+            "prices.export", "cheap",
+            self._preset_default_price("export", "cheap"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.export", "cheap", value
+        )
+    )
+
+    EXPORT_PEAK_P = property(
+        lambda self: self._get_config_value(
+            "prices.export", "peak",
+            self._preset_default_price("export", "peak"),
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.export", "peak", value
+        )
+    )
+
+    IMPORT_CHEAP_WINDOWS = property(
+        lambda self: self._get_config_value(
+            "prices.import", "cheap_windows", None
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.import", "cheap_windows", value
+        )
+    )
+
+    IMPORT_PEAK_WINDOWS = property(
+        lambda self: self._get_config_value(
+            "prices.import", "peak_windows", None
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.import", "peak_windows", value
+        )
+    )
+
+    EXPORT_CHEAP_WINDOWS = property(
+        lambda self: self._get_config_value(
+            "prices.export", "cheap_windows", None
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.export", "cheap_windows", value
+        )
+    )
+
+    EXPORT_PEAK_WINDOWS = property(
+        lambda self: self._get_config_value(
+            "prices.export", "peak_windows", None
+        ),
+        lambda self, value: self._set_config_value(
+            "prices.export", "peak_windows", value
+        )
+    )
+
+    def _default_price_preset(self) -> str:
+        """The preset that matches the configured tariff, for old configs."""
+        return {
+            "OCTGO": "octopus_go",
+            "COSY": "cosy",
+            "FLUX": "flux",
+        }.get(self.STARTUP_STATE, "iog_agile")
+
+    def _preset_default_price(self, side: str, tier: str) -> float:
+        """Starter price from the selected preset, for a first run."""
+        from evse_controller.price_tiers import PRESETS
+
+        preset = PRESETS.get(self.TARIFF_PRESET)
+        if preset is not None:
+            prices = (
+                preset.default_import_prices
+                if side == "import"
+                else preset.default_export_prices
+            )
+            if tier in prices:
+                return prices[tier]
+        # A hand-edited unknown preset still needs a safe number; the table
+        # builder will reject the preset name with a clear message.
+        return {
+            ("import", "standard"): self.IMPORT_HIGH,
+            ("import", "cheap"): self.IMPORT_LOW,
+            ("import", "peak"): self.IMPORT_HIGH,
+            ("export", "standard"): self.EXPORT_MID,
+            ("export", "cheap"): self.EXPORT_MID,
+            ("export", "peak"): self.EXPORT_HIGH,
+        }.get((side, tier), 0.0)
+
+    def build_price_table(self):
+        """Resolve the configured preset, prices and window overrides."""
+        from evse_controller.price_tiers import build_price_table
+
+        return build_price_table(
+            self.TARIFF_PRESET,
+            {
+                "standard": self.IMPORT_STANDARD_P,
+                "cheap": self.IMPORT_CHEAP_P,
+                "peak": self.IMPORT_PEAK_P,
+            },
+            {
+                "standard": self.EXPORT_STANDARD_P,
+                "cheap": self.EXPORT_CHEAP_P,
+                "peak": self.EXPORT_PEAK_P,
+            },
+            import_windows={
+                "cheap": self.IMPORT_CHEAP_WINDOWS,
+                "peak": self.IMPORT_PEAK_WINDOWS,
+            },
+            export_windows={
+                "cheap": self.EXPORT_CHEAP_WINDOWS,
+                "peak": self.EXPORT_PEAK_WINDOWS,
+            },
+            export_source=self.EXPORT_SOURCE,
+        )
+
+    def set_price_windows(self, side: str, tier: str, windows) -> None:
+        """Store or clear a window override.
+
+        An empty value removes the key so the preset's structure applies
+        again, rather than persisting a misleading empty list.
+        """
+        key = f"{tier}_windows"
+        section = f"prices.{side}"
+        if windows:
+            self._set_config_value(section, key, list(windows))
+            return
+        container = self.get(section, None)
+        if isinstance(container, dict):
+            container.pop(key, None)
+
     def save(self):
         """Save configuration to YAML file with backup."""
         config_path = get_config_file()
@@ -872,6 +1063,8 @@ class Config:
                 'startup_state': self.STARTUP_STATE
             },
             'tariffs': {
+                'preset': self.TARIFF_PRESET,
+                'export_source': self.EXPORT_SOURCE,
                 'ioctgo': {
                     'battery_capacity_kwh': self.IOCTGO_BATTERY_CAPACITY_KWH,
                     'target_soc_at_bulk_discharge_end': self.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
@@ -921,6 +1114,22 @@ class Config:
                 'high': self.EXPORT_HIGH,
                 'mid': self.EXPORT_MID,
                 'low': self.EXPORT_LOW
+            },
+            'prices': {
+                'import': {
+                    'standard': self.IMPORT_STANDARD_P,
+                    'cheap': self.IMPORT_CHEAP_P,
+                    'peak': self.IMPORT_PEAK_P,
+                    'cheap_windows': self.IMPORT_CHEAP_WINDOWS,
+                    'peak_windows': self.IMPORT_PEAK_WINDOWS,
+                },
+                'export': {
+                    'standard': self.EXPORT_STANDARD_P,
+                    'cheap': self.EXPORT_CHEAP_P,
+                    'peak': self.EXPORT_PEAK_P,
+                    'cheap_windows': self.EXPORT_CHEAP_WINDOWS,
+                    'peak_windows': self.EXPORT_PEAK_WINDOWS,
+                },
             }
         }
 

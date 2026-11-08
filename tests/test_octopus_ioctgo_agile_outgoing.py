@@ -4998,3 +4998,56 @@ class TestHighValueExportRecharge:
 
         assert control_state == ControlState.CHARGE
         assert minimum == maximum == config.WALLBOX_MAX_CHARGE_CURRENT
+
+
+class TestTieredExportVariants:
+    """The three outgoing products share one controller and one price table."""
+
+    def _tariff_with(self, preset, export_prices):
+        from evse_controller.price_tiers import build_price_table
+
+        tariff = _build_tariff()
+        table = build_price_table(
+            preset,
+            {"standard": 30.0, "cheap": 7.5, "peak": 30.0},
+            export_prices,
+        )
+        tariff._resolved_price_table = table
+        tariff.dynamic_export = table.dynamic_export
+        return tariff
+
+    def test_flat_outgoing_export_uses_the_standard_tier(self):
+        tariff = self._tariff_with(
+            "iog_outgoing",
+            {"standard": 12.0, "cheap": 12.0, "peak": 12.0},
+        )
+
+        assert tariff.export_price_p(datetime.now().date(), 0) == 12.0
+        assert tariff.export_price_p(datetime.now().date(), 34) == 12.0
+        assert tariff.dynamic_export is False
+
+    def test_prime_export_uses_the_peak_window(self):
+        tariff = self._tariff_with(
+            "iog_prime",
+            {"standard": 9.0, "cheap": 9.0, "peak": 16.0},
+        )
+
+        assert tariff.export_price_p(datetime.now().date(), 32) == 16.0  # 16:00
+        assert tariff.export_price_p(datetime.now().date(), 20) == 9.0
+
+    def test_no_export_tariff_returns_unknown(self):
+        tariff = self._tariff_with(
+            "iog_no_export",
+            {"standard": 9.0, "cheap": 9.0, "peak": 16.0},
+        )
+
+        assert tariff.export_price_p(datetime.now().date(), 32) is None
+
+    def test_live_import_price_uses_the_table(self):
+        tariff = self._tariff_with(
+            "iog_prime",
+            {"standard": 9.0, "cheap": 9.0, "peak": 16.0},
+        )
+
+        assert tariff._current_import_rate_p(0) == pytest.approx(7.5)
+        assert tariff._current_import_rate_p(12 * 60) == pytest.approx(30.0)
