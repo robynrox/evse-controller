@@ -36,6 +36,7 @@ class PlannerInput:
     target_soc: float
     source_name: str
     forecast_days: int = 0
+    load_fallback_kw: float = 0.0
 
 
 def _session_for(slot_start: datetime, sessions: list[EnergySession]):
@@ -154,4 +155,5 @@ def build_planner_input(
         target_soc=float(target_soc),
         source_name=source.name,
         forecast_days=forecast_days,
+        load_fallback_kw=float(load_fallback_kw),
     )

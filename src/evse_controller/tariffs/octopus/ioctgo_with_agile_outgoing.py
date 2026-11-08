@@ -242,6 +242,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: heuristic's control decision.  Tests disable it by default.
     ENABLE_SHADOW_PLANNER = True
 
+    #: SoC resolution used by the shadow planner.  A 0.1% grid keeps the
+    #: integer-current transitions from creating large rounding artefacts in
+    #: the policy surface; the plan still runs in a few hundred milliseconds.
+    SHADOW_SOC_STEP_PERCENT = 0.1
+
+    #: House load assumed when the profile has no forecast for a slot.  A
+    #: zero would make exports look free and is not a safe planning default.
+    SHADOW_LOAD_FALLBACK_KW = 0.72
+
     # Agile Outgoing tariff codes by region
     AGILE_TARIFF_CODES = {
         'A': 'AGILE-OUTGOING-19-05-13',
@@ -1046,13 +1055,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 max_discharge_current_a=float(
                     config.WALLBOX_MAX_DISCHARGE_CURRENT
                 ),
-                load_fallback_kw=0.0,
+                load_fallback_kw=float(self.SHADOW_LOAD_FALLBACK_KW),
                 unknown_export_p=0.0,
             )
             planner = DpPlanner(
                 efficiency_model=self.EFFICIENCY_MODEL,
                 capacity_kwh=self.SOC_CAPACITY_KWH,
-                soc_step_percent=0.5,
+                soc_step_percent=self.SHADOW_SOC_STEP_PERCENT,
                 min_current_a=float(self.MIN_DISCHARGE_CURRENT),
                 charge_cap_percent=self.charge_cap_percent(),
                 protection_floor_percent=self.absolute_min_soc_percent(),
@@ -1105,7 +1114,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "total_cost_p": result.total_cost_p,
             "planner": {
                 "capacity_kwh": self.SOC_CAPACITY_KWH,
-                "soc_step_percent": 0.5,
+                "soc_step_percent": self.SHADOW_SOC_STEP_PERCENT,
                 "min_current_a": float(self.MIN_DISCHARGE_CURRENT),
                 "charge_cap_percent": self.charge_cap_percent(),
                 "protection_floor_percent": self.absolute_min_soc_percent(),
@@ -1113,6 +1122,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     config.AGGRESSIVE_SOC_LOWER_LIMIT
                 ),
                 "degradation_p_per_kwh": 0.0,
+                "load_fallback_kw": float(
+                    planner_input.load_fallback_kw
+                ),
                 "max_charge_current_a": float(
                     config.WALLBOX_MAX_CHARGE_CURRENT
                 ),

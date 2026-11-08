@@ -124,7 +124,14 @@
     }
     .target-line { stroke: #0b5cad; stroke-width: 1.4; stroke-dasharray: 5 3; }
     .floor-line, .cap-line { stroke: #666; stroke-width: 1.2; }
+    .soc-grid-line {
+        stroke: #c9d2dc;
+        stroke-width: .8;
+        opacity: .6;
+        pointer-events: none;
+    }
     .axis { fill: #666; font-size: 10px; }
+    .axis-right { fill: #999; }
     .axis-unit { fill: #666; font-size: 10px; font-weight: 700; }
     .legend-bar {
         display: flex;
@@ -142,6 +149,12 @@
         border-radius: 2px;
         margin-right: 5px;
         vertical-align: -2px;
+    }
+    .legend-bar .swatch.hatch {
+        background: repeating-linear-gradient(
+            45deg, #0b5cad, #0b5cad 1px, #fff 1px, #fff 4px
+        );
+        border: 1px solid #c9d2dc;
     }
     .legend-bar .line-key {
         display: inline-block;
@@ -312,12 +325,37 @@
                 runs record the model and limits and will replay exactly.
             </div>
         {% endif %}
+        {% if no_load_forecast %}
+            <div class="banner">
+                This run had <strong>no house-load forecast</strong>
+                (forecast depth 0).
+                {% if load_fallback_kw > 0 %}
+                    Every slot used the {{ '%.2f'|format(load_fallback_kw) }} kW
+                    fallback.
+                {% else %}
+                    This older run assumed 0 kW for every slot.
+                {% endif %}
+                Treat this surface as price arbitrage only; it is not a full
+                house-load or self-consumption policy.
+            </div>
+        {% endif %}
 
         <div class="cards">
             <div class="card">
                 <div class="label">Run started</div>
                 <div class="value">{{ fmt_time(run.ts) }}</div>
-                <div class="note">slot {{ run.slot }} · {{ run.forecast_days }} forecast days</div>
+                <div class="note">slot {{ run.slot }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Load forecast</div>
+                <div class="value">{{ run.forecast_days }} d</div>
+                <div class="note">
+                    {% if no_load_forecast %}
+                        none · {{ '%.2f'|format(load_fallback_kw) }} kW fallback
+                    {% else %}
+                        profile depth
+                    {% endif %}
+                </div>
             </div>
             <div class="card">
                 <div class="label">Initial SoC</div>
@@ -369,9 +407,16 @@
             <span><span class="swatch" style="background:#d84315"></span>discharge, high current</span>
             <span><span class="swatch" style="background:#7b1fa2"></span>free import</span>
             <span><span class="swatch" style="background:#00796b"></span>grid support</span>
+            <span><span class="swatch hatch"></span>near-tie (&lt;1p)</span>
             <span><span class="line-key"></span>planned SoC (end of slot)</span>
             <span><span class="line-key estimated"></span>estimated SoC (slot start)</span>
         </div>
+        <p style="font-size:12px;color:#777;margin:0 0 12px;">
+            Near-tie cells are within 1p of the next-best mode. The exact
+            current there is not economically meaningful; a small forecast
+            change can flip it. This policy models fixed half-hour currents,
+            not the heuristic's intra-slot load-following.
+        </p>
         <div class="panel chart-panel">
             <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
             {{ heatmap|safe }}

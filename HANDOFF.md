@@ -353,12 +353,21 @@ completed fixes.
   with a mode/margin/current heatmap, price and session strips, planned and
   estimated SoC paths, selected-slot bands, an action options table and an
   explanation. High SoC is at the top; labels are every 10% at 1% resolution
-  and every 5% at 0.5%. Policies are replayed from recorded run inputs; old
-  runs without planner parameters show a caveat.
+  and every 5% at 0.5%, repeated on the right edge with faint horizontal
+  guides. Cells within 1p of the next-best mode are hatched as near-ties.
+  Policies are replayed from recorded run inputs; old runs without planner
+  parameters show a caveat, and a run with no load profile shows a prominent
+  no-load warning.
+- The shadow planner now uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`)
+  and a **0.72 kW load fallback** (`SHADOW_LOAD_FALLBACK_KW`) when the profile
+  has no slot forecast. The fine grid removes most integer-current rounding
+  sawtooth; the fallback stops the planner treating missing house load as zero.
+  The DP action space is still fixed half-hour currents; it does not yet model
+  intra-slot load-following.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **748 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **749 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

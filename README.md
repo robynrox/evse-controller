@@ -729,9 +729,10 @@ action for every half-hour slot and every SoC state:
   charge cap.
 - **Colour:** charge, idle, discharge, free-import charge, grid-support
   discharge or EV-away idle. Shade shows the commanded current.
-- **Overlays:** import/export price strip, session strip, target/floor/cap
-  lines, the run's planned SoC path and the estimated SoC that actually
-  happened.
+- **Overlays:** import/export price strip, session strip, faint horizontal
+  guides at every labelled SoC (also labelled on the right edge, so they stay
+  readable when scrolled), target/floor/cap lines, the run's planned SoC path
+  and the estimated SoC that actually happened.
 - **Views:** Mode, Decision margin (how much better the chosen mode is than
   the next-best mode), and Current.
 - **Resolution:** 1% by default, 0.5% for boundary inspection, with the same
@@ -741,6 +742,11 @@ action for every half-hour slot and every SoC state:
   charge at the configured minimum up to the charge limit, and discharge at
   the configured minimum up to the discharge limit. A non-derated Wallbox
   therefore uses 3–32 A and −3 to −32 A; a derated one uses its own limits.
+- **Near ties:** cells within 1p of the next-best mode are hatched. Their exact
+  current is not economically meaningful; a small forecast change can flip it.
+- **Load forecast:** if the run had no house-load profile, the page says so
+  prominently. The shadow planner uses a 0.72 kW fallback per slot instead of
+  assuming zero load.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future
@@ -757,6 +763,15 @@ model table, capacity, step, current limits, floors and target.
 For today the page defaults to the latest run; for a past day it defaults to
 the first run of that day. The run selector allows any recorded run to be
 inspected.
+
+The shadow planner currently uses a 0.1% SoC grid. A 0.5% grid combined with
+integer currents made several currents round to the same SoC step, producing
+sawtooth current choices where the alternatives were economically almost
+identical. The finer grid removes most of that artefact; near-ties are still
+marked. The policy action space is still **fixed half-hour currents** (idle,
+charge or discharge); it does not yet model the heuristic's intra-slot
+load-following, where the Wallbox continuously tracks house load or solar
+surplus. Adding a load-follow action is a separate modelling step.
 
 ##### Plan-versus-actual report (`/reports/plan`)
 

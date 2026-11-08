@@ -147,7 +147,9 @@ def _build_context(run: dict) -> RunContext:
     capacity = _number(
         params.get("capacity_kwh"), DASHBOARD_SOC_CAPACITY_KWH
     )
-    step = _number(params.get("soc_step_percent"), 0.5) or 0.5
+    # Match the current shadow planner if an older run did not record its
+    # step.  The page already warns that such a run is a recomputation.
+    step = _number(params.get("soc_step_percent"), 0.1) or 0.1
     min_current = _number(
         params.get("min_current_a"),
         float(config.WALLBOX_MIN_DISCHARGE_CURRENT),
@@ -341,7 +343,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     cell_w = 17
     cell_h = 12
     left = 64
-    right = 16
+    right = 46
     price_h = 34
     session_h = 8
     top = 24 + price_h + session_h + 6
@@ -362,7 +364,14 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
 
     svg = [
         f'<svg class="policy-map" viewBox="0 0 {width} {height}" '
-        'role="img" aria-label="DP action by slot and state of charge">'
+        'role="img" aria-label="DP action by slot and state of charge">',
+        '<defs>'
+        '<pattern id="policy-marginal" width="4" height="4" '
+        'patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
+        '<line x1="0" y1="0" x2="0" y2="4" stroke="#ffffff" '
+        'stroke-width="1" opacity="0.7"/>'
+        '</pattern>'
+        '</defs>',
     ]
 
     # Price strip: import bars and export dots.  Units are shown in the
@@ -418,6 +427,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     label_value = (
         math.floor(states[-1][1] / label_step) * label_step
     )
+    grid_rows: list[tuple[int, float]] = []
     while label_value >= states[0][1] - 1e-9:
         state = ctx.planner._clamp_state(
             int(round(label_value / ctx.step))
@@ -425,9 +435,14 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
         row_index = state_rows.get(state)
         if row_index is not None:
             y = top + (row_index + 0.5) * cell_h
+            grid_rows.append((row_index, label_value))
             svg.append(
                 f'<text x="{left - 6}" y="{y + 3:.1f}" '
                 f'text-anchor="end" class="axis">{label_value:.0f}%</text>'
+            )
+            svg.append(
+                f'<text x="{width - right + 6}" y="{y + 3:.1f}" '
+                f'class="axis axis-right">{label_value:.0f}%</text>'
             )
         label_value -= label_step
 
@@ -486,11 +501,35 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
                 )
             x = left + column * cell_w
             y = top + row_index * cell_h
+            near_tie = (
+                view != "advantage"
+                and action is not None
+                and cell.advantage_p is not None
+                and cell.advantage_p < 1.0
+                and cell.target_reachable
+            )
+            if near_tie:
+                title += " · near-tie"
             svg.append(
                 f'<rect x="{x}" y="{y}" width="{cell_w}" '
                 f'height="{cell_h}" fill="{fill}" class="policy-cell">'
                 f'<title>{title}</title></rect>'
             )
+            if near_tie:
+                svg.append(
+                    f'<rect x="{x}" y="{y}" width="{cell_w}" '
+                    f'height="{cell_h}" fill="url(#policy-marginal)" '
+                    'pointer-events="none"/>'
+                )
+
+    # Faint horizontal guides at the labelled SoC values, so the axis remains
+    # readable after scrolling away from the left-hand labels.
+    for row_index, _value in grid_rows:
+        y = top + row_index * cell_h
+        svg.append(
+            f'<line x1="{left}" y1="{y}" x2="{width - right}" '
+            f'y2="{y}" class="soc-grid-line"/>'
+        )
 
     # Session/price strip labels.
     svg.append(
@@ -706,6 +745,8 @@ def _render(history: PlannerHistory):
             selected_state=None,
             why="",
             samples=[],
+            no_load_forecast=False,
+            load_fallback_kw=0.0,
             fmt_pct=_fmt_pct,
             fmt_time=_fmt_time,
             fmt_current=_fmt_current,
@@ -734,6 +775,8 @@ def _render(history: PlannerHistory):
             selected_state=None,
             why="",
             samples=[],
+            no_load_forecast=False,
+            load_fallback_kw=0.0,
             fmt_pct=_fmt_pct,
             fmt_time=_fmt_time,
             fmt_current=_fmt_current,
@@ -753,6 +796,10 @@ def _render(history: PlannerHistory):
     cell = ctx.policy.cells[slot_index][state_index]
     options = ctx.planner.options(ctx.policy, slot_index, state_index)
     bands = _bands(ctx, slot_index, states)
+    forecast_days = int(run.get("forecast_days") or 0)
+    fallback_kw = _number(
+        (run.get("planner") or {}).get("load_fallback_kw"), 0.0
+    )
     return render_template(
         "policy_report.html",
         selected_date=day,
@@ -772,6 +819,8 @@ def _render(history: PlannerHistory):
         selected_state=state_index,
         why=_why_text(ctx, slot_index, cell, options),
         samples=samples,
+        no_load_forecast=forecast_days <= 0,
+        load_fallback_kw=fallback_kw or 0.0,
         fmt_pct=_fmt_pct,
         fmt_time=_fmt_time,
         fmt_current=_fmt_current,

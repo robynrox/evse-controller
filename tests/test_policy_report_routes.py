@@ -121,6 +121,8 @@ def test_page_renders_policy_map_and_tables(client):
     assert "Why this action?" in body
     assert "Option" in body
     assert "data-chart-zoom" in body
+    assert "soc-grid-line" in body
+    assert "policy-marginal" in body
     assert "predates planner-parameter capture" not in body
 
 
@@ -185,6 +187,26 @@ def test_page_warns_when_planner_params_are_missing(tmp_path):
     assert "predates planner-parameter capture" in response.get_data(
         as_text=True
     )
+
+
+def test_page_warns_when_the_run_had_no_load_forecast(tmp_path):
+    run = _run(with_params=True)
+    run["forecast_days"] = 0
+    for item in run["inputs"]:
+        item["load_kw"] = 0.0
+    run["planner"]["load_fallback_kw"] = 0.72
+    store = PlannerHistory(tmp_path / "no-load")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(f"/reports/policy?date={DAY.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "no house-load forecast" in body
+    assert "0.72 kW fallback" in body
 
 
 def test_empty_history_shows_an_explanation(tmp_path):
