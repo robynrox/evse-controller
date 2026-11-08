@@ -60,7 +60,7 @@ def _fmt_time(value) -> str:
 
 
 def _fmt_current(value) -> str:
-    return "—" if value is None else f"{value:.1f} A"
+    return "—" if value is None else f"{value:.0f} A"
 
 
 def _fmt_pence(value) -> str:
@@ -135,6 +135,7 @@ class RunContext:
     floor: float
     cap: float
     target: float
+    min_current_a: float
     max_charge_a: float
     max_discharge_a: float
     params_recorded: bool
@@ -233,6 +234,7 @@ def _build_context(run: dict) -> RunContext:
         floor=floor,
         cap=cap,
         target=target,
+        min_current_a=min_current,
         max_charge_a=max_charge,
         max_discharge_a=max_discharge,
         params_recorded=bool(params.get("efficiency_model")),
@@ -406,18 +408,28 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
             f'{slot.session or slot.forced}</title></rect>'
         )
 
-    # Y labels every 5% where possible.
-    label_step = 5.0
-    next_label = math.ceil(states[0][1] / label_step) * label_step
-    for state, soc in states:
-        if soc + 1e-9 >= next_label:
-            row_index = state_rows[state]
+    # SoC labels: every 10% at the 1% view, every 5% at 0.5%.
+    display_step = (
+        round(states[1][1] - states[0][1], 6)
+        if len(states) > 1
+        else 1.0
+    )
+    label_step = 5.0 if display_step <= 0.5 + 1e-9 else 10.0
+    label_value = (
+        math.floor(states[-1][1] / label_step) * label_step
+    )
+    while label_value >= states[0][1] - 1e-9:
+        state = ctx.planner._clamp_state(
+            int(round(label_value / ctx.step))
+        )
+        row_index = state_rows.get(state)
+        if row_index is not None:
             y = top + (row_index + 0.5) * cell_h
             svg.append(
                 f'<text x="{left - 6}" y="{y + 3:.1f}" '
-                f'text-anchor="end" class="axis">{soc:.0f}%</text>'
+                f'text-anchor="end" class="axis">{label_value:.0f}%</text>'
             )
-            next_label += label_step
+        label_value -= label_step
 
     # Heat cells.
     for state, soc in states:

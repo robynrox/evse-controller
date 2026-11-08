@@ -346,15 +346,19 @@ completed fixes.
 - `planner/dp.py` exposes `policy()`, a backward DP over slot × SoC. It returns
   the chosen action, real energy cost-to-go, a target-penalised ranking value,
   target reachability and per-cell decision margin, plus `options()` for every
-  feasible current at a selected cell. `web/policy_report_routes.py` serves
-  `/reports/policy` with a mode/margin/current heatmap, price and session
-  strips, planned and estimated SoC paths, selected-slot bands, an action
-  options table and an explanation. Policies are replayed from recorded run
-  inputs; old runs without planner parameters show a caveat.
+  feasible current at a selected cell. Actions are strictly integer currents
+  (0 A idle, then the configured minimum through the configured maximum in
+  each direction); the measured efficiency/AC-power curve is still evaluated
+  at each integer point. `web/policy_report_routes.py` serves `/reports/policy`
+  with a mode/margin/current heatmap, price and session strips, planned and
+  estimated SoC paths, selected-slot bands, an action options table and an
+  explanation. High SoC is at the top; labels are every 10% at 1% resolution
+  and every 5% at 0.5%. Policies are replayed from recorded run inputs; old
+  runs without planner parameters show a caveat.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **745 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **748 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

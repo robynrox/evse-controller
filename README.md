@@ -735,7 +735,12 @@ action for every half-hour slot and every SoC state:
 - **Views:** Mode, Decision margin (how much better the chosen mode is than
   the next-best mode), and Current.
 - **Resolution:** 1% by default, 0.5% for boundary inspection, with the same
-  zoom control as the other charts.
+  zoom control as the other charts. SoC labels are every 10% at 1% and every
+  5% at 0.5%.
+- **Currents:** only commandable integer amps are evaluated: idle at 0 A,
+  charge at the configured minimum up to the charge limit, and discharge at
+  the configured minimum up to the discharge limit. A non-derated Wallbox
+  therefore uses 3–32 A and −3 to −32 A; a derated one uses its own limits.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future

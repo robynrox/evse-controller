@@ -301,7 +301,17 @@ class DpPlanner:
                         continue
 
                     candidate = base_cost + template.cost_p
-                    if candidate < next_dp[next_state] - 1e-12:
+                    current_best = next_dp[next_state]
+                    # On an exact tie prefer idling in place.  Without this,
+                    # a degenerate flat-price day can look like a cheap
+                    # discharge/charge cycle because of the order in which
+                    # states are visited.
+                    idle_tie = (
+                        abs(candidate - current_best) <= 1e-9
+                        and template.kind == "idle"
+                        and state == next_state
+                    )
+                    if candidate < current_best - 1e-12 or idle_tie:
                         next_dp[next_state] = candidate
                         next_prev[next_state] = state
                         next_choice[next_state] = template
@@ -719,151 +729,32 @@ class DpPlanner:
         if forced:
             raise ValueError(f"Unknown forced action: {slot.forced}")
 
-        return [idle] + self._delta_templates(slot)
+        return [idle] + self._integer_templates(slot)
 
-    def _delta_templates(self, slot: PlannerSlot) -> list[_ActionTemplate]:
-        """Actions for every reachable successor SoC, not every current.
+    def _integer_templates(
+        self, slot: PlannerSlot
+    ) -> list[_ActionTemplate]:
+        """Every commandable integer current in each direction.
 
-        The DP is keyed by successor SoC.  For each feasible SoC step we invert
-        the measured current → SoC-change curve to find the commanded current
-        that produces it.  That keeps the stored energy exact and removes the
-        rounding arbitrage a current-indexed grid can create: a 3 A charge and
-        a 3 A discharge no longer look like a free cycle because their rounded
-        states happened to cancel.
+        The Wallbox commands integer amps, so the planner must not invent
+        fractional currents.  The measured current → SoC curve is still used
+        for the efficiency and AC power at each integer point; the SoC step is
+        rounded to the state grid, exactly as the executor sees it.
         """
         templates: list[_ActionTemplate] = []
-        step = self.soc_step_percent
-
-        charge_curve = self._delta_curve(slot, charge=True)
-        if charge_curve:
-            min_delta = min(delta for _, delta in charge_curve)
-            max_delta = max(delta for _, delta in charge_curve)
-            start = int(math.ceil(min_delta / step - 1e-9))
-            end = int(math.floor(max_delta / step + 1e-9))
-            for steps in range(max(1, start), end + 1):
-                delta = steps * step
-                current = self._interpolate_current(charge_curve, delta)
-                if current is not None:
-                    templates.append(
-                        self._template_for_delta(slot, delta, current)
-                    )
-
-        discharge_curve = self._delta_curve(slot, charge=False)
-        if discharge_curve:
-            min_delta = min(delta for _, delta in discharge_curve)
-            max_delta = max(delta for _, delta in discharge_curve)
-            start = int(math.ceil(min_delta / step - 1e-9))
-            end = int(math.floor(max_delta / step + 1e-9))
-            for steps in range(start, min(-1, end) + 1):
-                delta = steps * step
-                current = self._interpolate_current(discharge_curve, delta)
-                if current is not None:
-                    templates.append(
-                        self._template_for_delta(slot, delta, current)
-                    )
+        for current in self._currents(slot.max_charge_current_a):
+            templates.append(
+                self._template_for_current(
+                    slot, float(current), charge=True
+                )
+            )
+        for current in self._currents(slot.max_discharge_current_a):
+            templates.append(
+                self._template_for_current(
+                    slot, float(current), charge=False
+                )
+            )
         return templates
-
-    def _delta_curve(
-        self, slot: PlannerSlot, *, charge: bool
-    ) -> list[tuple[float, float]]:
-        """Measured-current points as ``(current, SoC change)``.
-
-        Charge changes are positive and increasing with current; discharge
-        changes are negative and decreasing.
-        """
-        max_current = (
-            slot.max_charge_current_a
-            if charge
-            else slot.max_discharge_current_a
-        )
-        points: list[tuple[float, float]] = []
-        for current in self._currents(max_current):
-            if charge:
-                ac_kw = float(
-                    self.efficiency_model.charge_ac_power_kw(current)
-                )
-                efficiency = float(
-                    self.efficiency_model.charge_efficiency(current)
-                )
-                delta = (
-                    ac_kw
-                    * SLOT_HOURS
-                    * efficiency
-                    / self.capacity_kwh
-                    * 100.0
-                )
-            else:
-                ac_kw = float(
-                    self.efficiency_model.discharge_ac_power_kw(current)
-                )
-                efficiency = float(
-                    self.efficiency_model.discharge_efficiency(current)
-                )
-                delta = (
-                    -ac_kw
-                    * SLOT_HOURS
-                    / max(efficiency, 1e-9)
-                    / self.capacity_kwh
-                    * 100.0
-                )
-            points.append((float(current), delta))
-        return points
-
-    @staticmethod
-    def _interpolate_current(
-        curve: list[tuple[float, float]], target_delta: float
-    ) -> Optional[float]:
-        for (left_current, left_delta), (
-            right_current,
-            right_delta,
-        ) in zip(curve, curve[1:]):
-            low, high = sorted((left_delta, right_delta))
-            if low - 1e-9 <= target_delta <= high + 1e-9:
-                if abs(right_delta - left_delta) < 1e-12:
-                    return left_current
-                fraction = (
-                    (target_delta - left_delta)
-                    / (right_delta - left_delta)
-                )
-                return left_current + fraction * (
-                    right_current - left_current
-                )
-        for current, delta in curve:
-            if abs(target_delta - delta) < 1e-9:
-                return current
-        return None
-
-    def _template_for_delta(
-        self, slot: PlannerSlot, delta_soc: float, current_a: float
-    ) -> _ActionTemplate:
-        stored_kwh = abs(delta_soc) / 100.0 * self.capacity_kwh
-        if delta_soc > 0:
-            efficiency = float(
-                self.efficiency_model.charge_efficiency(current_a)
-            )
-            ac_kw = stored_kwh / (
-                SLOT_HOURS * max(efficiency, 1e-9)
-            )
-            kind = "charge"
-            signed_ac = ac_kw
-        else:
-            efficiency = float(
-                self.efficiency_model.discharge_efficiency(current_a)
-            )
-            ac_kw = stored_kwh * efficiency / SLOT_HOURS
-            kind = "discharge"
-            signed_ac = -ac_kw
-        steps = int(round(delta_soc / self.soc_step_percent))
-        return _ActionTemplate(
-            kind=kind,
-            current_a=float(current_a),
-            ac_power_kw=signed_ac,
-            stored_kwh=stored_kwh,
-            delta_soc=steps * self.soc_step_percent,
-            delta_steps=steps,
-            cost_p=self._grid_cost(slot, signed_ac, stored_kwh),
-            session=slot.session,
-        )
 
     def _template_for_current(
         self, slot: PlannerSlot, current_a: float, *, charge: bool

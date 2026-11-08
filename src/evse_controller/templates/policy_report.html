@@ -344,6 +344,16 @@
                 <div class="note">{{ context.capacity_kwh|round(1) }} kWh · {{ context.step }}% steps</div>
             </div>
             <div class="card">
+                <div class="label">Commandable currents</div>
+                <div class="value">
+                    0 · {{ context.min_current_a|int }}–{{ context.max_charge_a|int }} A
+                </div>
+                <div class="note">
+                    discharge −{{ context.min_current_a|int }} to
+                    −{{ context.max_discharge_a|int }} A
+                </div>
+            </div>
+            <div class="card">
                 <div class="label">Policy cells</div>
                 <div class="value">{{ context.slots|length }} × {{ (context.cap - context.floor) / step + 1 }}</div>
                 <div class="note">slots × displayed SoC rows</div>

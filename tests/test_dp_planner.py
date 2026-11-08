@@ -143,6 +143,37 @@ def test_policy_marks_an_unreachable_target():
     assert cell.target_reachable is False
 
 
+@pytest.mark.parametrize("limit", [16, 32])
+def test_policy_only_uses_integer_currents_within_the_wallbox_limit(limit):
+    p = planner()
+    slots = [
+        slot(
+            0,
+            import_p=10.0,
+            export_p=50.0,
+            load_kw=0.0,
+            max_charge=limit,
+            max_discharge=limit,
+        )
+    ]
+    policy = p.policy(slots, 50.0)
+    options = p.options(policy, 0, 100)
+
+    charge = [
+        option.current_a for option in options if option.kind == "charge"
+    ]
+    discharge = [
+        option.current_a
+        for option in options
+        if option.kind == "discharge"
+    ]
+
+    expected = [float(value) for value in range(3, limit + 1)]
+    assert sorted(charge) == expected
+    assert sorted(discharge) == expected
+    assert all(value.is_integer() for value in charge + discharge)
+
+
 def test_flat_prices_leave_the_pack_alone():
     result = planner().plan(
         [slot(0), slot(1)],

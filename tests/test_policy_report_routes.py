@@ -139,7 +139,26 @@ def test_heatmap_puts_high_soc_at_the_top(client):
         )
     }
 
-    assert labels[90] < labels[30]
+    assert labels[90] < labels[80] < labels[70] < labels[30]
+    assert 85 not in labels
+
+
+def test_half_step_view_labels_every_five_percent(client):
+    import re
+
+    body = client.get(
+        f"/reports/policy?date={DAY.isoformat()}&step=0.5"
+    ).get_data(as_text=True)
+    labels = {
+        int(percent)
+        for _, percent in re.findall(
+            r'<text x="[^"]*" y="([0-9.]+)" text-anchor="end" '
+            r'class="axis">(\d+)%</text>',
+            body,
+        )
+    }
+
+    assert {85, 80, 75, 30, 25}.issubset(labels)
 
 
 def test_page_supports_resolution_and_view_switch(client):
