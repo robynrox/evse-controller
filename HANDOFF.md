@@ -383,10 +383,18 @@ completed fixes.
   arcs use expected cost, expected net SoC change and gross throughput for
   degradation. This adds arcs, not SoC states, and does not enumerate charge ×
   discharge current pairs.
+- The live heuristic now plans **import/charge** slots as well as exports:
+  off-peak charge is included in the 23:30 projection, and high-value priority
+  exports can trigger peak-rate recharge before their deadline. The recharge
+  only uses slots where `export price × round trip > import price + margin`,
+  never charges in an export slot or supplier session, and is gated by
+  `ENABLE_EXPORT_RECHARGE`. The dashboard marks planned imports with a blue
+  `IM` badge and lists them in the import plan; off-peak slots are normally
+  marked IM anyway.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **764 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **766 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

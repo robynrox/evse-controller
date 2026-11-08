@@ -310,10 +310,34 @@ first control cycle in that minute, with `|` separators.
 The strip below the line is 48 half-hour cells, coloured red→green by rate.
 A slot the planner will bulk-export in carries an orange border and an `EX`
 badge (lowercase `e` for the slot likely to be only partly filled, a green
-border and `✓` for one already exported). The plan is also listed in words
-under the strip — `Export plan: 16:00–16:30 @ 30.5p · …`, or
-`Export plan: none planned` — because a 48-cell strip is only a few pixels per
-cell on a phone, where the badge alone is too small to rely on.
+border and `✓` for one already exported). A planned import/charge slot
+carries a blue border and an `IM` badge. Off-peak slots (23:30–24:00 and
+00:00–05:30) are normally marked `IM`; peak-rate slots are marked `IM` only
+when the planner has added them to meet a later high-value export. The plan is
+also listed in words under the strip — `Export plan: 16:00–16:30 @ 30.5p · …`
+and `Import plan: 23:30–00:00 @ …` — because a 48-cell strip is only a few
+pixels per cell on a phone, where the badges alone are too small to rely on.
+
+High-value export recharge is a live heuristic feature, guarded by
+`ENABLE_EXPORT_RECHARGE`. When a priority export would otherwise take the
+running minimum below the bulk floor, the planner looks for pre-export slots
+where:
+
+```text
+export price × measured charge/discharge round trip
+    > import price + profit margin
+```
+
+It adds the lowest import-priced eligible slots first, never charges inside an
+export slot or a supplier session, and leaves the export unserved if no
+economic charge slot fits before the deadline. Off-peak/session charging is
+already planned as the first source; peak top-up is only the remainder.
+
+The bus has no separate solar accounting: solar offsets import automatically.
+Where solar surplus is available it makes the marginal charging cost the lost
+export revenue on that surplus, so it is naturally preferred. If solar exceeds
+the house plus maximum Wallbox charge, the remainder exports; the controller
+does not grid-charge while that surplus is being exported.
 
 - **Mode** uses the actual Wallbox ranges after load-follow configuration, not
   the min/max returned by `get_control_state()` (which load-follow states

@@ -245,6 +245,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: heuristic's control decision.  Tests disable it by default.
     ENABLE_SHADOW_PLANNER = True
 
+    #: Allow peak-rate grid charging to meet later high-value exports.  The
+    #: off-peak/session charging paths are unaffected; this only gates the
+    #: extra pre-export top-up.
+    ENABLE_EXPORT_RECHARGE = True
+
     #: SoC resolution used by the shadow planner.  A 0.1% grid keeps the
     #: integer-current transitions from creating large rounding artefacts in
     #: the policy surface; the plan still runs in a few hundred milliseconds.
@@ -517,6 +522,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         
         # Planned export slots (calculated dynamically)
         self._planned_export_slots = []
+        # Planned grid-charge slots: off-peak charging plus any peak-rate
+        # top-up needed to serve high-value exports.
+        self._planned_import_slots = []
         # Per-slot stage-1 actions behind the plan: export, conservative or
         # idle.  The 23:30 projection and the explanation table replay this
         # map, so they cannot drift from the planner's own feasibility check.
@@ -1350,6 +1358,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             action = slot_actions.get(slot)
             if action == "export":
                 return -export_loss, "planned_export"
+            if action == "charge":
+                if projected_soc < charge_cap:
+                    return (
+                        min(
+                            charge_cap,
+                            projected_soc + full_charge_gain,
+                        )
+                        - projected_soc,
+                        "planned_charge",
+                    )
+                return 0.0, "planned_charge"
             if action == "aggressive":
                 return -self._aggressive_slot_soc_loss(slot), "aggressive"
             if action == "conservative":
@@ -1547,6 +1566,67 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._apply_discharge_policy(projected_soc_at_2330)
         return self._energy_shortfall
 
+    def _schedule_export_charge(
+        self,
+        actions: dict[int, str],
+        current_soc_percent: float,
+        current_slot_idx: int,
+        target_slot: int,
+        target_rate_p: float,
+        floor_soc: float,
+        excluded: set[int],
+    ) -> list[int]:
+        """Add cheap pre-export charge slots until *target_slot* is reachable.
+
+        This is deliberately local: it tops up from the lowest import-priced
+        slots before the export, only when the export price covers the
+        grid-charge round trip plus margin.  It never charges in another
+        priority export slot or a supplier session.
+        """
+        if not self.ENABLE_EXPORT_RECHARGE:
+            return []
+        round_trip = self.EFFICIENCY_MODEL.round_trip_efficiency(
+            self.GRID_CHARGE_REFERENCE_CURRENT,
+            self.EXPORT_REFERENCE_CURRENT,
+        )
+        if round_trip <= 0:
+            return []
+        candidates = []
+        for slot_idx in range(current_slot_idx, target_slot):
+            if slot_idx in actions or slot_idx in excluded:
+                continue
+            if self.is_off_peak(slot_idx * 30):
+                continue
+            import_p = self._current_import_rate_p(slot_idx * 30)
+            hurdle_p = (
+                import_p / round_trip
+                + self.MIN_PROFIT_MARGIN_P_PER_KWH
+            )
+            if target_rate_p < hurdle_p:
+                continue
+            candidates.append((import_p, slot_idx))
+        candidates.sort(key=lambda item: (item[0], item[1]))
+
+        added: list[int] = []
+        for _import_p, slot_idx in candidates:
+            actions[slot_idx] = "charge"
+            added.append(slot_idx)
+            if self._minimum_projected_soc(
+                current_soc_percent,
+                current_slot_idx,
+                slot_actions=actions,
+            ) >= floor_soc - 1e-9:
+                info(
+                    f"IOCTGO_AGILEOUT: Added export recharge slot "
+                    f"{self._slot_range_label(slot_idx)} for "
+                    f"{target_rate_p:.1f}p export"
+                )
+                return added
+
+        for slot_idx in added:
+            actions.pop(slot_idx, None)
+        return []
+
     def calculate_export_plan(self, current_soc_percent: float) -> list:
         """Cherry-pick exports, then spend what is left on house load.
 
@@ -1580,6 +1660,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         if current_soc_percent < 0:
             self._planned_slot_actions = {}
+            self._planned_import_slots = []
             self._aggressive_slot_gates = {}
             self._update_energy_shortfall(current_soc_percent)
             return []
@@ -1613,18 +1694,35 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if 47 - current_slot_idx <= 0:
             debug("IOCTGO_AGILEOUT: No slots remaining today")
             self._planned_slot_actions = {}
+            self._planned_import_slots = []
             self._aggressive_slot_gates = {}
             self._apply_discharge_policy(current_soc_percent)
             return []
 
-        # Phase 1: the no-discretionary-load baseline.  Ordinary slots are
-        # idle, so the only changes come from supplier sessions.  The running
-        # minimum is the real budget: a later free-import charge must not
-        # sanction an earlier dip below the floor.
+        free_import_slots = self._free_import_slots_today()
+        grid_support_slots = self._grid_support_slots_today()
+        away_slots = self._away_slots_today()
+
+        actions: dict[int, str] = {}
+        # Off-peak charging is unconditional in the live heuristic, so the
+        # projection must include it.  It is also the first source of energy
+        # for later high-value exports.
+        for slot_idx in range(current_slot_idx, 47):
+            if (
+                self.is_off_peak(slot_idx * 30)
+                and slot_idx not in free_import_slots
+                and slot_idx not in grid_support_slots
+                and slot_idx not in away_slots
+            ):
+                actions[slot_idx] = "charge"
+
+        # Phase 1: the no-discretionary-load baseline, with mandatory off-peak
+        # and session charging included.  The running minimum is the real
+        # starting budget.
         baseline_path = self._soc_projection_path(
             current_soc_percent,
             current_slot_idx,
-            slot_actions={},
+            slot_actions=dict(actions),
         )
         baseline_projection = (
             baseline_path[-1][1] if baseline_path else current_soc_percent
@@ -1642,7 +1740,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             f"{priority_headroom_soc:.1f}%"
         )
 
-        actions: dict[int, str] = {}
         planned_slots: list[int] = []
 
         def feasible(floor_soc: float) -> bool:
@@ -1663,9 +1760,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # Candidate slots: future, not owned by a supplier session, not
         # off-peak charging, and at or above the export minimum.
-        free_import_slots = self._free_import_slots_today()
-        grid_support_slots = self._grid_support_slots_today()
-        away_slots = self._away_slots_today()
         slot_rates: list[tuple[int, float]] = []
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
@@ -1721,6 +1815,24 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # full per-slot cost, so price order is also value order.
         for slot_idx, rate in priority_rates:
             actions[slot_idx] = "export"
+            if not feasible(bulk_floor_soc):
+                # The pack is short.  Try buying cheap energy before the
+                # export, but only where the export itself covers the round
+                # trip and margin.
+                self._schedule_export_charge(
+                    actions,
+                    current_soc_percent,
+                    current_slot_idx,
+                    slot_idx,
+                    rate,
+                    bulk_floor_soc,
+                    excluded=(
+                        free_import_slots
+                        | grid_support_slots
+                        | away_slots
+                        | priority_slots
+                    ),
+                )
             if feasible(bulk_floor_soc):
                 planned_slots.append(slot_idx)
                 debug(
@@ -1757,6 +1869,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # forecast says conservative would not activate there.
         for slot_idx, rate in other_rates:
             existing = actions.get(slot_idx)
+            if existing == "charge":
+                continue
             if (
                 existing == "conservative"
                 and self._conservative_would_activate(slot_idx)
@@ -1790,7 +1904,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         aggressive_gates: dict[int, dict] = {}
         for slot_idx, rate in priority_rates:
             existing = actions.get(slot_idx)
-            if existing == "export":
+            if existing in ("export", "charge"):
                 continue
             if (
                 existing == "conservative"
@@ -1846,6 +1960,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         planned_slots.sort()
         self._planned_slot_actions = dict(actions)
+        self._planned_import_slots = sorted(
+            slot for slot, action in actions.items() if action == "charge"
+        )
         self._aggressive_slot_gates = dict(aggressive_gates)
 
         debug(
@@ -6550,6 +6667,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             away_slots = (
                 store.away_slots(now.date()) if store is not None else set()
             )
+            planned_import_slots = set(self._planned_import_slots)
+            for slot_idx in range(48):
+                if (
+                    self.is_off_peak(slot_idx * 30)
+                    and slot_idx not in away_slots
+                    and slot_idx not in grid_support_slots
+                ):
+                    planned_import_slots.add(slot_idx)
 
             # Create a dict for quick lookup by slot index
             # Each slot is 30 minutes, so slot 0 = 00:00, slot 1 = 00:30, etc.
@@ -6643,6 +6768,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     
                     # Check if this slot is planned for export, already exported, or in the past
                     is_planned = slot_idx in planned_slots
+                    is_import = slot_idx in planned_import_slots
                     is_exported = slot_idx in self._exported_slots
                     is_past = slot_idx < current_slot_idx
                     
@@ -6651,10 +6777,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     
                     # Determine visual indication - all cells have same border width for consistent sizing
                     if is_past and not is_exported:
-                        # Past slot that wasn't used - dim it with grey border
-                        extra_style = "opacity:0.5;border:2px solid #bbb;"
-                        tooltip_extra = " (past)"
-                        label = ""
+                        if is_import:
+                            extra_style = (
+                                "opacity:0.5;border:2px solid #2563eb;"
+                            )
+                            tooltip_extra = " - IMPORTED (past)"
+                            label = (
+                                '<span class="agile-rate-badge" '
+                                f'style="color:{text_color};">IM</span>'
+                            )
+                        else:
+                            extra_style = "opacity:0.5;border:2px solid #bbb;"
+                            tooltip_extra = " (past)"
+                            label = ""
                     elif is_exported:
                         # Already exported - show green border, checkmark in text color
                         extra_style = "border:2px solid #4caf50;"
@@ -6670,6 +6805,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         extra_style = "border:2px solid #ff9800;"
                         tooltip_extra = " - PLANNED EXPORT"
                         label = f'<span class="agile-rate-badge" style="color:{text_color};">EX</span>'
+                    elif is_import:
+                        # Planned grid charge / off-peak import - blue IM badge
+                        extra_style = "border:2px solid #2563eb;"
+                        tooltip_extra = " - PLANNED IMPORT / CHARGE"
+                        label = f'<span class="agile-rate-badge" style="color:{text_color};">IM</span>'
                     else:
                         # Normal future slot - grey border
                         extra_style = "border:2px solid #ddd;"
@@ -6677,7 +6817,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         label = ""
                     
                     html.append(f'''
-                    <div class="agile-rate-cell" data-rate="{rate}" data-rate-int="{rate_int}" data-planned="{is_planned}" data-exported="{is_exported}" data-past="{is_past}" style="
+                    <div class="agile-rate-cell" data-rate="{rate}" data-rate-int="{rate_int}" data-planned="{is_planned}" data-import="{is_import}" data-exported="{is_exported}" data-past="{is_past}" style="
                         flex:1;
                         min-width:0;
                         height:100%;
@@ -6766,8 +6906,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             html.append(time_axis)
             html.append('</div>')  # Close outer wrapper
 
-            if free_import_slots or grid_support_slots or away_slots:
+            if (
+                free_import_slots
+                or grid_support_slots
+                or away_slots
+                or planned_import_slots
+            ):
                 legend_items = []
+                if planned_import_slots:
+                    legend_items.append(
+                        '<span><span style="display:inline-block;width:10px;'
+                        'height:10px;background:#fff;border:2px solid #2563eb;'
+                        'border-radius:2px;margin-right:4px;'
+                        'vertical-align:middle;"></span>'
+                        'Planned import / charge (IM)</span>'
+                    )
                 if free_import_slots:
                     legend_items.append(
                         '<span><span style="display:inline-block;width:10px;'
@@ -6933,6 +7086,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 + html_module.escape(plan_text)
                 + "</div>"
             )
+            import_slots = sorted(self._planned_import_slots)
+            if import_slots:
+                import_items = [
+                    f"{self._slot_range_label(idx)} @ "
+                    f"{self._current_import_rate_p(idx * 30):.1f}p"
+                    for idx in import_slots[:6]
+                ]
+                if len(import_slots) > 6:
+                    import_items.append(
+                        f"+{len(import_slots) - 6} more"
+                    )
+                html.append(
+                    '<div style="font-size:10px;color:#2563eb;'
+                    'margin-top:1px;" title="Slots the planner will import '
+                    'or charge in. They carry a blue border and an IM badge '
+                    'on the strip.">'
+                    + html_module.escape(
+                        "Import plan: " + " · ".join(import_items)
+                    )
+                    + "</div>"
+                )
             
             # Add CSS for responsive behavior with progressive degradation
             html.append('''
@@ -7303,6 +7477,79 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 import_rate_p=self._current_import_rate_p(dayMinute),
             )
             return ControlState.CHARGE, 3, 3, "IOCTGO_AGILEOUT SoC unknown, charge at 3A"
+
+        # Planned high-value export recharge.  This buys energy before an
+        # expensive export only when the planner has established that the
+        # spread covers the round trip and margin.
+        slot_action = self._planned_slot_actions.get(current_slot)
+        if slot_action == "charge":
+            if battery_level < charge_cap:
+                import_price_p = self._current_import_rate_p(dayMinute)
+                target_rate_p = max(
+                    (
+                        self._current_export_rate_p(slot)
+                        for slot in self._planned_export_slots
+                        if slot > current_slot
+                    ),
+                    default=0.0,
+                )
+                self._record_decision(
+                    mode=(
+                        f"Charge for export ({self.MAX_CHARGE_CURRENT:.0f} A)"
+                    ),
+                    reason=(
+                        f"import {import_price_p:.1f}p now to serve a later "
+                        f"export at up to {target_rate_p:.1f}p"
+                    ),
+                    soc_percent=battery_level,
+                    detail=(
+                        f"The export plan needs more stored energy than the "
+                        f"pack currently holds. SoC {battery_level}%, charge "
+                        f"cap {charge_cap:.0f}%, import "
+                        f"{import_price_p:.1f}p/kWh, later export up to "
+                        f"{target_rate_p:.1f}p/kWh. The spread covers the "
+                        "measured round trip and margin."
+                    ),
+                    current_rate_p=target_rate_p,
+                    efficiency_pct=(
+                        self.EFFICIENCY_MODEL.charge_efficiency(
+                            self.GRID_CHARGE_REFERENCE_CURRENT
+                        ) * 100
+                    ),
+                    efficiency_label="charge",
+                    min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+                    charge_min_a=self.MAX_CHARGE_CURRENT,
+                    charge_max_a=self.MAX_CHARGE_CURRENT,
+                    charge_activation_w=0,
+                    decision_tier="export_recharge",
+                    import_rate_p=import_price_p,
+                    charge_cap_percent=charge_cap,
+                )
+                return (
+                    ControlState.CHARGE,
+                    self.MAX_CHARGE_CURRENT,
+                    self.MAX_CHARGE_CURRENT,
+                    "IOCTGO_AGILEOUT Export recharge: CHARGE AT MAX RATE",
+                )
+            self._record_decision(
+                mode=f"Idle — SoC at {charge_cap:.0f}% cap",
+                reason="export recharge planned, but the pack is at its cap",
+                soc_percent=battery_level,
+                detail=(
+                    f"An export recharge slot is planned, but SoC "
+                    f"{battery_level}% is at or above the {charge_cap:.0f}% "
+                    "charge cap."
+                ),
+                decision_tier="export_recharge",
+                import_rate_p=self._current_import_rate_p(dayMinute),
+                charge_cap_percent=charge_cap,
+            )
+            return (
+                ControlState.DORMANT,
+                None,
+                None,
+                "IOCTGO_AGILEOUT Export recharge: SoC at cap",
+            )
 
         # Battery depleted - protect battery
         if battery_level <= self.BATTERY_PROTECTION_RESERVE_SOC:
@@ -8335,6 +8582,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"IOCTGO_AGILEOUT: Export slot {current_slot} at the "
                 f"{export_floor}% floor - configuring house levels"
             )
+
+        if self._planned_slot_actions.get(current_slot) == "charge":
+            debug(
+                "IOCTGO_AGILEOUT: Export recharge slot - fixed CHARGE at "
+                "max current, skipping load-following configuration"
+            )
+            return
 
         # A planned aggressive slot is a conditional house-load action.  It
         # only forces aggressive while the policy is still in the aggressive

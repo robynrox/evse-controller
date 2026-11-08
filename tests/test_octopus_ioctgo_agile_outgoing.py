@@ -4940,3 +4940,61 @@ class TestShadowPlannerAndEstimator:
     def test_shadow_planner_is_disabled_by_default(self):
         tariff = _build_tariff()
         assert tariff._shadow_enabled is False
+
+
+class TestHighValueExportRecharge:
+    def test_low_soc_plans_peak_charge_before_high_export(self):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = False
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        rates = []
+        for rate in tariff.agile_rates:
+            slot = rate['start'].hour * 2 + (
+                1 if rate['start'].minute == 30 else 0
+            )
+            updated = dict(rate)
+            updated['rate'] = 90.0 if 36 <= slot <= 41 else 5.0
+            rates.append(updated)
+        tariff.agile_rates = rates
+
+        planned_exports = tariff.calculate_export_plan(30)
+        charge_slots = {
+            slot
+            for slot, action in tariff._planned_slot_actions.items()
+            if action == "charge"
+        }
+
+        assert planned_exports
+        assert set(planned_exports) & set(range(36, 42))
+        assert tariff._planned_import_slots
+        assert charge_slots & set(range(24, 36))
+
+        html = tariff.get_dashboard_html()
+        assert "data-import=\"True\"" in html
+        assert ">IM<" in html
+        assert "Planned import / charge (IM)" in html
+
+    def test_peak_recharge_charges_at_max(self):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = False
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+        rates = []
+        for rate in tariff.agile_rates:
+            slot = rate['start'].hour * 2 + (
+                1 if rate['start'].minute == 30 else 0
+            )
+            updated = dict(rate)
+            updated['rate'] = 90.0 if 36 <= slot <= 41 else 5.0
+            rates.append(updated)
+        tariff.agile_rates = rates
+        tariff._planned_slot_actions = {24: "charge"}
+        tariff._planned_import_slots = [24]
+        tariff._planned_export_slots = [36]
+
+        control_state, minimum, maximum, _ = tariff.get_control_state(
+            create_test_state(30), 12 * 60
+        )
+
+        assert control_state == ControlState.CHARGE
+        assert minimum == maximum == config.WALLBOX_MAX_CHARGE_CURRENT
