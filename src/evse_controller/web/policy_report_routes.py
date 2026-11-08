@@ -147,6 +147,7 @@ class RunContext:
     capacity_kwh: float
     step: float
     floor: float
+    discharge_floor: float
     cap: float
     target: Optional[float]
     min_current_a: float
@@ -175,6 +176,10 @@ def _build_context(run: dict) -> RunContext:
     floor = _number(
         params.get("protection_floor_percent"),
         float(config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT),
+    )
+    discharge_floor = _number(
+        params.get("discharge_floor_percent"),
+        max(floor, float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT)),
     )
     raw_target = params.get(
         "target_soc_percent", run.get("target_soc")
@@ -244,6 +249,9 @@ def _build_context(run: dict) -> RunContext:
                 follow_aggressive_floor_percent=_number(
                     item.get("follow_aggressive_floor_percent")
                 ),
+                horizon_index=int(
+                    item.get("horizon_index", len(slots))
+                ),
             )
         )
     if not slots:
@@ -256,6 +264,7 @@ def _build_context(run: dict) -> RunContext:
         min_current_a=min_current,
         charge_cap_percent=cap,
         protection_floor_percent=floor,
+        discharge_floor_percent=discharge_floor,
         target_soc_percent=target,
         degradation_p_per_kwh=degradation,
     )
@@ -272,6 +281,7 @@ def _build_context(run: dict) -> RunContext:
         capacity_kwh=capacity,
         step=step,
         floor=floor,
+        discharge_floor=discharge_floor,
         cap=cap,
         target=target,
         min_current_a=min_current,
@@ -308,6 +318,15 @@ def _slot_index_for_absolute(ctx: RunContext, absolute_slot: int) -> int:
         if slot.slot == absolute_slot:
             return index
     return 0
+
+
+def _slot_index_for_action(ctx: RunContext, action) -> int:
+    for index, slot in enumerate(ctx.slots):
+        if slot.start == action.start:
+            return index
+    if action.horizon_index >= 0:
+        return min(action.horizon_index, len(ctx.slots) - 1)
+    return _slot_index_for_absolute(ctx, action.slot)
 
 
 def _selected_slot(ctx: RunContext, requested: Optional[str]) -> int:
@@ -597,7 +616,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     # right edge of the column rather than half a cell early.
     planned_points = []
     for action in ctx.policy.actions:
-        column = _slot_index_for_absolute(ctx, action.slot)
+        column = _slot_index_for_action(ctx, action)
         if column >= n_cols:
             continue
         x_start = left + column * cell_w
@@ -638,14 +657,22 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
             'class="estimated-soc-line"/>'
         )
 
-    # Time labels.
+    # Time labels, with a day boundary when the horizon crosses midnight.
     for index, slot in enumerate(ctx.slots):
+        if slot.slot == 0 and index > 0:
+            x = left + index * cell_w
+            svg.append(
+                f'<line x1="{x}" y1="{top}" x2="{x}" '
+                f'y2="{top + len(states) * cell_h}" class="day-line"/>'
+            )
         if slot.slot % 4 == 0 or index == n_cols - 1:
             x = left + index * cell_w + cell_w / 2
+            label = slot.start.strftime("%H:%M")
+            if slot.slot == 0:
+                label = slot.start.strftime("%d %b %H:%M")
             svg.append(
                 f'<text x="{x:.1f}" y="{height - 10}" '
-                f'text-anchor="middle" class="axis">'
-                f"{slot.start.strftime('%H:%M')}</text>"
+                f'text-anchor="middle" class="axis">{label}</text>'
             )
 
     # Target and protection lines.
@@ -653,6 +680,10 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
         (ctx.floor, "floor-line", "floor"),
         (ctx.cap, "cap-line", "cap"),
     ]
+    if abs(ctx.discharge_floor - ctx.floor) > 1e-9:
+        guide_lines.append(
+            (ctx.discharge_floor, "export-floor-line", "export floor")
+        )
     if ctx.target is not None:
         guide_lines.append((ctx.target, "target-line", "target"))
     for value, css, label in guide_lines:

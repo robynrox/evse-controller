@@ -793,19 +793,28 @@ floor, including the integer-current efficiency scan and the best remaining
 export price. If the gate is unreachable or the mode is uneconomic, that follow
 arc is omitted for the slot.
 
-For a dynamic-export tariff, the moving horizon now ends at the last
-**contiguous slot with a published export price**. Unknown future export prices
-are not treated as 0p. Fixed-export tariffs still plan to the end of the local
-day. The policy page shows the horizon end and whether it was limited by export
-prices.
+For a dynamic-export tariff, the moving horizon runs to the last **contiguous
+slot with a published export price**. When today's series reaches midnight and
+tomorrow's prices have been published, the horizon continues across midnight
+to the end of tomorrow's published series. Unknown future export prices are
+never treated as 0p. Fixed-export tariffs still plan to the end of the local
+day. The policy page shows the horizon end, marks the day boundary, and says
+whether the horizon was limited by export prices.
 
 The shadow DP has **no fixed end-of-day SoC target**. It optimises the priced
-horizon within the configured protection floor and charge cap. The old 50%
-target is gone from the shadow planner; the live heuristic still uses its own
-target until the DP takes over. Because the horizon stops at the last known
-export price, the plan may end near the protection floor when that is the best
-priced outcome. A carry-over value for energy beyond the horizon is a separate
-decision, not currently modelled.
+horizon within the configured limits:
+
+- protection floor (hard),
+- bulk/priority export discharge floor for ordinary fixed discharge,
+- conservative and aggressive discharge floors for the follow modes,
+- the hard protection floor for supplier grid-support sessions,
+- charge cap and current limits.
+
+The old 50% target is gone from the shadow planner; the live heuristic still
+uses its own target until the DP takes over. Because the horizon extends into
+tomorrow once prices arrive, later value is considered without inventing a
+fixed SoC target. A carry-over value beyond the last published price remains a
+separate decision.
 
 ##### Plan-versus-actual report (`/reports/plan`)
 

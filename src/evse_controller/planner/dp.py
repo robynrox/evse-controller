@@ -26,7 +26,7 @@ the heuristic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from datetime import datetime
 from typing import Optional, Sequence
@@ -81,6 +81,9 @@ class PlannerSlot:
     follow_aggressive_gate_w: Optional[float] = None
     follow_conservative_floor_percent: Optional[float] = None
     follow_aggressive_floor_percent: Optional[float] = None
+    #: Unique position in the planning horizon.  Day slots repeat across a
+    #: midnight crossing, so reports use this key for multi-day runs.
+    horizon_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ class PlannerAction:
     current_min_a: Optional[float] = None
     current_max_a: Optional[float] = None
     follow: bool = False
+    horizon_index: int = -1
 
     @property
     def commanded_current_a(self) -> Optional[int]:
@@ -216,6 +220,7 @@ class DpPlanner:
         min_current_a: float = 3.0,
         charge_cap_percent: float = 97.0,
         protection_floor_percent: float = 25.0,
+        discharge_floor_percent: Optional[float] = None,
         target_soc_percent: Optional[float] = 50.0,
         degradation_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
@@ -254,6 +259,12 @@ class DpPlanner:
         self.min_current_a = float(min_current_a)
         self.charge_cap_percent = float(charge_cap_percent)
         self.protection_floor_percent = float(protection_floor_percent)
+        self.discharge_floor_percent = max(
+            self.protection_floor_percent,
+            self.protection_floor_percent
+            if discharge_floor_percent is None
+            else float(discharge_floor_percent),
+        )
         self.target_soc_percent = (
             None
             if target_soc_percent is None
@@ -626,6 +637,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    horizon_index=slot.horizon_index,
                 )
             )
             state = next_state
@@ -736,27 +748,33 @@ class DpPlanner:
 
         next_state = self._clamp_state(state + template.delta_steps)
         next_soc = next_state * self.soc_step_percent
-        if (
-            template.kind == "discharge"
-            and next_soc < self.protection_floor_percent - 1e-9
+        if template.kind == "discharge":
+            action_floor = (
+                self.discharge_floor_percent
+                if template.floor_percent is None
+                else float(template.floor_percent)
+            )
+            if next_soc < action_floor - 1e-9:
+                return None
+        elif template.kind in (
+            "follow_house_conservative",
+            "follow_house_aggressive",
         ):
-            return None
+            action_floor = self.discharge_floor_percent
+            if template.floor_percent is not None:
+                action_floor = max(
+                    action_floor, float(template.floor_percent)
+                )
+            if next_soc < action_floor - 1e-9:
+                return None
         if (
             template.kind == "charge"
             and next_soc > self.charge_cap_percent + 1e-9
         ):
             return None
-        if template.floor_percent is not None and (
-            next_soc < template.floor_percent - 1e-9
-        ):
-            return None
         if template.follow:
             if template.delta_steps > 0 and (
                 next_soc > self.charge_cap_percent + 1e-9
-            ):
-                return None
-            if template.delta_steps < 0 and (
-                next_soc < self.protection_floor_percent - 1e-9
             ):
                 return None
         if (
@@ -795,8 +813,16 @@ class DpPlanner:
             )
             if current is None:
                 return [idle]
+            template = self._template_for_current(
+                slot, current, charge=False
+            )
+            # Supplier grid-support sessions may use the hard protection
+            # floor; ordinary fixed discharge stops at the export floor.
             return [
-                self._template_for_current(slot, current, charge=False)
+                replace(
+                    template,
+                    floor_percent=self.protection_floor_percent,
+                )
             ]
         if forced:
             raise ValueError(f"Unknown forced action: {slot.forced}")
@@ -1128,6 +1154,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    horizon_index=slots[index].horizon_index,
                 )
             )
             state = previous

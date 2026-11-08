@@ -1127,6 +1127,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 min_current_a=float(self.MIN_DISCHARGE_CURRENT),
                 charge_cap_percent=self.charge_cap_percent(),
                 protection_floor_percent=self.absolute_min_soc_percent(),
+                discharge_floor_percent=max(
+                    self.absolute_min_soc_percent(),
+                    float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
+                ),
                 target_soc_percent=None,
                 degradation_p_per_kwh=0.0,
             )
@@ -1170,6 +1174,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "target_soc": planner_input.target_soc,
             "forecast_days": planner_input.forecast_days,
             "horizon_end_slot": planner_input.horizon_end_slot,
+            "horizon_end_date": (
+                planner_input.horizon_end_date.isoformat()
+                if planner_input.horizon_end_date is not None
+                else None
+            ),
             "horizon_limited_by_export": (
                 planner_input.horizon_limited_by_export
             ),
@@ -1185,6 +1194,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "charge_cap_percent": self.charge_cap_percent(),
                 "protection_floor_percent": self.absolute_min_soc_percent(),
                 "target_soc_percent": None,
+                "discharge_floor_percent": max(
+                    self.absolute_min_soc_percent(),
+                    float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
+                ),
                 "degradation_p_per_kwh": 0.0,
                 "load_fallback_kw": float(
                     planner_input.load_fallback_kw
@@ -1213,6 +1226,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "current_min_a": action.current_min_a,
                     "current_max_a": action.current_max_a,
                     "follow": action.follow,
+                    "horizon_index": action.horizon_index,
                 }
                 for action in result.actions
             ],
@@ -1221,6 +1235,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "slot": (
                         slot.slot if slot.slot >= 0 else index
                     ),
+                    "horizon_index": slot.horizon_index,
                     "start": slot.start.isoformat(),
                     "import_p": slot.import_p,
                     "export_p": slot.export_p,

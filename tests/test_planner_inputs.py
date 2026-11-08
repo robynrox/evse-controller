@@ -57,6 +57,27 @@ class FakeSource:
         return list(self.sessions)
 
 
+class DaySource(FakeSource):
+    """A source whose export prices can differ by local day."""
+
+    def __init__(self, prices_by_day, **kwargs):
+        super().__init__(**kwargs)
+        self.prices_by_day = prices_by_day
+
+    def rates_for_day(self, day):
+        prices = self.prices_by_day.get(day, [None] * 48)
+        start = datetime.combine(day, time())
+        return [
+            SlotRate(
+                start=start + timedelta(minutes=30 * slot),
+                end=start + timedelta(minutes=30 * (slot + 1)),
+                import_p=self.import_p,
+                export_p=prices[slot],
+            )
+            for slot in range(48)
+        ]
+
+
 class FakeProfile:
     def __init__(self, loads):
         self.loads = loads
@@ -81,7 +102,11 @@ def test_builds_only_the_remaining_slots():
         for _ in range(48)
     ]
     result = build_planner_input(
-        FakeSource(import_p=20.0, export_p=10.0),
+        FakeSource(
+            import_p=20.0,
+            export_p=10.0,
+            dynamic_export=False,
+        ),
         FakeProfile(loads),
         DAY,
         current_slot=46,
@@ -253,6 +278,56 @@ def test_dynamic_export_horizon_stops_at_the_last_known_price():
     assert len(result.slots) == 24
     assert result.slots[-1].slot == 23
     assert result.horizon_end_slot == 23
+    assert result.horizon_limited_by_export is True
+
+
+def test_dynamic_export_horizon_includes_the_next_day_when_published():
+    tomorrow = DAY + timedelta(days=1)
+    source = DaySource(
+        {
+            DAY: [10.0] * 48,
+            tomorrow: [12.0] * 24 + [None] * 24,
+        }
+    )
+    result = build_planner_input(
+        source,
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert len(result.slots) == 72
+    assert result.slots[-1].slot == 23
+    assert result.slots[-1].start.date() == tomorrow
+    assert result.horizon_end_date == tomorrow
+    assert result.horizon_limited_by_export is True
+
+
+def test_dynamic_export_without_next_day_prices_stops_at_midnight():
+    tomorrow = DAY + timedelta(days=1)
+    source = DaySource(
+        {
+            DAY: [10.0] * 48,
+            tomorrow: [None] * 48,
+        }
+    )
+    result = build_planner_input(
+        source,
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert len(result.slots) == 48
+    assert result.slots[-1].start.date() == DAY
     assert result.horizon_limited_by_export is True
 
 

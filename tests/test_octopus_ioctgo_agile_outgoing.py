@@ -4854,6 +4854,9 @@ class TestShadowPlannerAndEstimator:
         assert run["estimate_soc"] == pytest.approx(60.0)
         assert run["target_soc"] is None
         assert run["forecast_days"] >= 14
+        assert run["horizon_limited_by_export"] is True
+        assert run["horizon_end_date"] == today.isoformat()
+        assert run["inputs"][-1]["horizon_index"] == 23
         assert len(run["actions"]) == 24
         assert len(run["inputs"]) == 24
         assert run["actions"][0]["slot"] == 24

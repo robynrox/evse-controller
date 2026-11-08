@@ -363,11 +363,15 @@ completed fixes.
   single fallback remains only when no prior is supplied. The prior is stored
   per input row as `load_source="prior"`, so the policy page can label it.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
-  slot with a published export price; fixed-export tariffs still run to the
-  end of day. The shadow DP has no fixed end-of-day SoC target: it optimises
-  within the configured protection floor and charge cap. The live heuristic's
-  target is unchanged. The run stores `horizon_end_slot`,
-  `horizon_limited_by_export` and a null `target_soc`.
+  slot with a published export price. If today's series reaches midnight and
+  tomorrow's prices are already published, tomorrow's series is appended and
+  the horizon crosses midnight; otherwise it stops at midnight. Fixed-export
+  tariffs still run to the end of day. The shadow DP has no fixed end-of-day
+  SoC target: it optimises within the configured protection floor, bulk/export
+  discharge floor, follow floors and charge cap. The live heuristic's target
+  is unchanged. Runs store `horizon_end_slot`, `horizon_end_date`,
+  `horizon_limited_by_export`, a null `target_soc` and per-input
+  `horizon_index` values for cross-day actions.
 - Fixed actions are scored by expected grid cost over the per-slot load
   histogram (`load_samples`), not just the median. The sparse histograms are
   passed through the input builder; slots with many bins are condensed into at
@@ -382,7 +386,7 @@ completed fixes.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **760 passed, 1 skipped, 24 subtests passed**.
+- Local full test suite: **764 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

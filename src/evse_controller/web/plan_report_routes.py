@@ -140,12 +140,22 @@ def _decision_per_slot(decisions: list[dict]) -> dict[int, dict]:
     return result
 
 
-def _effective_plan(runs: list[dict]) -> dict[int, tuple[dict, dict]]:
+def _action_day(action: dict):
+    try:
+        return datetime.fromisoformat(
+            str(action.get("start"))
+        ).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_plan(
+    runs: list[dict], day
+) -> dict[int, tuple[dict, dict]]:
     """The run and action that were in force for every planned slot.
 
     Runs are ordered by their start slot; a later run in the same slot wins.
-    An action is keyed by its absolute day slot, so no horizon offset is
-    needed here.
+    Actions from a cross-midnight horizon are filtered to the selected day.
     """
     ordered = []
     for run in runs:
@@ -166,6 +176,10 @@ def _effective_plan(runs: list[dict]) -> dict[int, tuple[dict, dict]]:
                 item
                 for item in run.get("actions") or []
                 if item.get("slot") == slot
+                and (
+                    _action_day(item) is None
+                    or _action_day(item) == day
+                )
             ),
             None,
         )
@@ -222,7 +236,7 @@ def _build_rows(
     day: date,
 ) -> list[SlotComparison]:
     runs = history.runs_for_day(day)
-    planned = _effective_plan(runs)
+    planned = _effective_plan(runs, day)
     samples = _latest_per_slot(history.soc_samples_for_day(day))
     modes = _decision_per_slot(history.decisions_for_day(day))
     snapshot = log.snapshot_for(day)

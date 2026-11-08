@@ -20,7 +20,7 @@ have been executed exactly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from evse_controller.daily_report import daily_log
@@ -143,11 +143,19 @@ def simulate_run(
     soc_samples: Optional[list[dict]] = None,
 ) -> DayBacktest:
     """Replay one plan against the measured day."""
-    actions = {
-        action.get("slot"): action
-        for action in run.get("actions") or []
-        if isinstance(action.get("slot"), int)
-    }
+    actions = {}
+    for action in run.get("actions") or []:
+        if not isinstance(action.get("slot"), int):
+            continue
+        try:
+            action_day = datetime.fromisoformat(
+                str(action.get("start"))
+            ).date()
+        except (TypeError, ValueError):
+            action_day = None
+        if action_day is not None and action_day != day:
+            continue
+        actions[action["slot"]] = action
     start_slot = int(run.get("slot", 0))
     slots = snapshot.get("slots") or []
     samples = {}

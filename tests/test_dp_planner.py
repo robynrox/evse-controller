@@ -175,6 +175,28 @@ def test_policy_only_uses_integer_currents_within_the_wallbox_limit(limit):
     assert all(value.is_integer() for value in charge + discharge)
 
 
+def test_fixed_discharge_respects_the_export_floor():
+    p = planner(
+        protection_floor_percent=25.0,
+        discharge_floor_percent=40.0,
+        target_soc_percent=None,
+    )
+    slots = [
+        slot(index, import_p=10.0, export_p=100.0, load_kw=0.0)
+        for index in range(4)
+    ]
+
+    policy = p.policy(slots, 60.0)
+
+    for action in policy.actions:
+        if action.kind == "discharge":
+            assert action.soc_after >= 40.0 - 1e-9
+    for row in policy.cells:
+        for cell in row:
+            if cell.action is not None and cell.action.kind == "discharge":
+                assert cell.action.soc_after >= 40.0 - 1e-9
+
+
 def test_no_terminal_target_optimises_within_the_config_limits():
     p = planner(target_soc_percent=None)
     slots = [

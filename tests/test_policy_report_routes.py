@@ -217,6 +217,25 @@ def test_page_shows_follow_modes_and_their_gates(tmp_path):
     assert "Starts at house import" in body
 
 
+def test_page_shows_config_limits_only_when_there_is_no_target(tmp_path):
+    run = _run(with_params=True)
+    run["target_soc"] = None
+    run["planner"]["target_soc_percent"] = None
+    run["planner"]["discharge_floor_percent"] = 40.0
+    store = PlannerHistory(tmp_path / "no-target")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(f"/reports/policy?date={DAY.isoformat()}")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "config limits only" in body
+    assert "export floor 40.0%" in body
+
+
 def test_page_labels_a_prior_as_a_prior(tmp_path):
     run = _run(with_params=True)
     run["forecast_days"] = 0
