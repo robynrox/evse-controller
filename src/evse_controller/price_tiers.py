@@ -170,12 +170,24 @@ class PriceTierTable:
             self.import_prices, self.import_windows, day_minute
         )
 
+    def import_price_with(self, prices: Mapping[str, float], day_minute: int) -> float:
+        """Look up a slot using current prices with this table's windows."""
+        return self._lookup(prices, self.import_windows, day_minute)
+
     def export_price_p(self, day_minute: int) -> Optional[float]:
         if self.export_source == "none":
             return None
         return self._lookup(
             self.export_prices, self.export_windows, day_minute
         )
+
+    def export_price_with(
+        self, prices: Mapping[str, float], day_minute: int
+    ) -> Optional[float]:
+        """Look up a slot using current prices with this table's windows."""
+        if self.export_source == "none":
+            return None
+        return self._lookup(prices, self.export_windows, day_minute)
 
     @property
     def dynamic_export(self) -> bool:

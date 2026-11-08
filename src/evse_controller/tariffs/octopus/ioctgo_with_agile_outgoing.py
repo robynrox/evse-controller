@@ -448,15 +448,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Storage decision thresholds - TODO: move to config.yaml
         # Below this rate, always store solar energy regardless of other factors
         # This prevents exporting at trivial rates when energy may be needed later
-        self.STORAGE_FLOOR_THRESHOLD_P = config.IMPORT_LOW
+        self.STORAGE_FLOOR_THRESHOLD_P = self._import_cheap_p()
 
         # Self-use value threshold at the minimum harvest current.  The live
         # decision recomputes this from the actual harvest current.
         self.SELF_USE_VALUE_THRESHOLD_P = self.self_use_value_threshold_p()
         
         self.time_of_use = {
-            "low":  {"start": "23:30", "end": "05:30", "import_rate": config.IMPORT_LOW / 100, "export_rate": config.EXPORT_MID},
-            "high": {"start": "05:30", "end": "23:30", "import_rate": config.IMPORT_HIGH / 100, "export_rate": config.EXPORT_MID}
+            "low":  {"start": "23:30", "end": "05:30", "import_rate": self._import_cheap_p() / 100, "export_rate": self._export_standard_p()},
+            "high": {"start": "05:30", "end": "23:30", "import_rate": self._import_standard_p() / 100, "export_rate": self._export_standard_p()}
         }
         
         # Agile Outgoing rate storage
@@ -655,6 +655,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         hours, minutes = map(int, time_str.split(":"))
         return hours * 60 + minutes
 
+    def _config_import_prices(self) -> dict:
+        return {
+            "standard": float(config.IMPORT_STANDARD_P),
+            "cheap": float(config.IMPORT_CHEAP_P),
+            "peak": float(config.IMPORT_PEAK_P),
+        }
+
+    def _config_export_prices(self) -> dict:
+        return {
+            "standard": float(config.EXPORT_STANDARD_P),
+            "cheap": float(config.EXPORT_CHEAP_P),
+            "peak": float(config.EXPORT_PEAK_P),
+        }
+
+    def _import_cheap_p(self) -> float:
+        return self._config_import_prices()["cheap"]
+
+    def _import_standard_p(self) -> float:
+        return self._config_import_prices()["standard"]
+
+    def _export_standard_p(self) -> float:
+        return self._config_export_prices()["standard"]
+
     def absolute_min_soc_percent(self) -> float:
         """Hard lower SoC limit for discharge and export.
 
@@ -714,7 +737,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if export_eff <= 0:
             return float("inf")
         price = (
-            config.IMPORT_HIGH
+            self._import_standard_p()
             if import_price_p is None
             else import_price_p
         )
@@ -2014,7 +2037,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Export price for *current_slot*, or 0p if it is not known."""
         table = self.resolved_price_table()
         if table is not None and not table.dynamic_export:
-            value = table.export_price_p(current_slot * 30)
+            value = table.export_price_with(
+                self._config_export_prices(), current_slot * 30
+            )
             return 0.0 if value is None else float(value)
         for rate_data in self._today_rates():
             hour = rate_data['start'].hour
@@ -2022,6 +2047,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if slot_idx == current_slot:
                 return rate_data['rate']
         return 0.0
+
+    def import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Import price for one slot, using the configured tier windows."""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.import_price_with(
+                self._config_import_prices(), slot * 30
+            )
+        rate = self.get_import_rate(_slot_start(day, slot))
+        return None if rate is None else rate * 100.0
 
     def export_price_p(self, day: date, slot: int) -> Optional[float]:
         """Export price for one slot on *day*, or ``None``.
@@ -2032,7 +2067,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         table = self.resolved_price_table()
         if table is not None and not table.dynamic_export:
-            return table.export_price_p(slot * 30)
+            return table.export_price_with(
+                self._config_export_prices(), slot * 30
+            )
 
         match = None
         for rate_data in self.agile_rates:
@@ -2052,7 +2089,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         band.  The energy really was bought, so this is a price override for
         the report, not a zero-priced session.
         """
-        return self.resolved_price_table().import_prices["cheap"]
+        return self._import_cheap_p()
 
     def export_min_rate_p(self) -> float:
         """Minimum export price covering cheap import and the profit margin.
@@ -2061,7 +2098,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         (grid charge at max, export at max) plus the minimum profit margin.
         """
         return (
-            config.IMPORT_LOW / self.BATTERY_ROUND_TRIP_EFFICIENCY
+            self._import_cheap_p() / self.BATTERY_ROUND_TRIP_EFFICIENCY
             + self.MIN_PROFIT_MARGIN_P_PER_KWH
         )
 
@@ -2198,7 +2235,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def minimum_round_trip_saving_grid_p(self) -> float:
         """Minimum saving for cheap grid import -> export."""
         return self.minimum_round_trip_saving_p(
-            config.IMPORT_LOW, self.BATTERY_ROUND_TRIP_EFFICIENCY
+            self._import_cheap_p(), self.BATTERY_ROUND_TRIP_EFFICIENCY
         )
 
     def charge_cap_percent(self) -> float:
@@ -2252,7 +2289,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
         )
         return (
-            config.IMPORT_HIGH - self.MIN_PROFIT_MARGIN_P_PER_KWH
+            self._import_standard_p() - self.MIN_PROFIT_MARGIN_P_PER_KWH
         ) * round_trip
 
     def _minimum_harvest_charge_current_a(
@@ -2481,7 +2518,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         charge_efficiency = self.EFFICIENCY_MODEL.charge_efficiency(
             self.GRID_CHARGE_REFERENCE_CURRENT
         )
-        return (config.IMPORT_LOW / 100.0) / max(charge_efficiency, 1e-6)
+        return (self._import_cheap_p() / 100.0) / max(charge_efficiency, 1e-6)
 
     def _stored_cost_per_dc_kwh_p(self) -> float:
         """Average purchase cost of the energy in the pack, in p/kWh DC.
@@ -3052,7 +3089,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 marginal energy has no better sale than the ledger value.
         """
         import_p = (
-            config.IMPORT_HIGH if import_rate_p is None else import_rate_p
+            self._import_standard_p() if import_rate_p is None else import_rate_p
         )
         volts = 240.0 if voltage is None or voltage <= 0 else voltage
 
@@ -3133,11 +3170,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return 0.0
         table = self.resolved_price_table()
         if table is not None:
-            return table.import_price_p(day_minute)
+            return table.import_price_with(
+                self._config_import_prices(), day_minute
+            )
         return (
-            config.IMPORT_LOW
+            self._import_cheap_p()
             if self.is_off_peak(day_minute)
-            else config.IMPORT_HIGH
+            else self._import_standard_p()
         )
 
     def _current_discharge_activation_w(
@@ -3758,6 +3797,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         - Partial data availability
         - DST changes (46/48/50 slots)
         """
+        if not self.dynamic_export:
+            # Fixed/Prime/no-export presets price every slot from the tier
+            # table; there is no Agile series to fetch.
+            return
+
         def fetch_thread():
             try:
                 now = datetime.now()
@@ -4199,7 +4243,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "efficiency-adjusted break-even spread: covering the "
                 "round-trip loss and earning this margin needs "
                 f"{self.minimum_round_trip_saving_grid_p():.1f}p/kWh on the "
-                f"input price for grid charging at {config.IMPORT_LOW:.1f}p, "
+                f"input price for grid charging at {self._import_cheap_p():.1f}p, "
                 f"and {self.minimum_round_trip_saving_solar_p():.1f}p/kWh "
                 "for free solar.",
                 quote=True,
@@ -4461,7 +4505,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     else (
                         f"The ledger is below the {min_basis:.2f} kWh trust "
                         f"floor, so the off-peak fallback "
-                        f"({config.IMPORT_LOW:.1f}p/kWh ÷ "
+                        f"({self._import_cheap_p():.1f}p/kWh ÷ "
                         f"{charge_reference_eff:.0%} charge efficiency at "
                         f"{charge_reference_a:.0f} A) gives "
                         f"{fallback_p:.1f}p/kWh in the pack."
@@ -4532,7 +4576,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "calculation": (
                     f"Below {min_basis:.2f} kWh the ledger is not trusted as "
                     f"a price basis. Existing charge is seeded at the "
-                    f"off-peak replacement price: {config.IMPORT_LOW:.1f}p/kWh "
+                    f"off-peak replacement price: {self._import_cheap_p():.1f}p/kWh "
                     f"÷ {charge_reference_eff:.0%} = {fallback_p:.1f}p/kWh DC."
                 ),
                 "result": (
@@ -4740,7 +4784,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             sum(1 for item in profile if item.available) if profile else 0
         )
         min_export_rate_p = self.export_min_rate_p()
-        default_break_even_p = self.export_house_break_even_p(config.IMPORT_HIGH)
+        default_break_even_p = self.export_house_break_even_p(self._import_standard_p())
 
         if current_soc is None:
             baseline_projection = None
@@ -5334,9 +5378,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             snap.import_rate_p
             if snap.import_rate_p is not None
             else (
-                config.IMPORT_LOW
+                self._import_cheap_p()
                 if self.is_off_peak(snap.updated_at.hour * 60 + snap.updated_at.minute)
-                else config.IMPORT_HIGH
+                else self._import_standard_p()
             )
         )
         export_p = max(0.0, snap.current_rate_p or 0.0)
@@ -5816,7 +5860,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "What is the surplus worth if the house uses it later?",
                     "Storing the solar to cover the house avoids importing at "
                     "the peak rate.",
-                    f"(peak import {config.IMPORT_HIGH:.1f}p − {margin:.1f}p "
+                    f"(peak import {self._import_standard_p():.1f}p − {margin:.1f}p "
                     f"margin) × {self_use_rt * 100:.0f}% round trip at "
                     f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
                     f"{self_use_value_p:.1f}p/kWh.",
@@ -5930,7 +5974,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "What is the surplus worth if the house uses it later?",
                     "Storing the solar to cover the house avoids importing at "
                     "the peak rate.",
-                    f"(peak import {config.IMPORT_HIGH:.1f}p − {margin:.1f}p "
+                    f"(peak import {self._import_standard_p():.1f}p − {margin:.1f}p "
                     f"margin) × {self_use_rt * 100:.0f}% round trip at "
                     f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
                     f"{self_use_value_p:.1f}p/kWh.",
@@ -7079,7 +7123,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if priority:
                     qualifier = (
                         f"{len(priority)} slot(s) beat the "
-                        f"{self.export_house_break_even_p(config.IMPORT_HIGH):.1f}p "
+                        f"{self.export_house_break_even_p(self._import_standard_p()):.1f}p "
                         "break-even, but "
                     )
                     if projected is None:
@@ -7302,7 +7346,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # If we have just reached the 00:00 slot or the 16:00 slot then we should schedule fetching
         # the rates again.
-        should_fetch_rates = (current_slot != self._last_plan_slot) and (current_slot == 0 or current_slot == 32)
+        should_fetch_rates = self.dynamic_export and (current_slot != self._last_plan_slot) and (current_slot == 0 or current_slot == 32)
 
         if should_fetch_rates:
             self._fetch_rates_async()
@@ -7431,7 +7475,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if battery_level < cap:
                 mode = f"Max charge ({self.MAX_CHARGE_CURRENT:.0f} A)"
                 reason = (
-                    f"off-peak {config.IMPORT_LOW:.1f}p — charging to the "
+                    f"off-peak {self._import_cheap_p():.1f}p — charging to the "
                     f"{cap:.0f}% cap"
                 )
                 self._record_decision(
@@ -7439,12 +7483,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     reason=reason,
                     soc_percent=battery_level,
                     detail=(
-                        f"Off-peak import at {config.IMPORT_LOW:.1f}p/kWh. "
+                        f"Off-peak import at {self._import_cheap_p():.1f}p/kWh. "
                         f"SoC {battery_level}%, cap {cap:.0f}%. Charge "
                         f"efficiency {charge_efficiency:.0f}% at "
                         f"{self.GRID_CHARGE_REFERENCE_CURRENT:.0f} A."
                     ),
-                    current_rate_p=config.IMPORT_LOW,
+                    current_rate_p=self._import_cheap_p(),
                     efficiency_pct=charge_efficiency,
                     efficiency_label="charge",
                     min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
@@ -7452,7 +7496,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
                     decision_tier="off_peak",
-                    import_rate_p=config.IMPORT_LOW,
+                    import_rate_p=self._import_cheap_p(),
                     charge_cap_percent=cap,
                 )
                 return (
@@ -7465,18 +7509,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 self._record_decision(
                     mode=f"Idle — SoC at {cap:.0f}% cap",
                     reason=(
-                        f"off-peak {config.IMPORT_LOW:.1f}p — no charge needed "
+                        f"off-peak {self._import_cheap_p():.1f}p — no charge needed "
                         f"at SoC {battery_level}%"
                     ),
                     soc_percent=battery_level,
                     detail=(
-                        f"Off-peak import at {config.IMPORT_LOW:.1f}p/kWh. "
+                        f"Off-peak import at {self._import_cheap_p():.1f}p/kWh. "
                         f"SoC {battery_level}% is at or above the {cap:.0f}% "
                         "charge cap, so the battery is left alone."
                     ),
-                    current_rate_p=config.IMPORT_LOW,
+                    current_rate_p=self._import_cheap_p(),
                     decision_tier="off_peak",
-                    import_rate_p=config.IMPORT_LOW,
+                    import_rate_p=self._import_cheap_p(),
                     charge_cap_percent=cap,
                 )
                 return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Off-peak: SoC max, dormant"

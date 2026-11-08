@@ -929,7 +929,25 @@ class Config:
         }.get(self.STARTUP_STATE, "iog_agile")
 
     def _preset_default_price(self, side: str, tier: str) -> float:
-        """Starter price from the selected preset, for a first run."""
+        """Starter price for a first run, or the legacy value for old configs.
+
+        An old config has no ``tariffs.preset`` key, so it keeps the rates it
+        already stores under ``import.high/low`` and ``export.mid/high``.  Once
+        a preset is chosen explicitly, that preset's starter prices apply until
+        the user saves the ``prices`` block.
+        """
+        legacy = {
+            ("import", "standard"): self.IMPORT_HIGH,
+            ("import", "cheap"): self.IMPORT_LOW,
+            ("import", "peak"): self.IMPORT_HIGH,
+            ("export", "standard"): self.EXPORT_MID,
+            ("export", "cheap"): self.EXPORT_MID,
+            ("export", "peak"): self.EXPORT_HIGH,
+        }.get((side, tier), 0.0)
+
+        if self.get("tariffs.preset", None) is None:
+            return legacy
+
         from evse_controller.price_tiers import PRESETS
 
         preset = PRESETS.get(self.TARIFF_PRESET)
@@ -943,14 +961,7 @@ class Config:
                 return prices[tier]
         # A hand-edited unknown preset still needs a safe number; the table
         # builder will reject the preset name with a clear message.
-        return {
-            ("import", "standard"): self.IMPORT_HIGH,
-            ("import", "cheap"): self.IMPORT_LOW,
-            ("import", "peak"): self.IMPORT_HIGH,
-            ("export", "standard"): self.EXPORT_MID,
-            ("export", "cheap"): self.EXPORT_MID,
-            ("export", "peak"): self.EXPORT_HIGH,
-        }.get((side, tier), 0.0)
+        return legacy
 
     def build_price_table(self):
         """Resolve the configured preset, prices and window overrides."""
