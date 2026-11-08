@@ -5,9 +5,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from evse_controller.energy_sessions import (
+    BIDIRECTIONAL,
+    CONTROL_SESSION_KINDS,
     EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
+    HOME_ONLY,
+    OCPP,
+    PAUSE,
+    SOLAR_ONLY,
     EnergySession,
     SessionStore,
     ceil_to_slot,
@@ -249,3 +255,42 @@ class TestSlotsForKind:
 
         store.set_enabled(free.id, False)
         assert store.slots_for_kind(day, FREE_IMPORT) == {32, 33}
+
+
+class TestControlSessions:
+    def test_control_kinds_are_accepted(self):
+        kinds = (HOME_ONLY, BIDIRECTIONAL, SOLAR_ONLY, PAUSE, OCPP)
+        assert set(kinds) == CONTROL_SESSION_KINDS
+        for kind in kinds:
+            session = EnergySession(kind, at(18), at(19))
+            assert session.kind == kind
+
+    def test_control_session_is_distinguished_from_supplier_windows(
+        self, tmp_path
+    ):
+        store = SessionStore(tmp_path / "sessions.json")
+        store.add(EnergySession(HOME_ONLY, at(18), at(19)))
+
+        assert store.control_session(at(18, 15)).kind == HOME_ONLY
+        assert store.control_session(at(19, 0)) is None
+
+    def test_price_and_availability_windows_are_not_control_sessions(
+        self, tmp_path
+    ):
+        store = SessionStore(tmp_path / "sessions.json")
+        store.add(EnergySession(FREE_IMPORT, at(12), at(13)))
+        store.add(EnergySession(GRID_SUPPORT, at(14), at(15)))
+        store.add(EnergySession(EV_AWAY, at(16), at(17)))
+
+        assert store.control_session(at(12, 15)) is None
+        assert store.control_session(at(14, 15)) is None
+        assert store.control_session(at(16, 15)) is None
+
+    def test_disabled_control_session_does_not_own_the_wallbox(
+        self, tmp_path
+    ):
+        store = SessionStore(tmp_path / "sessions.json")
+        session = store.add(EnergySession(PAUSE, at(18), at(19)))
+        store.set_enabled(session.id, False)
+
+        assert store.control_session(at(18, 15)) is None

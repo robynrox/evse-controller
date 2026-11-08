@@ -142,6 +142,10 @@ class TariffSourceAdapter:
     def sessions_for_day(self, day: date) -> list[EnergySession]:
         return sessions_for_day(day, self._session_store)
 
+    def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Off-peak purchase price for a supplier-scheduled OCPP slot."""
+        return self._tariff.ocpp_import_price_p(day, slot)
+
 
 class SlotPriceBookSource:
     """The offline fallback source used while no tariff is active.
@@ -189,3 +193,7 @@ class SlotPriceBookSource:
 
     def sessions_for_day(self, day: date) -> list[EnergySession]:
         return sessions_for_day(day, self._session_store)
+
+    def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """The price book has no supplier-scheduled rate of its own."""
+        return None

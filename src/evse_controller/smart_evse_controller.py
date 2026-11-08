@@ -2,7 +2,11 @@ import os
 import sys
 import signal
 import threading
-from enum import Enum
+from evse_controller.execution_state import (
+    ControlOverride,
+    ExecState,
+    override_release_reason,
+)
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.tariffs.manager import TariffManager
@@ -30,6 +34,14 @@ ensure_data_dirs()
 from evse_controller.utils.logging_config import setup_logging, debug, info, warning, error, critical
 from evse_controller.utils.config import config
 from evse_controller.scheduler import Scheduler, ScheduledEvent
+from evse_controller.energy_sessions import (
+    BIDIRECTIONAL,
+    HOME_ONLY,
+    OCPP as OCPP_SESSION,
+    PAUSE as PAUSE_SESSION,
+    SOLAR_ONLY,
+    session_store,
+)
 
 # Setup logging
 logger = setup_logging()
@@ -38,18 +50,7 @@ info("Starting EVSE controller...")
 info(f"Using config file: {config.CONFIG_FILE}")
 
 # Main application
-class ExecState(Enum):
-    SMART = 1
-    CHARGE = 2
-    DISCHARGE = 3
-    PAUSE = 4
-    FIXED = 5
-    SOLAR = 6
-    POWER_HOME = 7
-    BALANCE = 8
-    PAUSE_UNTIL_DISCONNECT = 9
-    FREERUN = 10
-    OCPP = 11
+active_override: Optional[ControlOverride] = None
 
 def ensure_ocpp_disabled():
     """Ensure OCPP is disabled by using the OCPPManager.
@@ -114,6 +115,11 @@ def _save_exec_state():
             "exec_state": execState.name,
             "previous_state": previous_state.name if previous_state else None,
             "fixed_current_amps": _fixed_current_amps,  # Persist fixed current for FIXED state
+            "override": (
+                active_override.to_dict()
+                if active_override is not None
+                else None
+            ),
             "timestamp": datetime.now().isoformat()
         }
         with STATE_FILE.open('w') as f:
@@ -125,7 +131,7 @@ def _save_exec_state():
 def _load_exec_state():
     """Load execution state from file (for recovery after restart)."""
     if not STATE_FILE.exists():
-        return None, None, None
+        return None, None, None, None
     
     try:
         with STATE_FILE.open('r') as f:
@@ -134,15 +140,23 @@ def _load_exec_state():
         exec_state_name = state_data.get("exec_state")
         previous_state_name = state_data.get("previous_state")
         fixed_current = state_data.get("fixed_current_amps")
+        override_payload = state_data.get("override")
         
         exec_state = ExecState[exec_state_name] if exec_state_name else None
         previous_state = ExecState[previous_state_name] if previous_state_name else None
+        override = (
+            ControlOverride.from_dict(override_payload)
+            if isinstance(override_payload, dict)
+            else None
+        )
+        if override is not None and not override.is_active():
+            override = None
         
-        info(f"Loaded execution state: {exec_state.name} (previous: {previous_state.name if previous_state else 'None'}, fixed_current: {fixed_current})")
-        return exec_state, previous_state, fixed_current
+        info(f"Loaded execution state: {exec_state.name} (previous: {previous_state.name if previous_state else 'None'}, fixed_current: {fixed_current}, override: {override.mode.name if override else 'None'})")
+        return exec_state, previous_state, fixed_current, override
     except Exception as e:
         error(f"Failed to load execution state: {e}")
-        return None, None, None
+        return None, None, None, None
 
 def _set_exec_state(new_state, new_previous_state=None):
     """Set execution state and persist it to disk."""
@@ -152,6 +166,210 @@ def _set_exec_state(new_state, new_previous_state=None):
         previous_state = new_previous_state
     _save_exec_state()
     info(f"Execution state changed to: {new_state.name}")
+
+
+def _ensure_tariff_active() -> None:
+    """Keep the configured tariff alive as the observer during overrides."""
+    if tariffManager.get_tariff() is not None:
+        return
+    try:
+        tariffManager.start_tariff()
+    except Exception as exc:
+        warning(f"Could not start observer tariff: {exc}")
+
+
+def _set_override(mode: ExecState, reason: str, *, source: str = "dashboard",
+                  fixed_current: Optional[int] = None,
+                  expires_at: Optional[datetime] = None) -> ControlOverride:
+    """Take temporary actuator ownership while the tariff keeps observing."""
+    global active_override
+    _ensure_tariff_active()
+    active_override = ControlOverride(
+        mode=mode,
+        reason=reason,
+        source=source,
+        fixed_current=fixed_current,
+        expires_at=expires_at,
+    )
+    _set_exec_state(mode)
+    info(
+        f"CONTROL OVERRIDE: {mode.name} ({reason}); tariff remains active "
+        "as an observer"
+    )
+    return active_override
+
+
+def _clear_override(reason: str = "cleared") -> None:
+    global active_override
+    if active_override is None:
+        return
+    info(f"CONTROL OVERRIDE CLEARED: {reason}")
+    active_override = None
+    _save_exec_state()
+
+
+_SESSION_CONTROL_MODES = {
+    HOME_ONLY: ExecState.POWER_HOME,
+    BIDIRECTIONAL: ExecState.BALANCE,
+    SOLAR_ONLY: ExecState.SOLAR,
+    PAUSE_SESSION: ExecState.PAUSE,
+    OCPP_SESSION: ExecState.OCPP,
+}
+
+
+def _enter_ocpp_override(
+    reason: str,
+    *,
+    source: str = "dashboard",
+    expires_at: Optional[datetime] = None,
+) -> bool:
+    """Take the OCPP handoff and remember the override for the arbiter."""
+    _set_override(
+        ExecState.OCPP,
+        reason,
+        source=source,
+        expires_at=expires_at,
+    )
+    evseController.setFreeRun()
+    try:
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+
+        ocpp_manager.set_state(True)
+    except Exception as exc:
+        error(f"Failed to send OCPP enable request: {exc}")
+        _clear_override("OCPP enable failed")
+        _set_exec_state(ExecState.SMART)
+        _apply_exec_state(ExecState.SMART)
+        return False
+    return True
+
+
+def _sync_session_override(now: datetime) -> None:
+    """Arm or release a scheduled control session.
+
+    A dashboard override outranks a session: the user's manual command lasts
+    until they choose SMART or switch tariff.  A session-sourced override is
+    refreshed in place and released when its window ends.
+    """
+    session = session_store.control_session(now)
+    if session is not None:
+        if active_override is not None and active_override.source != "session":
+            return
+
+        desired = _SESSION_CONTROL_MODES.get(session.kind)
+        if desired is None:
+            return
+        reason = f"session {session.id} {session.label}"
+        if (
+            active_override is not None
+            and active_override.mode == desired
+            and active_override.reason == reason
+            and active_override.expires_at == session.end
+        ):
+            return
+
+        if desired == ExecState.OCPP:
+            _enter_ocpp_override(
+                reason, source="session", expires_at=session.end
+            )
+        else:
+            _set_override(
+                desired,
+                reason,
+                source="session",
+                expires_at=session.end,
+            )
+        return
+
+    if active_override is not None and active_override.source == "session":
+        info("CONTROL SESSION ENDED, resuming smart tariff control")
+        _clear_override("session ended")
+        _ensure_tariff_active()
+        _set_exec_state(ExecState.SMART)
+        _apply_exec_state(ExecState.SMART)
+
+
+def _observe_tariff(dayMinute: int) -> None:
+    """Let the configured tariff keep recording while an override drives.
+
+    An observer failure must never disturb the actuator override.
+    """
+    try:
+        tariffManager.observe(dayMinute)
+    except Exception as exc:
+        warning(f"Tariff observer failed: {exc}")
+
+
+def _apply_override(override: ControlOverride) -> None:
+    """Apply the temporary owner's mode to the Wallbox."""
+    mode = override.mode
+    if mode in (ExecState.PAUSE, ExecState.PAUSE_UNTIL_DISCONNECT):
+        info(f"CONTROL {mode.name} (override)")
+        evseController.setControlState(ControlState.DORMANT)
+    elif mode == ExecState.CHARGE:
+        info("CONTROL CHARGE (override)")
+        evseController.setControlState(ControlState.CHARGE)
+        evseController.setChargeCurrentRange(
+            config.WALLBOX_MAX_CHARGE_CURRENT,
+            config.WALLBOX_MAX_CHARGE_CURRENT,
+        )
+    elif mode == ExecState.DISCHARGE:
+        info("CONTROL DISCHARGE (override)")
+        evseController.setControlState(ControlState.DISCHARGE)
+        evseController.setDischargeCurrentRange(
+            config.WALLBOX_MAX_DISCHARGE_CURRENT,
+            config.WALLBOX_MAX_DISCHARGE_CURRENT,
+        )
+    elif mode == ExecState.FIXED:
+        current = (
+            override.fixed_current
+            if override.fixed_current is not None
+            else _fixed_current_amps
+        )
+        info(f"CONTROL FIXED {current} A (override)")
+        if current is None:
+            evseController.setControlState(ControlState.DORMANT)
+        elif current > 0:
+            evseController.setControlState(ControlState.CHARGE)
+            evseController.setChargeCurrentRange(current, current)
+        elif current < 0:
+            evseController.setControlState(ControlState.DISCHARGE)
+            evseController.setDischargeCurrentRange(-current, -current)
+        else:
+            evseController.setControlState(ControlState.DORMANT)
+    elif mode == ExecState.SOLAR:
+        info("CONTROL SOLAR (override)")
+        evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
+        evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
+    elif mode == ExecState.POWER_HOME:
+        info("CONTROL POWER_HOME (override)")
+        evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
+        evseController.setDischargeCurrentRange(
+            3, config.WALLBOX_MAX_DISCHARGE_CURRENT
+        )
+    elif mode == ExecState.BALANCE:
+        info("CONTROL BALANCE (override)")
+        evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
+        evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
+        evseController.setDischargeCurrentRange(
+            3, config.WALLBOX_MAX_DISCHARGE_CURRENT
+        )
+    elif mode in (ExecState.FREERUN, ExecState.OCPP):
+        # The EVSE owns the actuator in these modes; sending commands would
+        # fight the OCPP/free-running handoff.
+        info(f"CONTROL {mode.name} (override) - EVSE operates independently")
+        if mode == ExecState.OCPP:
+            # The report prices OCPP-driven import at the tariff's off-peak
+            # rate, so record which slots were handed to the supplier.
+            try:
+                from evse_controller.daily_report import daily_log
+
+                daily_log.flag(datetime.now(), "ocpp")
+            except Exception as exc:
+                debug(f"Could not flag OCPP slot: {exc}")
+    elif mode == ExecState.SMART:
+        # SMART is not a hardware override; fail safe if it is ever stored.
+        warning("SMART cannot be an actuator override; leaving EVSE untouched")
 
 def _apply_exec_state(state, fixed_current=None):
     """Apply hardware/settings for a given execution state."""
@@ -178,7 +396,7 @@ def _apply_exec_state(state, fixed_current=None):
             else:
                 evseController.setControlState(ControlState.DORMANT)
             info(f"Restored FIXED state with current: {fixed_current}A")
-    elif state in [ExecState.CHARGE, ExecState.DISCHARGE, ExecState.PAUSE, ExecState.SMART, ExecState.SOLAR, ExecState.POWER_HOME, ExecState.BALANCE]:
+    elif state in [ExecState.CHARGE, ExecState.DISCHARGE, ExecState.PAUSE, ExecState.PAUSE_UNTIL_DISCONNECT, ExecState.SMART, ExecState.SOLAR, ExecState.POWER_HOME, ExecState.BALANCE]:
         # Ensure OCPP is disabled for non-OCPP states
         try:
             ocpp_manager.set_state(False)
@@ -189,9 +407,17 @@ def _apply_exec_state(state, fixed_current=None):
 from evse_controller.utils.config import config
 
 # Try to load persisted state first
-loaded_exec_state, loaded_previous_state, loaded_fixed_current = _load_exec_state()
+loaded_exec_state, loaded_previous_state, loaded_fixed_current, loaded_override = _load_exec_state()
 
-if loaded_exec_state is not None:
+if loaded_override is not None:
+    info(f"Resuming override: {loaded_override.mode.name}")
+    active_override = loaded_override
+    execState = loaded_override.mode
+    previous_state = loaded_previous_state
+    _fixed_current_amps = loaded_fixed_current
+    _ensure_tariff_active()
+    _apply_exec_state(execState, loaded_fixed_current)
+elif loaded_exec_state is not None:
     # Use persisted state
     info(f"Resuming from persisted state: {loaded_exec_state.name}")
     execState = loaded_exec_state
@@ -244,8 +470,17 @@ def get_system_state():
     Returns the current system state information including active mode and tariff if applicable.
     """
     current_state = execState.name
-    if execState == ExecState.SMART:
-        current_tariff = tariffManager.get_tariff().__class__.__name__.replace('Tariff', '')
+    if active_override is not None:
+        current_state = f"{active_override.mode.name} (override)"
+        if execState == ExecState.SMART:
+            current_state = f"SMART ({active_override.mode.name} override)"
+    elif execState == ExecState.SMART:
+        tariff = tariffManager.get_tariff()
+        current_tariff = (
+            tariff.__class__.__name__.replace('Tariff', '')
+            if tariff is not None
+            else "no tariff"
+        )
         current_state = f"SMART ({current_tariff})"
     return current_state
 
@@ -395,47 +630,51 @@ def main():
             match command.lower():
                 case "p" | "pause":
                     ensure_ocpp_disabled()
-                    info("Entering pause state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.PAUSE)
+                    info("Entering pause override")
+                    _set_override(ExecState.PAUSE, "dashboard pause")
                     nextStateCheck = time.time()
                 case "c" | "charge":
                     ensure_ocpp_disabled()
-                    info("Entering charge state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.CHARGE)
+                    info("Entering charge override")
+                    _set_override(ExecState.CHARGE, "dashboard max charge")
                     nextStateCheck = time.time()
                 case "d" | "discharge":
                     ensure_ocpp_disabled()
-                    info("Entering discharge state")
-                    tariffManager.stop_tariff()
-                    _set_exec_state(ExecState.DISCHARGE)
+                    info("Entering discharge override")
+                    _set_override(
+                        ExecState.DISCHARGE, "dashboard max discharge"
+                    )
                     nextStateCheck = time.time()
                 case "s" | "smart":
                     ensure_ocpp_disabled()
+                    _clear_override("smart mode")
                     info("Entering smart tariff controller state")
                     tariffManager.start_tariff()
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "g" | "go" | "octgo":
                     ensure_ocpp_disabled()
+                    _clear_override("tariff switch")
                     info("Switching to Octopus Go tariff")
                     tariffManager.set_tariff("OCTGO")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "ioctgo":
+                    _clear_override("tariff switch")
                     info("Switching to Intelligent Octopus Go tariff")
-                    tariffManager.set_tariff("IOCTGO", command_queue=execQueue)
+                    tariffManager.set_tariff("IOCTGO")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "f" | "flux":
                     ensure_ocpp_disabled()
+                    _clear_override("tariff switch")
                     info("Switching to Octopus Flux tariff")
                     tariffManager.set_tariff("FLUX")
                     _set_exec_state(ExecState.SMART)
                     nextStateCheck = time.time()
                 case "cosy":
                     ensure_ocpp_disabled()
+                    _clear_override("tariff switch")
                     info("Switching to Cosy Octopus tariff")
                     tariffManager.set_tariff("COSY")
                     _set_exec_state(ExecState.SMART)
@@ -447,76 +686,58 @@ def main():
                 case "u" | "unplug":
                     ensure_ocpp_disabled()
                     if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
-                        info("Entering pause-until-disconnect state")
-                        _set_exec_state(ExecState.PAUSE_UNTIL_DISCONNECT, execState)
+                        info("Entering pause-until-disconnect override")
+                        _set_override(
+                            ExecState.PAUSE_UNTIL_DISCONNECT,
+                            "unplug safety hold",
+                        )
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
                 case "z" | "freerun" | "disable-ocpp":
                     success = enter_freerun_mode()
-                    tariffManager.stop_tariff()
+                    _set_override(
+                        ExecState.FREERUN,
+                        "freerun handoff",
+                    )
                     nextStateCheck = time.time()
                 case "enable-ocpp" | "ocpp":
-                    info("Enabling OCPP mode for the Wallbox")
-                    # Go to FREERUN first to match OCPP operational mode
-                    tariffManager.stop_tariff()
-                    evseController.setFreeRun()
-                    _set_exec_state(ExecState.FREERUN)
-                    # Use OCPPManager to enable OCPP
-                    try:
-                        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
-                        ocpp_manager.set_state(True)  # Enable OCPP
-                        success = True
-                        print("OCPP enable request sent successfully")
-                    except Exception as e:
-                        error(f"Failed to send OCPP enable request: {e}")
-                        print("Failed to send OCPP enable request")
-                        success = False
-
-                    if success:
-                        _set_exec_state(ExecState.OCPP)
+                    info("Enabling OCPP override; tariff remains observing")
+                    if _enter_ocpp_override("OCPP supplier handoff"):
                         print("OCPP enable request sent successfully and OCPP state entered")
                     else:
                         print("Failed to send OCPP enable request")
                 case "solar":
-                    # If we're in OCPP state, disable OCPP first
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering solar charging state")
-                    _set_exec_state(ExecState.SOLAR)
+                    info("Entering solar-only override")
+                    _set_override(ExecState.SOLAR, "solar-only override")
                     nextStateCheck = time.time()
                 case "power-home" | "ph":
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering power home state")
-                    _set_exec_state(ExecState.POWER_HOME)
+                    info("Entering power-home override")
+                    _set_override(
+                        ExecState.POWER_HOME, "power-home override"
+                    )
                     nextStateCheck = time.time()
                 case "balance" | "b":
-                    tariffManager.stop_tariff()
                     ensure_ocpp_disabled()
-                    info("Entering power balance state")
-                    _set_exec_state(ExecState.BALANCE)
+                    info("Entering power-balance override")
+                    _set_override(
+                        ExecState.BALANCE, "bidirectional override"
+                    )
                     nextStateCheck = time.time()
                 case "help" | "h" | "?":
                     print_usage_instructions()
                 case _:
                     try:
                         currentAmps = int(command)
-                        info(f"Setting current to {currentAmps}")
-                        if currentAmps > 0:
-                            tariffManager.stop_tariff()
-                            evseController.setControlState(ControlState.CHARGE)
-                            evseController.setChargeCurrentRange(currentAmps, currentAmps)
-                        elif currentAmps < 0:
-                            tariffManager.stop_tariff()
-                            evseController.setControlState(ControlState.DISCHARGE)
-                            # setDischargeCurrentRange takes positive current values
-                            evseController.setDischargeCurrentRange(-currentAmps, -currentAmps)
-                        else:
-                            tariffManager.stop_tariff()
-                            evseController.setControlState(ControlState.DORMANT)
+                        info(f"Setting fixed-current override to {currentAmps} A")
                         _fixed_current_amps = currentAmps
-                        _set_exec_state(ExecState.FIXED)
+                        _set_override(
+                            ExecState.FIXED,
+                            f"fixed current {currentAmps} A",
+                            fixed_current=currentAmps,
+                        )
                     except ValueError:
                         print_usage_instructions()
         except queue.Empty:
@@ -526,25 +747,57 @@ def main():
         nowInSeconds = time.time()
         if nowInSeconds >= nextStateCheck:
             nextStateCheck = math.ceil((nowInSeconds + 1) / 20) * 20
+            dayMinute = now.tm_hour * 60 + now.tm_min
 
-            if execState == ExecState.PAUSE_UNTIL_DISCONNECT:
-                info("CONTROL PAUSE_UNTIL_DISCONNECT")
-                evseController.setControlState(ControlState.DORMANT)
+            # Scheduled control sessions arm their temporary override before
+            # the release check, so an expiring session and a starting one
+            # cannot both leave the Wallbox ownerless.
+            _sync_session_override(datetime.now())
 
-                # Check if vehicle is disconnected and transition to previous state
-                evse_state = evseController.getEvseState()
-                new_exec_state, new_previous_state = handle_pause_until_disconnect(
-                    previous_state, evse_state
-                )
-                
-                # Apply state transition if needed
-                if new_exec_state != execState:
-                    if new_previous_state is None and previous_state is not None:
-                        info(f"Vehicle disconnected, reverting to {previous_state}")
-                    elif new_previous_state is None and previous_state is None:
-                        warning("Internal error: No previous state found, falling back to PAUSE mode")
-                    _set_exec_state(new_exec_state, new_previous_state)
+            # Release an override when it has expired or when
+            # pause-until-disconnect sees the cable leave.  In both cases the
+            # configured tariff takes the actuator back; it has been observing.
+            vehicle_disconnected = (
+                active_override is not None
+                and active_override.mode == ExecState.PAUSE_UNTIL_DISCONNECT
+                and evseController.getEvseState() in DISCONNECTED_STATES
+            )
+            release_reason = override_release_reason(
+                active_override,
+                vehicle_disconnected=vehicle_disconnected,
+            )
+            if release_reason is not None:
+                info(f"CONTROL OVERRIDE RELEASED: {release_reason}")
+                released_mode = active_override.mode
+                _clear_override(release_reason)
+                _ensure_tariff_active()
+                _set_exec_state(ExecState.SMART)
+                if released_mode == ExecState.OCPP:
+                    # Never leave OCPP driving while the tariff believes it
+                    # owns the Wallbox again.
+                    ensure_ocpp_disabled()
+                _apply_exec_state(ExecState.SMART)
 
+            if active_override is not None:
+                # The override owns the Wallbox; the configured tariff keeps
+                # running as an observer so history and forecasts stay warm.
+                _apply_override(active_override)
+                _observe_tariff(dayMinute)
+            elif execState == ExecState.SMART:
+                # Get the appropriate EVSE instance using the factory method
+                evse = EvseThreadInterface.get_instance()
+                state = evse.get_state()
+                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
+                debug(log_message)
+                evseController.setControlState(control_state)
+                tariff = tariffManager.get_tariff()
+                if tariff is not None:
+                    tariff.set_home_demand_levels(evseController, state, dayMinute)
+                if min_current is not None and max_current is not None:
+                    if control_state == ControlState.CHARGE:
+                        evseController.setChargeCurrentRange(min_current, max_current)
+                    elif control_state == ControlState.DISCHARGE:
+                        evseController.setDischargeCurrentRange(min_current, max_current)
             elif execState == ExecState.FREERUN:
                 # In FREERUN state, we don't send any control commands to the EVSE
                 # The EVSE operates independently via the setFreeRun() method
@@ -552,13 +805,15 @@ def main():
                 # No action needed - the EVSE is already in freerun mode
                 # OCPP state tracking is handled in command parsing to prevent exiting 
                 # FREERUN when OCPP is enabled
+                _observe_tariff(dayMinute)
             elif execState == ExecState.OCPP:
                 # In OCPP state, we don't send any control commands to the EVSE
                 # The EVSE operates via OCPP protocol, which is handled by the Wallbox API
                 info("CONTROL OCPP - EVSE operating via OCPP protocol")
                 # No action needed - the EVSE is operating via OCPP
-
+                _observe_tariff(dayMinute)
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
+                # Legacy persisted states without an override record.
                 info(f"CONTROL {execState}")
                 if execState == ExecState.PAUSE:
                     evseController.setControlState(ControlState.DORMANT)
@@ -568,37 +823,30 @@ def main():
                 elif execState == ExecState.DISCHARGE:
                     evseController.setControlState(ControlState.DISCHARGE)
                     evseController.setDischargeCurrentRange(config.WALLBOX_MAX_DISCHARGE_CURRENT, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-
-            if execState == ExecState.SMART:
-                dayMinute = now.tm_hour * 60 + now.tm_min
-                # Get the appropriate EVSE instance using the factory method
-                evse = EvseThreadInterface.get_instance()
-                state = evse.get_state()
-                control_state, min_current, max_current, log_message = tariffManager.get_control_state(dayMinute)
-                debug(log_message)
-                evseController.setControlState(control_state)
-                tariffManager.get_tariff().set_home_demand_levels(evseController, state, dayMinute)
-                if min_current is not None and max_current is not None:
-                    if control_state == ControlState.CHARGE:
-                        evseController.setChargeCurrentRange(min_current, max_current)
-                    elif control_state == ControlState.DISCHARGE:
-                        evseController.setDischargeCurrentRange(min_current, max_current)
-
-            if execState == ExecState.SOLAR:
+            elif execState == ExecState.SOLAR:
                 info("CONTROL SOLAR")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_CHARGE)
                 evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
-
-            if execState == ExecState.POWER_HOME:
+            elif execState == ExecState.POWER_HOME:
                 info("CONTROL POWER_HOME")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_DISCHARGE)
                 evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
-
-            if execState == ExecState.BALANCE:
+            elif execState == ExecState.BALANCE:
                 info("CONTROL BALANCE")
                 evseController.setControlState(ControlState.LOAD_FOLLOW_BIDIRECTIONAL)
                 evseController.setChargeCurrentRange(3, config.WALLBOX_MAX_CHARGE_CURRENT)
                 evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
+            elif execState == ExecState.PAUSE_UNTIL_DISCONNECT:
+                # Legacy persisted state without an override record: behave
+                # like a pause and use the old disconnect transition.
+                info("CONTROL PAUSE_UNTIL_DISCONNECT")
+                evseController.setControlState(ControlState.DORMANT)
+                evse_state = evseController.getEvseState()
+                new_exec_state, new_previous_state = handle_pause_until_disconnect(
+                    previous_state, evse_state
+                )
+                if new_exec_state != execState:
+                    _set_exec_state(new_exec_state, new_previous_state)
 
 if __name__ == '__main__':
     main()

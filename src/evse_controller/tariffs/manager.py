@@ -131,3 +131,17 @@ class TariffManager:
         evse_state = evse.get_state()
         debug(f"TariffManager: Getting control state with state={evse_state}")
         return self.current_tariff.get_control_state(evse_state, dayMinute)
+
+    def observe(self, dayMinute):
+        """Run the active tariff as an observer, without applying its command.
+
+        Temporary execution overrides still need planner history, SoC samples
+        and decision records.  This calls the tariff's normal decision method
+        but the caller deliberately ignores the actuator tuple.  It does not
+        call ``set_home_demand_levels``.
+        """
+        if self.current_tariff is None:
+            return None
+        evse = EvseThreadInterface.get_instance()
+        evse_state = evse.get_state()
+        return self.current_tariff.get_control_state(evse_state, dayMinute)

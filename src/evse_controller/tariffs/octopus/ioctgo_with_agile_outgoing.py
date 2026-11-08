@@ -2026,6 +2026,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 match = rate_data
         return None if match is None else float(match['rate'])
 
+    def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Book a supplier-scheduled OCPP charge at the off-peak rate.
+
+        Intelligent Octopus bills charging it schedules through OCPP at the
+        cheap rate, even when that slot falls outside the fixed overnight
+        band.  The energy really was bought, so this is a price override for
+        the report, not a zero-priced session.
+        """
+        return config.IMPORT_LOW
+
     def export_min_rate_p(self) -> float:
         """Minimum export price covering cheap import and the profit margin.
 

@@ -268,3 +268,53 @@ def test_closed_prices_stay_frozen_when_the_source_changes(tmp_path):
     assert closed["prices"]["import_p"] == pytest.approx(10.0)
     assert closed["prices"]["export_p"] == pytest.approx(5.0)
     assert log.snapshot_for(DAY)["slots"][0]["prices"] == closed["prices"]
+
+
+def _flag_slot(log: DailyEnergyLog, slot: int, flag: str) -> None:
+    log._ensure_day(DAY)
+    log._slots[slot].setdefault("flags", []).append(flag)
+
+
+def test_ocpp_slot_is_booked_at_the_octopus_off_peak_rate(tmp_path):
+    source = TariffSourceAdapter(_build(IntelligentOctopusGoTariff))
+    log = _log(tmp_path)
+    log.set_price_source(source)
+    _flag_slot(log, 24, "ocpp")  # 12:00, outside the overnight cheap band
+
+    prices = _price_all(log)
+
+    assert prices[24]["import_p"] == pytest.approx(config.IMPORT_LOW)
+
+
+def test_free_import_still_wins_over_the_ocpp_rate(tmp_path):
+    session_store.add(
+        EnergySession(FREE_IMPORT, _at(12, 0), _at(13, 0))
+    )
+    source = TariffSourceAdapter(_build(IntelligentOctopusGoTariff))
+    log = _log(tmp_path)
+    log.set_price_source(source)
+    _flag_slot(log, 24, "ocpp")
+
+    prices = _price_all(log)
+
+    assert prices[24]["import_p"] == 0.0
+    assert prices[24]["session"] == FREE_IMPORT
+
+
+def test_ocpp_flag_does_not_rewrite_a_tariff_without_the_rule(tmp_path):
+    source = TariffSourceAdapter(_build(CosyOctopusTariff))
+    log = _log(tmp_path)
+    log.set_price_source(source)
+    _flag_slot(log, 24, "ocpp")
+
+    prices = _price_all(log)
+
+    assert prices[24]["import_p"] == pytest.approx(
+        source.rates_for_day(DAY)[24].import_p
+    )
+
+
+def test_price_book_has_no_ocpp_rule(tmp_path):
+    source = SlotPriceBookSource()
+
+    assert source.ocpp_import_price_p(DAY, 24) is None

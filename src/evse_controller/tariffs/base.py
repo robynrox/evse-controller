@@ -161,6 +161,16 @@ class Tariff:
         rate = self.get_export_rate(_slot_start(day, slot))
         return None if rate is None else rate * 100.0
 
+    def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Import price to book for a slot charged through an OCPP handoff.
+
+        An Octopus smart tariff normally bills supplier-scheduled charging at
+        its off-peak rate even when the clock time is outside the cheap band.
+        Tariffs that know that rule override this; the default is ``None``,
+        meaning "use the ordinary import price".
+        """
+        return None
+
     def calculate_import_cost(self, kWh, timestamp):
         """Calculate import cost based on time of use rates"""
         return self.get_import_rate(timestamp) * kWh

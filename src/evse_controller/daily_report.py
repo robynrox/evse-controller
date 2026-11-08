@@ -555,6 +555,14 @@ class DailyEnergyLog:
         if flag not in flags:
             flags.append(flag)
 
+    def flag(self, when: datetime, flag: str) -> None:
+        """Mark a slot with a report flag (for example ``ocpp``).
+
+        Public counterpart to :meth:`_flag` for the controller loop.  It is a
+        no-op before the report has observed its first slot.
+        """
+        self._flag(when, flag)
+
     # -- day and slot lifecycle -----------------------------------------
 
     def _ensure_day(self, day: date) -> None:
@@ -678,6 +686,24 @@ class DailyEnergyLog:
             # Sessions are a separate overlay on the raw supplier price.
             import_p = 0.0 if session_kind == FREE_IMPORT else rate.import_p
             export_p = rate.export_p
+
+            # An OCPP handoff can be billed at the tariff's off-peak rate even
+            # when the clock time is outside the cheap band.  A free-import
+            # window is still genuinely 0p and outranks that rule.
+            if session_kind != FREE_IMPORT and "ocpp" in (
+                slot.get("flags") or []
+            ):
+                try:
+                    ocpp_p = (
+                        source.ocpp_import_price_p(self._day, slot["index"])
+                        if source is not None
+                        else None
+                    )
+                except Exception as exc:
+                    warning(f"DAILY_REPORT: OCPP price failed: {exc}")
+                    ocpp_p = None
+                if ocpp_p is not None:
+                    import_p = ocpp_p
 
         slot["prices"] = {
             "import_p": import_p,

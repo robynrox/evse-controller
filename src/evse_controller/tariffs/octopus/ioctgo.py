@@ -8,6 +8,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error
 import time
 import threading
 import queue
+from datetime import date
 from typing import Optional
 
 class IntelligentOctopusGoTariff(Tariff):
@@ -211,6 +212,16 @@ class IntelligentOctopusGoTariff(Tariff):
     def is_expensive_period(self, dayMinute: int) -> bool:
         """No specifically expensive periods in Intelligent Octopus Go"""
         return False
+
+    def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
+        """Book a supplier-scheduled OCPP charge at the off-peak rate.
+
+        Intelligent Octopus bills charging it schedules through OCPP at the
+        cheap rate, even when that slot falls outside the fixed overnight
+        band.  The energy really was bought, so this is a price override for
+        the report, not a zero-priced session.
+        """
+        return config.IMPORT_LOW
 
     def calculate_target_discharge_current(self, current_soc: float, dayMinute: int) -> float:
         """Calculate the appropriate discharge current to hit target SoC at bulk discharge end time.

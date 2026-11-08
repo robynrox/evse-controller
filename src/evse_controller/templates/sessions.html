@@ -156,6 +156,10 @@
         background: #6b7280;
     }
 
+    .cell.session-control::before {
+        background: #7c3aed;
+    }
+
     .cell.selected {
         background: #28a745 !important;
     }
@@ -238,6 +242,10 @@
         background: #6b7280;
     }
 
+    .legend .swatch-control::before {
+        background: #7c3aed;
+    }
+
     .legend .swatch-selected::before {
         background: #28a745;
     }
@@ -300,6 +308,14 @@
 
     .badge-ev_away {
         background: #6b7280;
+    }
+
+    .badge-home_only,
+    .badge-bidirectional,
+    .badge-solar_only,
+    .badge-pause,
+    .badge-ocpp {
+        background: #7c3aed;
     }
 
     .muted {
@@ -388,12 +404,21 @@
                 </span>
             </span>
         </label>
+        {% for entry in control_kinds %}
+        <label class="kind-option">
+            <input type="radio" name="kind" value="{{ entry.kind }}">
+            <span>
+                <span class="kind-title">{{ entry.title }}</span>
+                <span class="kind-detail">{{ entry.detail }}</span>
+            </span>
+        </label>
+        {% endfor %}
     </div>
 
     <div class="strip-wrap">
         <div id="strip" class="strip">
             {% for slot in slots %}
-            <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot in away_slots %} session-away{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
+            <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot in away_slots %} session-away{% endif %}{% if slot.slot in control_slots %} session-control{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
                  data-slot="{{ slot.slot }}"
                  style="background: {{ slot.colour }}"
                  title="{{ slot.time }}{% if slot.rate is not none %} · {{ '%.1f'|format(slot.rate) }}p export{% endif %}">
@@ -422,6 +447,7 @@
         <span class="swatch-free">Free Energy Session</span>
         <span class="swatch-grid">Save Energy Session</span>
         <span class="swatch-away">EV Away</span>
+        <span class="swatch-control">Control session</span>
         <span class="swatch-selected">Selected</span>
         <span class="swatch-now">Now</span>
     </div>

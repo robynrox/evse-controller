@@ -1,7 +1,7 @@
-"""Whole-slot energy sessions and planned EV availability windows.
+"""Whole-slot energy sessions, EV availability and scheduled control modes.
 
-Three kinds of window are supported, all expressed in neutral terms rather
-than one supplier's marketing names:
+Six kinds of window are supported, all expressed in neutral terms rather than
+one supplier's marketing names:
 
 ``free_import``
     The supplier makes import free for the window (a "Happy Hour").  The tariff
@@ -20,6 +20,27 @@ than one supplier's marketing names:
     those slots out because the pack will not be available, but if the EV is
     still connected the normal heuristic keeps running and may charge or
     discharge it.
+
+``home_only``
+    Cover the house load from the pack, conservatively, without planning an
+    export.  This is a temporary control override; the tariff keeps observing.
+
+``bidirectional``
+    Allow load-following charge and discharge.  The tariff keeps observing.
+
+``solar_only``
+    Charge only from solar surplus, with no grid import.  The tariff keeps
+    observing.
+
+``pause``
+    Hold the Wallbox dormant.  The tariff keeps observing.
+
+``ocpp``
+    Hand the Wallbox to the supplier's OCPP schedule.  The tariff keeps
+    observing so history and pricing continue.
+
+Control windows are temporary overrides, not scheduled tariff switches.  A
+manual dashboard command still outranks them.
 
 Windows are quantised to the half-hour tariff slots: ``start`` is floored and
 ``end`` is ceiled to a slot boundary, and ``end`` is exclusive.  Utilities bill
@@ -44,6 +65,16 @@ from evse_controller.utils.logging_config import error
 FREE_IMPORT = "free_import"
 GRID_SUPPORT = "grid_support"
 EV_AWAY = "ev_away"
+HOME_ONLY = "home_only"
+BIDIRECTIONAL = "bidirectional"
+SOLAR_ONLY = "solar_only"
+PAUSE = "pause"
+OCPP = "ocpp"
+
+#: Kinds that temporarily own the Wallbox.  The tariff keeps observing.
+CONTROL_SESSION_KINDS = frozenset(
+    {HOME_ONLY, BIDIRECTIONAL, SOLAR_ONLY, PAUSE, OCPP}
+)
 
 #: Display labels.  Kept out of the stored data so the wording can change (or
 #: be translated) without migrating the file.
@@ -51,6 +82,11 @@ SESSION_LABELS = {
     FREE_IMPORT: "Free Energy Session",
     GRID_SUPPORT: "Save Energy Session",
     EV_AWAY: "EV Away",
+    HOME_ONLY: "Home only",
+    BIDIRECTIONAL: "Bidirectional",
+    SOLAR_ONLY: "Solar only",
+    PAUSE: "Pause",
+    OCPP: "OCPP handoff",
 }
 
 SLOT_MINUTES = 30
@@ -189,6 +225,17 @@ class SessionStore:
         for session in self.sessions:
             if session.covers(when):
                 return session
+        return None
+
+    def control_session(self, when: datetime) -> EnergySession | None:
+        """The enabled control session covering *when*, if any.
+
+        Supplier price windows and EV-availability windows are not control
+        sessions: they change prices or the plan, not who owns the Wallbox.
+        """
+        session = self.active(when)
+        if session is not None and session.kind in CONTROL_SESSION_KINDS:
+            return session
         return None
 
     def upcoming(self, when: datetime) -> list[EnergySession]:

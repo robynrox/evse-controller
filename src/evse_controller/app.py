@@ -53,11 +53,17 @@ from evse_controller.web.policy_report_routes import (
     register_policy_report_routes,
 )
 from evse_controller.energy_sessions import (
+    BIDIRECTIONAL,
+    CONTROL_SESSION_KINDS,
     EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
+    HOME_ONLY,
+    OCPP,
+    PAUSE,
     SLOTS_PER_DAY,
     SESSION_LABELS,
+    SOLAR_ONLY,
     EnergySession,
     session_from_slots,
     session_store,
@@ -430,6 +436,55 @@ def sessions_page():
         free_slots=session_store.slots_for_kind(today, FREE_IMPORT),
         grid_slots=session_store.slots_for_kind(today, GRID_SUPPORT),
         away_slots=session_store.away_slots(today),
+        control_slots=set().union(
+            *(
+                session_store.slots_for_kind(today, kind)
+                for kind in CONTROL_SESSION_KINDS
+            )
+        ),
+        control_kinds=[
+            {
+                "kind": HOME_ONLY,
+                "title": "Home only",
+                "detail": (
+                    "Cover the house load from the battery, conservatively, "
+                    "with no planned export."
+                ),
+            },
+            {
+                "kind": BIDIRECTIONAL,
+                "title": "Bidirectional",
+                "detail": (
+                    "Allow load-following charge and discharge in both "
+                    "directions."
+                ),
+            },
+            {
+                "kind": SOLAR_ONLY,
+                "title": "Solar only",
+                "detail": (
+                    "Charge only from solar surplus; never import from the "
+                    "grid."
+                ),
+            },
+            {
+                "kind": PAUSE,
+                "title": "Pause",
+                "detail": (
+                    "Hold the Wallbox dormant for the window.  The tariff "
+                    "keeps observing and collecting data."
+                ),
+            },
+            {
+                "kind": OCPP,
+                "title": "OCPP handoff",
+                "detail": (
+                    "Hand the Wallbox to the supplier's OCPP schedule.  The "
+                    "tariff keeps observing and prices the import at "
+                    "off-peak."
+                ),
+            },
+        ],
         now_slot=now.hour * 2 + (1 if now.minute >= 30 else 0),
         now=now,
     )
