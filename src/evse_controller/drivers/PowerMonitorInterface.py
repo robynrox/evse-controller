@@ -58,8 +58,12 @@ class PowerMonitorPollingThread(threading.Thread):
                     warning(f"Excessive sleep time calculated: {sleep_time:.3f}s. Limiting to 1.0s")
                     sleep_time = 1.0
                 elif sleep_time < 0:
-                    warning(f"Negative sleep time calculated: {sleep_time:.3f}s. Setting to 0.1s")
-                    sleep_time = 0.1
+                    warning(f"Negative sleep time calculated: {sleep_time:.3f}s. Resuming at the next second")
+                    # Do not retry immediately after a slow fetch.  Skip the
+                    # ticks we missed and align the next sample to a whole
+                    # second, so a slow device cannot make the loop burst.
+                    sleep_time = 1.0 - (now.microsecond / 1_000_000.0)
+                    sleep_time = max(0.05, min(sleep_time, 1.0))
                     
                 time.sleep(sleep_time)
             except Exception as e:

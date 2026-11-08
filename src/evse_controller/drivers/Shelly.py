@@ -31,7 +31,10 @@ class PowerMonitorShelly(PowerMonitorInterface):
         self.posEnergyJoulesCh1 = 0
         self.negEnergyJoulesCh1 = 0
         self._consecutive_failures = 0
-        self.MAX_RETRIES = 5
+        # One retry is enough inside a one-second sampling cycle.  The next
+        # cycle retries anyway, and a long synchronous retry chain delays the
+        # control loop and the next sample.  Total worst-case budget is 0.3 s.
+        self.MAX_RETRIES = 2
         self.BASE_TIMEOUT = 0.1
         self.MAX_TIMEOUT = 1.0
 
@@ -80,6 +83,26 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 else:
                     debug(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
 
+    def last_power(self) -> Power:
+        """The most recent reading without touching the network.
+
+        Use this from another device's update path.  Calling
+        :meth:`getPowerLevels` there can trigger a second synchronous Shelly
+        fetch and double a network stall.
+        """
+        return Power(
+            self.powerCh0,
+            self.pfCh0,
+            self.powerCh1,
+            self.pfCh1,
+            self.voltage,
+            self.unixtime,
+            self.posEnergyJoulesCh0,
+            self.negEnergyJoulesCh0,
+            self.posEnergyJoulesCh1,
+            self.negEnergyJoulesCh1,
+        )
+
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
             lastUnixtime = self.unixtime
@@ -94,8 +117,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.negEnergyJoulesCh1 -= self.powerCh1 * (self.unixtime - lastUnixtime)
             else:
                 self.posEnergyJoulesCh1 += self.powerCh1 * (self.unixtime - lastUnixtime)
-        return Power(self.powerCh0, self.pfCh0, self.powerCh1, self.pfCh1, self.voltage, self.unixtime,
-                     self.posEnergyJoulesCh0, self.negEnergyJoulesCh0, self.posEnergyJoulesCh1, self.negEnergyJoulesCh1)
+        return self.last_power()
 
     def getPower(self) -> Power:
         """Get current power readings from the Shelly device.

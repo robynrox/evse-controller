@@ -1162,9 +1162,9 @@ class EvseController(PowerMonitorObserver):
             secondary_power = power
             if hasattr(self, 'pmon') and self.pmon:
                 try:
-                    primary_power = self.pmon.getPowerLevels()
+                    primary_power = self.pmon.last_power()
                 except Exception as e:
-                    debug(f"Failed to get instantaneous primary power values: {e}")
+                    debug(f"Failed to get cached primary power values: {e}")
 
         # Create a new history entry with all available data
         history_entry = {
