@@ -223,6 +223,7 @@ class DpPlanner:
         discharge_floor_percent: Optional[float] = None,
         target_soc_percent: Optional[float] = 50.0,
         degradation_p_per_kwh: float = 0.0,
+        terminal_energy_value_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
     ):
         if capacity_kwh is None:
@@ -271,6 +272,13 @@ class DpPlanner:
             else float(target_soc_percent)
         )
         self.degradation_p_per_kwh = max(0.0, float(degradation_p_per_kwh))
+        if terminal_energy_value_p_per_kwh < 0:
+            raise ValueError(
+                "terminal_energy_value_p_per_kwh cannot be negative"
+            )
+        self.terminal_energy_value_p_per_kwh = float(
+            terminal_energy_value_p_per_kwh
+        )
         self.horizon_slots = (
             None if horizon_slots is None else max(0, int(horizon_slots))
         )
@@ -421,6 +429,7 @@ class DpPlanner:
                 policy_values=(
                     tuple(
                         self._terminal_penalty(s)
+                        - self._terminal_credit(s)
                         for s in range(n_states)
                     ),
                 ),
@@ -453,7 +462,8 @@ class DpPlanner:
         target_state = self._target_state()
         energy_next: list[float] = [0.0] * n_states
         policy_next: list[float] = [
-            self._terminal_penalty(state) for state in range(n_states)
+            self._terminal_penalty(state) - self._terminal_credit(state)
+            for state in range(n_states)
         ]
         reachable_next: list[bool] = [
             state >= target_state for state in range(n_states)
@@ -729,6 +739,17 @@ class DpPlanner:
         return (
             target - state
         ) * TARGET_SHORTFALL_PENALTY_P_PER_STEP
+
+    def _state_kwh(self, state: int) -> float:
+        return (
+            state * self.soc_step_percent / 100.0 * self.capacity_kwh
+        )
+
+    def _terminal_credit(self, state: int) -> float:
+        """Value of energy left in the pack at the end of the horizon."""
+        if self.terminal_energy_value_p_per_kwh <= 0:
+            return 0.0
+        return self.terminal_energy_value_p_per_kwh * self._state_kwh(state)
 
     def _feasible_next_state(
         self, state: int, template: _ActionTemplate
@@ -1097,9 +1118,14 @@ class DpPlanner:
         if not reachable:
             return None, False
         if self.target_soc_percent is None:
-            # No fixed end-of-day SoC target: choose the cheapest reachable
-            # state within the configured floor and cap.
-            return min(reachable, key=lambda item: item[1])[0], False
+            # No fixed end-of-day SoC target: choose the state with the best
+            # cost after crediting energy left in the pack.  The credit is a
+            # continuation value, so the plan does not stop charging merely
+            # because the horizon has ended.
+            return min(
+                reachable,
+                key=lambda item: item[1] - self._terminal_credit(item[0]),
+            )[0], False
         target_state = self._clamp_state(
             int(
                 math.ceil(
@@ -1112,7 +1138,10 @@ class DpPlanner:
             (state, cost) for state, cost in reachable if state >= target_state
         ]
         if meeting:
-            return min(meeting, key=lambda item: item[1])[0], False
+            return min(
+                meeting,
+                key=lambda item: item[1] - self._terminal_credit(item[0]),
+            )[0], False
         # Relax explicitly: keep the highest reachable SoC, then the cheapest
         # path to it.  This is preferable to returning no plan.
         highest = max(state for state, _ in reachable)

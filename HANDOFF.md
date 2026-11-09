@@ -404,10 +404,14 @@ completed fixes.
   the horizon crosses midnight; otherwise it stops at midnight. Fixed-export
   tariffs still run to the end of day. The shadow DP has no fixed end-of-day
   SoC target: it optimises within the configured protection floor, bulk/export
-  discharge floor, follow floors and charge cap. The live heuristic's target
-  is unchanged. Runs store `horizon_end_slot`, `horizon_end_date`,
-  `horizon_limited_by_export`, a null `target_soc` and per-input
-  `horizon_index` values for cross-day actions.
+  discharge floor, follow floors and charge cap. Energy left at the horizon end
+  carries a continuation value of the cheap replacement cost per DC kWh plus
+  the policy margin, so the final cheap charging slots are not left half-used.
+  The reported cost remains real grid cost; the credit only chooses the
+  terminal state. Runs store `horizon_end_slot`, `horizon_end_date`,
+  `horizon_limited_by_export`, a null `target_soc`, the
+  `terminal_energy_value_p_per_kwh` and per-input `horizon_index` values for
+  cross-day actions.
 - Fixed actions are scored by expected grid cost over the per-slot load
   histogram (`load_samples`), not just the median. The sparse histograms are
   passed through the input builder; slots with many bins are condensed into at

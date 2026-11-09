@@ -1201,6 +1201,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
                 target_soc_percent=None,
                 degradation_p_per_kwh=0.0,
+                terminal_energy_value_p_per_kwh=(
+                    self.dp_terminal_energy_value_p_per_kwh()
+                ),
             )
             result = planner.plan(
                 planner_input.slots, planner_input.initial_soc
@@ -1262,6 +1265,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "charge_cap_percent": self.charge_cap_percent(),
                 "protection_floor_percent": self.absolute_min_soc_percent(),
                 "target_soc_percent": None,
+                "terminal_energy_value_p_per_kwh": (
+                    self.dp_terminal_energy_value_p_per_kwh()
+                ),
                 "discharge_floor_percent": max(
                     self.absolute_min_soc_percent(),
                     float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
@@ -2547,6 +2553,23 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.GRID_CHARGE_REFERENCE_CURRENT
         )
         return (self._import_cheap_p() / 100.0) / max(charge_efficiency, 1e-6)
+
+    def dp_terminal_energy_value_p_per_kwh(self) -> float:
+        """Value of energy left in the pack at the end of a DP horizon.
+
+        The DP otherwise has no reason to fill the last cheap slots, because
+        energy still in the pack after the final slot is free.  Valuing it at
+        the cheap replacement cost per DC kWh, plus a small policy margin,
+        makes charging at the cheap rate worthwhile without making charging at
+        the standard or peak rate look attractive.
+        """
+        charge_efficiency = self.EFFICIENCY_MODEL.charge_efficiency(
+            self.GRID_CHARGE_REFERENCE_CURRENT
+        )
+        replacement_p = self._import_cheap_p() / max(charge_efficiency, 1e-6)
+        return replacement_p + max(
+            0.05, self.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
 
     def _stored_cost_per_dc_kwh_p(self) -> float:
         """Average purchase cost of the energy in the pack, in p/kWh DC.

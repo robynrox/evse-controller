@@ -5081,3 +5081,21 @@ class TestTieredExportVariants:
         assert tariff.import_price_p(datetime.now().date(), 0) == pytest.approx(
             config.IMPORT_LOW
         )
+
+
+class TestTerminalEnergyValue:
+    """The shadow DP should not leave cheap charging slots half-used."""
+
+    def test_terminal_value_is_just_above_cheap_replacement_cost(
+        self, agile_tariff
+    ):
+        efficiency = agile_tariff.EFFICIENCY_MODEL.charge_efficiency(
+            agile_tariff.GRID_CHARGE_REFERENCE_CURRENT
+        )
+        cheap_cost = agile_tariff._import_cheap_p() / efficiency
+        standard_cost = agile_tariff._import_standard_p() / efficiency
+
+        value = agile_tariff.dp_terminal_energy_value_p_per_kwh()
+
+        assert value > cheap_cost
+        assert value < standard_cost

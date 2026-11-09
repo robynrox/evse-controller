@@ -188,6 +188,9 @@ def _build_context(run: dict) -> RunContext:
         None if raw_target is None else _number(raw_target)
     )
     degradation = _number(params.get("degradation_p_per_kwh"), 0.0)
+    terminal_value = _number(
+        params.get("terminal_energy_value_p_per_kwh"), 0.0
+    )
     max_charge = _number(
         params.get("max_charge_current_a"),
         float(config.WALLBOX_MAX_CHARGE_CURRENT),
@@ -267,6 +270,7 @@ def _build_context(run: dict) -> RunContext:
         discharge_floor_percent=discharge_floor,
         target_soc_percent=target,
         degradation_p_per_kwh=degradation,
+        terminal_energy_value_p_per_kwh=terminal_value,
     )
     initial_soc = _number(
         run.get("estimate_soc"),

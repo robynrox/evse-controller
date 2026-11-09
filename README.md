@@ -789,6 +789,14 @@ It never actuates the Wallbox, so a bug in the planner cannot affect the car
 or the house. Each run records the horizon it saw, its chosen actions, the
 estimated and reported SoC, the cost and whether the target was reachable.
 
+The plan credits energy left in the pack at the end of the horizon at the
+cheap replacement cost per DC kWh plus the policy margin. Without that
+continuation value the planner has no reason to fill the last cheap slots,
+because energy still in the pack after the final slot looks free. The credit
+only chooses the terminal state; the reported `total_cost_p` remains the real
+grid cost. The value is recorded as
+`terminal_energy_value_p_per_kwh` in each run's planner parameters.
+
 The SoC estimate is continuous: the estimator integrates measured Wallbox AC
 power through the current-dependent efficiency model, then applies a capped
 Kalman correction when the Wallbox reports a new integer percentage. The

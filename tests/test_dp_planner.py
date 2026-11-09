@@ -444,3 +444,70 @@ def test_real_efficiency_model_plans_a_day():
         for action in result.actions
         if action.kind != "idle"
     )
+
+
+def test_no_terminal_value_leaves_energy_unbought_at_the_horizon_end():
+    p = planner(target_soc_percent=None)
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, initial_soc_percent=50.0)
+
+    assert all(action.kind != "charge" for action in result.actions)
+
+
+def test_terminal_value_fills_a_cheap_slot_at_maximum_current():
+    p = planner(
+        target_soc_percent=None,
+        terminal_energy_value_p_per_kwh=20.0,
+    )
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, initial_soc_percent=50.0)
+
+    charge = [action for action in result.actions if action.kind == "charge"]
+    assert charge
+    assert charge[0].current_a == pytest.approx(10.0)
+    assert result.final_soc > 50.0
+
+
+def test_terminal_value_does_not_justify_an_unprofitable_charge():
+    p = planner(
+        target_soc_percent=None,
+        terminal_energy_value_p_per_kwh=12.0,
+    )
+    slots = [slot(0, import_p=50.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, initial_soc_percent=50.0)
+
+    assert all(action.kind != "charge" for action in result.actions)
+
+
+def test_terminal_value_is_a_continuation_value_not_a_cost_discount():
+    p = planner(
+        target_soc_percent=None,
+        terminal_energy_value_p_per_kwh=20.0,
+    )
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, initial_soc_percent=50.0)
+
+    # The reported cost is real grid cost; the terminal credit only decides
+    # which terminal state is preferred.
+    assert result.total_cost_p == pytest.approx(
+        sum(action.cost_p for action in result.actions)
+    )
+    assert result.total_cost_p > 0.0
+
+
+def test_terminal_value_is_visible_in_the_policy_surface():
+    p = planner(
+        target_soc_percent=None,
+        terminal_energy_value_p_per_kwh=20.0,
+    )
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    policy = p.policy(slots, initial_soc_percent=50.0)
+
+    charge = [action for action in policy.actions if action.kind == "charge"]
+    assert charge
+    assert charge[0].current_a == pytest.approx(10.0)
