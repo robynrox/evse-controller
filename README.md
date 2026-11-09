@@ -692,6 +692,29 @@ plugged back in, a temporary 3 A SoC probe runs until the reported charge
 level changes (or a 90-second timeout), then control returns to SMART. Every
 other override also names itself in the dashboard state line.
 
+##### Automatic OCPP handoff
+
+The `ocpp` section can schedule supplier handoffs without manual session
+creation:
+
+```yaml
+ocpp:
+  auto_enabled: true
+  frequency_days: 7      # 1 = daily, 7 = weekly; capped at 30
+  duration_slots: 2      # one hour
+  window_start: "23:30"
+  window_end: "05:30"
+```
+
+When a handoff is due, the scheduler picks the cheapest contiguous block of
+the requested length inside the window, skips blocks that overlap any existing
+session, and adds a normal OCPP session marked **Auto** on the sessions page.
+The interval is measured from the last handoff's start date and is clamped to
+30 days, so a handoff happens at least monthly even if a longer interval is
+entered. Manual OCPP sessions count towards the interval. Deleting or disabling
+the automatic session is still possible; disabling a single window does not
+stop the scheduler from choosing another when the next interval is due.
+
 All kinds are selected on the **Energy Sessions & EV Availability** page
 (`/sessions`, linked from the dashboard and the schedule page). Click a
 half-hour cell, or drag across several, choose the kind, and add the window. On

@@ -893,6 +893,50 @@ def config_page():
                 if value is not None:
                     setattr(config, f'EXPORT_{key.upper()}', float(value))
 
+            # Automatic supplier OCPP handoff.
+            config.OCPP_AUTO_ENABLED = (
+                request.form.get('ocpp[auto_enabled]') == 'on'
+            )
+            frequency = request.form.get('ocpp[frequency_days]')
+            if frequency is not None:
+                config.OCPP_AUTO_FREQUENCY_DAYS = int(frequency)
+            duration = request.form.get('ocpp[duration_slots]')
+            if duration is not None:
+                config.OCPP_AUTO_DURATION_SLOTS = int(duration)
+            window_start = request.form.get('ocpp[window_start]')
+            if window_start is not None:
+                config.OCPP_AUTO_WINDOW_START = window_start
+            window_end = request.form.get('ocpp[window_end]')
+            if window_end is not None:
+                config.OCPP_AUTO_WINDOW_END = window_end
+
+            from evse_controller.ocpp_auto import (
+                effective_frequency_days,
+            )
+            from evse_controller.price_tiers import parse_clock
+
+            if not (1 <= config.OCPP_AUTO_DURATION_SLOTS <= 12):
+                raise ValueError(
+                    "Automatic OCPP duration must be between 1 and 12 slots"
+                )
+            window_start_min = parse_clock(config.OCPP_AUTO_WINDOW_START)
+            window_end_min = parse_clock(config.OCPP_AUTO_WINDOW_END)
+            if window_start_min == window_end_min:
+                raise ValueError(
+                    "Automatic OCPP window start and end must differ"
+                )
+            window_minutes = (window_end_min - window_start_min) % 1440
+            if window_minutes < 30 * config.OCPP_AUTO_DURATION_SLOTS:
+                raise ValueError(
+                    "Automatic OCPP window is shorter than the selected "
+                    "handoff duration"
+                )
+            # Clamp here as well as in the scheduler so the saved value shows
+            # the real interval rather than a number the scheduler ignores.
+            config.OCPP_AUTO_FREQUENCY_DAYS = effective_frequency_days(
+                config.OCPP_AUTO_FREQUENCY_DAYS
+            )
+
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
                 ("latitude", "WEATHER_LATITUDE"),

@@ -1018,3 +1018,36 @@ class TestPriceTiers:
 
         with pytest.raises(ValueError, match="overlaps"):
             config.build_price_table()
+
+
+class TestAutoOcppConfig:
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_defaults_are_weekly_overnight(self):
+        config = self._config()
+
+        assert config.OCPP_AUTO_ENABLED is False
+        assert config.OCPP_AUTO_FREQUENCY_DAYS == 7
+        assert config.OCPP_AUTO_DURATION_SLOTS == 2
+        assert config.OCPP_AUTO_WINDOW_START == "23:30"
+        assert config.OCPP_AUTO_WINDOW_END == "05:30"
+
+    def test_values_round_trip_and_appear_in_the_page_dict(self):
+        config = self._config()
+        config.OCPP_AUTO_ENABLED = True
+        config.OCPP_AUTO_FREQUENCY_DAYS = 30
+        config.OCPP_AUTO_DURATION_SLOTS = 4
+        config.OCPP_AUTO_WINDOW_START = "01:00"
+        config.OCPP_AUTO_WINDOW_END = "04:00"
+
+        row = config.as_dict()["ocpp"]
+
+        assert row["auto_enabled"] is True
+        assert row["frequency_days"] == 30
+        assert row["duration_slots"] == 4
+        assert row["window_start"] == "01:00"
+        assert row["window_end"] == "04:00"

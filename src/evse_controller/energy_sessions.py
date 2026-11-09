@@ -152,6 +152,8 @@ class EnergySession:
     end: datetime
     enabled: bool = True
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    #: True when the automatic OCPP scheduler created this window.
+    auto: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in SESSION_LABELS:
@@ -196,6 +198,7 @@ class EnergySession:
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "enabled": self.enabled,
+            "auto": self.auto,
         }
 
     @classmethod
@@ -206,6 +209,7 @@ class EnergySession:
             end=data["end"],
             enabled=data.get("enabled", True),
             id=data.get("id") or uuid.uuid4().hex[:12],
+            auto=bool(data.get("auto", False)),
         )
 
 

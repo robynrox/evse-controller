@@ -318,6 +318,10 @@
         background: #7c3aed;
     }
 
+    .badge-auto {
+        background: #0f766e;
+    }
+
     .muted {
         color: #666;
         font-size: 12px;
@@ -463,6 +467,7 @@
             data-enabled="{{ 'true' if session.enabled else 'false' }}">
             <div class="session-main">
                 <span class="badge badge-{{ session.kind }}">{{ session.label }}</span>
+                {% if session.auto %}<span class="badge badge-auto">Auto</span>{% endif %}
                 <strong>{{ session.start.strftime('%a %d %b %H:%M') }}–{{ session.end.strftime('%H:%M') }}</strong>
                 <span class="muted">
                     {{ ((session.end - session.start).total_seconds() // 1800)|int }}

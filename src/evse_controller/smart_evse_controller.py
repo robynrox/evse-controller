@@ -44,6 +44,7 @@ from evse_controller.energy_sessions import (
     SOLAR_ONLY,
     session_store,
 )
+from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
 
 # Setup logging
 logger = setup_logging()
@@ -438,6 +439,53 @@ def _dismiss_active_session() -> None:
 
     session = session_store.control_session(datetime.now())
     _dismissed_session_id = session.id if session is not None else None
+
+
+def _maybe_schedule_auto_ocpp(now: datetime) -> None:
+    """Create the next automatic OCPP handoff when one is due."""
+    if not config.OCPP_AUTO_ENABLED:
+        return
+
+    try:
+        table = config.build_price_table()
+    except Exception as exc:
+        warning(f"Automatic OCPP price table unavailable: {exc}")
+        return
+
+    tariff = tariffManager.get_tariff()
+
+    def price_fn(when: datetime):
+        slot = when.hour * 2 + (1 if when.minute >= 30 else 0)
+        if tariff is not None:
+            try:
+                price = tariff.import_price_p(when.date(), slot)
+                if price is not None:
+                    return float(price)
+            except Exception as exc:
+                debug(f"Automatic OCPP tariff price failed: {exc}")
+        return table.import_price_p(slot * 30)
+
+    try:
+        session = maybe_schedule_auto_ocpp(
+            now,
+            session_store,
+            enabled=True,
+            frequency_days=config.OCPP_AUTO_FREQUENCY_DAYS,
+            duration_slots=config.OCPP_AUTO_DURATION_SLOTS,
+            window_start=config.OCPP_AUTO_WINDOW_START,
+            window_end=config.OCPP_AUTO_WINDOW_END,
+            price_fn=price_fn,
+        )
+    except Exception as exc:
+        warning(f"Automatic OCPP scheduling failed: {exc}")
+        return
+
+    if session is not None:
+        info(
+            "AUTO OCPP scheduled "
+            f"{session.start:%Y-%m-%d %H:%M}–"
+            f"{session.end:%Y-%m-%d %H:%M}"
+        )
 
 
 def _flag_ocpp_slot_if_active() -> None:
@@ -947,7 +995,9 @@ def main():
             # Scheduled control sessions arm their temporary override before
             # the release check, so an expiring session and a starting one
             # cannot both leave the Wallbox ownerless.
-            _sync_session_override(datetime.now())
+            now_for_sessions = datetime.now()
+            _maybe_schedule_auto_ocpp(now_for_sessions)
+            _sync_session_override(now_for_sessions)
 
             # Timed overrides expire here.  Unplug and SoC-probe transitions
             # are handled by the 1 s watcher above.

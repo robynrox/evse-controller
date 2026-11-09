@@ -375,6 +375,58 @@ class Config:
         lambda self, value: self._set_config_value("charging", "startup_state", value)
     )
 
+    # -- automatic OCPP handoff ------------------------------------------
+    #
+    # The supplier handoff is useful periodically even when the heuristic
+    # would otherwise keep control.  A frequency longer than 30 days is
+    # clamped by the scheduler because the handoff must happen at least that
+    # often.
+
+    OCPP_AUTO_ENABLED = property(
+        lambda self: self._get_config_value(
+            "ocpp", "auto_enabled", False
+        ),
+        lambda self, value: self._set_config_value(
+            "ocpp", "auto_enabled", value
+        )
+    )
+
+    OCPP_AUTO_FREQUENCY_DAYS = property(
+        lambda self: self._get_config_int(
+            "ocpp", "frequency_days", 7
+        ),
+        lambda self, value: self._set_config_int(
+            "ocpp", "frequency_days", value, 7
+        )
+    )
+
+    OCPP_AUTO_DURATION_SLOTS = property(
+        lambda self: self._get_config_int(
+            "ocpp", "duration_slots", 2
+        ),
+        lambda self, value: self._set_config_int(
+            "ocpp", "duration_slots", value, 2
+        )
+    )
+
+    OCPP_AUTO_WINDOW_START = property(
+        lambda self: self._get_config_value(
+            "ocpp", "window_start", "23:30"
+        ),
+        lambda self, value: self._set_config_value(
+            "ocpp", "window_start", value
+        )
+    )
+
+    OCPP_AUTO_WINDOW_END = property(
+        lambda self: self._get_config_value(
+            "ocpp", "window_end", "05:30"
+        ),
+        lambda self, value: self._set_config_value(
+            "ocpp", "window_end", value
+        )
+    )
+
     MAX_CHARGE_PERCENT = property(
         lambda self: self._get_config_int("charging", "max_charge_percent", 90),
         lambda self, value: self._set_config_int("charging", "max_charge_percent", value, 90)
@@ -1147,6 +1199,13 @@ class Config:
                     'cheap_windows': self.EXPORT_CHEAP_WINDOWS,
                     'peak_windows': self.EXPORT_PEAK_WINDOWS,
                 },
+            },
+            'ocpp': {
+                'auto_enabled': self.OCPP_AUTO_ENABLED,
+                'frequency_days': self.OCPP_AUTO_FREQUENCY_DAYS,
+                'duration_slots': self.OCPP_AUTO_DURATION_SLOTS,
+                'window_start': self.OCPP_AUTO_WINDOW_START,
+                'window_end': self.OCPP_AUTO_WINDOW_END,
             }
         }
 

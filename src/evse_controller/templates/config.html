@@ -683,6 +683,47 @@
     </div>
 
     <div class="config-section">
+        <h2>Automatic OCPP handoff</h2>
+        <p>
+            Periodically hand the Wallbox to the supplier's OCPP schedule.
+            The scheduler picks the cheapest contiguous block inside the
+            preferred window, avoids overlapping sessions, and enforces a
+            maximum 30-day gap even if a longer interval is entered.
+        </p>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="ocpp[auto_enabled]"
+                    {% if config.ocpp.get('auto_enabled') %}checked{% endif %}>
+                Enable automatic OCPP handoff
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="ocpp_frequency_days">Interval in days (1 = daily, 7 = weekly, maximum 30):</label>
+            <input type="number" id="ocpp_frequency_days" name="ocpp[frequency_days]"
+                   value="{{ config.ocpp.get('frequency_days', 7) }}" min="1" max="30" step="1">
+        </div>
+        <div class="form-group">
+            <label for="ocpp_duration_slots">Handoff length in half-hour slots:</label>
+            <input type="number" id="ocpp_duration_slots" name="ocpp[duration_slots]"
+                   value="{{ config.ocpp.get('duration_slots', 2) }}" min="1" max="12" step="1">
+            <small>Two slots is one hour.</small>
+        </div>
+        <div class="form-group">
+            <label for="ocpp_window_start">Preferred window start (HH:MM):</label>
+            <input type="text" id="ocpp_window_start" name="ocpp[window_start]"
+                   value="{{ config.ocpp.get('window_start', '23:30') }}"
+                   pattern="[0-2][0-9]:[0-5][0-9]" placeholder="23:30">
+        </div>
+        <div class="form-group">
+            <label for="ocpp_window_end">Preferred window end (HH:MM):</label>
+            <input type="text" id="ocpp_window_end" name="ocpp[window_end]"
+                   value="{{ config.ocpp.get('window_end', '05:30') }}"
+                   pattern="[0-2][0-9]:[0-5][0-9]" placeholder="05:30">
+            <small>May cross midnight. The cheapest block in this window is chosen.</small>
+        </div>
+    </div>
+
+    <div class="config-section">
         <h2>Weather (optional)</h2>
         {% set weather = config.get('weather', {}) %}
         <p>
