@@ -15,7 +15,8 @@
             PAUSE: "/static/images/On-Off_black.svg",
             SMART: "/static/images/SMART_black.svg",
             FREERUN: "/static/images/Freerun_black.svg",
-            OCPP: "/static/images/OCPP_ON_black.svg"
+            OCPP: "/static/images/OCPP_ON_black.svg",
+            RESET: "/static/images/RESET_red.svg"
         };
 </script>
 <style>
@@ -312,10 +313,6 @@
             </div>
         </div>
         <div id="link-health" class="link-health" hidden></div>
-        {% if wallbox_reset_available %}
-        <button type="button" class="reset-wallbox-btn"
-                onclick="resetWallbox()">Reset Wallbox</button>
-        {% endif %}
         <div class="nav-links">
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
             <a href="{{ url_for('daily_report_today') }}">Energy Report →</a>
@@ -375,6 +372,11 @@
     <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="ocpp-icon" alt="OCPP Mode">
     </button>
+    {% if wallbox_reset_available %}
+    <button class="svg-button" onclick="resetWallbox()" title="Restart the Wallbox (asks for confirmation)">
+        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="reset-icon" alt="Reset Wallbox">
+    </button>
+    {% endif %}
     <button onclick="toggleLegend()">Help</button>
 </div>
 
@@ -443,6 +445,14 @@
                     <strong>OCPP Mode:</strong> Enter OCPP mode - EVSE controlled via OCPP protocol
                 </div>
             </div>
+            {% if wallbox_reset_available %}
+            <div class="legend-item">
+                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="legend-reset-icon" alt="Reset Wallbox icon">
+                <div class="legend-text">
+                    <strong>Reset Wallbox:</strong> Restart the charger (asks for confirmation)
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -483,21 +493,6 @@
 
     .status-item strong {
         color: #495057;
-    }
-
-    .reset-wallbox-btn {
-        margin: 0 0 10px 0;
-        padding: 4px 10px;
-        font-size: 12px;
-        background: #fff;
-        color: #b02a37;
-        border: 1px solid #dc3545;
-        border-radius: 4px;
-        cursor: pointer;
-    }
-
-    .reset-wallbox-btn:hover {
-        background: #f8d7da;
     }
 
     .svg-button-container {
@@ -690,6 +685,10 @@
         document.getElementById('smart-icon').src = ICONS.SMART;
         document.getElementById('free-run-icon').src = ICONS.FREERUN;
         document.getElementById('ocpp-icon').src = ICONS.OCPP;
+        const resetIcon = document.getElementById('reset-icon');
+        if (resetIcon) {
+            resetIcon.src = ICONS.RESET;
+        }
 
         // Set legend icons
         document.getElementById('legend-unplug-icon').src = ICONS.UNPLUG;
@@ -702,6 +701,10 @@
         document.getElementById('legend-smart-icon').src = ICONS.SMART;
         document.getElementById('legend-free-run-icon').src = ICONS.FREERUN;
         document.getElementById('legend-ocpp-icon').src = ICONS.OCPP;
+        const legendResetIcon = document.getElementById('legend-reset-icon');
+        if (legendResetIcon) {
+            legendResetIcon.src = ICONS.RESET;
+        }
     });
 
     function resetWallbox() {
