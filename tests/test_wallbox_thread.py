@@ -1128,12 +1128,35 @@ class TestWallboxRestartStatus(TestCase):
         assert self.thread._handle_comms_failure() is False
         assert self.thread.restart_status() is None
 
-    def test_first_successful_read_clears_the_restart_label(self):
-        self.thread._restart_started_at = time.time()
+    def test_first_successful_read_after_the_minimum_clears_the_label(self):
+        self.thread._restart_started_at = time.time() - 100.0
 
         self.thread._update_state()
 
         assert self.thread.restart_status() is None
+
+    def test_early_successful_read_does_not_clear_the_label(self):
+        # The charger can still answer immediately after the API call, before
+        # it has actually started rebooting.
+        self.thread._restart_started_at = time.time()
+
+        self.thread._update_state()
+
+        assert self.thread.restart_status() is not None
+
+    def test_last_restart_transition_survives_the_label(self):
+        self.thread._restart_started_at = time.time() - 100.0
+        self.thread._last_restart_started_at = (
+            self.thread._restart_started_at
+        )
+
+        self.thread._update_state()
+
+        status = self.thread.last_transition_status()
+        assert status is not None
+        assert status["label"] == "Restart"
+        assert status["active"] is False
+        assert status["elapsed_seconds"] >= 100.0
 
     def test_manual_reset_starts_the_restart_label(self):
         self._reset_thread()

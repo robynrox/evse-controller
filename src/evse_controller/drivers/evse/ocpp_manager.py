@@ -64,9 +64,13 @@ class OCPPManager:
         # so the dashboard does not show DISCONNECTED/ERROR while it settles.
         self.OCPP_SWITCH_MIN_SECONDS = 60.0
         self.OCPP_SWITCH_TIMEOUT_SECONDS = 180.0
+        self.TRANSITION_RETENTION_SECONDS = 600.0
         self._transition_started_at: Optional[float] = None
         self._transition_target: Optional[bool] = None
         self._transition_confirmed_at: Optional[float] = None
+        self._last_transition_label: Optional[str] = None
+        self._last_transition_started_at: Optional[float] = None
+        self._last_transition_finished_at: Optional[float] = None
 
     def start(self):
         """Start the OCPP manager worker threads"""
@@ -119,9 +123,15 @@ class OCPPManager:
                 self._transition_started_at is None
                 or self._transition_target != target_state
             ):
-                self._transition_started_at = time.time()
+                now = time.time()
+                self._transition_started_at = now
                 self._transition_target = target_state
                 self._transition_confirmed_at = None
+                self._last_transition_label = (
+                    "OCPP On" if target_state else "OCPP Off"
+                )
+                self._last_transition_started_at = now
+                self._last_transition_finished_at = None
         command = OCPPCommand.SET_ENABLED if target_state else OCPPCommand.SET_DISABLED
         job = {
             'command': command,
@@ -157,9 +167,35 @@ class OCPPManager:
         return label, elapsed
 
     def _clear_transition(self) -> None:
+        if self._transition_started_at is not None:
+            self._last_transition_finished_at = time.time()
         self._transition_started_at = None
         self._transition_target = None
         self._transition_confirmed_at = None
+
+    def last_transition_status(
+        self, now: Optional[float] = None
+    ) -> Optional[dict]:
+        """The latest OCPP transition and its age, including after settling."""
+        started = self._last_transition_started_at
+        if started is None:
+            return None
+        now = time.time() if now is None else float(now)
+        active = self._transition_started_at is not None
+        finished = self._last_transition_finished_at
+        if (
+            not active
+            and finished is not None
+            and now - finished > self.TRANSITION_RETENTION_SECONDS
+        ):
+            return None
+        return {
+            "label": self._last_transition_label or "OCPP",
+            "started_at": started,
+            "elapsed_seconds": max(0.0, now - started),
+            "active": active,
+            "source": "ocpp",
+        }
 
     def _has_credentials(self) -> bool:
         """Check if required credentials are available"""

@@ -47,3 +47,62 @@ def test_regular_wallbox_state_returns_when_settled():
         ocpp_manager, "transition_status", return_value=None
     ):
         assert controller.get_wallbox_state_label() == "DISCONNECTED"
+
+
+def test_transition_line_uses_the_most_recent_event():
+    controller = _controller(None)
+    controller.evse.last_transition_status = Mock(
+        return_value={
+            "label": "Restart",
+            "started_at": 100.0,
+            "elapsed_seconds": 50.0,
+            "active": True,
+            "source": "wallbox",
+        }
+    )
+
+    with patch.object(
+        ocpp_manager,
+        "last_transition_status",
+        return_value={
+            "label": "OCPP On",
+            "started_at": 200.0,
+            "elapsed_seconds": 10.0,
+            "active": True,
+            "source": "ocpp",
+        },
+    ):
+        status = controller.get_transition_status()
+
+    assert status["label"] == "OCPP On"
+    assert status["elapsed_seconds"] == 10.0
+    assert status["active"] is True
+
+
+def test_transition_line_prefers_a_later_restart():
+    controller = _controller(None)
+    controller.evse.last_transition_status = Mock(
+        return_value={
+            "label": "Restart",
+            "started_at": 300.0,
+            "elapsed_seconds": 5.0,
+            "active": True,
+            "source": "wallbox",
+        }
+    )
+
+    with patch.object(
+        ocpp_manager,
+        "last_transition_status",
+        return_value={
+            "label": "OCPP On",
+            "started_at": 100.0,
+            "elapsed_seconds": 205.0,
+            "active": False,
+            "source": "ocpp",
+        },
+    ):
+        status = controller.get_transition_status()
+
+    assert status["label"] == "Restart"
+    assert status["source"] == "wallbox"

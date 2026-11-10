@@ -289,14 +289,17 @@ completed fixes.
   "To OCPP" or "From OCPP" for at least 60 s after a request (3-minute
   timeout, cleared early on persistent API failure).
   `WallboxThread.restart_status()` reports "Restarting" from a successful
-  reset request until the first successful Modbus read, with a 10-minute
-  timeout. `EvseController.get_wallbox_state_label()` puts these in the
-  measurements' Wallbox State row; reset takes priority. `/api/ext_status`
-  recomputes the label on each poll so elapsed seconds keep moving. The
-  dashboard has a red **RESET** SVG button left of Help, shown only when the
-  Wallbox credentials and serial are configured; manual resets start the
-  label immediately, and automatic resets are suppressed while a reboot is in
-  progress.
+  reset request until the first successful Modbus read after a 90-second
+  minimum, with a 10-minute timeout. `EvseController.get_wallbox_state_label()`
+  puts these in the measurements' Wallbox State row; reset takes priority.
+  `get_transition_status()` returns the latest event's label, age and active
+  flag; a line to the right of Help shows `OCPP On 30s ago`,
+  `OCPP Off 40s ago` or `Restart 326s ago`, keeping the timer for 10 minutes
+  after the label clears. `/api/ext_status` recomputes all of this on each
+  poll so elapsed seconds keep moving. The command row has a red **RESET**
+  SVG button left of Help, shown only when the Wallbox credentials and serial
+  are configured; manual resets start the label immediately, and automatic
+  resets are suppressed while a reboot is in progress.
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,

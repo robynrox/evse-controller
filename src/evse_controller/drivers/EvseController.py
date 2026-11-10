@@ -746,6 +746,50 @@ class EvseController(PowerMonitorObserver):
 
         return log_msg, log_state
 
+    def get_transition_status(self):
+        """The most recent OCPP/restart transition and its age.
+
+        This is separate from the Wallbox State label: the state row may have
+        returned to Disconnected or another valid state while the user still
+        wants to see how long the last transition has been running.
+        """
+        candidates = []
+
+        restart = getattr(self.evse, "last_transition_status", None)
+        if callable(restart):
+            try:
+                status = restart()
+            except Exception as exc:
+                debug(f"Could not read Wallbox transition history: {exc}")
+                status = None
+            if status:
+                candidates.append(status)
+
+        try:
+            from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+
+            status = ocpp_manager.last_transition_status()
+        except Exception as exc:
+            debug(f"Could not read OCPP transition history: {exc}")
+            status = None
+        if status:
+            candidates.append(status)
+
+        if not candidates:
+            return None
+        latest = max(
+            candidates, key=lambda item: item.get("started_at", 0.0)
+        )
+        return {
+            "label": latest.get("label") or "Transition",
+            "started_at": latest.get("started_at"),
+            "elapsed_seconds": round(
+                float(latest.get("elapsed_seconds", 0.0)), 1
+            ),
+            "active": bool(latest.get("active")),
+            "source": latest.get("source", ""),
+        }
+
     def get_wallbox_state_label(self) -> str:
         """The Wallbox State row, with timed switch/reboot labels.
 

@@ -1310,6 +1310,7 @@ def get_extended_status():
             config.SHELLY_PRIMARY_URL,
             config.SHELLY_SECONDARY_URL,
         ),
+        'transition': evseController.get_transition_status(),
     })
 
 @app.route('/api/tariff/dashboard_html', methods=['GET'])

@@ -374,3 +374,26 @@ class TestOCPPTransitionStatus(TestCase):
         label, _ = self.manager.transition_status(now=start + 5)
 
         self.assertEqual(label, "From OCPP")
+
+    def test_last_transition_survives_after_the_label_clears(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        start = self.manager._transition_started_at
+        self.manager._transition_confirmed_at = start + 5
+
+        self.assertIsNone(
+            self.manager.transition_status(now=start + 61)
+        )
+        # transition_status used a synthetic clock; align the finish stamp
+        # with it before checking retention.
+        self.manager._last_transition_finished_at = start + 61
+
+        status = self.manager.last_transition_status(now=start + 62)
+        self.assertIsNotNone(status)
+        self.assertEqual(status["label"], "OCPP On")
+        self.assertFalse(status["active"])
+        self.assertAlmostEqual(status["elapsed_seconds"], 62.0)
+
+        self.assertIsNone(
+            self.manager.last_transition_status(now=start + 61 + 601)
+        )

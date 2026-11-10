@@ -378,6 +378,7 @@
     </button>
     {% endif %}
     <button onclick="toggleLegend()">Help</button>
+    <span id="transition-status" class="transition-status" hidden></span>
 </div>
 
 <div class="legend-container">
@@ -501,6 +502,19 @@
         gap: 10px;
         flex-wrap: wrap;
         align-items: center;
+    }
+
+    .transition-status {
+        align-self: center;
+        padding: 0 4px;
+        font-size: 12px;
+        color: #6c757d;
+        white-space: nowrap;
+    }
+
+    .transition-status.active {
+        color: #b45309;
+        font-weight: 600;
     }
     
     @media (min-width: 801px) {
@@ -972,6 +986,36 @@
             box.hidden = false;
         }
 
+        function formatTransitionAge(seconds) {
+            const total = Math.max(0, Math.round(Number(seconds) || 0));
+            if (total < 3600) {
+                return total + 's';
+            }
+            const hours = Math.floor(total / 3600);
+            const minutes = Math.floor((total % 3600) / 60);
+            return hours + 'h ' + minutes + 'm';
+        }
+
+        function renderTransitionStatus(transition) {
+            const element = document.getElementById('transition-status');
+            if (!element) {
+                return;
+            }
+            if (!transition || !transition.label) {
+                element.hidden = true;
+                element.textContent = '';
+                return;
+            }
+            element.hidden = false;
+            element.textContent =
+                transition.label + ' ' +
+                formatTransitionAge(transition.elapsed_seconds) + ' ago';
+            element.classList.toggle('active', !!transition.active);
+            element.title = transition.active
+                ? 'Transition in progress'
+                : 'Last transition finished';
+        }
+
         async function updateStatus() {
             try {
                 const response = await fetch('/api/ext_status');
@@ -1025,6 +1069,7 @@
                 }
 
                 renderLinkHealth(data.poll_health);
+                renderTransitionStatus(data.transition);
 
                 // Update measurements display if available
                 if (data.measurements) {

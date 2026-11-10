@@ -366,10 +366,17 @@ API confirms and the minimum has elapsed, with a three-minute timeout so a
 failed switch eventually reveals the real state.
 
 A charger reboot shows `Restarting (30s)` from the successful reset request
-until the first Modbus read succeeds again, or for ten minutes if the charger
-does not come back. A reset label takes priority over an OCPP switch label.
-The elapsed seconds are recomputed on every status poll, so they keep
+until the first Modbus read after a 90-second minimum, or for ten minutes if
+the charger does not come back. The minimum stops an early pre-reboot poll
+from clearing the label. A reset label takes priority over an OCPP switch
+label. The elapsed seconds are recomputed on every status poll, so they keep
 advancing even if the last Shelly sample is stale.
+
+A separate line to the right of **Help** keeps the latest transition and its
+age: `OCPP On 30s ago`, `OCPP Off 40s ago` or `Restart 326s ago`. It is amber
+while the transition is active, grey once it has settled, and remains visible
+for ten minutes after it finishes. This keeps the timer available even after
+the Wallbox State row has returned to a valid state such as Disconnected.
 
 The command row has a red **RESET** button, immediately left of **Help**,
 when the Wallbox username, password and serial are configured. It asks
