@@ -770,6 +770,7 @@ def print_usage_instructions():
     print("f | flux: Switch to Octopus Flux tariff")
     print("cosy: Switch to Cosy Octopus tariff")
     print("u | unplug: Allow the vehicle to be unplugged")
+    print("reset: Manually restart the Wallbox (asks for confirmation in the UI)")
     print("z | freerun | disable-ocpp: Turn off OCPP if it is on and enter free-running state")
     print("enable-ocpp: Turn on OCPP mode and monitor Wallbox state only")
     print("solar: Enter solar-only charging mode")
@@ -933,6 +934,24 @@ def main():
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
+                case "reset":
+                    reset = getattr(
+                        evseController.evse, "request_reset", None
+                    )
+                    if callable(reset):
+                        if reset():
+                            print("Manual Wallbox reset requested")
+                        else:
+                            print(
+                                "Wallbox reset not started; it is already "
+                                "restarting or credentials are missing"
+                            )
+                    else:
+                        print(
+                            "Manual Wallbox reset is not available for this "
+                            "EVSE"
+                        )
+                    nextStateCheck = time.time()
                 case "z" | "freerun" | "disable-ocpp":
                     success = enter_freerun_mode()
                     _set_override(

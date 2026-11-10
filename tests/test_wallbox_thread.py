@@ -1134,3 +1134,56 @@ class TestWallboxRestartStatus(TestCase):
         self.thread._update_state()
 
         assert self.thread.restart_status() is None
+
+    def test_manual_reset_starts_the_restart_label(self):
+        self._reset_thread()
+
+        assert self.thread.request_reset() is True
+        assert self.thread._restart_started_at is not None
+        api = self.thread._wallbox_api_client
+        deadline = time.time() + 2
+        while not api.reset_called and time.time() < deadline:
+            time.sleep(0.01)
+        assert api.reset_called
+
+    def test_manual_reset_requires_credentials(self):
+        self.thread._wallbox_username = ""
+        self.thread._wallbox_password = ""
+        self.thread._wallbox_serial = ""
+
+        assert self.thread.request_reset() is False
+        assert self.thread._restart_started_at is None
+
+    def test_manual_reset_rejects_a_duplicate(self):
+        self._reset_thread()
+        self.thread._restart_started_at = time.time()
+
+        assert self.thread.request_reset() is False
+
+    def test_manual_reset_failure_clears_the_label(self):
+        class FailingApi(MockWallboxApi):
+            def __init__(self, username, password):
+                super().__init__(username, password)
+                self.attempts = 0
+
+            def restartCharger(self, serial):
+                self.attempts += 1
+                raise RuntimeError("API down")
+
+        self._reset_thread()
+        api = FailingApi("u", "p")
+        self.thread._wallbox_api_client = api
+
+        assert self.thread.request_reset() is True
+        deadline = time.time() + 2
+        while not api.attempts and time.time() < deadline:
+            time.sleep(0.01)
+        assert api.attempts
+        assert self.thread.restart_status() is None
+
+    def test_automatic_reset_does_not_stack_on_a_manual_reboot(self):
+        self._reset_thread()
+        self.thread._restart_started_at = time.time()
+
+        assert self.thread._handle_comms_failure() is False
+        assert self.thread._wallbox_api_client.reset_called is False

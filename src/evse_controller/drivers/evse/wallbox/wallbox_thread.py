@@ -297,12 +297,70 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             return None
         return "Restarting", elapsed
 
+    def request_reset(self) -> bool:
+        """Request a manual Wallbox reboot.
+
+        The API call runs off the control thread so a slow cloud request does
+        not stall the main loop.  The restart label starts immediately and is
+        cleared if the request fails.
+        """
+        started = self._restart_started_at
+        if (
+            started is not None
+            and time.time() - started < self.RESTART_TIMEOUT_SECONDS
+        ):
+            warning("A Wallbox reset is already in progress")
+            return False
+        if not all(
+            [
+                self._wallbox_username,
+                self._wallbox_password,
+                self._wallbox_serial,
+            ]
+        ):
+            error(
+                "Cannot reset via API - missing credentials or serial number"
+            )
+            return False
+
+        self._restart_started_at = time.time()
+
+        def _run_reset():
+            try:
+                if self._wallbox_api_client is None:
+                    self._wallbox_api_client = Wallbox(
+                        self._wallbox_username,
+                        self._wallbox_password,
+                    )
+                self._wallbox_api_client.authenticate()
+                self._wallbox_api_client.restartCharger(self._wallbox_serial)
+                info("Manual Wallbox reset command sent successfully")
+            except Exception as exc:
+                self._restart_started_at = None
+                error(f"Failed to reset charger via API: {exc}")
+
+        threading.Thread(
+            target=_run_reset,
+            name="ManualWallboxReset",
+            daemon=True,
+        ).start()
+        return True
+
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""
         with self._state_lock:
             # Don't attempt reset if we're in FREERUN state
             if self._state.evse_state == EvseState.FREERUN:
                 warning("Skipping comms failure handling in FREERUN state - not attempting API reset")
+                return False
+            if (
+                self._restart_started_at is not None
+                and time.time() - self._restart_started_at
+                < self.RESTART_TIMEOUT_SECONDS
+            ):
+                debug(
+                    "Wallbox reset already in progress; not resetting again"
+                )
                 return False
             
             consecutive_errors = self._state.consecutive_connection_errors

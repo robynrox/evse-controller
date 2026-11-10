@@ -371,6 +371,13 @@ does not come back. A reset label takes priority over an OCPP switch label.
 The elapsed seconds are recomputed on every status poll, so they keep
 advancing even if the last Shelly sample is stale.
 
+The status panel has a **Reset Wallbox** button. It asks
+“Are you sure you want to manually reset the Wallbox?” and then uses the same
+API reset path. A manual reset starts the label immediately, and an automatic
+reset is suppressed while any reboot is in progress. On desktop the
+real-time measurements panel sizes to its content and grows leftwards from its
+right-hand anchor rather than clipping long values.
+
 ##### IOCTGO_AGILEOUT dashboard
 
 The tariff dashboard shows a compact decision line above the 48-slot Agile

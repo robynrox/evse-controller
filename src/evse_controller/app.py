@@ -86,6 +86,7 @@ VALID_COMMANDS = {
     'flux': 'Switch to Octopus Flux tariff',
     'cosy': 'Switch to Cosy Octopus tariff',
     'unplug': 'Prepare for cable removal',
+    'reset': 'Manually restart the Wallbox',
     'freerun': 'Turn off OCPP mode if it is on, and enter FREERUN mode',
     'ocpp': 'Turn on OCPP mode in which a third party controls the Wallbox',
     'solar': 'Solar-only charging mode',

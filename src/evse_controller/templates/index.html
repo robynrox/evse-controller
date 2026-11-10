@@ -312,6 +312,8 @@
             </div>
         </div>
         <div id="link-health" class="link-health" hidden></div>
+        <button type="button" class="reset-wallbox-btn"
+                onclick="resetWallbox()">Reset Wallbox</button>
         <div class="nav-links">
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
             <a href="{{ url_for('daily_report_today') }}">Energy Report →</a>
@@ -481,6 +483,21 @@
         color: #495057;
     }
 
+    .reset-wallbox-btn {
+        margin: 0 0 10px 0;
+        padding: 4px 10px;
+        font-size: 12px;
+        background: #fff;
+        color: #b02a37;
+        border: 1px solid #dc3545;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .reset-wallbox-btn:hover {
+        background: #f8d7da;
+    }
+
     .svg-button-container {
         margin-top: 15px;
         display: flex;
@@ -512,6 +529,20 @@
         .measurements-panel {
             flex-basis: 100%;
             order: -1; /* Place above the buttons on small screens */
+        }
+    }
+
+    /* Desktop: let the panel size to its content and grow to the left from
+       its right-hand anchor, rather than clipping or wrapping long values. */
+    @media (min-width: 801px) {
+        .measurements-panel.desktop-measurements {
+            width: auto;
+            min-width: 230px;
+            max-width: 320px;
+        }
+
+        .header-content {
+            margin-right: 340px;
         }
     }
 
@@ -671,6 +702,15 @@
         document.getElementById('legend-ocpp-icon').src = ICONS.OCPP;
     });
 
+    function resetWallbox() {
+        if (!window.confirm(
+            'Are you sure you want to manually reset the Wallbox?'
+        )) {
+            return;
+        }
+        sendCommand('reset');
+    }
+
     async function sendCommand(command) {
         try {
             const response = await fetch('/api/control/command', {
@@ -680,7 +720,6 @@
                 },
                 body: JSON.stringify({ command: command })
             });
-
             const data = await response.json();
 
             if (!response.ok) {
