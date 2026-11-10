@@ -1063,3 +1063,74 @@ class TestWallboxThread(TestCase):
             thread.stop()
             thread.join(timeout=1)
             self.mock_client.simulate_communication_failure(False)
+
+
+class TestWallboxRestartStatus(TestCase):
+    """A reboot is reported with elapsed time until Modbus recovers."""
+
+    def setUp(self):
+        WallboxThread._instance = None
+        self.mock_client = MockModbusClient()
+        self.thread = WallboxThread(
+            "dummy_host",
+            modbus_client=self.mock_client,
+            poll_interval=0.1,
+        )
+
+    def tearDown(self):
+        if WallboxThread._instance is not None:
+            WallboxThread._instance.stop()
+            WallboxThread._instance = None
+        if self.thread.is_alive():
+            self.thread.stop()
+            self.thread.join(timeout=1)
+        self.mock_client.simulate_communication_failure(False)
+
+    def _reset_thread(self):
+        self.thread._wallbox_username = "test_user"
+        self.thread._wallbox_password = "test_pass"
+        self.thread._wallbox_serial = "TEST123"
+        self.thread._wallbox_api_client = MockWallboxApi(
+            "test_user", "test_pass"
+        )
+        self.thread._state.consecutive_connection_errors = 10
+        self.thread._last_modbus_error = "timed out"
+
+    def test_successful_reset_starts_a_timed_restart_label(self):
+        self._reset_thread()
+
+        assert self.thread._handle_comms_failure() is True
+        started = self.thread._restart_started_at
+        assert started is not None
+
+        label, elapsed = self.thread.restart_status(now=started + 30)
+
+        assert label == "Restarting"
+        assert elapsed == 30
+
+    def test_restart_label_times_out(self):
+        self._reset_thread()
+        self.thread._handle_comms_failure()
+        started = self.thread._restart_started_at
+
+        assert self.thread.restart_status(now=started + 599) is not None
+        assert self.thread.restart_status(now=started + 601) is None
+        assert self.thread._restart_started_at is None
+
+    def test_failed_reset_does_not_show_restarting(self):
+        class FailingApi(MockWallboxApi):
+            def restartCharger(self, serial):
+                raise RuntimeError("API down")
+
+        self._reset_thread()
+        self.thread._wallbox_api_client = FailingApi("u", "p")
+
+        assert self.thread._handle_comms_failure() is False
+        assert self.thread.restart_status() is None
+
+    def test_first_successful_read_clears_the_restart_label(self):
+        self.thread._restart_started_at = time.time()
+
+        self.thread._update_state()
+
+        assert self.thread.restart_status() is None

@@ -285,6 +285,14 @@ completed fixes.
   existing one-second dashboard poll renders a compact status row without any
   extra device traffic. A poll is one complete read; internal retries are not
   counted separately.
+- **Wallbox transition labels.** `OCPPManager.transition_status()` reports
+  "Switching to/from OCPP" for at least 60 s after a request (3-minute
+  timeout, cleared early on persistent API failure).
+  `WallboxThread.restart_status()` reports "Restarting" from a successful
+  reset request until the first successful Modbus read, with a 10-minute
+  timeout. `EvseController.get_wallbox_state_label()` puts these in the
+  measurements' Wallbox State row; reset takes priority. `/api/ext_status`
+  recomputes the label on each poll so elapsed seconds keep moving.
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,

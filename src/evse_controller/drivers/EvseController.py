@@ -746,6 +746,37 @@ class EvseController(PowerMonitorObserver):
 
         return log_msg, log_state
 
+    def get_wallbox_state_label(self) -> str:
+        """The Wallbox State row, with timed switch/reboot labels.
+
+        A reset takes priority because it explains why the charger is
+        unreachable.  An OCPP switch otherwise masks DISCONNECTED/ERROR for
+        the minute or so the charger needs to apply it.
+        """
+        restart = getattr(self.evse, "restart_status", None)
+        if callable(restart):
+            try:
+                status = restart()
+            except Exception as exc:
+                debug(f"Could not read Wallbox restart status: {exc}")
+                status = None
+            if status is not None:
+                label, elapsed = status
+                return f"{label} ({max(0, int(elapsed))}s)"
+
+        try:
+            from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+
+            status = ocpp_manager.transition_status()
+        except Exception as exc:
+            debug(f"Could not read OCPP transition status: {exc}")
+            status = None
+        if status is not None:
+            label, elapsed = status
+            return f"{label} ({max(0, int(elapsed))}s)"
+
+        return self.chargerState.name if self.chargerState else "UNKNOWN"
+
     def _build_measurements_data(self, power, evse_power=0, desired_evse_current=0, primary_power=None, secondary_power=None):
         """
         Build a structured data object with power values from all channels.
@@ -845,7 +876,7 @@ class EvseController(PowerMonitorObserver):
             "evse_current": self.evseCurrent,
             "target_current": desired_evse_current,
             "soc": round(power.soc) if power.soc is not None else -1,
-            "charger_state": self.chargerState.name if self.chargerState else "UNKNOWN"
+            "charger_state": self.get_wallbox_state_label()
         }
 
         # Add EVSE power separately if configured

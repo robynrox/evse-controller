@@ -59,6 +59,15 @@ class OCPPManager:
         self.base_delay = 5  # seconds
         self.max_delay = 60  # 1 minute maximum backoff to reduce wait times
 
+        # The charger takes roughly a minute to apply an OCPP change even
+        # after the API reports success.  Keep a short-lived transition label
+        # so the dashboard does not show DISCONNECTED/ERROR while it settles.
+        self.OCPP_SWITCH_MIN_SECONDS = 60.0
+        self.OCPP_SWITCH_TIMEOUT_SECONDS = 180.0
+        self._transition_started_at: Optional[float] = None
+        self._transition_target: Optional[bool] = None
+        self._transition_confirmed_at: Optional[float] = None
+
     def start(self):
         """Start the OCPP manager worker threads"""
         if self._worker_thread is None or not self._worker_thread.is_alive():
@@ -90,6 +99,29 @@ class OCPPManager:
 
     def set_state(self, target_state: bool):
         """Request to set OCPP to a specific state"""
+        target_state = bool(target_state)
+        current = self.state
+        # A request that reverses an in-flight switch must start the new
+        # transition even if the manager has not yet caught up.
+        active_conflict = (
+            self._transition_started_at is not None
+            and self._transition_target != target_state
+        )
+        # Do not flash a transition when the charger is already in the
+        # requested state, or when startup is merely confirming the default
+        # disabled state from an unknown starting point.
+        starts_transition = active_conflict or not (
+            current == target_state
+            or (current is None and target_state is False)
+        )
+        if starts_transition:
+            if (
+                self._transition_started_at is None
+                or self._transition_target != target_state
+            ):
+                self._transition_started_at = time.time()
+                self._transition_target = target_state
+                self._transition_confirmed_at = None
         command = OCPPCommand.SET_ENABLED if target_state else OCPPCommand.SET_DISABLED
         job = {
             'command': command,
@@ -98,6 +130,36 @@ class OCPPManager:
             'attempts': 0
         }
         self.request_queue.put(job)
+
+    def transition_status(
+        self, now: Optional[float] = None
+    ) -> Optional[tuple[str, float]]:
+        """The current OCPP switch label and elapsed seconds, if active."""
+        started = self._transition_started_at
+        if started is None:
+            return None
+        now = time.time() if now is None else float(now)
+        elapsed = now - started
+        if elapsed >= self.OCPP_SWITCH_TIMEOUT_SECONDS:
+            self._clear_transition()
+            return None
+        if (
+            self._transition_confirmed_at is not None
+            and elapsed >= self.OCPP_SWITCH_MIN_SECONDS
+        ):
+            self._clear_transition()
+            return None
+        label = (
+            "Switching to OCPP"
+            if self._transition_target
+            else "Switching from OCPP"
+        )
+        return label, elapsed
+
+    def _clear_transition(self) -> None:
+        self._transition_started_at = None
+        self._transition_target = None
+        self._transition_confirmed_at = None
 
     def _has_credentials(self) -> bool:
         """Check if required credentials are available"""
@@ -292,6 +354,11 @@ class OCPPManager:
             target_state = job.get('target_state', self.state)
             old_state = self.state
             self.state = target_state
+            if (
+                self._transition_target == target_state
+                and self._transition_started_at is not None
+            ):
+                self._transition_confirmed_at = time.time()
             
             # Publish state change event
             event_type = EventType.OCPP_ENABLED if target_state else EventType.OCPP_DISABLED
@@ -304,7 +371,10 @@ class OCPPManager:
         if job['command'] == OCPPCommand.GET_STATE:
             warning(f"OCPP Manager: Could not determine OCPP state after retries, keeping current state: {self.state}")
         else:
-            # For enable/disable commands, we can't confirm the state change
+            # For enable/disable commands, we can't confirm the state change.
+            # Stop showing the switch label so the dashboard reveals the real
+            # error state instead of hiding a failed transition.
+            self._clear_transition()
             event_type = EventType.OCPP_ENABLED if self.state else EventType.OCPP_DISABLED
             EventBus().publish(event_type, time.time())
             warning(f"OCPP Manager: Could not {job['command'].value.replace('set_', '')} OCPP after retries")

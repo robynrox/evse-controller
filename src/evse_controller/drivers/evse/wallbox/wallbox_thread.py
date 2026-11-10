@@ -87,6 +87,11 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._last_reset_attempt = 0
         self._reset_attempt_threshold = 10  # consecutive errors before attempting reset
         self._reset_cooldown_period = 420  # 7 minutes in seconds
+        # A reboot normally takes about six minutes.  Keep a transient label
+        # until Modbus reads succeed again, with a bounded timeout so a stuck
+        # charger eventually shows its real error state.
+        self.RESTART_TIMEOUT_SECONDS = 600.0
+        self._restart_started_at: Optional[float] = None
         # Diagnostics: keep the most recent Modbus failure so the reset log
         # can say why the charger is being rebooted, and remember an unknown
         # state code so it is logged once rather than every poll.
@@ -280,6 +285,18 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             time_since_ocpp_change = current_time - self._last_ocpp_change_time
             return time_since_ocpp_change < self._ocpp_delay_duration
 
+    def restart_status(self, now=None):
+        """Return ``("Restarting", elapsed_seconds)`` during a reboot."""
+        started = self._restart_started_at
+        if started is None:
+            return None
+        now = time.time() if now is None else float(now)
+        elapsed = now - started
+        if elapsed >= self.RESTART_TIMEOUT_SECONDS:
+            self._restart_started_at = None
+            return None
+        return "Restarting", elapsed
+
     def _handle_comms_failure(self):
         """Handle communication failure by attempting to reset via Wallbox API"""
         with self._state_lock:
@@ -308,6 +325,7 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             
             self._wallbox_api_client.authenticate()
             self._wallbox_api_client.restartCharger(self._wallbox_serial)
+            self._restart_started_at = time.time()
             
             info("Reset command sent successfully")
             return True
@@ -635,6 +653,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                 
                 self._state.last_update = time.time()
                 self._state.consecutive_connection_errors = 0
+                # A successful Modbus read means a reboot has finished.
+                self._restart_started_at = None
 
             if previous_errors:
                 info(

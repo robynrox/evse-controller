@@ -1200,6 +1200,18 @@ def get_extended_status():
     )
     battery_soc = evseController.getBatteryChargeLevel()
 
+    measurements = latest_measurements
+    if measurements is not None:
+        # Recompute the timed switch/restart label on each status poll so the
+        # elapsed seconds advance even when the last Shelly sample is stale.
+        measurements = dict(measurements)
+        try:
+            measurements["charger_state"] = (
+                evseController.get_wallbox_state_label()
+            )
+        except Exception:
+            pass
+
     return jsonify({
         'current_state': current_state,
         'battery_soc': battery_soc,
@@ -1210,7 +1222,7 @@ def get_extended_status():
             'min_soc': next_event.min_soc,
             'max_soc': next_event.max_soc
         } if next_event else None,
-        'measurements': latest_measurements,
+        'measurements': measurements,
         'ocpp_state': ocpp_state,
         'poll_health': poll_health_payload(
             evseController,

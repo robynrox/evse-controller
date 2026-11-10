@@ -8,7 +8,7 @@ import time
 import threading
 from queue import Queue, Empty
 
-from evse_controller.drivers.evse.ocpp_manager import OCPPManager
+from evse_controller.drivers.evse.ocpp_manager import OCPPCommand, OCPPManager
 from evse_controller.event_bus import EventType
 
 
@@ -292,3 +292,85 @@ class TestOCPPManagerWithMocks(TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TestOCPPTransitionStatus(TestCase):
+    """The dashboard masks the charger settling time with a timed label."""
+
+    def setUp(self):
+        OCPPManager._instance = None
+        OCPPManager._lock = threading.Lock()
+        self.manager = OCPPManager()
+
+    def test_switching_to_ocpp_starts_a_timed_label(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        start = self.manager._transition_started_at
+
+        label, elapsed = self.manager.transition_status(now=start + 30)
+
+        self.assertEqual(label, "Switching to OCPP")
+        self.assertAlmostEqual(elapsed, 30.0)
+
+    def test_switching_from_ocpp_uses_the_other_label(self):
+        self.manager.state = True
+        self.manager.set_state(False)
+        start = self.manager._transition_started_at
+
+        label, _ = self.manager.transition_status(now=start + 5)
+
+        self.assertEqual(label, "Switching from OCPP")
+
+    def test_already_disabled_does_not_start_a_label(self):
+        self.manager.state = False
+        self.manager.set_state(False)
+
+        self.assertIsNone(self.manager.transition_status())
+
+    def test_unknown_to_disabled_does_not_start_a_label(self):
+        self.manager.state = None
+        self.manager.set_state(False)
+
+        self.assertIsNone(self.manager.transition_status())
+
+    def test_confirmed_switch_clears_after_the_minimum(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        start = self.manager._transition_started_at
+        self.manager._transition_confirmed_at = start + 5
+
+        self.assertIsNotNone(
+            self.manager.transition_status(now=start + 59)
+        )
+        self.assertIsNone(self.manager.transition_status(now=start + 61))
+
+    def test_unconfirmed_switch_times_out(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        start = self.manager._transition_started_at
+
+        self.assertIsNotNone(
+            self.manager.transition_status(now=start + 179)
+        )
+        self.assertIsNone(self.manager.transition_status(now=start + 181))
+
+    def test_persistent_failure_reveals_the_real_state(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        job = {
+            "command": OCPPCommand.SET_ENABLED,
+            "target_state": True,
+        }
+
+        self.manager._handle_persistent_error(job)
+
+        self.assertIsNone(self.manager.transition_status())
+
+    def test_reversing_an_inflight_switch_updates_the_label(self):
+        self.manager.state = False
+        self.manager.set_state(True)
+        self.manager.set_state(False)
+        start = self.manager._transition_started_at
+
+        label, _ = self.manager.transition_status(now=start + 5)
+
+        self.assertEqual(label, "Switching from OCPP")
