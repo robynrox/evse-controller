@@ -44,6 +44,9 @@ class SlotLoad:
     #: Sparse time-weighted samples as ``(watts, weight)``.  Condensed into a
     #: small number of adjacent-bin groups when a slot contains many bins.
     samples: tuple[tuple[float, float], ...] = ()
+    #: Synthetic prior days blended into a house-load slot with thin history.
+    #: ``days`` above remains the number of real days.
+    prior_days: int = 0
 
     @property
     def available(self) -> bool:
@@ -124,16 +127,30 @@ class LoadProfile:
 
         profile: list[SlotLoad] = []
         for index in range(SLOTS_PER_DAY):
-            if days[index] < self.min_days or not merged[index]:
+            if days[index] == 0 or not merged[index]:
                 profile.append(
                     SlotLoad(None, None, days[index], coverage[index])
                 )
                 continue
+            # Only the house series has a meaningful 0-400 W prior.  Other
+            # report series keep the old rule: wait for enough real days.
+            if series != "house" and days[index] < self.min_days:
+                profile.append(
+                    SlotLoad(None, None, days[index], coverage[index])
+                )
+                continue
+            bins = merged[index]
+            prior_days = 0
+            if series == "house" and days[index] < self.min_days:
+                prior_days = self.min_days - days[index]
+                bins = dict(bins)
+                self._add_prior(bins, days[index], prior_days)
             profile.append(
                 self._slot_load(
-                    merged[index],
+                    bins,
                     days=days[index],
                     coverage_s=coverage[index],
+                    prior_days=prior_days,
                 )
             )
 
@@ -183,12 +200,41 @@ class LoadProfile:
             return []
         return sorted(set(days), reverse=True)
 
+    def _add_prior(
+        self,
+        bins: dict[int, float],
+        data_days: int,
+        prior_days: int,
+    ) -> None:
+        """Blend the flat 0-400 W prior into a thin house-load slot.
+
+        The prior is weighted as ``prior_days`` synthetic days.  It is scaled
+        to the average real-day weight so a usable day counts as one day even
+        when its coverage is only the ten-minute minimum.
+        """
+        if data_days <= 0 or prior_days <= 0:
+            return
+        data_seconds = sum(bins.values())
+        if data_seconds <= 0:
+            return
+        prior_seconds = prior_days * (data_seconds / data_days)
+        from evse_controller.planner.inputs import uniform_load_prior
+
+        for load_kw, weight in uniform_load_prior():
+            watts = max(0.0, float(load_kw) * 1000.0)
+            index = int(watts // self.bin_width_w)
+            bins[index] = (
+                bins.get(index, 0.0)
+                + prior_seconds * max(0.0, float(weight))
+            )
+
     def _slot_load(
         self,
         bins: dict[int, float],
         *,
         days: int,
         coverage_s: float,
+        prior_days: int = 0,
     ) -> SlotLoad:
         return SlotLoad(
             median_w=self._percentile(bins, 0.50),
@@ -198,6 +244,7 @@ class LoadProfile:
             p10_w=self._percentile(bins, 0.10),
             mean_w=self._mean(bins),
             samples=self._samples(bins),
+            prior_days=prior_days,
         )
 
     def _samples(

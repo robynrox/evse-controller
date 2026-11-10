@@ -400,9 +400,13 @@ completed fixes.
   parameters show a caveat, and a run with no load profile shows a prominent
   no-load warning.
 - The shadow planner uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`).
-  Missing profile slots use a flat **0–400 W prior** in 25 W bins; the old
-  single fallback remains only when no prior is supplied. The prior is stored
-  per input row as `load_source="prior"`, so the policy page can label it.
+  House-load slots with 1–13 usable days blend the measured histogram with the
+  flat **0–400 W prior** in 25 W bins for the missing days, weighting one day
+  as 1/14; 14–28 days are used directly and the lookback is capped at 28. The
+  prior is scaled to the average real-day weight, so a ten-minute day still
+  counts as one day. It applies only to the `house` series; other report series
+  keep the old minimum-days rule. Inputs record `load_source="profile"`,
+  `"blended"` or `"prior"`, and the policy page labels the latter two.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

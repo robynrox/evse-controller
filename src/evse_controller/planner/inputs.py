@@ -191,7 +191,11 @@ def build_planner_input(
                 stats = loads[index]
                 if stats is not None and stats.median_w is not None:
                     load_kw = max(0.0, float(stats.median_w) / 1000.0)
-                    load_source = "profile"
+                    load_source = (
+                        "blended"
+                        if getattr(stats, "prior_days", 0)
+                        else "profile"
+                    )
                     if stats.samples:
                         load_samples = tuple(
                             (max(0.0, watts) / 1000.0, weight)

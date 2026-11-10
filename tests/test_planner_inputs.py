@@ -376,3 +376,34 @@ def test_load_fallback_is_used_when_the_forecast_is_thin():
 
     assert result.slots[0].load_kw == pytest.approx(0.4)
     assert result.forecast_days == 0
+
+
+def test_blended_profile_is_reported_as_blended():
+    loads = [
+        SlotLoad(
+            median_w=200.0,
+            p90_w=400.0,
+            days=1,
+            coverage_s=600.0,
+            samples=((100.0, 0.5), (300.0, 0.5)),
+            prior_days=13,
+        )
+    ] + [
+        SlotLoad(median_w=None, p90_w=None, days=0, coverage_s=0)
+        for _ in range(47)
+    ]
+    result = build_planner_input(
+        FakeSource(import_p=20.0, export_p=10.0),
+        FakeProfile(loads),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+        load_prior=uniform_load_prior(),
+    )
+
+    first = result.slots[0]
+    assert first.load_source == "blended"
+    assert first.load_samples == ((0.1, 0.5), (0.3, 0.5))

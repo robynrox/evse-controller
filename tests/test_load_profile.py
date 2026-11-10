@@ -88,13 +88,61 @@ def test_median_and_p90_from_merged_histograms(tmp_path):
     assert not profile[1].available
 
 
-def test_insufficient_days_are_unavailable(tmp_path):
-    _write_days(tmp_path, 5, {0: {24: 1800.0}})
+def test_insufficient_days_are_blended_with_the_prior(tmp_path):
+    _write_days(tmp_path, 5, {0: {24: 1800.0}})  # 600 W
 
     profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
 
+    assert profile[0].available
+    assert profile[0].days == 5
+    assert profile[0].prior_days == 9
+    # Nine prior days outweigh five measured days, so the median is pulled
+    # into the 0-400 W prior rather than staying at 600 W.
+    assert 0.0 <= profile[0].median_w <= 400.0
+
+
+def test_thirteen_days_are_blended_lightly(tmp_path):
+    _write_days(tmp_path, 13, {0: {24: 1800.0}})  # 600 W
+
+    profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
+
+    assert profile[0].days == 13
+    assert profile[0].prior_days == 1
+    assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
+
+
+def test_fourteen_days_need_no_prior(tmp_path):
+    _write_days(tmp_path, 14, {0: {24: 1800.0}})  # 600 W
+
+    profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
+
+    assert profile[0].prior_days == 0
+    assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
+
+
+def test_non_house_series_keep_the_minimum_days_rule(tmp_path):
+    _write_days(
+        tmp_path,
+        5,
+        {0: {24: 1800.0}},
+        series="solar",
+    )
+
+    profile = LoadProfile(tmp_path, min_days=14).for_date(
+        DAY, series="solar"
+    )
+
     assert not profile[0].available
     assert profile[0].days == 5
+
+
+def test_the_lookback_is_capped_at_twenty_eight_days(tmp_path):
+    _write_days(tmp_path, 30, {0: {24: 1800.0}})
+
+    profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
+
+    assert profile[0].days == 28
+    assert profile[0].prior_days == 0
 
 
 def test_unclosed_slots_are_ignored(tmp_path):
@@ -215,3 +263,28 @@ def test_available_days_are_newest_first(tmp_path):
         DAY,
         DAY - timedelta(days=1),
     ]
+
+
+@pytest.mark.parametrize("coverage_s", [1800.0, 600.0])
+def test_one_day_has_one_fourteenth_of_the_blended_weight(
+    tmp_path, coverage_s
+):
+    _write_day(
+        tmp_path,
+        DAY,
+        {0: {24: coverage_s}},  # 600 W
+        coverage_s=coverage_s,
+    )
+
+    slot = LoadProfile(tmp_path, min_days=14).for_date(DAY)[0]
+
+    assert slot.days == 1
+    assert slot.prior_days == 13
+    data_weight = sum(
+        weight for watts, weight in slot.samples if watts >= 400
+    )
+    prior_weight = sum(
+        weight for watts, weight in slot.samples if watts < 400
+    )
+    assert data_weight == pytest.approx(1 / 14)
+    assert prior_weight == pytest.approx(13 / 14)

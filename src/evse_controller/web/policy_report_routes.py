@@ -907,7 +907,7 @@ def _render(history: PlannerHistory):
         (run.get("planner") or {}).get("load_fallback_kw"), 0.0
     )
     load_prior_used = any(
-        (item.get("load_source") == "prior")
+        (item.get("load_source") in ("prior", "blended"))
         for item in run.get("inputs") or []
     )
     return render_template(

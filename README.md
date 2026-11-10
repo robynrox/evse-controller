@@ -493,9 +493,11 @@ does not grid-charge while that surplus is being exported.
   the forecasted load and the integer current the Wallbox would choose, not a
   flat constant, so it fits when a full export no longer does. These slots
   are ranked by export price and labelled `AGGRESSIVE` in the plan table. The
-  planner uses a rolling persistence forecast from the last 28 days (minimum
-  14); each row still carries its live break-even gate: the slot only starts
-  once the live house import reaches that load. Below it, the forced output would export more than it
+  planner uses a rolling persistence forecast from the last 28 days. Slots
+  with fewer than 14 usable days blend the measured histogram with the flat
+  0–400 W prior for the missing days; each row still carries its live
+  break-even gate: the slot only starts once the live house import reaches
+  that load. Below it, the forced output would export more than it
   saves. The scan evaluates the integer current the Wallbox would actually
   choose, so a load that only pays at 4 A or 5 A is found even when 3 A is
   uneconomic. The reason names the gate and the stored-energy hurdle: the
@@ -515,13 +517,17 @@ does not grid-charge while that surplus is being exported.
   power histograms per half-hour slot and CT clamp under
   `data/state/load_profile/`. The forecast target is the net grid load before
   the Wallbox (`grid − Wallbox AC`), so EV and battery activity are removed.
-  The planner merges the last 28 days where available (minimum 14) and uses
-  the 90th percentile for conservative coverage and the median for aggressive
-  discharge. With too little history it falls back to the flat configured
-  losses. The same histograms are the raw material for future house-load
-  reports. A graceful SIGINT/SIGTERM flushes the open slot as well as the
-  completed ones, so a restart continues the same half-hour rather than
-  losing it; the downtime itself is not bridged.
+  The planner merges the most recent 28 days and uses the 90th percentile for
+  conservative coverage and the median for aggressive discharge. A house-load
+  slot with fewer than 14 usable days is blended with the flat 0–400 W prior
+  for the missing days: one day of data is weighted 1/14 and the prior 13/14.
+  Days 14–28 are used directly. The prior is not applied to the other plotted
+  series, because it is a house-load prior rather than a solar or grid prior.
+  With no usable days at all, the existing flat prior path still applies. The
+  same histograms are the raw material for future house-load reports. A
+  graceful SIGINT/SIGTERM flushes the open slot as well as the completed ones,
+  so a restart continues the same half-hour rather than losing it; the
+  downtime itself is not bridged.
 - **The charge floor and its activation are calculated, not fixed.** When the
   decision is not to store for a later sale, the controller stays in
   `LOAD_FOLLOW_BIDIRECTIONAL`: the pack keeps covering the house while the car
@@ -896,9 +902,11 @@ action for every half-hour slot and every SoC state:
 - **Near ties:** cells within 1p of the next-best mode are hatched. Their exact
   current is not economically meaningful; a small forecast change can flip it.
 - **Load forecast:** if the run had no house-load profile, the page says so
-  prominently. Until profile history exists, the shadow planner uses a flat
-  0–400 W prior per slot, in 25 W bins; the page labels this as a prior. Once
-  real histograms exist they are used directly.
+  prominently. Until 14 days of history exist for a slot, the shadow planner
+  blends the measured histogram with a flat 0–400 W prior for the missing days
+  (one day of data is 1/14 of the weight). The page labels this as blended or
+  prior. The prior applies only to the `house` series, not to solar or grid
+  report series.
 - **Follow modes:** where the heuristic's economic gate is available, the map
   can choose *follow house conservative*, *follow house aggressive* or *follow
   solar*. Fixed charge/discharge arcs remain available, so the planner can
