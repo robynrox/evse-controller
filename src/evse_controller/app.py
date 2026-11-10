@@ -9,6 +9,10 @@ import logging
 import threading
 from datetime import datetime
 from evse_controller.utils.logging_config import info, error, debug
+from evse_controller.web.form_values import (
+    form_float as _form_float,
+    form_int as _form_int,
+)
 
 # Ensure data directories exist before anything else
 ensure_data_dirs()
@@ -172,12 +176,6 @@ def _parse_window_list(value):
         return []
     parts = text.replace(";", ",").replace("\n", ",").split(",")
     return [part.strip() for part in parts if part.strip()]
-
-
-def _form_float(value, default):
-    if value is None or str(value).strip() == "":
-        return default
-    return float(value)
 
 
 # Global variables to cache the latest measurements and OCPP state
@@ -615,7 +613,10 @@ def config_page():
 
             # Update Grid monitoring settings
             config.SHELLY_GRID_DEVICE = request.form.get('shelly[grid][device]')
-            config.SHELLY_GRID_CHANNEL = int(request.form.get('shelly[grid][channel]'))
+            config.SHELLY_GRID_CHANNEL = _form_int(
+                request.form.get('shelly[grid][channel]'),
+                config.SHELLY_GRID_CHANNEL,
+            )
 
             # Update EVSE monitoring settings
             config.SHELLY_EVSE_DEVICE = request.form.get('shelly[evse][device]') or ""
@@ -632,15 +633,23 @@ def config_page():
 
             # Update MQTT settings
             config.MQTT_BROKER = request.form.get('mqtt[broker]', '')
-            config.MQTT_PORT = int(request.form.get('mqtt[port]', 1883))
+            config.MQTT_PORT = _form_int(
+                request.form.get('mqtt[port]'), config.MQTT_PORT
+            )
             config.MQTT_USER = request.form.get('mqtt[username]', '')
             config.MQTT_PASS = request.form.get('mqtt[password]', '')
             config.MQTT_CLIENT_ID = request.form.get('mqtt[client_id]', 'wbquasar')
             config.MQTT_TLS_ENABLED = request.form.get('mqtt[tls_enabled]') == "true"
 
             # Update charging settings
-            config.MAX_CHARGE_PERCENT = int(request.form.get('charging[max_charge_percent]', 90))
-            config.SOLAR_PERIOD_MAX_CHARGE = int(request.form.get('charging[solar_period_max_charge]', 80))
+            config.MAX_CHARGE_PERCENT = _form_int(
+                request.form.get('charging[max_charge_percent]'),
+                config.MAX_CHARGE_PERCENT,
+            )
+            config.SOLAR_PERIOD_MAX_CHARGE = _form_int(
+                request.form.get('charging[solar_period_max_charge]'),
+                config.SOLAR_PERIOD_MAX_CHARGE,
+            )
             config.STARTUP_STATE = request.form.get('charging[startup_state]', 'FREERUN')
 
             # Update logging settings
@@ -648,87 +657,147 @@ def config_page():
             config.CONSOLE_LOGGING = request.form.get('logging[console_level]', 'WARNING')
 
             # Update simulator settings
-            config.SIMULATOR_BATTERY_CAPACITY_KWH = float(request.form.get('simulator[battery_capacity]', 50))
-            config.SIMULATOR_SPEED = int(request.form.get('simulator[speed]', 60))
+            config.SIMULATOR_BATTERY_CAPACITY_KWH = _form_float(
+                request.form.get('simulator[battery_capacity]'),
+                config.SIMULATOR_BATTERY_CAPACITY_KWH,
+            )
+            config.SIMULATOR_SPEED = _form_int(
+                request.form.get('simulator[speed]'), config.SIMULATOR_SPEED
+            )
 
             # Update Intelligent Octopus Go tariff parameters
-            config.IOCTGO_BATTERY_CAPACITY_KWH = float(request.form.get('tariffs.ioctgo[battery_capacity_kwh]', 59))
-            config.IOCTGO_TARGET_SOC_AT_CHEAP_START = int(request.form.get('tariffs.ioctgo[target_soc_at_cheap_start]', 54))
+            config.IOCTGO_BATTERY_CAPACITY_KWH = _form_float(
+                request.form.get('tariffs.ioctgo[battery_capacity_kwh]'),
+                config.IOCTGO_BATTERY_CAPACITY_KWH,
+            )
+            config.IOCTGO_TARGET_SOC_AT_CHEAP_START = _form_int(
+                request.form.get('tariffs.ioctgo[target_soc_at_cheap_start]'),
+                config.IOCTGO_TARGET_SOC_AT_CHEAP_START,
+            )
             config.IOCTGO_BULK_DISCHARGE_START_TIME = request.form.get('tariffs.ioctgo[bulk_discharge_start_time]', '16:00')
             config.IOCTGO_BULK_DISCHARGE_END_TIME = request.form.get('tariffs.ioctgo[bulk_discharge_end_time]', '19:00')
-            config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = int(request.form.get('tariffs.ioctgo[target_soc_at_bulk_discharge_end]', 60))
-            config.IOCTGO_MIN_DISCHARGE_CURRENT = float(request.form.get('tariffs.ioctgo[min_discharge_current]', 3))
-            config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = int(request.form.get('tariffs.ioctgo[soc_threshold_for_strategy]', 50))
-            config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = int(request.form.get('tariffs.ioctgo[grid_import_threshold_high_soc]', 0))
-            config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = int(request.form.get('tariffs.ioctgo[grid_import_threshold_low_soc]', 720))
+            config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = _form_int(
+                request.form.get('tariffs.ioctgo[target_soc_at_bulk_discharge_end]'),
+                config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
+            )
+            config.IOCTGO_MIN_DISCHARGE_CURRENT = _form_float(
+                request.form.get('tariffs.ioctgo[min_discharge_current]'),
+                config.IOCTGO_MIN_DISCHARGE_CURRENT,
+            )
+            config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = _form_int(
+                request.form.get('tariffs.ioctgo[soc_threshold_for_strategy]'),
+                config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
+            )
+            config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = _form_int(
+                request.form.get('tariffs.ioctgo[grid_import_threshold_high_soc]'),
+                config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
+            )
+            config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = _form_int(
+                request.form.get('tariffs.ioctgo[grid_import_threshold_low_soc]'),
+                config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
+            )
             config.IOCTGO_ENABLE_BULK_DISCHARGE = bool(request.form.get('tariffs.ioctgo[enable_bulk_discharge]'))
             config.IOCTGO_SMART_OCPP_OPERATION = bool(request.form.get('tariffs.ioctgo[smart_ocpp_operation]'))
-            config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = int(request.form.get('tariffs.ioctgo[ocpp_enable_soc_threshold]', 30))
-            config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = int(request.form.get('tariffs.ioctgo[ocpp_disable_soc_threshold]', 95))
+            config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = _form_int(
+                request.form.get('tariffs.ioctgo[ocpp_enable_soc_threshold]'),
+                config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD,
+            )
+            config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = _form_int(
+                request.form.get('tariffs.ioctgo[ocpp_disable_soc_threshold]'),
+                config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD,
+            )
             config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
             config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
             # Update Octopus Agile Outgoing settings
             max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
             if max_export_power is not None:
-                config.MAX_EXPORT_POWER_KW = float(max_export_power)
+                config.MAX_EXPORT_POWER_KW = _form_float(
+                    max_export_power, config.MAX_EXPORT_POWER_KW
+                )
                 logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
 
             # Update Agile Outgoing export planning parameters
             export_slot_loss = request.form.get('tariffs.ioctgo[export_slot_soc_loss_percent]')
             if export_slot_loss is not None:
-                config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = float(export_slot_loss)
+                config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT = _form_float(
+                    export_slot_loss,
+                    config.IOCTGO_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                )
             non_export_slot_loss = request.form.get('tariffs.ioctgo[non_export_slot_soc_loss_percent]')
             if non_export_slot_loss is not None:
-                config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = float(non_export_slot_loss)
+                config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT = _form_float(
+                    non_export_slot_loss,
+                    config.IOCTGO_NON_EXPORT_SLOT_SOC_LOSS_PERCENT,
+                )
             full_charge_gain = request.form.get('tariffs.ioctgo[full_charge_slot_soc_gain_percent]')
             if full_charge_gain is not None:
-                config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = float(full_charge_gain)
+                config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT = _form_float(
+                    full_charge_gain,
+                    config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT,
+                )
             min_profit_margin = request.form.get('tariffs.ioctgo[min_profit_margin_p_per_kwh]')
             if min_profit_margin is not None:
-                config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = float(min_profit_margin)
+                config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH = _form_float(
+                    min_profit_margin,
+                    config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH,
+                )
 
             # Hard protection floor for discharge and export
-            absolute_min_soc = request.form.get(
-                'tariffs.ioctgo[absolute_min_soc_percent]'
+            absolute_min_soc = _form_int(
+                request.form.get('tariffs.ioctgo[absolute_min_soc_percent]'),
+                None,
             )
             if absolute_min_soc is not None:
-                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = int(
-                    absolute_min_soc
-                )
+                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = absolute_min_soc
 
             # Three economic SoC limits.  Accept the old form field names too
             # so a stale browser tab cannot silently discard the setting.
-            bulk_soc = request.form.get(
-                'tariffs.ioctgo[bulk_discharge_soc_lower_limit]'
+            bulk_soc = _form_int(
+                request.form.get(
+                    'tariffs.ioctgo[bulk_discharge_soc_lower_limit]'
+                ),
+                None,
             )
             if bulk_soc is not None:
-                config.BULK_DISCHARGE_SOC_LOWER_LIMIT = int(bulk_soc)
+                config.BULK_DISCHARGE_SOC_LOWER_LIMIT = bulk_soc
 
-            aggressive_soc = request.form.get(
-                'tariffs.ioctgo[aggressive_soc_lower_limit]'
+            aggressive_soc = _form_int(
+                request.form.get(
+                    'tariffs.ioctgo[aggressive_soc_lower_limit]'
+                ),
+                None,
             )
             if aggressive_soc is None:
-                aggressive_soc = request.form.get(
-                    'tariffs.ioctgo[min_agile_discharge_soc]'
+                aggressive_soc = _form_int(
+                    request.form.get(
+                        'tariffs.ioctgo[min_agile_discharge_soc]'
+                    ),
+                    None,
                 )
             if aggressive_soc is not None:
-                config.AGGRESSIVE_SOC_LOWER_LIMIT = int(aggressive_soc)
+                config.AGGRESSIVE_SOC_LOWER_LIMIT = aggressive_soc
 
-            conservative_soc = request.form.get(
-                'tariffs.ioctgo[conservative_soc_lower_limit]'
+            conservative_soc = _form_int(
+                request.form.get(
+                    'tariffs.ioctgo[conservative_soc_lower_limit]'
+                ),
+                None,
             )
             if conservative_soc is None:
-                margin = request.form.get(
-                    'tariffs.ioctgo[house_load_margin_percent]'
+                margin = _form_int(
+                    request.form.get(
+                        'tariffs.ioctgo[house_load_margin_percent]'
+                    ),
+                    None,
                 )
                 if margin is not None:
                     conservative_soc = (
-                        config.AGGRESSIVE_SOC_LOWER_LIMIT - int(margin)
+                        config.AGGRESSIVE_SOC_LOWER_LIMIT - margin
                     )
             if conservative_soc is not None:
-                config.CONSERVATIVE_SOC_LOWER_LIMIT = int(conservative_soc)
+                config.CONSERVATIVE_SOC_LOWER_LIMIT = conservative_soc
 
             # Handle channel configuration for both devices
             devices = ['primary']
@@ -899,10 +968,14 @@ def config_page():
             )
             frequency = request.form.get('ocpp[frequency_days]')
             if frequency is not None:
-                config.OCPP_AUTO_FREQUENCY_DAYS = int(frequency)
+                config.OCPP_AUTO_FREQUENCY_DAYS = _form_int(
+                    frequency, config.OCPP_AUTO_FREQUENCY_DAYS
+                )
             duration = request.form.get('ocpp[duration_slots]')
             if duration is not None:
-                config.OCPP_AUTO_DURATION_SLOTS = int(duration)
+                config.OCPP_AUTO_DURATION_SLOTS = _form_int(
+                    duration, config.OCPP_AUTO_DURATION_SLOTS
+                )
             window_start = request.form.get('ocpp[window_start]')
             if window_start is not None:
                 config.OCPP_AUTO_WINDOW_START = window_start
