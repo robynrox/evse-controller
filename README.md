@@ -392,10 +392,15 @@ export price × measured charge/discharge round trip
     > import price + profit margin
 ```
 
-It adds the lowest import-priced eligible slots first, never charges inside an
-export slot or a supplier session, and leaves the export unserved if no
-economic charge slot fits before the deadline. Off-peak/session charging is
-already planned as the first source; peak top-up is only the remainder.
+It now works backwards from the export deadline: the latest eligible slots are
+used first, so the afternoon stays free to harvest solar and a later supplier
+session can still displace a charge slot. Earlier slots are added only when one
+slot cannot carry enough energy. The top-up leaves a 1% SoC buffer above the
+bulk floor (`EXPORT_RECHARGE_BUFFER_SOC`) because that floor is a hard limit.
+It never charges inside an export slot or a supplier session, and leaves the
+export unserved if no economic charge slot fits before the deadline.
+Off-peak/session charging is already planned as the first source; peak top-up
+is only the remainder.
 
 The bus has no separate solar accounting: solar offsets import automatically.
 Where solar surplus is available it makes the marginal charging cost the lost

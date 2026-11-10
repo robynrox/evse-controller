@@ -4991,6 +4991,11 @@ class TestHighValueExportRecharge:
         tariff._planned_slot_actions = {24: "charge"}
         tariff._planned_import_slots = [24]
         tariff._planned_export_slots = [36]
+        # Keep the manual action map: this test is about the live branch, not
+        # about recalculating the plan.
+        tariff._last_plan_slot = 24
+        tariff._plan_cache = [36]
+        tariff._prev_battery_level = 30
 
         control_state, minimum, maximum, _ = tariff.get_control_state(
             create_test_state(30), 12 * 60
@@ -5099,3 +5104,72 @@ class TestTerminalEnergyValue:
 
         assert value > cheap_cost
         assert value < standard_cost
+
+
+class TestJustInTimeExportRecharge:
+    """Pre-export buying should wait for the last slots before the export."""
+
+    def _plan(self, tariff, cheap_early=5.0, cheap_late=5.0):
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+        rates = []
+        for rate in tariff.agile_rates:
+            slot = rate['start'].hour * 2 + (
+                1 if rate['start'].minute == 30 else 0
+            )
+            updated = dict(rate)
+            if 36 <= slot <= 41:
+                updated['rate'] = 90.0
+            elif slot < 28:
+                updated['rate'] = cheap_early
+            else:
+                updated['rate'] = cheap_late
+            rates.append(updated)
+        tariff.agile_rates = rates
+        tariff.calculate_export_plan(30)
+        return {
+            slot
+            for slot, action in tariff._planned_slot_actions.items()
+            if action == "charge"
+        }
+
+    def test_recharge_starts_immediately_before_the_export(self):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = False
+
+        charge_slots = self._plan(tariff)
+
+        assert charge_slots
+        assert max(charge_slots) == 35
+        assert all(slot >= 28 for slot in charge_slots)
+
+    def test_earlier_cheaper_slots_do_not_win_over_just_in_time(self):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = False
+
+        charge_slots = self._plan(
+            tariff, cheap_early=1.0, cheap_late=10.0
+        )
+
+        assert charge_slots
+        assert max(charge_slots) == 35
+        assert all(slot >= 28 for slot in charge_slots)
+
+    def test_recharge_leaves_a_buffer_above_the_export_floor(self):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = False
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+        charge_slots = self._plan(tariff)
+        assert charge_slots
+
+        current_slot = 24
+        minimum = tariff._minimum_projected_soc(
+            30,
+            current_slot,
+            slot_actions=tariff._planned_slot_actions,
+        )
+
+        assert minimum >= (
+            float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT)
+            + tariff.EXPORT_RECHARGE_BUFFER_SOC
+            - 1e-9
+        )

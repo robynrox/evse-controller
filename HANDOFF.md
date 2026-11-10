@@ -431,8 +431,12 @@ completed fixes.
 - The live heuristic now plans **import/charge** slots as well as exports:
   off-peak charge is included in the 23:30 projection, and high-value priority
   exports can trigger peak-rate recharge before their deadline. The recharge
-  only uses slots where `export price × round trip > import price + margin`,
-  never charges in an export slot or supplier session, and is gated by
+  is just-in-time: it works backwards from the export, using the latest
+  eligible slots first so solar harvest and later session choices are
+  preserved, and leaves a 1% SoC buffer above the bulk floor
+  (`EXPORT_RECHARGE_BUFFER_SOC`). It only uses slots where
+  `export price × round trip > import price + margin`, never charges in an
+  export slot or supplier session, and is gated by
   `ENABLE_EXPORT_RECHARGE`. The dashboard marks planned imports with a blue
   `IM` badge and lists them in the import plan; off-peak slots are normally
   marked IM anyway.

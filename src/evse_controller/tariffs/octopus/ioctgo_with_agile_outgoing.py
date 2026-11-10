@@ -258,6 +258,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: extra pre-export top-up.
     ENABLE_EXPORT_RECHARGE = True
 
+    #: Extra SoC to leave above the export floor when buying pre-export
+    #: energy.  The floor is a hard operating limit, so a small buffer absorbs
+    #: forecast and efficiency error without materially oversizing the buy.
+    EXPORT_RECHARGE_BUFFER_SOC = 1.0
+
     #: SoC resolution used by the shadow planner.  A 0.1% grid keeps the
     #: integer-current transitions from creating large rounding artefacts in
     #: the policy surface; the plan still runs in a few hundred milliseconds.
@@ -1642,12 +1647,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         floor_soc: float,
         excluded: set[int],
     ) -> list[int]:
-        """Add cheap pre-export charge slots until *target_slot* is reachable.
+        """Add pre-export charge slots until *target_slot* is reachable.
 
-        This is deliberately local: it tops up from the lowest import-priced
-        slots before the export, only when the export price covers the
-        grid-charge round trip plus margin.  It never charges in another
-        priority export slot or a supplier session.
+        This is just-in-time: candidates are taken from the last available
+        slots immediately before the export, not from the cheapest slots
+        earlier in the day.  That leaves the afternoon free to harvest solar
+        and gives later supplier-session selections the best chance of
+        fitting.  The spread must still cover the round trip and margin, and
+        the top-up leaves a small buffer above the floor rather than stopping
+        exactly at the hard limit.
         """
         if not self.ENABLE_EXPORT_RECHARGE:
             return []
@@ -1671,8 +1679,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if target_rate_p < hurdle_p:
                 continue
             candidates.append((import_p, slot_idx))
-        candidates.sort(key=lambda item: (item[0], item[1]))
+        # Latest first: the last available slot before the export is the
+        # preferred place to buy, and the block grows backwards only when one
+        # slot cannot carry enough energy.
+        candidates.sort(key=lambda item: item[1], reverse=True)
 
+        effective_floor = floor_soc + max(
+            0.0, float(self.EXPORT_RECHARGE_BUFFER_SOC)
+        )
         added: list[int] = []
         for _import_p, slot_idx in candidates:
             actions[slot_idx] = "charge"
@@ -1681,10 +1695,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 current_soc_percent,
                 current_slot_idx,
                 slot_actions=actions,
-            ) >= floor_soc - 1e-9:
+            ) >= effective_floor - 1e-9:
                 info(
-                    f"IOCTGO_AGILEOUT: Added export recharge slot "
-                    f"{self._slot_range_label(slot_idx)} for "
+                    f"IOCTGO_AGILEOUT: Added just-in-time export recharge "
+                    f"slot {self._slot_range_label(slot_idx)} for "
                     f"{target_rate_p:.1f}p export"
                 )
                 return added
