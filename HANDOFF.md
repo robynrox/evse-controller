@@ -286,7 +286,7 @@ completed fixes.
   extra device traffic. A poll is one complete read; internal retries are not
   counted separately.
 - **Wallbox transition labels.** `OCPPManager.transition_status()` reports
-  "Switching to/from OCPP" for at least 60 s after a request (3-minute
+  "To OCPP" or "From OCPP" for at least 60 s after a request (3-minute
   timeout, cleared early on persistent API failure).
   `WallboxThread.restart_status()` reports "Restarting" from a successful
   reset request until the first successful Modbus read, with a 10-minute

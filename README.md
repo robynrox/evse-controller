@@ -360,10 +360,10 @@ memory and does not add any extra network polling.
 ##### Wallbox transition states
 
 While an OCPP switch is settling, the **Wallbox State** row shows
-`Switching to OCPP (30s)` or `Switching from OCPP (30s)` instead of the
-underlying DISCONNECTED/ERROR reading. The label lasts at least a minute, or
-until the API confirms and the minimum has elapsed, with a three-minute
-timeout so a failed switch eventually reveals the real state.
+`To OCPP (30s)` or `From OCPP (30s)` instead of the underlying
+DISCONNECTED/ERROR reading. The label lasts at least a minute, or until the
+API confirms and the minimum has elapsed, with a three-minute timeout so a
+failed switch eventually reveals the real state.
 
 A charger reboot shows `Restarting (30s)` from the successful reset request
 until the first Modbus read succeeds again, or for ten minutes if the charger

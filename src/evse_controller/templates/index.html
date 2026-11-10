@@ -1154,12 +1154,20 @@
             wallboxStateRow.className = 'channel-power-row';
 
             let formattedChargerState = '';
-            // Map technical state names to more user-friendly terms
-            if (measurements.charger_state === 'WAITING_FOR_CAR_DEMAND') {
+            const rawChargerState = measurements.charger_state || '';
+            // Map technical state names to more user-friendly terms.  Keep
+            // transient switch/restart labels as-is so OCPP stays uppercase.
+            if (rawChargerState === 'WAITING_FOR_CAR_DEMAND') {
                 formattedChargerState = 'Preparing';  // More user-friendly term
+            } else if (
+                rawChargerState.startsWith('To OCPP') ||
+                rawChargerState.startsWith('From OCPP') ||
+                rawChargerState.startsWith('Restarting')
+            ) {
+                formattedChargerState = rawChargerState;
             } else {
                 // Format the state to convert underscores to spaces and have only first letter capitalized
-                formattedChargerState = measurements.charger_state.replace(/_/g, ' ');
+                formattedChargerState = rawChargerState.replace(/_/g, ' ');
                 formattedChargerState = formattedChargerState.charAt(0).toUpperCase() + 
                                     formattedChargerState.slice(1).toLowerCase();
             }

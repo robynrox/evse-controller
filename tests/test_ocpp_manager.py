@@ -308,7 +308,7 @@ class TestOCPPTransitionStatus(TestCase):
 
         label, elapsed = self.manager.transition_status(now=start + 30)
 
-        self.assertEqual(label, "Switching to OCPP")
+        self.assertEqual(label, "To OCPP")
         self.assertAlmostEqual(elapsed, 30.0)
 
     def test_switching_from_ocpp_uses_the_other_label(self):
@@ -318,7 +318,7 @@ class TestOCPPTransitionStatus(TestCase):
 
         label, _ = self.manager.transition_status(now=start + 5)
 
-        self.assertEqual(label, "Switching from OCPP")
+        self.assertEqual(label, "From OCPP")
 
     def test_already_disabled_does_not_start_a_label(self):
         self.manager.state = False
@@ -373,4 +373,4 @@ class TestOCPPTransitionStatus(TestCase):
 
         label, _ = self.manager.transition_status(now=start + 5)
 
-        self.assertEqual(label, "Switching from OCPP")
+        self.assertEqual(label, "From OCPP")

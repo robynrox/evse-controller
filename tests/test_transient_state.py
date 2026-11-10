@@ -21,7 +21,7 @@ def test_restart_label_takes_priority_over_ocpp():
     with patch.object(
         ocpp_manager,
         "transition_status",
-        return_value=("Switching to OCPP", 10.0),
+        return_value=("To OCPP", 10.0),
     ):
         assert controller.get_wallbox_state_label() == "Restarting (30s)"
 
@@ -32,11 +32,11 @@ def test_ocpp_switch_label_is_used_without_a_restart():
     with patch.object(
         ocpp_manager,
         "transition_status",
-        return_value=("Switching to OCPP", 42.9),
+        return_value=("To OCPP", 42.9),
     ):
         assert (
             controller.get_wallbox_state_label()
-            == "Switching to OCPP (42s)"
+            == "To OCPP (42s)"
         )
 
 

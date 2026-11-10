@@ -150,9 +150,9 @@ class OCPPManager:
             self._clear_transition()
             return None
         label = (
-            "Switching to OCPP"
+            "To OCPP"
             if self._transition_target
-            else "Switching from OCPP"
+            else "From OCPP"
         )
         return label, elapsed
 
