@@ -16,12 +16,13 @@ import csv
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 import io
+import math
 
 from flask import Response, abort, jsonify, render_template, request
 
 from evse_controller.daily_report import configured_series
 from evse_controller.load_profile import LoadProfile, SlotLoad, load_profile
-from evse_controller.weather import OpenMeteoClient
+from evse_controller.weather import OpenMeteoClient, weather_refresher
 
 
 def slot_label(slot: int) -> str:
@@ -109,6 +110,34 @@ def _metrics(
     }
 
 
+def _axis_bounds(min_value: float, max_value: float) -> tuple[float, float, float]:
+    """A rounded axis range that always includes zero.
+
+    Returns ``(minimum, maximum, step)``.  Four intervals are used, with a
+    1/2/2.5/5/10 step so the labels stay readable for small solar exports and
+    large house loads alike.
+    """
+    low = min(float(min_value), 0.0)
+    high = max(float(max_value), 0.0)
+    if not math.isfinite(low) or not math.isfinite(high):
+        return 0.0, 500.0, 125.0
+    if high - low < 1e-9:
+        return low - 1.0, high + 1.0, 0.5
+
+    raw_step = (high - low) / 4.0
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    step = magnitude
+    for multiplier in (1.0, 2.0, 2.5, 5.0, 10.0):
+        step = magnitude * multiplier
+        if raw_step <= step:
+            break
+    minimum = math.floor(low / step) * step
+    maximum = math.ceil(high / step) * step
+    if maximum <= minimum:
+        maximum = minimum + step
+    return minimum, maximum, step
+
+
 def _fan_chart(
     forecast: list[SlotLoad],
     actual: list[SlotLoad],
@@ -128,13 +157,16 @@ def _fan_chart(
         return (
             '<p class="empty">No profile data is available for this day.</p>'
         )
-    max_w = max(max(values), 500.0) * 1.08
+    axis_min, axis_max, axis_step = _axis_bounds(
+        min(values), max(values)
+    )
+    axis_span = axis_max - axis_min
 
     def x(slot: int) -> float:
         return left + (slot / 47.0) * plot_w
 
     def y(value: float) -> float:
-        return top + plot_h - (value / max_w) * plot_h
+        return top + plot_h - ((value - axis_min) / axis_span) * plot_h
 
     def points(values_by_slot, upper: bool) -> str:
         return " ".join(
@@ -151,8 +183,8 @@ def _fan_chart(
         f'<text x="{left - 8}" y="{top - 4}" text-anchor="end" '
         'class="axis-unit">W</text>'
     )
-    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
-        value = max_w * fraction
+    for index in range(5):
+        value = axis_min + axis_span * index / 4.0
         y_pos = y(value)
         svg.append(
             f'<line x1="{left}" y1="{y_pos:.1f}" x2="{width-right}" '
@@ -160,7 +192,15 @@ def _fan_chart(
         )
         svg.append(
             f'<text x="{left-8}" y="{y_pos+4:.1f}" '
-            f'text-anchor="end" class="axis">{value:,.0f}</text>'
+            f'text-anchor="end" class="axis">'
+            f'{(f"{value:,.1f}" if axis_step < 1 else f"{value:,.0f}")}'
+            "</text>"
+        )
+    if axis_min < 0.0 < axis_max:
+        zero_y = y(0.0)
+        svg.append(
+            f'<line x1="{left}" y1="{zero_y:.1f}" x2="{width-right}" '
+            f'y2="{zero_y:.1f}" class="zero-line"/>'
         )
 
     forecast_band = [
@@ -220,16 +260,16 @@ def _heatmap(
     days = [day] + [item for item in available if item != day]
     days = days[:limit]
     rows = []
-    max_value = 1.0
+    min_value = 0.0
+    max_value = 0.0
     for row_day in days:
         stats = profile.day_stats(row_day, series)
         values = [
             item.median_w if item.available else None for item in stats
         ]
-        max_value = max(
-            max_value,
-            max((value for value in values if value is not None), default=0.0),
-        )
+        present = [value for value in values if value is not None]
+        min_value = min(min_value, min(present, default=0.0))
+        max_value = max(max_value, max(present, default=0.0))
         rows.append({"date": row_day, "stats": stats, "values": values})
 
     for row in rows:
@@ -245,21 +285,37 @@ def _heatmap(
                     }
                 )
                 continue
-            intensity = min(1.0, max(0.0, value / max_value))
-            if intensity < 0.18:
-                color = "#eaf2fa"
-                text = "#222"
-            elif intensity < 0.55:
-                color = "#8ebce6"
-                text = "#123"
+            if value < 0 and min_value < 0:
+                intensity = min(1.0, abs(value) / abs(min_value))
+                if intensity < 0.18:
+                    color = "#eaf5ec"
+                    text = "#222"
+                elif intensity < 0.55:
+                    color = "#7fc18f"
+                    text = "#123"
+                else:
+                    color = "#1b7f3a"
+                    text = "#fff"
+            elif value > 0 and max_value > 0:
+                intensity = min(1.0, value / max_value)
+                if intensity < 0.18:
+                    color = "#eaf2fa"
+                    text = "#222"
+                elif intensity < 0.55:
+                    color = "#8ebce6"
+                    text = "#123"
+                else:
+                    color = "#0b5cad"
+                    text = "#fff"
             else:
-                color = "#0b5cad"
-                text = "#fff"
+                intensity = 0.0
+                color = "#f8f9fa"
+                text = "#222"
             cells.append(
                 {
                     "value": value,
                     "style": f"background:{color};color:{text};",
-                    "title": f"{slot_label(slot)}: {value:,.0f} W",
+                    "title": f"{slot_label(slot)}: {value:+,.0f} W",
                     "label": (
                         f"{value / 1000:.1f}" if intensity >= 0.55 else ""
                     ),
@@ -299,6 +355,13 @@ def _render_report(
         if weather_client.configured
         else []
     )
+    if weather_client.configured and not weather_hours:
+        # The controller loop also refreshes this in the background, but an
+        # open report page should trigger the first fetch immediately.
+        try:
+            weather_refresher.maybe_fetch()
+        except Exception:
+            pass
     return render_template(
         "load_profile.html",
         selected_date=day,

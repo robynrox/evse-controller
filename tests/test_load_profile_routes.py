@@ -223,3 +223,58 @@ def test_page_explains_when_weather_is_not_configured(client):
 
     assert response.status_code == 200
     assert "Weather is not configured" in response.get_data(as_text=True)
+
+
+def test_axis_bounds_include_zero_and_negative_values():
+    from evse_controller.web.load_profile_routes import _axis_bounds
+
+    minimum, maximum, step = _axis_bounds(-3000.0, 500.0)
+
+    assert minimum <= -3000.0
+    assert maximum >= 500.0
+    assert step > 0
+    assert minimum < 0 < maximum
+
+    positive_min, positive_max, _ = _axis_bounds(100.0, 1200.0)
+    assert positive_min == 0.0
+    assert positive_max >= 1200.0
+
+
+def test_fan_chart_draws_a_zero_line_when_values_cross_zero():
+    from evse_controller.load_profile import SlotLoad
+    from evse_controller.web.load_profile_routes import _fan_chart
+
+    forecast = [
+        SlotLoad(-3000.0, -100.0, 14, 1800.0, p10_w=-4000.0),
+        SlotLoad(600.0, 1200.0, 14, 1800.0, p10_w=200.0),
+    ]
+    actual = [
+        SlotLoad(-2500.0, -50.0, 1, 1800.0, p10_w=-3500.0),
+        SlotLoad(500.0, 1000.0, 1, 1800.0, p10_w=100.0),
+    ]
+
+    chart = _fan_chart(forecast, actual)
+
+    assert 'class="zero-line"' in chart
+    assert ">-" in chart  # at least one negative axis label
+
+
+def test_heatmap_uses_green_for_negative_and_blue_for_positive():
+    from evse_controller.load_profile import SlotLoad
+    from evse_controller.web.load_profile_routes import _heatmap
+
+    stats = [SlotLoad(None, None, 0, 0) for _ in range(48)]
+    stats[0] = SlotLoad(-3000.0, -1000.0, 1, 1800.0)
+    stats[1] = SlotLoad(3000.0, 4000.0, 1, 1800.0)
+
+    class FakeProfile:
+        def available_days(self):
+            return [DAY]
+
+        def day_stats(self, day, series):
+            return stats
+
+    row = _heatmap(FakeProfile(), DAY, "house")[0]
+
+    assert "#1b7f3a" in row["cells"][0]["style"]
+    assert "#0b5cad" in row["cells"][1]["style"]

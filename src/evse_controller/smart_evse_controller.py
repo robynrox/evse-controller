@@ -45,6 +45,7 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
+from evse_controller.weather import weather_refresher
 
 # Setup logging
 logger = setup_logging()
@@ -1017,6 +1018,11 @@ def main():
             now_for_sessions = datetime.now()
             _maybe_schedule_auto_ocpp(now_for_sessions)
             _sync_session_override(now_for_sessions)
+            try:
+                weather_refresher.maybe_fetch()
+            except Exception as exc:
+                # Weather is optional and must never disturb control.
+                warning(f"WEATHER: Refresh check failed: {exc}")
 
             # Timed overrides expire here.  Unplug and SoC-probe transitions
             # are handled by the 1 s watcher above.

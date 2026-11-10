@@ -257,7 +257,13 @@ The optional `weather` section is used only for reports and forecast research. I
 - `panel_azimuth`: Panel azimuth as a compass bearing: 0° north, 90° east, 180° south, 270° west
 - `panel_tilt`: Panel tilt in degrees from horizontal (0° horizontal, 90° vertical)
 
-To check the configured geometry against the live API, run:
+When configured, the controller fetches and caches the Open-Meteo series
+automatically in the background. It checks about every ten minutes, refreshes
+a snapshot older than three hours, and retries a failed fetch after fifteen
+minutes. Opening the load-profile report triggers the first fetch if the cache
+is still empty. Weather is never a control dependency.
+
+To check the configured geometry against the live API manually, run:
 
 ```bash
 poetry run python -m evse_controller.weather
@@ -832,12 +838,15 @@ available on the previous day with the actual distribution recorded on the
 selected day:
 
 - a p10/p50/p90 fan chart for the selected series, with the actual band and
-  median overlaid;
-- a 48-slot × 14-day heatmap of median load;
+  median overlaid and an axis spanning the rounded minimum-to-maximum range,
+  including negative solar/export values;
+- a 48-slot × 14-day heatmap of median load, blue for positive and green for
+  negative values;
 - forecast MAE, bias and p90 coverage;
 - the forecast history depth and the number of matched slots;
 - a per-slot table and CSV download;
-- cached Open-Meteo temperature and irradiance when weather is configured.
+- cached Open-Meteo temperature and irradiance, fetched automatically when
+  weather is configured.
 
 The series selector includes the derived `house` series (grid minus Wallbox
 AC), the grid and EVSE channels, the battery DC channel, and every named

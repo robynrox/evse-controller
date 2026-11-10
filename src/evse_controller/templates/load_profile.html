@@ -98,6 +98,7 @@
     }
     .fan-chart { width: 100%; height: auto; display: block; }
     .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .zero-line { stroke: #9aa0a6; stroke-width: 1.4; }
     .axis { fill: #666; font-size: 11px; }
     .forecast-band { fill: #0b5cad; opacity: .16; }
     .actual-band { fill: #e65100; opacity: .12; }
@@ -305,9 +306,10 @@
         </details>
     {% elif weather_configured %}
         <p class="empty">
-            Weather is configured, but there is no cached snapshot for
-            {{ selected_date }}. Run
-            <code>python -m evse_controller.weather</code> to fetch one.
+            Weather is configured. The controller fetches it automatically;
+            this page will show the cached hourly series once the fetch
+            completes. If it remains empty, check the log or run
+            <code>python -m evse_controller.weather</code>.
         </p>
     {% else %}
         <p class="empty">
@@ -319,8 +321,9 @@
 
     <h2>Last 14 days</h2>
     <p>
-        Median load for each half-hour slot. Darker cells are higher load;
-        blank cells have no recorded data.
+        Median load for each half-hour slot. Blue cells are positive load,
+        green cells are negative (export or solar), and blank cells have no
+        recorded data.
     </p>
     <div class="heatmap-wrap">
         <table class="heatmap">

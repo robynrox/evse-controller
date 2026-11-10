@@ -20,12 +20,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import json
 from pathlib import Path
+import threading
+import time
 from typing import Any, Optional
 
 import requests
 
 from evse_controller.utils.config import config
-from evse_controller.utils.logging_config import debug, warning
+from evse_controller.utils.logging_config import debug, info, warning
 
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
@@ -317,6 +319,79 @@ class OpenMeteoClient:
             source=str(payload.get("source", "open-meteo")),
             model=str(payload.get("model", "best_match")),
         )
+
+
+class WeatherRefresher:
+    """Keep the optional weather cache fresh in the background.
+
+    The controller calls :meth:`maybe_fetch` from its periodic loop.  The
+    report route can call it too when a page is opened before the first
+    fetch.  A failed attempt is retried after a backoff, and concurrent
+    fetches are suppressed.
+    """
+
+    def __init__(
+        self,
+        client: Optional[OpenMeteoClient] = None,
+        *,
+        check_interval_seconds: float = 600.0,
+        max_age_hours: float = 3.0,
+        retry_seconds: float = 900.0,
+    ):
+        self.client = client or OpenMeteoClient()
+        self.check_interval_seconds = max(1.0, float(check_interval_seconds))
+        self.max_age_hours = max(0.0, float(max_age_hours))
+        self.retry_seconds = max(1.0, float(retry_seconds))
+        self._lock = threading.Lock()
+        self._fetching = False
+        self._last_check = 0.0
+        self._last_attempt = 0.0
+
+    def maybe_fetch(self, now: Optional[float] = None) -> bool:
+        """Start a background fetch when the cache is missing or stale."""
+        moment = time.time() if now is None else float(now)
+        with self._lock:
+            if not self.client.configured or self._fetching:
+                return False
+            if moment - self._last_check < self.check_interval_seconds:
+                return False
+            self._last_check = moment
+            if (
+                self.client.latest(
+                    max_age_hours=self.max_age_hours,
+                    now=datetime.now(),
+                )
+                is not None
+            ):
+                return False
+            if (
+                self._last_attempt
+                and moment - self._last_attempt < self.retry_seconds
+            ):
+                return False
+            self._fetching = True
+            self._last_attempt = moment
+
+        threading.Thread(
+            target=self._run,
+            name="WeatherRefresh",
+            daemon=True,
+        ).start()
+        return True
+
+    def _run(self) -> None:
+        try:
+            self.client.fetch()
+            info("WEATHER: Fetched and cached the Open-Meteo snapshot")
+        except Exception as exc:
+            warning(f"WEATHER: Automatic fetch failed: {exc}")
+        finally:
+            with self._lock:
+                self._fetching = False
+
+
+#: Shared by the controller loop and the report pages.
+weather_refresher = WeatherRefresher()
 
 
 def main(argv=None) -> int:

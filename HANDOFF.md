@@ -235,11 +235,16 @@ completed fixes.
   azimuth to Open-Meteo's south-zero convention, and caches the normalised
   snapshot at `data/state/weather_cache.json`. There are no default
   coordinates or panel geometry: all four values must be configured before a
-  request is made.
+  request is made. `WeatherRefresher` checks about every ten minutes, refreshes
+  a snapshot older than three hours, and retries failures after fifteen
+  minutes. The controller loop and the load-profile report both trigger it in
+  the background; weather is never a control dependency.
 - `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
-  forecast-versus-actual fan chart, a 14-day heatmap, MAE/bias/p90 coverage,
-  per-slot detail, CSV, and cached weather when configured. It is the first
-  report built on the sparse histograms and is read-only.
+  forecast-versus-actual fan chart with a rounded min-to-max axis that includes
+  negative solar/export values, a 14-day heatmap with blue positive and green
+  negative cells, MAE/bias/p90 coverage, per-slot detail, CSV, and cached
+  weather when configured. It is the first report built on the sparse
+  histograms and is read-only.
 - Grid and EVSE power are resolved from `shelly.grid`/`shelly.evse` into one
   normalised ch1=grid, ch2=EVSE view. The current calculation and the savings
   ledger both read that view, so a non-default CT assignment no longer inverts
