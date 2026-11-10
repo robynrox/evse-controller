@@ -1048,9 +1048,16 @@ def index():
     """Render the main dashboard page"""
     scheduled_events = scheduler.get_future_events()
     current_state = get_system_state()
+    wallbox_reset_available = bool(
+        config.WALLBOX_USERNAME
+        and config.WALLBOX_PASSWORD
+        and config.WALLBOX_SERIAL
+        and callable(getattr(evseController.evse, "request_reset", None))
+    )
     return render_template('index.html',
                          scheduled_events=scheduled_events,
-                         current_state=current_state)
+                         current_state=current_state,
+                         wallbox_reset_available=wallbox_reset_available)
 
 @app.route('/decision')
 def decision_page():

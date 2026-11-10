@@ -293,8 +293,9 @@ completed fixes.
   timeout. `EvseController.get_wallbox_state_label()` puts these in the
   measurements' Wallbox State row; reset takes priority. `/api/ext_status`
   recomputes the label on each poll so elapsed seconds keep moving. The
-  dashboard has a confirmed **Reset Wallbox** button; manual resets start the
-  label immediately, and automatic resets are suppressed while a reboot is in
+  dashboard has a confirmed **Reset Wallbox** button only when the Wallbox
+  credentials and serial are configured; manual resets start the label
+  immediately, and automatic resets are suppressed while a reboot is in
   progress.
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects

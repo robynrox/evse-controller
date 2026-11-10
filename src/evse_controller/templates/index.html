@@ -312,8 +312,10 @@
             </div>
         </div>
         <div id="link-health" class="link-health" hidden></div>
+        {% if wallbox_reset_available %}
         <button type="button" class="reset-wallbox-btn"
                 onclick="resetWallbox()">Reset Wallbox</button>
+        {% endif %}
         <div class="nav-links">
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
             <a href="{{ url_for('daily_report_today') }}">Energy Report →</a>
