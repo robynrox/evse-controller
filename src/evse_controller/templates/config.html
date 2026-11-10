@@ -724,6 +724,28 @@
     </div>
 
     <div class="config-section">
+        <h2>Dashboard</h2>
+        <div class="form-group">
+            <label for="ui_button_style">Command button style</label>
+            <select id="ui_button_style" name="ui[use_icon_buttons]">
+                <option value="icons"
+                    {% if config.ui.get('use_icon_buttons', True) %}selected{% endif %}>
+                    Illustrated icons (default)
+                </option>
+                <option value="text"
+                    {% if not config.ui.get('use_icon_buttons', True) %}selected{% endif %}>
+                    Text abbreviations
+                </option>
+            </select>
+            <small>
+                Text mode uses UNPLUG, SOLAR CHG, MAX CHG, MAX DIS,
+                HOME DIS, BAL GRID, PAUSE, SMART, FREE RUN, OCPP ON and
+                RESET.
+            </small>
+        </div>
+    </div>
+
+    <div class="config-section">
         <h2>Weather (optional)</h2>
         {% set weather = config.get('weather', {}) %}
         <p>

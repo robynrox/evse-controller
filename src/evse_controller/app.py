@@ -1011,6 +1011,11 @@ def config_page():
                 config.OCPP_AUTO_FREQUENCY_DAYS
             )
 
+            # Dashboard command-button style.
+            button_style = request.form.get('ui[use_icon_buttons]')
+            if button_style is not None:
+                config.UI_USE_ICON_BUTTONS = button_style != 'text'
+
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
                 ("latitude", "WEATHER_LATITUDE"),
@@ -1057,7 +1062,8 @@ def index():
     return render_template('index.html',
                          scheduled_events=scheduled_events,
                          current_state=current_state,
-                         wallbox_reset_available=wallbox_reset_available)
+                         wallbox_reset_available=wallbox_reset_available,
+                         use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 
 @app.route('/decision')
 def decision_page():

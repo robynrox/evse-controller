@@ -1051,3 +1051,24 @@ class TestAutoOcppConfig:
         assert row["duration_slots"] == 4
         assert row["window_start"] == "01:00"
         assert row["window_end"] == "04:00"
+
+
+class TestDashboardButtonStyle:
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_icons_are_the_default(self):
+        config = self._config()
+
+        assert config.UI_USE_ICON_BUTTONS is True
+        assert config.as_dict()["ui"]["use_icon_buttons"] is True
+
+    def test_text_abbreviations_can_be_selected(self):
+        config = self._config()
+        config.UI_USE_ICON_BUTTONS = False
+
+        assert config.UI_USE_ICON_BUTTONS is False
+        assert config.as_dict()["ui"]["use_icon_buttons"] is False

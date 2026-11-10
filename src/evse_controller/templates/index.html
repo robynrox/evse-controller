@@ -337,44 +337,55 @@
     </div>
 </div>
 
-<div class="svg-button-container">
+<div class="svg-button-container{% if not use_icon_buttons %} text-buttons{% endif %}">
     <button class="svg-button" onclick="sendCommand('unplug')" title="Pause charging to allow the plug to be removed">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="unplug-icon" alt="Pause to remove plug">
+        <span class="button-label">UNPLUG</span>
     </button>
     <button class="svg-button" onclick="sendCommand('solar')" title="Charge using only solar power">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="solar-icon" alt="Solar only charging">
+        <span class="button-label">SOLAR<br>CHG</span>
     </button>
     <button class="svg-button" onclick="sendCommand('charge')"
         title="Charge battery at maximum rate using all power sources">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="charge-icon" alt="Charge at maximum rate">
+        <span class="button-label">MAX<br>CHG</span>
     </button>
     <button class="svg-button" onclick="sendCommand('discharge')"
         title="Discharge battery at maximum rate to power the home and send any excess back to the grid">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="discharge-icon" alt="Discharge">
+        <span class="button-label">MAX<br>DIS</span>
     </button>
     <button class="svg-button" onclick="sendCommand('power-home')"
         title="Discharge battery when necessary to power the home only">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="power-home-icon" alt="Power Home">
+        <span class="button-label">HOME<br>DIS</span>
     </button>
     <button class="svg-button" onclick="sendCommand('balance')"
         title="Minimise use of the grid (charge from solar and power the home)">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="balance-icon" alt="Balance">
+        <span class="button-label">BAL<br>GRID</span>
     </button>
     <button class="svg-button" onclick="sendCommand('pause')" title="Pause all charging/discharging">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="pause-icon" alt="Pause">
+        <span class="button-label">PAUSE</span>
     </button>
     <button class="svg-button" onclick="sendCommand('smart')" title="Use configured smart tariff (set in Configuration)">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="smart-icon" alt="Smart Tariff">
+        <span class="button-label">SMART</span>
     </button>
     <button class="svg-button" onclick="sendCommand('freerun')" title="Allow EVSE to operate independently without Modbus control">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="free-run-icon" alt="Free Run Mode">
+        <span class="button-label">FREE<br>RUN</span>
     </button>
     <button class="svg-button" onclick="sendCommand('ocpp')" title="Enter OCPP mode - EVSE controlled via OCPP protocol">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="ocpp-icon" alt="OCPP Mode">
+        <span class="button-label">OCPP<br>ON</span>
     </button>
     {% if wallbox_reset_available %}
     <button class="svg-button" onclick="resetWallbox()" title="Restart the Wallbox (asks for confirmation)">
         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" id="reset-icon" alt="Reset Wallbox">
+        <span class="button-label reset-label">RESET</span>
     </button>
     {% endif %}
     <button onclick="toggleLegend()">Help</button>
@@ -586,6 +597,37 @@
         width: auto;
     }
 
+    .svg-button .button-label {
+        display: none;
+        height: 40px;
+        min-width: 64px;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.05;
+        color: #495057;
+        white-space: normal;
+    }
+
+    .text-buttons .svg-button {
+        min-width: 76px;
+        padding: 4px 8px !important;
+    }
+
+    .text-buttons .svg-button img {
+        display: none;
+    }
+
+    .text-buttons .svg-button .button-label {
+        display: flex;
+    }
+
+    .svg-button .button-label.reset-label {
+        color: #b02a37;
+    }
+
     .legend-container {
         margin-top: 10px;
     }
@@ -723,7 +765,7 @@
 
     function resetWallbox() {
         if (!window.confirm(
-            'Are you sure you want to manually reset the Wallbox?'
+            'Proceed to manually reset the Wallbox?'
         )) {
             return;
         }

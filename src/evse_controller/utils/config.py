@@ -427,6 +427,17 @@ class Config:
         )
     )
 
+    #: Dashboard command buttons use the supplied illustrations by default.
+    #: Users who prefer words can switch to the text abbreviations.
+    UI_USE_ICON_BUTTONS = property(
+        lambda self: self._get_config_value(
+            "ui", "use_icon_buttons", True
+        ),
+        lambda self, value: self._set_config_value(
+            "ui", "use_icon_buttons", value
+        )
+    )
+
     MAX_CHARGE_PERCENT = property(
         lambda self: self._get_config_int("charging", "max_charge_percent", 90),
         lambda self, value: self._set_config_int("charging", "max_charge_percent", value, 90)
@@ -1206,6 +1217,9 @@ class Config:
                 'duration_slots': self.OCPP_AUTO_DURATION_SLOTS,
                 'window_start': self.OCPP_AUTO_WINDOW_START,
                 'window_end': self.OCPP_AUTO_WINDOW_END,
+            },
+            'ui': {
+                'use_icon_buttons': self.UI_USE_ICON_BUTTONS,
             }
         }
 

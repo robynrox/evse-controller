@@ -299,7 +299,9 @@ completed fixes.
   poll so elapsed seconds keep moving. The command row has a red **RESET**
   SVG button left of Help, shown only when the Wallbox credentials and serial
   are configured; manual resets start the label immediately, and automatic
-  resets are suppressed while a reboot is in progress.
+  resets are suppressed while a reboot is in progress. Dashboard command
+  buttons use the supplied icons by default; `ui.use_icon_buttons: false`
+  switches them to the text abbreviations (UNPLUG, SOLAR CHG, MAX CHG, …).
 - **Three-tier prices and presets.** `price_tiers.py` resolves a
   standard/cheap/peak table with multiple wrap-aware windows and rejects
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,

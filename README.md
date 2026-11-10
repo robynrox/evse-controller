@@ -380,11 +380,13 @@ the Wallbox State row has returned to a valid state such as Disconnected.
 
 The command row has a red **RESET** button, immediately left of **Help**,
 when the Wallbox username, password and serial are configured. It asks
-“Are you sure you want to manually reset the Wallbox?” and then uses the same
-API reset path. A manual reset starts the label immediately, and an automatic
-reset is suppressed while any reboot is in progress. On desktop the
-real-time measurements panel sizes to its content and grows leftwards from its
-right-hand anchor rather than clipping long values.
+“Proceed to manually reset the Wallbox?” and then uses the same API reset
+path. A manual reset starts the label immediately, and an automatic reset is
+suppressed while any reboot is in progress. The illustrated command icons are
+the default; choose **Dashboard → Command button style → Text abbreviations**
+in the configuration page to replace them with the text abbreviations. On
+desktop the real-time measurements panel sizes to its content and grows
+leftwards from its right-hand anchor rather than clipping long values.
 
 ##### IOCTGO_AGILEOUT dashboard
 
