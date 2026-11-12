@@ -448,12 +448,16 @@ completed fixes.
   passed through the input builder; slots with many bins are condensed into at
   most 24 time-balanced groups.
 - The DP now adds follow arcs when the heuristic's follow gates are present:
-  `follow_house_conservative`, `follow_house_aggressive` and `follow_solar`.
+  `follow_house_conservative`, `follow_house_aggressive`, `follow_solar` and
+  two bidirectional variants. A bidirectional arc charges on negative load
+  samples, discharges on positive samples above the chosen gate, and idles
+  elsewhere; the samples are folded into one expected transition. It is only
+  offered when both directions occur in the slot. This adds arcs, not SoC
+  states, and does not enumerate charge × discharge current pairs.
   Gates come from the same `discharge_activation_threshold_w` calculation as
   the live heuristic and are stored per input row with their floors. Follow
   arcs use expected cost, expected net SoC change and gross throughput for
-  degradation. This adds arcs, not SoC states, and does not enumerate charge ×
-  discharge current pairs.
+  degradation.
 - The live heuristic now plans **import/charge** slots as well as exports:
   off-peak charge is included in the 23:30 projection, and high-value priority
   exports can trigger peak-rate recharge before their deadline. The recharge

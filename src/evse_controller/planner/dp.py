@@ -780,6 +780,8 @@ class DpPlanner:
         elif template.kind in (
             "follow_house_conservative",
             "follow_house_aggressive",
+            "follow_bidirectional_conservative",
+            "follow_bidirectional_aggressive",
         ):
             action_floor = self.discharge_floor_percent
             if template.floor_percent is not None:
@@ -869,6 +871,17 @@ class DpPlanner:
             )
             if template is not None:
                 templates.append(template)
+        for kind, aggressive in (
+            ("follow_bidirectional_conservative", False),
+            ("follow_bidirectional_aggressive", True),
+        ):
+            template = self._follow_bidirectional_template(
+                slot,
+                aggressive=aggressive,
+                kind=kind,
+            )
+            if template is not None:
+                templates.append(template)
         solar = self._follow_solar_template(slot)
         if solar is not None:
             templates.append(solar)
@@ -928,6 +941,130 @@ class DpPlanner:
         if not currents:
             return None
         delta_soc = -net_stored / self.capacity_kwh * 100.0
+        steps = int(round(delta_soc / self.soc_step_percent))
+        return _ActionTemplate(
+            kind=kind,
+            current_a=sum(currents) / len(currents),
+            ac_power_kw=signed_ac,
+            stored_kwh=net_stored,
+            delta_soc=steps * self.soc_step_percent,
+            delta_steps=steps,
+            cost_p=(
+                expected_cost
+                + self.degradation_p_per_kwh * gross_stored
+            ),
+            session=slot.session,
+            current_min_a=float(min(currents)),
+            current_max_a=float(max(currents)),
+            floor_percent=floor_percent,
+            follow=True,
+        )
+
+    def _follow_bidirectional_template(
+        self,
+        slot: PlannerSlot,
+        *,
+        aggressive: bool,
+        kind: str,
+    ) -> Optional[_ActionTemplate]:
+        """One arc that follows both solar surplus and house demand.
+
+        Each load sample is handled independently: charge when it has a
+        usable surplus, discharge when it reaches the house gate, otherwise
+        idle.  The samples are then folded into one expected transition, so
+        this adds a single arc rather than enumerating charge/discharge
+        current pairs inside the slot.
+        """
+        samples = slot.load_samples or ((slot.load_kw, 1.0),)
+        minimum = int(math.ceil(self.min_current_a - 1e-9))
+        max_charge = int(math.floor(slot.max_charge_current_a + 1e-9))
+        max_discharge = int(math.floor(slot.max_discharge_current_a + 1e-9))
+        gate_w = (
+            slot.follow_aggressive_gate_w
+            if aggressive
+            else slot.follow_conservative_gate_w
+        )
+        floor_percent = (
+            slot.follow_aggressive_floor_percent
+            if aggressive
+            else slot.follow_conservative_floor_percent
+        )
+
+        expected_cost = 0.0
+        net_stored = 0.0
+        gross_stored = 0.0
+        signed_ac = 0.0
+        currents: list[int] = []
+        charged = False
+        discharged = False
+
+        for load_kw, weight in samples:
+            load_kw = float(load_kw)
+            if load_kw < 0:
+                surplus_w = -load_kw * 1000.0
+                current = int(math.floor(surplus_w / VOLTAGE_V))
+                if current < minimum or max_charge < minimum:
+                    expected_cost += weight * self._grid_energy_cost_at(
+                        slot, load_kw, 0.0
+                    )
+                    continue
+                current = min(max_charge, current)
+                ac_kw = float(
+                    self.efficiency_model.charge_ac_power_kw(current)
+                )
+                efficiency = float(
+                    self.efficiency_model.charge_efficiency(current)
+                )
+                stored = ac_kw * SLOT_HOURS * efficiency
+                expected_cost += weight * self._grid_energy_cost_at(
+                    slot, load_kw, ac_kw
+                )
+                net_stored += weight * stored
+                gross_stored += weight * stored
+                signed_ac += weight * ac_kw
+                currents.append(current)
+                charged = True
+                continue
+
+            load_w = max(0.0, load_kw * 1000.0)
+            if (
+                gate_w is None
+                or gate_w >= 1e8
+                or load_w + 1e-9 < gate_w
+                or max_discharge < minimum
+            ):
+                expected_cost += weight * self._grid_energy_cost_at(
+                    slot, load_kw, 0.0
+                )
+                continue
+
+            raw = load_w / VOLTAGE_V
+            if aggressive:
+                raw += AGGRESSIVE_DISCHARGE_BIAS_A
+                current = int(round(raw))
+            else:
+                current = int(math.floor(raw))
+            current = max(minimum, min(max_discharge, current))
+            ac_kw = float(
+                self.efficiency_model.discharge_ac_power_kw(current)
+            )
+            efficiency = float(
+                self.efficiency_model.discharge_efficiency(current)
+            )
+            stored = ac_kw * SLOT_HOURS / max(efficiency, 1e-9)
+            expected_cost += weight * self._grid_energy_cost_at(
+                slot, load_kw, -ac_kw
+            )
+            net_stored -= weight * stored
+            gross_stored += weight * stored
+            signed_ac -= weight * ac_kw
+            currents.append(-current)
+            discharged = True
+
+        if not (charged and discharged):
+            return None
+
+        delta_soc = net_stored / self.capacity_kwh * 100.0
         steps = int(round(delta_soc / self.soc_step_percent))
         return _ActionTemplate(
             kind=kind,

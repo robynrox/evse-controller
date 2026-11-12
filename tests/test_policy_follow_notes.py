@@ -66,6 +66,23 @@ def test_no_notes_when_all_follow_arcs_are_offered():
         _option("follow_solar"),
         _option("follow_house_conservative"),
         _option("follow_house_aggressive"),
+        _option("follow_bidirectional_conservative"),
+        _option("follow_bidirectional_aggressive"),
     ]
 
     assert _follow_notes(slot, options) == []
+
+
+def test_bidirectional_note_names_the_missing_direction():
+    notes = _follow_notes(
+        _slot(
+            load_kw=0.5,
+            follow_conservative_gate_w=800.0,
+            follow_aggressive_gate_w=900.0,
+        ),
+        [],
+    )
+
+    assert any(
+        "lacks a usable solar surplus" in note for note in notes
+    )

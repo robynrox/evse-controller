@@ -948,10 +948,11 @@ action for every half-hour slot and every SoC state:
   prior. The prior applies only to the `house` series, not to solar or grid
   report series.
 - **Follow modes:** where the heuristic's economic gate is available, the map
-  can choose *follow house conservative*, *follow house aggressive* or *follow
-  solar*. Fixed charge/discharge arcs remain available, so the planner can
-  still prefer an exact current. The selected slot shows the conservative and
-  aggressive house-import gates and floors.
+  can choose *follow house conservative*, *follow house aggressive*, *follow
+  bidirectional conservative/aggressive* or *follow solar*. Fixed
+  charge/discharge arcs remain available, so the planner can still prefer an
+  exact current. The selected slot shows the conservative and aggressive
+  house-import gates and floors.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future
@@ -980,10 +981,16 @@ modes. Each fixed arc is scored using the **expected grid cost over the slot's
 house-load histogram**, not just the median. The follow arcs apply a per-sample
 rule: follow-house discharges to cover positive house load above the
 heuristic's conservative/aggressive activation gate; follow-solar charges from
-negative net load (surplus). The DP still keeps only the SoC state; load is
-exogenous, so these are additional arcs, not additional dimensions. The
-expected cost and net SoC change are computed in one pass over the histogram,
-so the algorithm stays linear in the number of arcs and samples.
+negative net load (surplus). A bidirectional follow arc applies both rules to
+the same samples: charge when a sample has surplus, discharge when it reaches
+the gate, otherwise idle. It is one expected transition, not a charge×discharge
+current-pair search, so the algorithm stays linear in the number of arcs and
+samples. The DP still keeps only the SoC state; load is exogenous, so these are
+additional arcs, not additional dimensions.
+
+A bidirectional arc is offered only when the slot has both a usable surplus
+and at least one sample that reaches the relevant house-follow gate. The
+conservative and aggressive variants use their own gate and floor.
 
 The follow-house gates are the same `discharge_activation_threshold_w`
 calculation used by the live heuristic. The conservative mode uses the

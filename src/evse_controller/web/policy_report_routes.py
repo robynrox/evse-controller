@@ -65,6 +65,8 @@ def _fmt_current(value) -> str:
 
 def _fmt_action_current(value, minimum=None, maximum=None) -> str:
     if minimum is not None and maximum is not None and minimum != maximum:
+        if minimum < 0 < maximum:
+            return f"{minimum:+.0f}…{maximum:+.0f} A"
         return f"{minimum:.0f}–{maximum:.0f} A"
     return _fmt_current(value)
 
@@ -73,6 +75,12 @@ def _mode_label(kind: Optional[str]) -> str:
     return {
         "follow_house_conservative": "follow house (conservative)",
         "follow_house_aggressive": "follow house (aggressive)",
+        "follow_bidirectional_conservative": (
+            "follow bidirectional (conservative)"
+        ),
+        "follow_bidirectional_aggressive": (
+            "follow bidirectional (aggressive)"
+        ),
         "follow_solar": "follow solar",
     }.get(kind or "", kind or "—")
 
@@ -355,6 +363,10 @@ def _mode_color(kind: str, current: float, max_current: float) -> str:
     strength = 0.35
     if max_current > 0:
         strength = max(0.35, min(1.0, abs(current) / max_current))
+    if (kind or "").startswith("follow_bidirectional"):
+        # These arcs span both directions; use the full colour even when the
+        # weighted average current is near zero.
+        strength = 1.0
     if kind == "charge":
         low = (207, 227, 247)
         high = (11, 92, 173)
@@ -367,6 +379,12 @@ def _mode_color(kind: str, current: float, max_current: float) -> str:
     elif kind == "follow_house_aggressive":
         low = (214, 238, 237)
         high = (0, 105, 92)
+    elif kind == "follow_bidirectional_conservative":
+        low = (232, 241, 224)
+        high = (85, 139, 47)
+    elif kind == "follow_bidirectional_aggressive":
+        low = (224, 241, 241)
+        high = (0, 131, 143)
     elif kind == "follow_solar":
         low = (255, 248, 214)
         high = (249, 168, 37)
@@ -398,12 +416,18 @@ def _current_color(kind: str, current: float, max_current: float) -> str:
     if kind == "idle":
         return "#e6e9ed"
     strength = max(0.0, min(1.0, abs(current) / max(max_current, 1.0)))
+    if (kind or "").startswith("follow_bidirectional"):
+        strength = 1.0
     if kind == "charge":
         low, high = (213, 231, 248), (8, 69, 130)
     elif kind == "follow_house_conservative":
         low, high = (220, 237, 220), (46, 125, 50)
     elif kind == "follow_house_aggressive":
         low, high = (214, 238, 237), (0, 105, 92)
+    elif kind == "follow_bidirectional_conservative":
+        low, high = (232, 241, 224), (85, 139, 47)
+    elif kind == "follow_bidirectional_aggressive":
+        low, high = (224, 241, 241), (0, 131, 143)
     elif kind == "follow_solar":
         low, high = (255, 248, 214), (249, 168, 37)
     else:
@@ -838,6 +862,38 @@ def _follow_notes(slot, options) -> list[str]:
                 f"{label} is absent because the forecast house import "
                 f"({max_import_w:.0f} W) never reaches its "
                 f"{float(gate):.0f} W gate."
+            )
+
+    bidirectional_kinds = {
+        "follow_bidirectional_conservative",
+        "follow_bidirectional_aggressive",
+    }
+    if not (kinds & bidirectional_kinds):
+        missing = []
+        if (
+            surplus_w < minimum_w
+            or slot.max_charge_current_a < float(
+                config.WALLBOX_MIN_DISCHARGE_CURRENT
+            )
+        ):
+            missing.append("a usable solar surplus")
+        has_house = any(
+            gate is not None
+            and max_import_w >= float(gate)
+            and slot.max_discharge_current_a
+            >= float(config.WALLBOX_MIN_DISCHARGE_CURRENT)
+            for gate in (
+                slot.follow_conservative_gate_w,
+                slot.follow_aggressive_gate_w,
+            )
+        )
+        if not has_house:
+            missing.append("a reachable house-follow gate")
+        if missing:
+            notes.append(
+                "Bidirectional follow is absent because the slot lacks "
+                + " and ".join(missing)
+                + "."
             )
     return notes
 

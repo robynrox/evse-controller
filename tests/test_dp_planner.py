@@ -511,3 +511,60 @@ def test_terminal_value_is_visible_in_the_policy_surface():
     charge = [action for action in policy.actions if action.kind == "charge"]
     assert charge
     assert charge[0].current_a == pytest.approx(10.0)
+
+
+def _bidirectional_slot():
+    return replace(
+        slot(0, import_p=20.0, export_p=5.0, load_kw=0.0),
+        load_samples=((-3.0, 0.5), (1.0, 0.5)),
+        follow_conservative_gate_w=800.0,
+        follow_aggressive_gate_w=900.0,
+        follow_conservative_floor_percent=45.0,
+        follow_aggressive_floor_percent=50.0,
+    )
+
+
+def test_bidirectional_follow_arc_charges_and_discharges_from_samples():
+    p = planner(target_soc_percent=None)
+    policy = p.policy([_bidirectional_slot()], initial_soc_percent=70.0)
+
+    kinds = {
+        option.kind for option in p.options(policy, 0, 140)
+    }
+
+    assert "follow_bidirectional_conservative" in kinds
+    assert "follow_bidirectional_aggressive" in kinds
+    options = {
+        option.kind: option for option in p.options(policy, 0, 140)
+    }
+    conservative = options["follow_bidirectional_conservative"]
+    assert conservative.current_min_a < 0 < conservative.current_max_a
+
+
+def test_bidirectional_arc_needs_both_surplus_and_house_demand():
+    p = planner(target_soc_percent=None)
+    surplus_only = replace(
+        _bidirectional_slot(),
+        load_samples=((-3.0, 1.0),),
+    )
+    house_only = replace(
+        _bidirectional_slot(),
+        load_samples=((1.0, 1.0),),
+    )
+
+    surplus_policy = p.policy([surplus_only], initial_soc_percent=70.0)
+    house_policy = p.policy([house_only], initial_soc_percent=70.0)
+
+    surplus_kinds = {
+        option.kind for option in p.options(surplus_policy, 0, 140)
+    }
+    house_kinds = {
+        option.kind for option in p.options(house_policy, 0, 140)
+    }
+
+    assert not {
+        kind for kind in surplus_kinds if "bidirectional" in kind
+    }
+    assert not {
+        kind for kind in house_kinds if "bidirectional" in kind
+    }
