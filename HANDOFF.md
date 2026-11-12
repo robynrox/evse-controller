@@ -803,8 +803,11 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
   - `src/evse_controller/tariffs/base.py` — tariff rate/cost contract, £/kWh.
   - `src/evse_controller/tariffs/octopus/ioctgo.py` and
     `ioctgo_with_agile_outgoing.py` — current heuristic and shortfall logic.
-  - `src/evse_controller/tools/export_influxdb.py` — existing InfluxDB export
-    pattern (requires pandas).
+  - `src/evse_controller/tools/export_influxdb.py` — daily gzipped backup
+    export (requires pandas).
+  - `src/evse_controller/tools/export_influxdb_range.py` — analysis export of
+    an arbitrary range as tidy `timestamp,series,value` CSV, with field
+    discovery, resolution/aggregation and without pandas.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).

@@ -1206,6 +1206,41 @@ crontab -e
 
 The script is idempotent - it only exports dates that haven't been backed up yet, making it safe to run multiple times.
 
+### Analysis Export
+
+For research rather than backup, `export_influxdb_range.py` extracts a
+selected date range and field set as one tidy long CSV:
+
+```bash
+# Discover the field names in the configured bucket
+python -m evse_controller.tools.export_influxdb_range --list-fields
+
+# Five-minute means for a year
+python -m evse_controller.tools.export_influxdb_range \
+    --start 2026-01-01 --end 2027-01-01 \
+    --resolution 5m --output data/analysis/influx_2026.csv.gz
+
+# Raw samples for a short investigation
+python -m evse_controller.tools.export_influxdb_range \
+    --start 2026-11-01 --end 2026-11-08 \
+    --fields solar,heat_pump,grid,evse \
+    --resolution raw --batch-days 1
+```
+
+The output columns are `timestamp,series,value`, so the file can be joined
+directly with weather, daily-report or load-profile data. Timestamps are
+written in local time with an explicit offset; use `--timezone Europe/London`
+for a reproducible zone. Configuration follows the same precedence as
+`analyse_efficiency.py`: CLI flags, then `INFLUXDB_*` environment variables,
+then the `influxdb` section of `data/config/config.yaml`. The tool uses the
+configured bucket and measurement, supports `--resolution raw` or an
+`aggregateWindow` duration such as `5m`, `30m` or `1h`, and pages long ranges
+with `--batch-days`. It does not require pandas.
+
+This tool is optional and only useful when InfluxDB logging is enabled. The
+daily backup script above remains the right choice for long-term backups; the
+range exporter is for analysis and weather-correlation work.
+
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
