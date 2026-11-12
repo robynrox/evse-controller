@@ -727,8 +727,10 @@
         <h2>Learning mode</h2>
         <p>
             Learning mode uses dynamic programming (DP) to plan from measured
-            grid load and prices. Preview records each plan without changing
-            control, so it is safe to leave on while the plan is evaluated.
+            grid load and prices. <strong>Preview</strong> is the normal state:
+            it records plans, SoC estimates and decisions without changing
+            control. <strong>Off</strong> is for heuristic-only use and stops
+            that observer history; the heuristic still controls either way.
             Control is not available yet.
         </p>
         <div class="form-group">
@@ -736,7 +738,7 @@
             <select id="learning_mode" name="learning[mode]">
                 <option value="off"
                     {% if config.learning.get('mode', 'preview') == 'off' %}selected{% endif %}>
-                    Off
+                    Off — heuristic only, no plan or SoC history
                 </option>
                 <option value="preview"
                     {% if config.learning.get('mode', 'preview') == 'preview' %}selected{% endif %}>

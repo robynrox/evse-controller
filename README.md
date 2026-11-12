@@ -891,12 +891,15 @@ learning:
   mode: preview
 ```
 
-- `preview` (default) — record plans without changing control;
-- `off` — do not run or record plans.
+- `preview` (default) — record plans, SoC estimates and decisions without
+  changing control;
+- `off` — heuristic-only use: stop the planner and its observer history.
 
 A future `control` mode is reserved for the control rollout and is not yet
-implemented; a hand-edited `control` value falls back to preview. Preview is
-safe to leave on, but it does not actuate.
+implemented; a hand-edited `control` value falls back to preview. The dashboard
+shows the effective mode. “Learning mode: Preview” means the planner is in its
+normal observer state; it does not mean the heuristics have been replaced.
+Preview is safe to leave on, but it does not actuate.
 
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can

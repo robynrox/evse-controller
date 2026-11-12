@@ -428,8 +428,10 @@ completed fixes.
   no-load warning.
 - **Learning mode** is the user-facing name for the DP planner.
   `learning.mode` accepts `preview` (default) or `off`; `control` is reserved
-  for the later rollout and falls back to preview. Preview records plans but
-  never actuates. Each run stores `solver_version` and `solver_mode`;
+  for the later rollout and falls back to preview. Preview is the normal
+  observer state and records plans, SoC estimates and decisions but never
+  actuates. Off is the heuristic-only mode and stops that observer history.
+  Each run stores `solver_version` and `solver_mode`;
   `SOLVER_VERSION` in `planner/version.py` must be bumped whenever a planner
   change can alter an action or its cost. The policy and backtest pages show
   the version.
