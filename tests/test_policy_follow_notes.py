@@ -86,3 +86,39 @@ def test_bidirectional_note_names_the_missing_direction():
     assert any(
         "lacks a usable solar surplus" in note for note in notes
     )
+
+
+def test_folded_unidirectional_arcs_are_explained_as_bidirectional():
+    slot = _slot(
+        load_kw=-1.0,
+        follow_conservative_gate_w=800.0,
+        follow_aggressive_gate_w=900.0,
+    )
+    options = [
+        _option("follow_bidirectional_conservative"),
+        _option("follow_bidirectional_aggressive"),
+    ]
+
+    notes = _follow_notes(slot, options)
+
+    assert any("Solar follow is folded" in note for note in notes)
+    assert any(
+        "Conservative house follow is folded" in note for note in notes
+    )
+    assert any(
+        "Aggressive house follow is folded" in note for note in notes
+    )
+
+
+def test_missing_unidirectional_arc_still_explained_when_its_bidirectional_arc_is_absent():
+    slot = _slot(load_kw=0.5)
+    options = [_option("follow_bidirectional_aggressive")]
+
+    notes = _follow_notes(slot, options)
+
+    assert any("Solar follow is folded" in note for note in notes)
+    assert any(
+        "Conservative house follow is absent because its economic gate"
+        in note
+        for note in notes
+    )

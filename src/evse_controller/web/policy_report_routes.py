@@ -813,6 +813,11 @@ def _follow_notes(slot, options) -> list[str]:
     if slot is None:
         return []
     kinds = {option.kind for option in options}
+    bidirectional_kinds = {
+        "follow_bidirectional_conservative",
+        "follow_bidirectional_aggressive",
+    }
+    offered_bidirectional = kinds & bidirectional_kinds
     samples = slot.load_samples or ((slot.load_kw, 1.0),)
     surplus_w = max(
         0.0,
@@ -826,7 +831,12 @@ def _follow_notes(slot, options) -> list[str]:
     notes = []
 
     if "follow_solar" not in kinds:
-        if surplus_w <= 0:
+        if offered_bidirectional:
+            notes.append(
+                "Solar follow is folded into the bidirectional follow arc "
+                "at this SoC."
+            )
+        elif surplus_w <= 0:
             notes.append(
                 "Solar follow is absent because the house-load forecast has "
                 "no surplus in this slot."
@@ -838,19 +848,27 @@ def _follow_notes(slot, options) -> list[str]:
                 "minimum."
             )
 
-    for kind, label, gate in (
+    for kind, suppressing_kind, label, gate in (
         (
             "follow_house_conservative",
+            "follow_bidirectional_conservative",
             "Conservative house follow",
             slot.follow_conservative_gate_w,
         ),
         (
             "follow_house_aggressive",
+            "follow_bidirectional_aggressive",
             "Aggressive house follow",
             slot.follow_aggressive_gate_w,
         ),
     ):
         if kind in kinds:
+            continue
+        if suppressing_kind in kinds:
+            notes.append(
+                f"{label} is folded into the bidirectional follow arc "
+                "at this SoC."
+            )
             continue
         if gate is None:
             notes.append(
@@ -864,11 +882,7 @@ def _follow_notes(slot, options) -> list[str]:
                 f"{float(gate):.0f} W gate."
             )
 
-    bidirectional_kinds = {
-        "follow_bidirectional_conservative",
-        "follow_bidirectional_aggressive",
-    }
-    if not (kinds & bidirectional_kinds):
+    if not offered_bidirectional:
         missing = []
         if (
             surplus_w < minimum_w

@@ -568,3 +568,66 @@ def test_bidirectional_arc_needs_both_surplus_and_house_demand():
     assert not {
         kind for kind in house_kinds if "bidirectional" in kind
     }
+
+
+UNIDIRECTIONAL_FOLLOWS = {
+    "follow_solar",
+    "follow_house_conservative",
+    "follow_house_aggressive",
+}
+
+
+def test_bidirectional_follows_replace_unidirectional_arcs_when_feasible():
+    p = planner(target_soc_percent=None)
+    policy = p.policy([_bidirectional_slot()], initial_soc_percent=70.0)
+
+    kinds = {option.kind for option in p.options(policy, 0, 140)}
+
+    assert "follow_bidirectional_conservative" in kinds
+    assert "follow_bidirectional_aggressive" in kinds
+    assert not kinds & UNIDIRECTIONAL_FOLLOWS
+
+
+def test_unidirectional_follows_return_when_no_bidirectional_arc_fits():
+    p = planner(target_soc_percent=None)
+    policy = p.policy([_bidirectional_slot()], initial_soc_percent=97.0)
+
+    kinds = {option.kind for option in p.options(policy, 0, 194)}
+
+    assert not {kind for kind in kinds if "bidirectional" in kind}
+    assert "follow_house_conservative" in kinds
+    assert "follow_house_aggressive" in kinds
+
+
+def test_policy_does_not_choose_suppressed_unidirectional_follows():
+    # High degradation makes the narrow house-follow arc cheaper than the
+    # bidirectional arc, so it would win if the suppression were not applied
+    # in the backward pass.
+    p = planner(target_soc_percent=None, degradation_p_per_kwh=10.0)
+    policy = p.policy([_bidirectional_slot()], initial_soc_percent=70.0)
+
+    checked = 0
+    for state, cell in enumerate(policy.cells[0]):
+        kinds = {option.kind for option in p.options(policy, 0, state)}
+        suppressed = set()
+        if any(kind.startswith("follow_bidirectional") for kind in kinds):
+            suppressed.add("follow_solar")
+        if "follow_bidirectional_conservative" in kinds:
+            suppressed.add("follow_house_conservative")
+        if "follow_bidirectional_aggressive" in kinds:
+            suppressed.add("follow_house_aggressive")
+        if not suppressed:
+            continue
+        checked += 1
+        assert cell.action is None or cell.action.kind not in suppressed
+
+    assert checked > 0
+
+
+def test_plan_does_not_choose_suppressed_unidirectional_follows():
+    p = planner(target_soc_percent=None, degradation_p_per_kwh=10.0)
+
+    result = p.plan([_bidirectional_slot()], initial_soc_percent=70.0)
+
+    assert result.actions
+    assert result.actions[0].kind not in UNIDIRECTIONAL_FOLLOWS

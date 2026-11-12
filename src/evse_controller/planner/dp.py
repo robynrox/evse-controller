@@ -344,7 +344,7 @@ class DpPlanner:
             for state, base_cost in enumerate(dp):
                 if not math.isfinite(base_cost):
                     continue
-                for template in templates:
+                for template in self._templates_for_state(templates, state):
                     next_state = self._feasible_next_state(
                         state, template
                     )
@@ -500,7 +500,7 @@ class DpPlanner:
                 best_energy = float("inf")
                 best_template = None
                 best_next = None
-                for template in templates:
+                for template in self._templates_for_state(templates, state):
                     next_state = self._feasible_next_state(
                         state, template
                     )
@@ -579,7 +579,9 @@ class DpPlanner:
                 )
 
                 mode_best: dict[str, float] = {}
-                for candidate in templates:
+                for candidate in self._templates_for_state(
+                    templates, state
+                ):
                     candidate_next = self._feasible_next_state(
                         state, candidate
                     )
@@ -686,7 +688,10 @@ class DpPlanner:
             return ()
         if not (0 <= state_index <= self._state_count):
             return ()
-        templates = self._action_templates(policy.slots[slot_index])
+        templates = self._templates_for_state(
+            self._action_templates(policy.slots[slot_index]),
+            state_index,
+        )
         options = []
         for template in templates:
             next_state = self._feasible_next_state(
@@ -886,6 +891,50 @@ class DpPlanner:
         if solar is not None:
             templates.append(solar)
         return templates
+
+    def _templates_for_state(
+        self,
+        templates: list[_ActionTemplate],
+        state: int,
+    ) -> list[_ActionTemplate]:
+        """Drop unidirectional follows when a bidirectional one is feasible.
+
+        A feasible bidirectional arc already covers charging from surplus and
+        discharging above the house gate, and is at least as valuable when both
+        directions occur in the slot.  The one-direction arcs are fallbacks
+        for SoCs where the bidirectional arc cannot reach its floor or charge
+        cap.
+        """
+        feasible_bidirectional = {
+            template.kind
+            for template in templates
+            if template.kind.startswith("follow_bidirectional")
+            and self._feasible_next_state(state, template) is not None
+        }
+        if not feasible_bidirectional:
+            return templates
+
+        filtered = []
+        for template in templates:
+            if (
+                template.kind == "follow_solar"
+                and feasible_bidirectional
+            ):
+                continue
+            if (
+                template.kind == "follow_house_conservative"
+                and "follow_bidirectional_conservative"
+                in feasible_bidirectional
+            ):
+                continue
+            if (
+                template.kind == "follow_house_aggressive"
+                and "follow_bidirectional_aggressive"
+                in feasible_bidirectional
+            ):
+                continue
+            filtered.append(template)
+        return filtered
 
     def _follow_house_template(
         self,

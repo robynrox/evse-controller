@@ -951,8 +951,10 @@ action for every half-hour slot and every SoC state:
   can choose *follow house conservative*, *follow house aggressive*, *follow
   bidirectional conservative/aggressive* or *follow solar*. Fixed
   charge/discharge arcs remain available, so the planner can still prefer an
-  exact current. The selected slot shows the conservative and aggressive
-  house-import gates and floors.
+  exact current. A feasible bidirectional arc replaces the corresponding
+  one-direction follows; the one-direction arcs return only when the
+  bidirectional arc cannot reach that SoC's floor or cap. The selected slot
+  shows the conservative and aggressive house-import gates and floors.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future
@@ -990,7 +992,11 @@ additional arcs, not additional dimensions.
 
 A bidirectional arc is offered only when the slot has both a usable surplus
 and at least one sample that reaches the relevant house-follow gate. The
-conservative and aggressive variants use their own gate and floor.
+conservative and aggressive variants use their own gate and floor. When a
+bidirectional arc is feasible from a given SoC it suppresses the matching
+one-direction arc (solar, conservative house or aggressive house); that
+one-direction arc remains available at SoCs where its bidirectional
+counterpart cannot be applied.
 
 The follow-house gates are the same `discharge_activation_threshold_w`
 calculation used by the live heuristic. The conservative mode uses the

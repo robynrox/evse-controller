@@ -459,9 +459,9 @@
             Near-tie cells are within 1p of the next-best mode. The exact
             current there is not economically meaningful; a small forecast
             change can flip it. This policy models fixed half-hour currents
-            plus separate house-follow and solar-follow arcs. It does not model
-            a single bidirectional arc; charge and discharge directions are
-            evaluated separately.
+            plus follow arcs. Where a bidirectional follow arc fits from this
+            starting SoC it replaces the separate house-follow and solar-follow
+            arcs; those return as fallbacks when it cannot fit.
         </p>
         <div class="panel chart-panel">
             <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>

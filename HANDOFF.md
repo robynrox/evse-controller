@@ -454,6 +454,11 @@ completed fixes.
   elsewhere; the samples are folded into one expected transition. It is only
   offered when both directions occur in the slot. This adds arcs, not SoC
   states, and does not enumerate charge × discharge current pairs.
+  Where a bidirectional arc is feasible from a SoC it suppresses the matching
+  one-direction follow arc (solar, conservative house or aggressive house) in
+  the forward pass, backward pass, cell margins and option list. The
+  one-direction arc remains as a fallback when its bidirectional counterpart
+  cannot reach that SoC's floor or cap.
   Gates come from the same `discharge_activation_threshold_w` calculation as
   the live heuristic and are stored per input row with their floors. Follow
   arcs use expected cost, expected net SoC change and gross throughput for
