@@ -456,8 +456,10 @@
         <p style="font-size:12px;color:#777;margin:0 0 12px;">
             Near-tie cells are within 1p of the next-best mode. The exact
             current there is not economically meaningful; a small forecast
-            change can flip it. This policy models fixed half-hour currents,
-            not the heuristic's intra-slot load-following.
+            change can flip it. This policy models fixed half-hour currents
+            plus separate house-follow and solar-follow arcs. It does not model
+            a single bidirectional arc; charge and discharge directions are
+            evaluated separately.
         </p>
         <div class="panel chart-panel">
             <button type="button" class="chart-zoom-button" data-chart-zoom>Zoom</button>
@@ -607,6 +609,17 @@
             plus future energy cost. Future uses the recorded inputs, not
             today's forecast.
         </p>
+        {% endif %}
+
+        {% if follow_notes %}
+        <div class="panel" style="margin-top:10px;">
+            <strong>Why some arcs are absent here</strong>
+            <ul style="margin:8px 0 0 18px;padding:0;color:#555;font-size:13px;">
+                {% for note in follow_notes %}
+                <li>{{ note }}</li>
+                {% endfor %}
+            </ul>
+        </div>
         {% endif %}
     {% else %}
         <p class="empty">

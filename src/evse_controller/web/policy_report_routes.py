@@ -784,6 +784,64 @@ def _selected_state(ctx: RunContext, states, requested_soc) -> int:
     return min(available, key=lambda item: abs(item - state))
 
 
+def _follow_notes(slot, options) -> list[str]:
+    """Explain follow arcs that are absent from this slot's option list."""
+    if slot is None:
+        return []
+    kinds = {option.kind for option in options}
+    samples = slot.load_samples or ((slot.load_kw, 1.0),)
+    surplus_w = max(
+        0.0,
+        max((-float(load_kw) * 1000.0 for load_kw, _ in samples), default=0.0),
+    )
+    minimum_w = float(config.WALLBOX_MIN_DISCHARGE_CURRENT) * 240.0
+    max_import_w = max(
+        (max(0.0, float(load_kw)) * 1000.0 for load_kw, _ in samples),
+        default=0.0,
+    )
+    notes = []
+
+    if "follow_solar" not in kinds:
+        if surplus_w <= 0:
+            notes.append(
+                "Solar follow is absent because the house-load forecast has "
+                "no surplus in this slot."
+            )
+        elif surplus_w < minimum_w:
+            notes.append(
+                f"Solar follow is absent because the forecast surplus "
+                f"({surplus_w:.0f} W) is below the 3 A / {minimum_w:.0f} W "
+                "minimum."
+            )
+
+    for kind, label, gate in (
+        (
+            "follow_house_conservative",
+            "Conservative house follow",
+            slot.follow_conservative_gate_w,
+        ),
+        (
+            "follow_house_aggressive",
+            "Aggressive house follow",
+            slot.follow_aggressive_gate_w,
+        ),
+    ):
+        if kind in kinds:
+            continue
+        if gate is None:
+            notes.append(
+                f"{label} is absent because its economic gate is never "
+                "reached at this slot's prices."
+            )
+        elif max_import_w < float(gate):
+            notes.append(
+                f"{label} is absent because the forecast house import "
+                f"({max_import_w:.0f} W) never reaches its "
+                f"{float(gate):.0f} W gate."
+            )
+    return notes
+
+
 def _why_text(ctx, slot_index, cell, options) -> str:
     if cell.action is None or not options:
         return "No feasible action at this state."
@@ -901,6 +959,7 @@ def _render(history: PlannerHistory):
     )
     cell = ctx.policy.cells[slot_index][state_index]
     options = ctx.planner.options(ctx.policy, slot_index, state_index)
+    follow_notes = _follow_notes(ctx.slots[slot_index], options)
     bands = _bands(ctx, slot_index, states)
     forecast_days = int(run.get("forecast_days") or 0)
     fallback_kw = _number(
@@ -924,6 +983,7 @@ def _render(history: PlannerHistory):
         heatmap=_heatmap(ctx, states, view),
         bands=bands,
         options=options,
+        follow_notes=follow_notes,
         selected_slot=ctx.slots[slot_index],
         selected_cell=cell,
         selected_state=state_index,
