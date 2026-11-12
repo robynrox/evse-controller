@@ -337,7 +337,7 @@
         {% endif %}
         {% if no_load_forecast %}
             <div class="banner">
-                This run had <strong>no house-load forecast</strong>
+                This run had <strong>no grid-load forecast</strong>
                 (forecast depth 0).
                 {% if load_prior_used %}
                     Every slot used a flat 0–400 W prior.
@@ -348,7 +348,7 @@
                     This older run assumed 0 kW for every slot.
                 {% endif %}
                 Treat this surface as price arbitrage only; it is not a full
-                house-load or self-consumption policy.
+                grid-load or self-consumption policy.
             </div>
         {% endif %}
 

@@ -530,11 +530,11 @@ does not grid-charge while that surplus is being exported.
   the forecasted load and the integer current the Wallbox would choose, not a
   flat constant, so it fits when a full export no longer does. These slots
   are ranked by export price and labelled `AGGRESSIVE` in the plan table. The
-  planner uses a rolling persistence forecast from the last 28 days. Slots
-  with fewer than 14 usable days blend the measured histogram with the flat
-  0–400 W prior for the missing days; each row still carries its live
-  break-even gate: the slot only starts once the live house import reaches
-  that load. Below it, the forced output would export more than it
+  planner uses a rolling persistence forecast from the last 28 measured days.
+  Slots with fewer than 14 usable days use the measured days directly; the
+  measured-day count is the confidence signal, not a synthetic prior. Each
+  row still carries its live break-even gate: the slot only starts once the
+  live grid import reaches that load. Below it, the forced output would export more than it
   saves. The scan evaluates the integer current the Wallbox would actually
   choose, so a load that only pays at 4 A or 5 A is found even when 3 A is
   uneconomic. The reason names the gate and the stored-energy hurdle: the
@@ -550,21 +550,21 @@ does not grid-charge while that surplus is being exported.
   and the pack is conserved. See `evse.log`'s
   `CONTROL Setting discharge activation power to N W` line for the live
   value.
-- **House-load forecast.** The controller keeps sparse 25 W time-weighted
+- **Grid-load forecast.** The controller keeps sparse 25 W time-weighted
   power histograms per half-hour slot and CT clamp under
   `data/state/load_profile/`. The forecast target is the net grid load before
   the Wallbox (`grid − Wallbox AC`), so EV and battery activity are removed.
-  The planner merges the most recent 28 days and uses the 90th percentile for
-  conservative coverage and the median for aggressive discharge. A house-load
-  slot with fewer than 14 usable days is blended with the flat 0–400 W prior
-  for the missing days: one day of data is weighted 1/14 and the prior 13/14.
-  Days 14–28 are used directly. Other meter series such as solar and heat
-  pump use the same missing-day weighting with a 0 W prior, so their
-  measured distribution builds up over the first 14 days instead of being
-  withheld. A series with no usable days at all therefore has a 0 W
-  forecast. The same histograms are the raw material for future house-load
-  reports. A
-  graceful SIGINT/SIGTERM flushes the open slot as well as the completed ones,
+  The stored profile key is still `house` for continuity with existing files;
+  the user-facing label is **Grid load (excl. Wallbox)**. The planner merges
+  the most recent 28 days and uses the 90th percentile for conservative
+  coverage and the median for aggressive discharge. Forecasts use measured
+  days only: missing days are not synthesised as zero or as a base-load prior.
+  One measured day is used directly, and the number of measured days is the
+  confidence signal. Fourteen or more measured days are the confident window;
+  fewer days are shown as low confidence, and DP control will not be enabled
+  without at least one measured day. The same histograms are the raw material
+  for future grid-load reports. A graceful SIGINT/SIGTERM flushes the open
+  slot as well as the completed ones,
   so a restart continues the same half-hour rather than losing it; the
   downtime itself is not bridged.
 - **The charge floor and its activation are calculated, not fixed.** When the
@@ -835,7 +835,7 @@ report fetches the day once and writes it.
 ##### Load-profile and forecast-accuracy report (`/reports/load-profile`)
 
 The **Load profile** link in the energy-report navigation opens the rolling
-house-load report. It compares the persistence forecast that would have been
+grid-load report. It compares the persistence forecast that would have been
 available on the previous day with the actual distribution recorded on the
 selected day:
 
@@ -943,13 +943,13 @@ action for every half-hour slot and every SoC state:
   therefore uses 3–32 A and −3 to −32 A; a derated one uses its own limits.
 - **Near ties:** cells within 1p of the next-best mode are hatched. Their exact
   current is not economically meaningful; a small forecast change can flip it.
-- **Load forecast:** if the run had no house-load profile, the page says so
-  prominently. Until 14 days of history exist for a slot, the shadow planner
-  blends the measured histogram with a flat 0–400 W prior for the missing days
-  (one day of data is 1/14 of the weight). The page labels this as blended or
-  prior. The house prior is 0–400 W; solar, heat-pump and other meter series
-  blend a 0 W prior for missing days, so they build up from zero over the
-  first 14 days. The DP itself still plans from the `house` series.
+- **Load forecast:** if the run had no grid-load profile, the page says so
+  prominently. Forecasts use measured days only, up to 28 days; missing days
+  are not filled with zero or a base-load prior. A short window is shown as
+  low confidence through its measured-day count, not as a lower or higher
+  load. The DP plans from the net grid-load series (`grid − Wallbox`), whose
+  stored key remains `house` for compatibility. The policy page still labels
+  historical runs that used the old blended or prior input.
 - **Follow modes:** where the heuristic's economic gate is available, the map
   can choose *follow house conservative*, *follow house aggressive*, *follow
   bidirectional conservative/aggressive* or *follow solar*. Fixed
@@ -983,8 +983,8 @@ marked.
 
 The policy action space now includes fixed half-hour currents plus follow
 modes. Each fixed arc is scored using the **expected grid cost over the slot's
-house-load histogram**, not just the median. The follow arcs apply a per-sample
-rule: follow-house discharges to cover positive house load above the
+grid-load histogram**, not just the median. The follow arcs apply a per-sample
+rule: follow-house discharges to cover positive grid load above the
 heuristic's conservative/aggressive activation gate; follow-solar charges from
 negative net load (surplus). A bidirectional follow arc applies both rules to
 the same samples: charge when a sample has surplus, discharge when it reaches

@@ -220,13 +220,14 @@ completed fixes.
   forecast expects it to activate; surplus and aggressive use only headroom
   above `aggressive_soc_lower_limit` that conservative does not need. A day
   that maxes out its export budget therefore has no aggressive slots.
-- The rolling house-load profile lives in
+- The rolling grid-load profile lives in
   `data/state/load_profile/YYYY-MM-DD.json`. Each file holds sparse 25 W
   time-weighted histograms per half-hour slot for every CT clamp and a derived
-  `house` series (`grid − Wallbox AC`). The planner uses the 90th percentile
-  for conservative coverage and the median for aggressive, over the last 28
-  days where available (minimum 14), and falls back to the flat configured
-  constants when there is not enough history.  A graceful SIGINT/SIGTERM
+  `house` series (`grid − Wallbox AC`, labelled **Grid load (excl. Wallbox)**).
+  The planner uses the 90th percentile for conservative coverage and the
+  median for aggressive, over the last 28 measured days. Missing days are not
+  synthesised; a short window is used directly as lower confidence, and the
+  flat configured constants apply only when there is no history at all.  A graceful SIGINT/SIGTERM
   flushes the daily report and the open profile slot; the next run reloads
   both and continues the same half-hour.
 - Weather is an optional reporting/research input, never a control
@@ -422,16 +423,17 @@ completed fixes.
   parameters show a caveat, and a run with no load profile shows a prominent
   no-load warning.
 - The shadow planner uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`).
-  House-load slots with 1–13 usable days blend the measured histogram with the
-  flat **0–400 W prior** in 25 W bins for the missing days, weighting one day
-  as 1/14; 14–28 days are used directly and the lookback is capped at 28. The
-  prior is scaled to the average real-day weight, so a ten-minute day still
-  counts as one day. The house prior is 0–400 W; solar, heat-pump and other
-  meter series use the same missing-day weighting with a 0 W prior, so their
-  forecasts build up over the first 14 days instead of being withheld. A
-  series with no usable days therefore has a 0 W forecast. Inputs record
-  `load_source="profile"`, `"blended"` or `"prior"`, and the policy page
-  labels the latter two.
+  Forecasts use measured days only, up to 28 days; missing days are not
+  synthesised as zero or as a base-load prior. One measured day is used
+  directly, and the measured-day count is the confidence signal: fourteen or
+  more days are the confident window, fewer are low confidence. The DP input
+  is the net grid load before the Wallbox (`grid − Wallbox`), stored under the
+  legacy profile key `house` so existing files keep working; the user-facing
+  label is **Grid load (excl. Wallbox)**. New inputs record
+  `load_source="profile"` or `"fallback"`; historical runs with `"blended"` or
+  `"prior"` remain labelled as such. The DP-control switch must stay disabled
+  until at least one measured day exists, with a warning that very short
+  history may make decisions unreasonable.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

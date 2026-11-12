@@ -5,8 +5,8 @@ The planner deliberately does not import a tariff class.  It consumes:
 * ``TariffSource.rates_for_day`` — 48 import/export rows in p/kWh;
 * ``TariffSource.sessions_for_day`` — free-import, grid-support and EV-away
   windows;
-* ``LoadProfile.for_date`` — per-slot house load, or ``None`` when the history
-  is too thin;
+* ``LoadProfile.for_date`` — per-slot net grid load before the Wallbox, or
+  ``None`` when there is no measured history;
 * the site's Wallbox current limits.
 
 That keeps the optimiser independent of the supplier and of the control
@@ -191,11 +191,7 @@ def build_planner_input(
                 stats = loads[index]
                 if stats is not None and stats.median_w is not None:
                     load_kw = max(0.0, float(stats.median_w) / 1000.0)
-                    load_source = (
-                        "blended"
-                        if getattr(stats, "prior_days", 0)
-                        else "profile"
-                    )
+                    load_source = "profile"
                     if stats.samples:
                         load_samples = tuple(
                             (max(0.0, watts) / 1000.0, weight)

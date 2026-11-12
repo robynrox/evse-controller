@@ -838,7 +838,7 @@ def _follow_notes(slot, options) -> list[str]:
             )
         elif surplus_w <= 0:
             notes.append(
-                "Solar follow is absent because the house-load forecast has "
+                "Solar follow is absent because the grid-load forecast has "
                 "no surplus in this slot."
             )
         elif surplus_w < minimum_w:

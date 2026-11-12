@@ -272,7 +272,7 @@ def test_page_warns_when_the_run_had_no_load_forecast(tmp_path):
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "no house-load forecast" in body
+    assert "no grid-load forecast" in body
     assert "0.72 kW fallback" in body
 
 

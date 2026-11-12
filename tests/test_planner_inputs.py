@@ -378,7 +378,7 @@ def test_load_fallback_is_used_when_the_forecast_is_thin():
     assert result.forecast_days == 0
 
 
-def test_blended_profile_is_reported_as_blended():
+def test_profile_is_reported_as_profile():
     loads = [
         SlotLoad(
             median_w=200.0,
@@ -386,7 +386,6 @@ def test_blended_profile_is_reported_as_blended():
             days=1,
             coverage_s=600.0,
             samples=((100.0, 0.5), (300.0, 0.5)),
-            prior_days=13,
         )
     ] + [
         SlotLoad(median_w=None, p90_w=None, days=0, coverage_s=0)
@@ -405,5 +404,5 @@ def test_blended_profile_is_reported_as_blended():
     )
 
     first = result.slots[0]
-    assert first.load_source == "blended"
+    assert first.load_source == "profile"
     assert first.load_samples == ((0.1, 0.5), (0.3, 0.5))

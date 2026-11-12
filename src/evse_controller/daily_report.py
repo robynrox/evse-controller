@@ -388,10 +388,12 @@ class DailyEnergyLog:
                 continue
             self._add_profile_bin(slot, key, watts, seconds)
 
-        # The house load that the Wallbox would have to cover: the grid
-        # reading with the Wallbox's own AC activity removed.  Without a
-        # Wallbox reading, the grid reading alone is the best available
-        # proxy and the slot's coverage still records that the sample exists.
+        # The net grid load that the Wallbox would have to cover: the grid
+        # reading with the Wallbox's own AC activity removed.  The stored key
+        # is still "house" for continuity with existing profile files; the
+        # user-facing label is "Grid load (excl. Wallbox)".  Without a Wallbox
+        # reading, the grid reading alone is the best available proxy and the
+        # slot's coverage still records that the sample exists.
         grid_w = values.get("grid")
         if grid_w is None or not math.isfinite(grid_w):
             return

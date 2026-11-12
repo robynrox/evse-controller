@@ -50,7 +50,7 @@ def _finite_or_none(value: float) -> Optional[float]:
 class PlannerSlot:
     """One half-hour input row.
 
-    ``load_kw`` is the net house load *before* the Wallbox: positive is grid
+    ``load_kw`` is the net grid load *before* the Wallbox: positive is grid
     import, negative is surplus solar/export.  The Wallbox action is added to
     it to get the grid balance.
 
@@ -71,7 +71,7 @@ class PlannerSlot:
     max_discharge_current_a: float = 32.0
     forced: Optional[str] = None
     session: Optional[str] = None
-    #: Time-weighted net house-load samples as ``(load_kw, weight)``.  Empty
+    #: Time-weighted net grid-load samples as ``(load_kw, weight)``.  Empty
     #: means the planner uses ``load_kw`` alone.
     load_samples: tuple[tuple[float, float], ...] = ()
     load_source: str = ""

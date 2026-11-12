@@ -202,7 +202,7 @@ def test_unconfigured_series_falls_back_to_house(client):
     )
 
     assert response.status_code == 200
-    assert "House (grid" in response.get_data(as_text=True)
+    assert "Grid load (excl. Wallbox)" in response.get_data(as_text=True)
 
 
 def test_page_shows_cached_weather_when_configured(weather_client):

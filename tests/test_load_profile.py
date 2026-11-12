@@ -88,30 +88,28 @@ def test_median_and_p90_from_merged_histograms(tmp_path):
     assert not profile[1].available
 
 
-def test_insufficient_days_are_blended_with_the_prior(tmp_path):
+def test_five_days_are_used_directly(tmp_path):
     _write_days(tmp_path, 5, {0: {24: 1800.0}})  # 600 W
 
     profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
 
     assert profile[0].available
     assert profile[0].days == 5
-    assert profile[0].prior_days == 9
-    # Nine prior days outweigh five measured days, so the median is pulled
-    # into the 0-400 W prior rather than staying at 600 W.
-    assert 0.0 <= profile[0].median_w <= 400.0
+    assert profile[0].prior_days == 0
+    assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
 
 
-def test_thirteen_days_are_blended_lightly(tmp_path):
+def test_thirteen_days_are_used_directly(tmp_path):
     _write_days(tmp_path, 13, {0: {24: 1800.0}})  # 600 W
 
     profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
 
     assert profile[0].days == 13
-    assert profile[0].prior_days == 1
+    assert profile[0].prior_days == 0
     assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
 
 
-def test_fourteen_days_need_no_prior(tmp_path):
+def test_fourteen_days_are_used_directly(tmp_path):
     _write_days(tmp_path, 14, {0: {24: 1800.0}})  # 600 W
 
     profile = LoadProfile(tmp_path, min_days=14).for_date(DAY)
@@ -120,7 +118,7 @@ def test_fourteen_days_need_no_prior(tmp_path):
     assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
 
 
-def test_non_house_series_blend_missing_days_as_zero(tmp_path):
+def test_non_house_series_use_measured_days_directly(tmp_path):
     _write_days(
         tmp_path,
         5,
@@ -134,25 +132,21 @@ def test_non_house_series_blend_missing_days_as_zero(tmp_path):
 
     assert profile[0].available
     assert profile[0].days == 5
-    assert profile[0].prior_days == 9
-    # Nine zero days outweigh five measured days, so the forecast starts near
-    # zero and the measured output gains weight as more days arrive.
-    assert profile[0].median_w == pytest.approx(0.0, abs=BIN_WIDTH)
+    assert profile[0].prior_days == 0
+    assert profile[0].median_w == pytest.approx(3000.0, abs=BIN_WIDTH)
 
 
-def test_non_house_series_with_no_history_forecast_zero(tmp_path):
+def test_non_house_series_with_no_history_is_unavailable(tmp_path):
     profile = LoadProfile(tmp_path, min_days=14).for_date(
         DAY, series="heat_pump"
     )
 
-    assert profile[0].available
+    assert not profile[0].available
     assert profile[0].days == 0
-    assert profile[0].prior_days == 14
-    assert profile[0].median_w == pytest.approx(0.0, abs=BIN_WIDTH)
-    assert profile[0].samples[0][0] < BIN_WIDTH
+    assert profile[0].prior_days == 0
 
 
-def test_non_house_series_one_day_has_one_fourteenth_of_the_weight(tmp_path):
+def test_non_house_series_one_day_is_used_directly(tmp_path):
     _write_day(
         tmp_path,
         DAY,
@@ -165,15 +159,9 @@ def test_non_house_series_one_day_has_one_fourteenth_of_the_weight(tmp_path):
     )[0]
 
     assert slot.days == 1
-    assert slot.prior_days == 13
-    data_weight = sum(
-        weight for watts, weight in slot.samples if watts >= 400
-    )
-    zero_weight = sum(
-        weight for watts, weight in slot.samples if watts < 400
-    )
-    assert data_weight == pytest.approx(1 / 14)
-    assert zero_weight == pytest.approx(13 / 14)
+    assert slot.prior_days == 0
+    assert slot.median_w == pytest.approx(3000.0, abs=BIN_WIDTH)
+    assert all(watts >= 400 for watts, _ in slot.samples)
 
 
 def test_non_house_series_need_no_prior_after_fourteen_days(tmp_path):
@@ -322,9 +310,7 @@ def test_available_days_are_newest_first(tmp_path):
 
 
 @pytest.mark.parametrize("coverage_s", [1800.0, 600.0])
-def test_one_day_has_one_fourteenth_of_the_blended_weight(
-    tmp_path, coverage_s
-):
+def test_one_day_is_used_directly(tmp_path, coverage_s):
     _write_day(
         tmp_path,
         DAY,
@@ -335,12 +321,6 @@ def test_one_day_has_one_fourteenth_of_the_blended_weight(
     slot = LoadProfile(tmp_path, min_days=14).for_date(DAY)[0]
 
     assert slot.days == 1
-    assert slot.prior_days == 13
-    data_weight = sum(
-        weight for watts, weight in slot.samples if watts >= 400
-    )
-    prior_weight = sum(
-        weight for watts, weight in slot.samples if watts < 400
-    )
-    assert data_weight == pytest.approx(1 / 14)
-    assert prior_weight == pytest.approx(13 / 14)
+    assert slot.prior_days == 0
+    assert slot.median_w == pytest.approx(600.0, abs=BIN_WIDTH)
+    assert all(watts >= 400 for watts, _ in slot.samples)

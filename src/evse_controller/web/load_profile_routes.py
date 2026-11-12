@@ -1,4 +1,4 @@
-"""Web report for the rolling house-load profile and its forecast accuracy.
+"""Web report for the rolling grid-load profile and its forecast accuracy.
 
 The report is deliberately read-only and server-rendered.  It uses the same
 sparse profile files as the planner and compares:
@@ -51,7 +51,9 @@ def _date_or_404(value: str) -> date:
 
 
 def _series_labels() -> dict[str, str]:
-    labels = {"house": "House (grid − Wallbox)"}
+    # The stored key stays "house" so existing daily profile files keep
+    # working; the quantity is the net grid load after removing the Wallbox.
+    labels = {"house": "Grid load (excl. Wallbox)"}
     for spec in configured_series():
         labels.setdefault(spec.key, spec.label)
     return labels
@@ -115,7 +117,7 @@ def _axis_bounds(min_value: float, max_value: float) -> tuple[float, float, floa
 
     Returns ``(minimum, maximum, step)``.  Four intervals are used, with a
     1/2/2.5/5/10 step so the labels stay readable for small solar exports and
-    large house loads alike.
+    large grid loads alike.
     """
     low = min(float(min_value), 0.0)
     high = max(float(max_value), 0.0)

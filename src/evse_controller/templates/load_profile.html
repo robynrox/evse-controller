@@ -184,9 +184,11 @@
             The forecast is the persistence profile that would have been
             available on the previous day. The actual band is the measured
             distribution on {{ selected_date }}. The DP uses the p50 for
-            planning and the p90 as its conservative reserve. House slots
-            blend a 0–400 W prior for missing days; other meter series blend
-            a 0 W prior, so their forecasts build up over the first 14 days.
+            planning and the p90 as its conservative reserve. Forecasts use
+            measured days only, up to 28 days; missing days are not treated as
+            zero. The “Forecast days” column shows how little history a slot
+            has, so a short window is read as low confidence rather than as a
+            lower or higher load.
         </p>
     </div>
 
