@@ -426,9 +426,12 @@ completed fixes.
   flat **0–400 W prior** in 25 W bins for the missing days, weighting one day
   as 1/14; 14–28 days are used directly and the lookback is capped at 28. The
   prior is scaled to the average real-day weight, so a ten-minute day still
-  counts as one day. It applies only to the `house` series; other report series
-  keep the old minimum-days rule. Inputs record `load_source="profile"`,
-  `"blended"` or `"prior"`, and the policy page labels the latter two.
+  counts as one day. The house prior is 0–400 W; solar, heat-pump and other
+  meter series use the same missing-day weighting with a 0 W prior, so their
+  forecasts build up over the first 14 days instead of being withheld. A
+  series with no usable days therefore has a 0 W forecast. Inputs record
+  `load_source="profile"`, `"blended"` or `"prior"`, and the policy page
+  labels the latter two.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

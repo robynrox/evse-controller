@@ -1,15 +1,17 @@
-"""Rolling house-load profile from the sparse per-slot power histograms.
+"""Rolling per-series load profile from sparse per-slot power histograms.
 
 The daily report writes one profile file per day under
 ``data/state/load_profile``.  Each file stores, for every half-hour slot and
 meter, a sparse time-weighted power histogram.  This module merges the recent
-files and produces the per-slot load estimates used by the export planner.
+files and produces the per-slot estimates used by the export planner and the
+load-profile reports.
 
-The profile is intentionally a persistence forecast: it says what the house
-has done at this time of day over the last few weeks, not what it will do
-tomorrow.  That is enough to stop the planner from assuming a flat 1.1% of
-SoC per slot, and it degrades to the old constants when there is not enough
-history.
+The profile is intentionally a persistence forecast: it says what a meter has
+done at this time of day over the last few weeks, not what it will do
+tomorrow.  House slots with thin history blend in a flat 0–400 W prior for the
+missing days.  Solar, heat-pump and other meter series blend in 0 W for a
+missing day, so a usable forecast builds up from zero over the first fourteen
+days rather than being withheld.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ DEFAULT_BIN_WIDTH_W = 25.0
 DEFAULT_WINDOW_DAYS = 28
 DEFAULT_MIN_DAYS = 14
 DEFAULT_MIN_COVERAGE_S = 600.0  # ten minutes of valid samples
+SLOT_SECONDS = 1800.0
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,8 @@ class SlotLoad:
     #: Sparse time-weighted samples as ``(watts, weight)``.  Condensed into a
     #: small number of adjacent-bin groups when a slot contains many bins.
     samples: tuple[tuple[float, float], ...] = ()
-    #: Synthetic prior days blended into a house-load slot with thin history.
+    #: Synthetic prior days blended into a slot with thin history.  The prior
+    #: is 0–400 W for the house series and 0 W for other meter series.
     #: ``days`` above remains the number of real days.
     prior_days: int = 0
 
@@ -128,23 +132,35 @@ class LoadProfile:
         profile: list[SlotLoad] = []
         for index in range(SLOTS_PER_DAY):
             if days[index] == 0 or not merged[index]:
+                if series == "house":
+                    profile.append(
+                        SlotLoad(None, None, days[index], coverage[index])
+                    )
+                    continue
+                # Solar, heat-pump and other meter series default to 0 W on
+                # days without a usable reading.  A zero-only slot is still a
+                # valid forecast, so it does not wait for fourteen real days.
+                prior_days = self.min_days - days[index]
+                bins: dict[int, float] = {}
+                self._add_zero_prior(bins, days[index], prior_days)
                 profile.append(
-                    SlotLoad(None, None, days[index], coverage[index])
-                )
-                continue
-            # Only the house series has a meaningful 0-400 W prior.  Other
-            # report series keep the old rule: wait for enough real days.
-            if series != "house" and days[index] < self.min_days:
-                profile.append(
-                    SlotLoad(None, None, days[index], coverage[index])
+                    self._slot_load(
+                        bins,
+                        days=days[index],
+                        coverage_s=coverage[index],
+                        prior_days=prior_days,
+                    )
                 )
                 continue
             bins = merged[index]
             prior_days = 0
-            if series == "house" and days[index] < self.min_days:
+            if days[index] < self.min_days:
                 prior_days = self.min_days - days[index]
                 bins = dict(bins)
-                self._add_prior(bins, days[index], prior_days)
+                if series == "house":
+                    self._add_prior(bins, days[index], prior_days)
+                else:
+                    self._add_zero_prior(bins, days[index], prior_days)
             profile.append(
                 self._slot_load(
                     bins,
@@ -227,6 +243,31 @@ class LoadProfile:
                 bins.get(index, 0.0)
                 + prior_seconds * max(0.0, float(weight))
             )
+
+    def _add_zero_prior(
+        self,
+        bins: dict[int, float],
+        data_days: int,
+        prior_days: int,
+    ) -> None:
+        """Blend unmeasured meter days in as zero-watt days.
+
+        Solar and heat-pump output genuinely falls to zero, so a day without
+        a usable reading is treated as one zero day rather than withholding
+        the forecast.  The zero prior is weighted like the house prior, so a
+        series builds up over the first ``min_days`` days instead of being
+        ignored until the full window exists.
+        """
+        if prior_days <= 0:
+            return
+        if data_days > 0:
+            data_seconds = sum(bins.values())
+            if data_seconds <= 0:
+                return
+            prior_seconds = prior_days * (data_seconds / data_days)
+        else:
+            prior_seconds = prior_days * SLOT_SECONDS
+        bins[0] = bins.get(0, 0.0) + prior_seconds
 
     def _slot_load(
         self,

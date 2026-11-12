@@ -558,10 +558,12 @@ does not grid-charge while that surplus is being exported.
   conservative coverage and the median for aggressive discharge. A house-load
   slot with fewer than 14 usable days is blended with the flat 0–400 W prior
   for the missing days: one day of data is weighted 1/14 and the prior 13/14.
-  Days 14–28 are used directly. The prior is not applied to the other plotted
-  series, because it is a house-load prior rather than a solar or grid prior.
-  With no usable days at all, the existing flat prior path still applies. The
-  same histograms are the raw material for future house-load reports. A
+  Days 14–28 are used directly. Other meter series such as solar and heat
+  pump use the same missing-day weighting with a 0 W prior, so their
+  measured distribution builds up over the first 14 days instead of being
+  withheld. A series with no usable days at all therefore has a 0 W
+  forecast. The same histograms are the raw material for future house-load
+  reports. A
   graceful SIGINT/SIGTERM flushes the open slot as well as the completed ones,
   so a restart continues the same half-hour rather than losing it; the
   downtime itself is not bridged.
@@ -945,8 +947,9 @@ action for every half-hour slot and every SoC state:
   prominently. Until 14 days of history exist for a slot, the shadow planner
   blends the measured histogram with a flat 0–400 W prior for the missing days
   (one day of data is 1/14 of the weight). The page labels this as blended or
-  prior. The prior applies only to the `house` series, not to solar or grid
-  report series.
+  prior. The house prior is 0–400 W; solar, heat-pump and other meter series
+  blend a 0 W prior for missing days, so they build up from zero over the
+  first 14 days. The DP itself still plans from the `house` series.
 - **Follow modes:** where the heuristic's economic gate is available, the map
   can choose *follow house conservative*, *follow house aggressive*, *follow
   bidirectional conservative/aggressive* or *follow solar*. Fixed

@@ -120,11 +120,11 @@ def test_fourteen_days_need_no_prior(tmp_path):
     assert profile[0].median_w == pytest.approx(600.0, abs=BIN_WIDTH)
 
 
-def test_non_house_series_keep_the_minimum_days_rule(tmp_path):
+def test_non_house_series_blend_missing_days_as_zero(tmp_path):
     _write_days(
         tmp_path,
         5,
-        {0: {24: 1800.0}},
+        {0: {120: 1800.0}},  # 3000 W
         series="solar",
     )
 
@@ -132,8 +132,64 @@ def test_non_house_series_keep_the_minimum_days_rule(tmp_path):
         DAY, series="solar"
     )
 
-    assert not profile[0].available
+    assert profile[0].available
     assert profile[0].days == 5
+    assert profile[0].prior_days == 9
+    # Nine zero days outweigh five measured days, so the forecast starts near
+    # zero and the measured output gains weight as more days arrive.
+    assert profile[0].median_w == pytest.approx(0.0, abs=BIN_WIDTH)
+
+
+def test_non_house_series_with_no_history_forecast_zero(tmp_path):
+    profile = LoadProfile(tmp_path, min_days=14).for_date(
+        DAY, series="heat_pump"
+    )
+
+    assert profile[0].available
+    assert profile[0].days == 0
+    assert profile[0].prior_days == 14
+    assert profile[0].median_w == pytest.approx(0.0, abs=BIN_WIDTH)
+    assert profile[0].samples[0][0] < BIN_WIDTH
+
+
+def test_non_house_series_one_day_has_one_fourteenth_of_the_weight(tmp_path):
+    _write_day(
+        tmp_path,
+        DAY,
+        {0: {120: 1800.0}},  # 3000 W
+        series="solar",
+    )
+
+    slot = LoadProfile(tmp_path, min_days=14).for_date(
+        DAY, series="solar"
+    )[0]
+
+    assert slot.days == 1
+    assert slot.prior_days == 13
+    data_weight = sum(
+        weight for watts, weight in slot.samples if watts >= 400
+    )
+    zero_weight = sum(
+        weight for watts, weight in slot.samples if watts < 400
+    )
+    assert data_weight == pytest.approx(1 / 14)
+    assert zero_weight == pytest.approx(13 / 14)
+
+
+def test_non_house_series_need_no_prior_after_fourteen_days(tmp_path):
+    _write_days(
+        tmp_path,
+        14,
+        {0: {120: 1800.0}},  # 3000 W
+        series="solar",
+    )
+
+    profile = LoadProfile(tmp_path, min_days=14).for_date(
+        DAY, series="solar"
+    )
+
+    assert profile[0].prior_days == 0
+    assert profile[0].median_w == pytest.approx(3000.0, abs=BIN_WIDTH)
 
 
 def test_the_lookback_is_capped_at_twenty_eight_days(tmp_path):
