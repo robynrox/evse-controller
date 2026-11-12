@@ -13,6 +13,7 @@ from evse_controller.drivers.evse.async_interface import EvseAsyncState
 from evse_controller.load_profile import LoadProfile, SlotLoad
 from evse_controller.planner.dp import DpPlanner
 from evse_controller.planner.history import PlannerHistory
+from evse_controller.planner.labels import action_label
 from evse_controller.planner.inputs import (
     build_planner_input,
     uniform_load_prior,
@@ -597,6 +598,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_decision_history_key = None
         self._last_shadow_slot = -1
         self._last_shadow_soc = None
+        self._last_shadow_run = None
         self._learning_mode = self._resolve_learning_mode()
         self._shadow_enabled = (
             self.ENABLE_SHADOW_PLANNER
@@ -697,6 +699,57 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             return "preview"
         return mode
+
+    def _latest_shadow_run(self) -> Optional[dict]:
+        """Return the latest preview run for today, in memory or on disk."""
+        today = self.get_current_datetime().date()
+        run = self._last_shadow_run
+        if run and run.get("day") == today.isoformat():
+            return run
+        try:
+            runs = self._history.runs_for_day(today)
+        except Exception:
+            return None
+        if not runs:
+            return None
+        run = max(
+            runs,
+            key=lambda item: (
+                int(item.get("slot") or -1),
+                str(item.get("ts") or ""),
+            ),
+        )
+        self._last_shadow_run = run
+        return run
+
+    def learning_preview_label(self) -> Optional[str]:
+        """A short description of what the preview plan would do now."""
+        if self._learning_mode != "preview" or not self._shadow_enabled:
+            return None
+        run = self._latest_shadow_run()
+        if run is None:
+            return "No preview plan yet"
+        now = self.get_current_datetime()
+        slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        action = next(
+            (
+                item
+                for item in run.get("actions") or []
+                if item.get("slot") == slot
+            ),
+            None,
+        )
+        if action is None:
+            return "No action for this slot"
+        slot_input = next(
+            (
+                item
+                for item in run.get("inputs") or []
+                if item.get("slot") == slot
+            ),
+            None,
+        )
+        return f"Would: {action_label(action, slot_input)}"
 
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight."""
@@ -1243,16 +1296,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             result = planner.plan(
                 planner_input.slots, planner_input.initial_soc
             )
-            self._history.record_run(
-                now.date(),
-                self._shadow_run_dict(
-                    now,
-                    current_slot,
-                    battery,
-                    planner_input,
-                    result,
-                ),
+            run = self._shadow_run_dict(
+                now,
+                current_slot,
+                battery,
+                planner_input,
+                result,
             )
+            self._history.record_run(now.date(), run)
+            self._last_shadow_run = run
             self._last_shadow_slot = current_slot
             self._last_shadow_soc = battery
             debug(

@@ -308,7 +308,10 @@
                 </span>
                 <span class="separator">|</span>
                 <span class="status-info">
-                    <strong>Learning mode:</strong> {{ learning_mode|capitalize }}
+                    <strong>Learning mode:</strong>
+                    <span id="learning-mode">{{ learning_mode|capitalize }}</span><span
+                        id="learning-preview"
+                        class="learning-preview">{% if learning_preview %} · {{ learning_preview }}{% endif %}</span>
                 </span>
                 <span class="separator">|</span>
             </div>
@@ -509,6 +512,10 @@
 
     .status-item strong {
         color: #495057;
+    }
+
+    .learning-preview {
+        color: #6c757d;
     }
 
     .svg-button-container {
@@ -1070,6 +1077,20 @@
                 // Update controller state
                 const stateElement = document.getElementById('current-state');
                 stateElement.textContent = data.current_state.replace(/_/g, ' ');
+
+                // Update Learning mode and its preview action.
+                const learningModeElement = document.getElementById('learning-mode');
+                if (learningModeElement && data.learning_mode !== undefined) {
+                    const mode = String(data.learning_mode || '');
+                    learningModeElement.textContent =
+                        mode.charAt(0).toUpperCase() + mode.slice(1);
+                }
+                const learningPreviewElement = document.getElementById('learning-preview');
+                if (learningPreviewElement) {
+                    learningPreviewElement.textContent = data.learning_preview
+                        ? ` · ${data.learning_preview}`
+                        : '';
+                }
 
                 // Update battery SOC if available
                 const socElement = document.getElementById('battery-soc');

@@ -4951,6 +4951,39 @@ class TestShadowPlannerAndEstimator:
         assert tariff._learning_mode == "preview"
         assert tariff._shadow_enabled is True
 
+    def test_learning_preview_label_uses_the_current_slot_action(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=12, minute=10, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff._learning_mode = "preview"
+        tariff._shadow_enabled = True
+        tariff._last_shadow_run = {
+            "day": fixed.date().isoformat(),
+            "slot": 24,
+            "actions": [
+                {"slot": 24, "kind": "charge", "current_a": 11.0},
+                {"slot": 25, "kind": "idle", "current_a": 0.0},
+            ],
+            "inputs": [{"slot": 24}],
+        }
+
+        assert tariff.learning_preview_label() == "Would: Charge 11A"
+
+    def test_learning_preview_label_is_absent_when_preview_is_off(self):
+        tariff = _build_tariff()
+        tariff._learning_mode = "off"
+        tariff._shadow_enabled = False
+        tariff._last_shadow_run = {
+            "day": datetime.now().date().isoformat(),
+            "slot": 24,
+            "actions": [{"slot": 24, "kind": "charge", "current_a": 11.0}],
+            "inputs": [{"slot": 24}],
+        }
+
+        assert tariff.learning_preview_label() is None
+
     def test_disabled_shadow_planner_records_nothing(self, tmp_path):
         tariff = _build_tariff()
         tariff._history.set_directory(tmp_path / "history")

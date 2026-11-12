@@ -430,8 +430,11 @@ completed fixes.
   `learning.mode` accepts `preview` (default) or `off`; `control` is reserved
   for the later rollout and falls back to preview. Preview is the normal
   observer state and records plans, SoC estimates and decisions but never
-  actuates. Off is the heuristic-only mode and stops that observer history.
-  Each run stores `solver_version` and `solver_mode`;
+  actuates. The dashboard appends the current-slot action from the latest
+  preview run, for example `Would: Charge 11A` or
+  `Would: Cover house aggr >=4A from 830W`. Off is the heuristic-only mode and
+  stops that observer history. Each run stores `solver_version` and
+  `solver_mode`;
   `SOLVER_VERSION` in `planner/version.py` must be bumped whenever a planner
   change can alter an action or its cost. The policy and backtest pages show
   the version.

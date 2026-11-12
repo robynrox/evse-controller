@@ -899,7 +899,10 @@ A future `control` mode is reserved for the control rollout and is not yet
 implemented; a hand-edited `control` value falls back to preview. The dashboard
 shows the effective mode. “Learning mode: Preview” means the planner is in its
 normal observer state; it does not mean the heuristics have been replaced.
-Preview is safe to leave on, but it does not actuate.
+While preview is on, the dashboard also shows the action the current plan
+would take, such as `Would: Charge 11A`, `Would: Harvest solar >=4A` or
+`Would: Cover house aggr >=4A from 830W`. Preview is safe to leave on, but it
+does not actuate.
 
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can

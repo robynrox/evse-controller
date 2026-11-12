@@ -1061,6 +1061,21 @@ def config_page():
         flash(f'Error loading configuration: {str(e)}', 'error')
         return redirect(url_for('index'))
 
+def _learning_status() -> tuple[str, str]:
+    """Return the effective Learning mode and the current preview action."""
+    tariff = tariffManager.get_tariff()
+    # Learning mode currently lives on the IOctGo controller.  Other tariffs,
+    # or no tariff, show Off rather than borrowing the configured IOctGo mode.
+    mode = getattr(tariff, "_learning_mode", "off")
+    preview = ""
+    if tariff is not None and hasattr(tariff, "learning_preview_label"):
+        try:
+            preview = tariff.learning_preview_label() or ""
+        except Exception:
+            preview = ""
+    return str(mode).lower(), preview
+
+
 @app.route('/')
 def index():
     """Render the main dashboard page"""
@@ -1072,15 +1087,13 @@ def index():
         and config.WALLBOX_SERIAL
         and callable(getattr(evseController.evse, "request_reset", None))
     )
-    active_tariff = tariffManager.get_tariff()
-    learning_mode = getattr(active_tariff, "_learning_mode", None) or str(
-        config.LEARNING_MODE
-    ).lower()
+    learning_mode, learning_preview = _learning_status()
     return render_template('index.html',
                          scheduled_events=scheduled_events,
                          current_state=current_state,
                          wallbox_reset_available=wallbox_reset_available,
                          learning_mode=learning_mode,
+                         learning_preview=learning_preview,
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 
 @app.route('/decision')
@@ -1317,9 +1330,12 @@ def get_extended_status():
         except Exception:
             pass
 
+    learning_mode, learning_preview = _learning_status()
     return jsonify({
         'current_state': current_state,
         'battery_soc': battery_soc,
+        'learning_mode': learning_mode,
+        'learning_preview': learning_preview,
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),
             'state': next_event.state,
