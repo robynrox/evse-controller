@@ -132,6 +132,8 @@ def _csv_report(history, log, days: int) -> str:
         [
             "Date",
             "Start slot",
+            "Solver version",
+            "Solver mode",
             "Linked slots",
             "Skipped slots",
             "DP cost (GBP)",
@@ -147,6 +149,8 @@ def _csv_report(history, log, days: int) -> str:
             [
                 row.day.isoformat(),
                 row.start_slot,
+                row.solver_version or "legacy",
+                row.solver_mode or "legacy",
                 row.linked_slots,
                 row.skipped_slots,
                 "" if row.dp_cost_gbp is None else round(row.dp_cost_gbp, 4),
@@ -191,6 +195,8 @@ def register_backtest_routes(
                     {
                         "day": row.day.isoformat(),
                         "start_slot": row.start_slot,
+                        "solver_version": row.solver_version,
+                        "solver_mode": row.solver_mode,
                         "linked_slots": row.linked_slots,
                         "skipped_slots": row.skipped_slots,
                         "dp_cost_gbp": row.dp_cost_gbp,

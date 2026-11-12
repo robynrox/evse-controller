@@ -131,6 +131,8 @@ def test_api_returns_summary_and_days():
     assert payload["summary"]["soc_mae"] == pytest.approx(1.0)
     assert len(payload["days_data"]) == 1
     assert payload["days_data"][0]["day"] == DAY.isoformat()
+    assert "solver_version" in payload["days_data"][0]
+    assert "solver_mode" in payload["days_data"][0]
 
 
 def test_csv_has_the_expected_headers():
@@ -140,6 +142,8 @@ def test_csv_has_the_expected_headers():
     assert response.mimetype == "text/csv"
     body = response.get_data(as_text=True)
     assert body.splitlines()[0].startswith("Date,Start slot")
+    assert "Solver version" in body
+    assert "Solver mode" in body
     assert "SoC MAE (pp)" in body
     assert "Action match" in body
 
@@ -148,7 +152,9 @@ def test_empty_history_shows_the_explanation():
     response = _client(runs=False).get("/reports/backtest?days=7")
 
     assert response.status_code == 200
-    assert "No shadow plans are recorded" in response.get_data(as_text=True)
+    assert "No Learning mode preview plans are recorded" in response.get_data(
+        as_text=True
+    )
 
 
 def test_invalid_window_falls_back_to_the_default():

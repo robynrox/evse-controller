@@ -100,6 +100,8 @@ class DayBacktest:
     day: date
     start_slot: int
     run_ts: Optional[str]
+    solver_version: Optional[str]
+    solver_mode: Optional[str]
     linked_slots: int
     skipped_slots: int
     dp_cost_gbp: Optional[float]
@@ -270,6 +272,8 @@ def simulate_run(
         day=day,
         start_slot=start_slot,
         run_ts=run.get("ts"),
+        solver_version=run.get("solver_version"),
+        solver_mode=run.get("solver_mode"),
         linked_slots=SLOTS_PER_DAY - start_slot,
         skipped_slots=skipped,
         dp_cost_gbp=dp_total if any_dp else None,
@@ -371,5 +375,8 @@ def summarise(results: list[DayBacktest]) -> dict:
         "action_slots": action_slots,
         "action_match_rate": (
             matches / action_slots if action_slots else None
+        ),
+        "solver_versions": sorted(
+            {row.solver_version or "legacy" for row in results}
         ),
     }

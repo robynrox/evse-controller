@@ -724,6 +724,33 @@
     </div>
 
     <div class="config-section">
+        <h2>Learning mode</h2>
+        <p>
+            Learning mode uses dynamic programming (DP) to plan from measured
+            grid load and prices. Preview records each plan without changing
+            control, so it is safe to leave on while the plan is evaluated.
+            Control is not available yet.
+        </p>
+        <div class="form-group">
+            <label for="learning_mode">Mode</label>
+            <select id="learning_mode" name="learning[mode]">
+                <option value="off"
+                    {% if config.learning.get('mode', 'preview') == 'off' %}selected{% endif %}>
+                    Off
+                </option>
+                <option value="preview"
+                    {% if config.learning.get('mode', 'preview') == 'preview' %}selected{% endif %}>
+                    Preview — record plans without controlling
+                </option>
+            </select>
+            <small>
+                Solver version {{ solver_version }}. A bump in this version
+                marks a planner change in future runs.
+            </small>
+        </div>
+    </div>
+
+    <div class="config-section">
         <h2>Dashboard</h2>
         <div class="form-group">
             <label for="ui_button_style">Command button style</label>

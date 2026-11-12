@@ -427,6 +427,18 @@ class Config:
         )
     )
 
+    #: Learning mode: ``off`` disables the planner preview, ``preview``
+    #: records the dynamic-programming plan without changing control.
+    #: ``control`` is reserved for a later release.
+    LEARNING_MODE = property(
+        lambda self: self._get_config_value(
+            "learning", "mode", "preview"
+        ),
+        lambda self, value: self._set_config_value(
+            "learning", "mode", value
+        )
+    )
+
     #: Dashboard command buttons use the supplied illustrations by default.
     #: Users who prefer words can switch to the text abbreviations.
     UI_USE_ICON_BUTTONS = property(
@@ -1217,6 +1229,9 @@ class Config:
                 'duration_slots': self.OCPP_AUTO_DURATION_SLOTS,
                 'window_start': self.OCPP_AUTO_WINDOW_START,
                 'window_end': self.OCPP_AUTO_WINDOW_END,
+            },
+            'learning': {
+                'mode': self.LEARNING_MODE,
             },
             'ui': {
                 'use_icon_buttons': self.UI_USE_ICON_BUTTONS,

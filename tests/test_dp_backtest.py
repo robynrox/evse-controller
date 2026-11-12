@@ -86,6 +86,8 @@ def test_replays_house_load_and_frozen_prices():
     result = simulate_run(DAY, _run(), _snapshot(), _samples())
 
     assert result.start_slot == 0
+    assert result.solver_version is None
+    assert result.solver_mode is None
     assert result.linked_slots == 48
     # Slot 0: house = (1.0 / 0.5) - (0.5 / 0.5) = 1 kW; +2 kW charge.
     assert result.rows[0].house_kw == pytest.approx(1.0)
@@ -106,6 +108,18 @@ def test_soc_and_action_comparisons_use_matched_slots_only():
     assert result.soc_bias == pytest.approx(1.0)
     assert result.action_slots == 2
     assert result.action_match_rate == pytest.approx(1.0)
+
+
+def test_solver_version_and_mode_are_carried_into_the_backtest():
+    run = _run()
+    run["solver_version"] = "dp-test"
+    run["solver_mode"] = "preview"
+
+    result = simulate_run(DAY, run, _snapshot(), _samples())
+
+    assert result.solver_version == "dp-test"
+    assert result.solver_mode == "preview"
+    assert summarise([result])["solver_versions"] == ["dp-test"]
 
 
 def test_a_different_plan_action_does_not_match():

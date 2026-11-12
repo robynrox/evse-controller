@@ -285,7 +285,9 @@ def test_empty_history_shows_an_explanation(tmp_path):
     response = app.test_client().get(f"/reports/policy?date={DAY.isoformat()}")
 
     assert response.status_code == 200
-    assert "No shadow plans are recorded" in response.get_data(as_text=True)
+    assert "No Learning mode preview plans are recorded" in response.get_data(
+        as_text=True
+    )
 
 
 def test_invalid_date_is_a_404(client):

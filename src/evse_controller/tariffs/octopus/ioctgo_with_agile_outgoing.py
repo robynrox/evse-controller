@@ -18,6 +18,7 @@ from evse_controller.planner.inputs import (
     uniform_load_prior,
 )
 from evse_controller.planner.soc_estimator import SocEstimator
+from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.price_tiers import IOG_PRESETS
 from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
@@ -249,8 +250,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: The outgoing-product presets all share this controller.
     price_presets = IOG_PRESETS
 
-    #: Run the DP in shadow mode and record its plan.  It never changes the
-    #: heuristic's control decision.  Tests disable it by default.
+    #: Allow the planner to run at all.  The user-facing setting is
+    #: ``LEARNING_MODE``; ``preview`` records plans without changing control.
+    #: Tests disable this class-level switch by default.
     ENABLE_SHADOW_PLANNER = True
 
     #: Allow peak-rate grid charging to meet later high-value exports.  The
@@ -595,7 +597,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_decision_history_key = None
         self._last_shadow_slot = -1
         self._last_shadow_soc = None
-        self._shadow_enabled = self.ENABLE_SHADOW_PLANNER
+        self._learning_mode = self._resolve_learning_mode()
+        self._shadow_enabled = (
+            self.ENABLE_SHADOW_PLANNER
+            and self._learning_mode == "preview"
+        )
 
         # House-load discharge policy, derived from the projected 23:30 SoC:
         # ``aggressive`` at or above the aggressive lower limit,
@@ -667,6 +673,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Fetch rates at startup (async). Keep this last so the fetch thread
         # cannot run before the instance attributes it needs are initialised.
         self._fetch_rates_async()
+
+    @staticmethod
+    def _resolve_learning_mode() -> str:
+        """Return the configured Learning mode.
+
+        Only ``off`` and ``preview`` are available in this release.  A
+        ``control`` setting is reserved for the later control rollout; until
+        then it falls back to preview so a hand-edited config cannot start
+        unvalidated control.
+        """
+        mode = str(config.LEARNING_MODE or "preview").strip().lower()
+        if mode == "control":
+            warning(
+                "IOCTGO_AGILEOUT: Learning mode control is not available "
+                "yet; using preview."
+            )
+            return "preview"
+        if mode not in ("off", "preview"):
+            warning(
+                f"IOCTGO_AGILEOUT: Unknown Learning mode '{mode}'; "
+                "using preview."
+            )
+            return "preview"
+        return mode
 
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight."""
@@ -1245,6 +1275,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "ts": now.isoformat(),
             "day": now.date().isoformat(),
             "slot": current_slot,
+            "solver_version": SOLVER_VERSION,
+            "solver_mode": self._learning_mode,
             "reported_soc": reported_soc,
             "estimate_soc": planner_input.initial_soc,
             "target_soc": planner_input.target_soc,

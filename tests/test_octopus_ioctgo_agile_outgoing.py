@@ -16,6 +16,7 @@ from evse_controller.energy_sessions import (
 from evse_controller.drivers.EvseController import ControlState, EvseController
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.utils.config import config, Config
 
 
@@ -4850,6 +4851,8 @@ class TestShadowPlannerAndEstimator:
         assert len(runs) == 1
         run = runs[0]
         assert run["slot"] == 24
+        assert run["solver_version"] == SOLVER_VERSION
+        assert run["solver_mode"] == "preview"
         assert run["reported_soc"] == 60
         assert run["estimate_soc"] == pytest.approx(60.0)
         assert run["target_soc"] is None
@@ -4907,6 +4910,46 @@ class TestShadowPlannerAndEstimator:
         # the same battery state, so plan again in the same slot.
         tariff.get_control_state(create_test_state(64), 12 * 60)
         assert len(tariff._history.runs_for_day(today)) == 2
+
+    def test_learning_mode_off_disables_preview(self, monkeypatch):
+        monkeypatch.setattr(
+            Config, "LEARNING_MODE", property(lambda self: "off")
+        )
+
+        tariff = _build_tariff()
+
+        assert tariff._learning_mode == "off"
+        assert tariff._shadow_enabled is False
+
+    def test_preview_mode_enables_the_planner(self, monkeypatch):
+        monkeypatch.setattr(
+            Config, "LEARNING_MODE", property(lambda self: "preview")
+        )
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+
+        tariff = _build_tariff()
+
+        assert tariff._learning_mode == "preview"
+        assert tariff._shadow_enabled is True
+
+    def test_control_mode_falls_back_to_preview(self, monkeypatch):
+        monkeypatch.setattr(
+            Config, "LEARNING_MODE", property(lambda self: "control")
+        )
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+
+        tariff = _build_tariff()
+
+        assert tariff._learning_mode == "preview"
+        assert tariff._shadow_enabled is True
 
     def test_disabled_shadow_planner_records_nothing(self, tmp_path):
         tariff = _build_tariff()

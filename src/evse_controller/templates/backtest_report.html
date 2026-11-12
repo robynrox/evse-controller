@@ -145,12 +145,15 @@
     <div class="page-header">
         <h1>DP backtest</h1>
         <p>
-            The first shadow plan of each day is replayed against the measured
-            house load and frozen prices. The DP cost replaces the actual EVSE
-            action, so it is comparable with the heuristic's net cost over the
-            same slots. Positive delta means the DP plan would have been
-            cheaper. This is a first-order sanity check: it does not re-solve
-            battery constraints or supplier rewards.
+            This is the technical view of <strong>Learning mode</strong>, which
+            uses dynamic programming (DP). The first preview plan of each day
+            is replayed against the measured grid load and frozen prices. The
+            DP cost replaces the actual EVSE action, so it is comparable with
+            the heuristic's net cost over the same slots. Positive delta means
+            the DP plan would have been cheaper. This is a first-order sanity
+            check: it does not re-solve battery constraints or supplier
+            rewards. The solver version records which planner generation
+            produced each day.
         </p>
     </div>
 
@@ -222,6 +225,7 @@
                     <tr>
                         <th>Date</th>
                         <th>Start slot</th>
+                        <th>Solver</th>
                         <th>Linked</th>
                         <th>Skipped</th>
                         <th>DP cost</th>
@@ -237,6 +241,9 @@
                         <tr>
                             <td><a href="/reports/plan/{{ row.day }}">{{ row.day }}</a></td>
                             <td>{{ row.start_slot }}</td>
+                            <td title="{{ row.solver_mode or 'legacy run' }}">
+                                {{ row.solver_version or 'legacy' }}
+                            </td>
                             <td>{{ row.linked_slots }}</td>
                             <td>{{ row.skipped_slots }}</td>
                             <td>{{ fmt_money(row.dp_cost_gbp) }}</td>
@@ -258,8 +265,9 @@
         </p>
     {% else %}
         <p class="empty">
-            No shadow plans are recorded yet. Enable the shadow planner and let
-            it run for at least one slot; the backtest will appear here.
+            No Learning mode preview plans are recorded yet. Set Learning mode
+            to Preview and let it run for at least one slot; the backtest will
+            appear here.
         </p>
     {% endif %}
 </div>

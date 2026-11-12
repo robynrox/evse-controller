@@ -879,6 +879,31 @@ Kalman correction when the Wallbox reports a new integer percentage. The
 2–3% steps in those reports therefore do not cause the estimate to jump. The
 estimate is saved in the tariff state and restored after a restart.
 
+##### Learning mode
+
+**Learning mode** is the user-facing name for the dynamic-programming
+planner. The DP policy and DP backtest reports are its technical views.
+
+`learning.mode` has two available values in this release:
+
+```yaml
+learning:
+  mode: preview
+```
+
+- `preview` (default) — record plans without changing control;
+- `off` — do not run or record plans.
+
+A future `control` mode is reserved for the control rollout and is not yet
+implemented; a hand-edited `control` value falls back to preview. Preview is
+safe to leave on, but it does not actuate.
+
+Every run records `solver_version` and `solver_mode`. Bump
+`evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can
+alter the chosen action or its cost, even if the configuration is unchanged.
+The policy and backtest pages show the version so a later regression can be
+tied to the generation that produced it.
+
 History is append-only JSONL, one file per local day, under
 `data/state/planner_history/`:
 
@@ -890,14 +915,17 @@ History is append-only JSONL, one file per local day, under
   last decision in each slot and does not carry it into slots the controller
   has not reached yet.
 
-Set `ENABLE_SHADOW_PLANNER = False` on
-`IOctGoWithAgileOutgoingTariff` to stop both the shadow plan and the estimator;
-tests do this by default so a control test does not pay for a plan. The
+Set `learning.mode` to `off` to stop both the preview plan and the estimator.
+The class-level `ENABLE_SHADOW_PLANNER` remains as a test/instance override,
+and tests disable it by default so a control test does not pay for a plan. The
 plan-versus-actual report reads this history before the live control is
 switched over.
 
-The first plan of each day can also be replayed against the measured house
-load and frozen prices:
+The first plan of each day can also be replayed against the measured grid
+load and frozen prices. This first-plan replay is a historical sanity check,
+not a rolling simulation: it freezes the plan made at the start of the day,
+so it does not capture later replans as the horizon and prices change. A
+rolling re-solver is the next confidence step:
 
 ```bash
 poetry run python -m evse_controller.tools.dp_backtest --days 30
@@ -916,13 +944,13 @@ sanity check rather than a promise that the plan could have been executed
 exactly.
 
 The same result is on the **DP Backtest** page (`/reports/backtest`, with 7,
-30 or 90-day windows, CSV and JSON). It appears only after the shadow planner
-has recorded at least one run.
+30 or 90-day windows, CSV and JSON). It appears only after Learning mode
+preview has recorded at least one run.
 
 ##### DP policy map (`/reports/policy`)
 
-The **DP Policy** link replays a recorded shadow run and shows the optimal
-action for every half-hour slot and every SoC state:
+The **DP Policy** link replays a recorded Learning mode preview run and shows
+the optimal action for every half-hour slot and every SoC state:
 
 - **X axis:** slot time; **Y axis:** SoC from the protection floor to the
   charge cap.

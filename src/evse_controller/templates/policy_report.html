@@ -254,9 +254,11 @@
         <h1>DP policy map</h1>
         <p>
             The best action for every half-hour slot and starting SoC, replayed
-            from a recorded shadow run. The black line is the run's own planned
-            path; the dashed orange line is the SoC estimate that actually
-            happened. Hover a cell for its action, cost and decision margin.
+            from a recorded <strong>Learning mode preview</strong> run.
+            Learning mode uses dynamic programming (DP). The black line is the
+            run's own planned path; the dashed orange line is the SoC estimate
+            that actually happened. Hover a cell for its action, cost and
+            decision margin.
         </p>
     </div>
 
@@ -357,6 +359,15 @@
                 <div class="label">Run started</div>
                 <div class="value">{{ fmt_time(run.ts) }}</div>
                 <div class="note">slot {{ run.slot }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Solver</div>
+                <div class="value">
+                    {{ run.get('solver_version') or 'legacy' }}
+                </div>
+                <div class="note">
+                    {{ run.get('solver_mode') or 'legacy run' }}
+                </div>
             </div>
             <div class="card">
                 <div class="label">Horizon ends</div>
@@ -625,8 +636,9 @@
         {% endif %}
     {% else %}
         <p class="empty">
-            No shadow plans are recorded for {{ selected_date }}. Enable the
-            shadow planner and let it run for at least one slot.
+            No Learning mode preview plans are recorded for
+            {{ selected_date }}. Set Learning mode to Preview and let it run
+            for at least one slot.
         </p>
     {% endif %}
 </div>

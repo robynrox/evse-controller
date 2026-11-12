@@ -73,6 +73,7 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.price_tiers import PRESETS
+from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.poll_health import poll_health_payload
 
 VALID_COMMANDS = {
@@ -1016,6 +1017,17 @@ def config_page():
             if button_style is not None:
                 config.UI_USE_ICON_BUTTONS = button_style != 'text'
 
+            # Learning mode.  Control is not exposed in this release, so only
+            # the safe preview/off choices are accepted from the form.
+            learning_mode = request.form.get('learning[mode]')
+            if learning_mode is not None:
+                learning_mode = learning_mode.strip().lower()
+                if learning_mode not in ('off', 'preview'):
+                    raise ValueError(
+                        "Learning mode must be 'off' or 'preview'"
+                    )
+                config.LEARNING_MODE = learning_mode
+
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
                 ("latitude", "WEATHER_LATITUDE"),
@@ -1042,7 +1054,8 @@ def config_page():
     try:
         config_dict = config.as_dict()
         return render_template('config.html', config=config_dict,
-                               price_presets=PRESETS)
+                               price_presets=PRESETS,
+                               solver_version=SOLVER_VERSION)
     except Exception as e:
         logging.error(f"Error loading configuration page: {str(e)}")
         flash(f'Error loading configuration: {str(e)}', 'error')
@@ -1059,10 +1072,15 @@ def index():
         and config.WALLBOX_SERIAL
         and callable(getattr(evseController.evse, "request_reset", None))
     )
+    active_tariff = tariffManager.get_tariff()
+    learning_mode = getattr(active_tariff, "_learning_mode", None) or str(
+        config.LEARNING_MODE
+    ).lower()
     return render_template('index.html',
                          scheduled_events=scheduled_events,
                          current_state=current_state,
                          wallbox_reset_available=wallbox_reset_available,
+                         learning_mode=learning_mode,
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 
 @app.route('/decision')

@@ -1053,6 +1053,27 @@ class TestAutoOcppConfig:
         assert row["window_end"] == "04:00"
 
 
+class TestLearningMode:
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_preview_is_the_default(self):
+        config = self._config()
+
+        assert config.LEARNING_MODE == "preview"
+        assert config.as_dict()["learning"]["mode"] == "preview"
+
+    def test_off_round_trips_and_appears_in_the_page_dict(self):
+        config = self._config()
+        config.LEARNING_MODE = "off"
+
+        assert config.LEARNING_MODE == "off"
+        assert config.as_dict()["learning"]["mode"] == "off"
+
+
 class TestDashboardButtonStyle:
     @staticmethod
     def _config():

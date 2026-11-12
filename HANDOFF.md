@@ -399,11 +399,15 @@ completed fixes.
   slot, price, SoC, load-profile, plan, estimator, decision and weather-cache
   coverage over 7/30/90 days. A completed day is good only when all 48 slots
   have measured data, a grid reading and a frozen price; today is not scored.
-- `planner/backtest.py` and `tools/dp_backtest.py` replay the first shadow plan
-  of each day against the measured house load and frozen prices. The tool
-  compares DP grid cost with the heuristic's actual cost, SoC MAE/bias and the
-  planned-versus-actual action match rate. It is first-order: it does not
-  re-solve battery constraints or supplier rewards.
+- `planner/backtest.py` and `tools/dp_backtest.py` replay the first Learning
+  mode preview plan of each day against the measured grid load and frozen
+  prices. The tool compares DP grid cost with the heuristic's actual cost, SoC
+  MAE/bias and the planned-versus-actual action match rate. It is first-order:
+  it does not re-solve battery constraints or supplier rewards. This freezes
+  the start-of-day plan, so it is a sanity check rather than a rolling
+  simulation; a rolling re-solver is the next confidence step. Each row
+  carries `solver_version` and `solver_mode` so legacy and current planner
+  generations can be separated.
 - `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
   7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
   shows an explanation rather than a score before any shadow plan exists.
@@ -422,6 +426,13 @@ completed fixes.
   Policies are replayed from recorded run inputs; old runs without planner
   parameters show a caveat, and a run with no load profile shows a prominent
   no-load warning.
+- **Learning mode** is the user-facing name for the DP planner.
+  `learning.mode` accepts `preview` (default) or `off`; `control` is reserved
+  for the later rollout and falls back to preview. Preview records plans but
+  never actuates. Each run stores `solver_version` and `solver_mode`;
+  `SOLVER_VERSION` in `planner/version.py` must be bumped whenever a planner
+  change can alter an action or its cost. The policy and backtest pages show
+  the version.
 - The shadow planner uses a **0.1% SoC grid** (`SHADOW_SOC_STEP_PERCENT`).
   Forecasts use measured days only, up to 28 days; missing days are not
   synthesised as zero or as a base-load prior. One measured day is used
