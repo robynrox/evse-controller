@@ -1017,6 +1017,34 @@ Rolling can use either a **simulated closed-loop SoC** or the **recorded SoC
 estimate** at each slot. The latter isolates policy decisions from simulated
 SoC drift.
 
+The **Load input** selector keeps the recorded load profile by default. Choosing
+**Component forecast** replaces the re-solved run's load inputs with:
+
+```text
+net_grid = baseload(slot) + heat_pump(T) − solar(GTI)
+```
+
+using the fitted component model and the historical forecast weather. The
+baseline always keeps the recorded load, so the A/B comparison shows whether
+the better forecast changes decisions. Generate the model and weather files
+with:
+
+```bash
+python -m evse_controller.tools.fetch_weather_history \
+    --source historical-forecast --days 365 \
+    --output data/analysis/weather_forecast_history.csv.gz
+python -m evse_controller.tools.evaluate_net_grid_forecast \
+    --weather data/analysis/weather_forecast_history.csv.gz \
+    --kwp 4.7 --inverter-limit-kw 3.6 \
+    --latitude 51.5 --longitude -3.2 --test-days 60
+```
+
+The default paths are `data/analysis/net_grid_model/model.json` and
+`data/analysis/weather_forecast_history.csv.gz`. Use a model whose training
+cutoff is before the backtest window; the default 60-day holdout leaves the
+most recent 30-day backtest out of training. A missing weather slot fails the
+job rather than being filled with a synthetic zero.
+
 Both are A/B tests of the solver generation, not replacements for the recorded
 history. Vehicle disconnect and reconnect events are recorded with the
 reported SoC; a rolling re-solve leaves fully disconnected slots idle and

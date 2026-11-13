@@ -226,6 +226,84 @@ def test_start_job_route_accepts_rolling_scope(tmp_path, monkeypatch):
     assert job["baseline_source"] == "plan_in_force"
 
 
+def test_start_job_route_accepts_component_load(tmp_path, monkeypatch):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager,
+        "_spawn",
+        lambda job_dir: type("Process", (), {"pid": 1234})(),
+    )
+
+    class FakeTariff:
+        _learning_mode = "preview"
+
+        def shadow_planner_spec(self):
+            return {"capacity_kwh": 36.0}
+
+    import evse_controller.web.backtest_routes as backtest_routes
+
+    monkeypatch.setattr(
+        backtest_routes, "_active_tariff", lambda: FakeTariff()
+    )
+    client = _client(jobs=manager)
+    model = tmp_path / "model.json"
+    weather = tmp_path / "weather.csv.gz"
+    model.write_text("{}")
+    weather.write_text("")
+
+    response = client.post(
+        "/reports/backtest/jobs?days=7",
+        json={
+            "scope": "rolling",
+            "load_source": "component",
+            "component_model_path": str(model),
+            "weather_forecast_path": str(weather),
+        },
+    )
+
+    assert response.status_code == 202
+    job = response.get_json()
+    assert job["load_source"] == "component"
+    assert job["component_model_path"] == str(model)
+    assert job["weather_forecast_path"] == str(weather)
+
+
+def test_start_job_route_rejects_missing_component_files(
+    tmp_path, monkeypatch
+):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager,
+        "_spawn",
+        lambda job_dir: type("Process", (), {"pid": 1234})(),
+    )
+
+    class FakeTariff:
+        _learning_mode = "preview"
+
+        def shadow_planner_spec(self):
+            return {"capacity_kwh": 36.0}
+
+    import evse_controller.web.backtest_routes as backtest_routes
+
+    monkeypatch.setattr(
+        backtest_routes, "_active_tariff", lambda: FakeTariff()
+    )
+    client = _client(jobs=manager)
+
+    response = client.post(
+        "/reports/backtest/jobs?days=7",
+        json={
+            "load_source": "component",
+            "component_model_path": str(tmp_path / "missing.json"),
+            "weather_forecast_path": str(tmp_path / "missing.csv.gz"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "needs these files" in response.get_json()["error"]
+
+
 def test_job_ab_view_shows_heuristic_and_vehicle_columns(
     tmp_path,
 ):

@@ -17,8 +17,13 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from evse_controller.daily_report import daily_log
+from evse_controller.forecasting.component import (
+    ComponentLoadModel,
+    apply_component_load_to_run,
+)
 from evse_controller.planner.backtest import (
     day_backtest_to_dict,
     first_run,
@@ -41,6 +46,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
     BatteryEfficiencyModel,
     DASHBOARD_SOC_CAPACITY_KWH,
 )
+from evse_controller.tools.analyse_weather_components import load_weather
 
 
 JOB_FILE = "job.json"
@@ -108,6 +114,26 @@ def _build_planner(params: dict) -> DpPlanner:
     )
 
 
+def _component_context(job: dict):
+    """Load the optional component forecast model and weather series."""
+    if str(job.get("load_source") or "recorded") != "component":
+        return None
+    model_path = job.get("component_model_path")
+    weather_path = job.get("weather_forecast_path")
+    if not model_path or not weather_path:
+        raise ValueError(
+            "Component load source needs a model and a weather forecast"
+        )
+    model = ComponentLoadModel.from_dict(
+        _read_json(Path(str(model_path)).expanduser())
+    )
+    weather, _ = load_weather(
+        Path(str(weather_path)).expanduser(),
+        ZoneInfo(model.timezone),
+    )
+    return model, weather
+
+
 def _cancel_requested(path: Path) -> bool:
     try:
         return bool(_read_json(path).get("cancel_requested"))
@@ -166,6 +192,8 @@ def run_job(job_dir: Path) -> int:
     scope = str(job.get("scope") or "first_plan")
     state_source = str(job.get("state_source") or "simulated")
     baseline_source = str(job.get("baseline_source") or "first_plan")
+    load_source = str(job.get("load_source") or "recorded")
+    component = None
     start_day = date.fromisoformat(str(job["start"]))
     end_day = date.fromisoformat(str(job["end"]))
     days_total = (end_day - start_day).days + 1
@@ -180,6 +208,7 @@ def run_job(job_dir: Path) -> int:
         pass
 
     try:
+        component = _component_context(job)
         day = start_day
         while day <= end_day:
             if _cancel_requested(job_path):
@@ -225,6 +254,13 @@ def run_job(job_dir: Path) -> int:
                 if baseline_source == "plan_in_force"
                 else run
             )
+            component_runs = runs
+            if component is not None:
+                model, weather = component
+                component_runs = [
+                    apply_component_load_to_run(item, model, weather)
+                    for item in runs
+                ]
             baseline = simulate_run(
                 day,
                 baseline_run,
@@ -239,7 +275,7 @@ def run_job(job_dir: Path) -> int:
 
                 resolved_run = rolling_resolve(
                     day,
-                    runs,
+                    component_runs,
                     planner,
                     job.get("planner") or {},
                     solver_version=solver_version,
@@ -250,10 +286,17 @@ def run_job(job_dir: Path) -> int:
                     progress=on_slot,
                 )
             else:
-                slots = slots_from_run(run, job.get("planner") or {})
-                result = planner.plan(slots, initial_soc(run))
+                resolved_source = (
+                    first_run(component_runs) if component is not None else run
+                )
+                slots = slots_from_run(
+                    resolved_source, job.get("planner") or {}
+                )
+                result = planner.plan(slots, initial_soc(resolved_source))
                 resolved_run = resolved_run_dict(
-                    run, result, solver_version=solver_version
+                    resolved_source,
+                    result,
+                    solver_version=solver_version,
                 )
             job["current_slot"] = None
             resolved = simulate_run(
@@ -273,6 +316,7 @@ def run_job(job_dir: Path) -> int:
                     "scope": scope,
                     "state_source": state_source,
                     "baseline_source": baseline_source,
+                    "load_source": load_source,
                     "source_run_ts": run.get("ts"),
                     "source_run_slot": run.get("slot"),
                     "solver_version": solver_version,

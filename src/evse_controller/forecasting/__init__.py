@@ -1,5 +1,9 @@
 """Forecast models for weather-driven components."""
 
+from evse_controller.forecasting.component import (
+    ComponentLoadModel,
+    apply_component_load_to_run,
+)
 from evse_controller.forecasting.heatpump import (
     HeatPumpModel,
     HeatPumpSample,
@@ -12,10 +16,12 @@ from evse_controller.forecasting.solar import (
 )
 
 __all__ = [
+    "ComponentLoadModel",
     "HeatPumpModel",
     "HeatPumpSample",
     "SolarModel",
     "SolarSample",
+    "apply_component_load_to_run",
     "fit_heatpump_model",
     "fit_solar_model",
 ]

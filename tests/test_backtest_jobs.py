@@ -56,6 +56,35 @@ def test_start_writes_job_and_spawns_worker(tmp_path, monkeypatch):
     assert stored["planner"]["capacity_kwh"] == 36.0
 
 
+def test_start_records_the_component_load_source(tmp_path, monkeypatch):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager, "_spawn", lambda job_dir: FakeProcess(1234)
+    )
+
+    job = manager.start(
+        _spec(
+            load_source="component",
+            component_model_path="/tmp/model.json",
+            weather_forecast_path="/tmp/weather.csv.gz",
+        )
+    )
+
+    assert job["load_source"] == "component"
+    assert job["component_model_path"] == "/tmp/model.json"
+    assert job["weather_forecast_path"] == "/tmp/weather.csv.gz"
+
+
+def test_start_rejects_an_unknown_load_source(tmp_path, monkeypatch):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager, "_spawn", lambda job_dir: FakeProcess(1234)
+    )
+
+    with pytest.raises(BacktestJobError, match="load source"):
+        manager.start(_spec(load_source="synthetic"))
+
+
 def test_start_rejects_a_second_active_job(tmp_path, monkeypatch):
     manager = BacktestJobManager(tmp_path)
     monkeypatch.setattr(

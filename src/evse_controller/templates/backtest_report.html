@@ -205,6 +205,11 @@
                 <option value="simulated">Simulated (closed loop)</option>
                 <option value="recorded">Recorded estimate</option>
             </select>
+            <label for="backtest-job-load">Load input</label>
+            <select id="backtest-job-load">
+                <option value="recorded">Recorded load</option>
+                <option value="component">Component forecast</option>
+            </select>
             <button type="button" id="start-backtest-job"
                     data-days="{{ days }}">Re-run solver</button>
             <button type="button" id="cancel-backtest-job" hidden>Cancel</button>
@@ -221,6 +226,7 @@
                     <th>Created</th>
                     <th>Status</th>
                     <th>Days</th>
+                    <th>Load</th>
                     <th>Solver</th>
                     <th>Improvement</th>
                     <th></th>
@@ -233,6 +239,7 @@
                     <td>{{ job.created_at }}</td>
                     <td>{{ job.status }}{% if job.days_total %} · {{ job.days_done }}/{{ job.days_total }}{% endif %}</td>
                     <td>{{ job.scope }}</td>
+                    <td>{{ job.load_source or 'recorded' }}</td>
                     <td>{{ job.solver_version }}</td>
                     <td>
                         {% if summary and summary.get('improvement_gbp') is not none %}
@@ -273,6 +280,14 @@
         Positive improvement means the re-solved plan was cheaper on grid
         cost.
     </p>
+    {% if selected_job.load_source == 'component' %}
+    <p>
+        The resolved plan uses the component net-grid forecast
+        (baseload + heat pump − solar) as its load input. The baseline still
+        uses the recorded load profile, so the comparison shows whether the
+        better forecast changes the decisions.
+    </p>
+    {% endif %}
     {% if job_summary %}
     <div class="cards">
         <div class="card">
@@ -477,6 +492,7 @@
     const scopeElement = document.getElementById('backtest-job-scope');
     const baselineElement = document.getElementById('backtest-job-baseline');
     const stateElement = document.getElementById('backtest-job-state');
+    const loadElement = document.getElementById('backtest-job-load');
     const statusElement = document.getElementById('backtest-job-status');
     if (!startButton || !statusElement) return;
 
@@ -522,6 +538,7 @@
                 if (scopeElement) scopeElement.disabled = false;
                 if (baselineElement) baselineElement.disabled = false;
                 if (stateElement) stateElement.disabled = false;
+                if (loadElement) loadElement.disabled = false;
                 setStatus(
                     job.status + (job.error ? ': ' + job.error : ''),
                     job.status
@@ -535,6 +552,7 @@
             if (scopeElement) scopeElement.disabled = false;
             if (baselineElement) baselineElement.disabled = false;
             if (stateElement) stateElement.disabled = false;
+            if (loadElement) loadElement.disabled = false;
             setStatus(error.message, 'failed');
         }
     }
@@ -544,6 +562,7 @@
         if (scopeElement) scopeElement.disabled = true;
         if (baselineElement) baselineElement.disabled = true;
         if (stateElement) stateElement.disabled = true;
+        if (loadElement) loadElement.disabled = true;
         cancelButton.hidden = false;
         setStatus('Starting…', 'running');
         try {
@@ -555,6 +574,9 @@
             const stateSource = stateElement
                 ? stateElement.value
                 : 'simulated';
+            const loadSource = loadElement
+                ? loadElement.value
+                : 'recorded';
             const response = await fetch(
                 '/reports/backtest/jobs?days=' + days,
                 {
@@ -563,7 +585,8 @@
                     body: JSON.stringify({
                         scope: scope,
                         baseline_source: baselineSource,
-                        state_source: stateSource
+                        state_source: stateSource,
+                        load_source: loadSource
                     })
                 }
             );
@@ -577,6 +600,7 @@
             if (scopeElement) scopeElement.disabled = false;
             if (baselineElement) baselineElement.disabled = false;
             if (stateElement) stateElement.disabled = false;
+            if (loadElement) loadElement.disabled = false;
             cancelButton.hidden = true;
             setStatus(error.message, 'failed');
         }

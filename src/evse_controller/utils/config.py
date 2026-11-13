@@ -180,6 +180,20 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "weather_forecast_history"
 
+    @property
+    def NET_GRID_MODEL_FILE(self):
+        """Fitted component net-grid model used by shadow backtests."""
+        self._ensure_initialized()
+        return get_data_dir() / "analysis" / "net_grid_model" / "model.json"
+
+    @property
+    def WEATHER_FORECAST_HISTORY_FILE(self):
+        """Tidy historical-forecast weather CSV for shadow backtests."""
+        self._ensure_initialized()
+        return (
+            get_data_dir() / "analysis" / "weather_forecast_history.csv.gz"
+        )
+
     def _optional_weather_float(
         self, key: str, minimum: float, maximum: float
     ) -> Optional[float]:

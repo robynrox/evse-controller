@@ -181,6 +181,51 @@ def test_worker_writes_an_ab_row_and_summary(tmp_path, monkeypatch):
     assert (job_dir / "summary.json").exists()
 
 
+def test_worker_applies_component_load_source(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_context(job):
+        return ("model", "weather")
+
+    def fake_apply(run, model, weather):
+        calls.append(run)
+        updated = dict(run)
+        updated["inputs"] = [
+            dict(
+                item,
+                load_kw=0.7,
+                load_samples=[[0.7, 1.0]],
+                load_source="component",
+            )
+            for item in run["inputs"]
+        ]
+        return updated
+
+    monkeypatch.setattr(backtest_job, "_component_context", fake_context)
+    monkeypatch.setattr(
+        backtest_job, "apply_component_load_to_run", fake_apply
+    )
+
+    job_dir, code = _run_worker(
+        tmp_path,
+        monkeypatch,
+        load_source="component",
+        component_model_path="model.json",
+        weather_forecast_path="weather.csv.gz",
+    )
+
+    assert code == 0
+    assert calls
+    rows = [
+        json.loads(line)
+        for line in (job_dir / "days.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert rows[0]["load_source"] == "component"
+    job = json.loads((job_dir / "job.json").read_text())
+    assert job["load_source"] == "component"
+
+
 def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):
     job_dir, code = _run_worker(
         tmp_path,

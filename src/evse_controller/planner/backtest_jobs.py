@@ -202,6 +202,11 @@ class BacktestJobManager:
                 raise BacktestJobError(
                     f"Unsupported baseline source: {baseline_source!r}"
                 )
+            load_source = str(spec.get("load_source") or "recorded")
+            if load_source not in ("recorded", "component"):
+                raise BacktestJobError(
+                    f"Unsupported load source: {load_source!r}"
+                )
             start_day = date.fromisoformat(str(spec["start"]))
             end_day = date.fromisoformat(str(spec["end"]))
             if end_day < start_day:
@@ -232,6 +237,13 @@ class BacktestJobManager:
                 "scope": scope,
                 "state_source": state_source,
                 "baseline_source": baseline_source,
+                "load_source": load_source,
+                "component_model_path": str(
+                    spec.get("component_model_path") or ""
+                ),
+                "weather_forecast_path": str(
+                    spec.get("weather_forecast_path") or ""
+                ),
                 "solver_version": version,
                 "solver_mode": spec.get("solver_mode"),
                 "start": start_day.isoformat(),

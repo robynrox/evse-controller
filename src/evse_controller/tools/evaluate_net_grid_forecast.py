@@ -64,6 +64,20 @@ class Record:
     baseload_kw: float
 
 
+def _percentile(values: Sequence[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(
+        0,
+        min(
+            len(ordered) - 1,
+            int(round(fraction * (len(ordered) - 1))),
+        ),
+    )
+    return ordered[index]
+
+
 def _metrics(pairs: Sequence[tuple[float, float]]) -> dict:
     if not pairs:
         return {"n": 0, "mae_kw": None, "rmse_kw": None, "bias_kw": None}
@@ -217,6 +231,27 @@ def fit_and_evaluate(
         train, lambda record: record.house_kw
     )
 
+    training_residuals = []
+    for record in train:
+        solar_pred = solar_model.predict(record.when, record.gti_wm2)
+        heat_pred = (
+            heat_model.predict(
+                record.when, record.temperature_c, quantile="p50"
+            )
+            / 1000.0
+        )
+        baseload_pred = baseload_profile.get(
+            record.slot, baseload_overall
+        )
+        training_residuals.append(
+            record.house_kw
+            - (baseload_pred + heat_pred - solar_pred)
+        )
+    residual_quantiles = {
+        str(fraction): _percentile(training_residuals, fraction)
+        for fraction in (0.1, 0.3, 0.5, 0.7, 0.9)
+    }
+
     component_pairs = []
     persistence_pairs = []
     solar_pairs = []
@@ -289,6 +324,7 @@ def fit_and_evaluate(
             for slot, value in sorted(baseload_profile.items())
         },
         "baseload_overall_kw": baseload_overall,
+        "residual_quantiles_kw": residual_quantiles,
         "solar_model": solar_model.to_dict(),
         "heatpump_model": heat_model.to_dict(),
     }
@@ -310,6 +346,7 @@ def fit_and_evaluate(
         "heatpump_component": _metrics(heat_pairs),
         "performance_ratio": solar_model.performance_ratio,
         "shading_bins": len(solar_model.shading),
+        "residual_quantiles_kw": residual_quantiles,
         "heatpump_temperature_bins": len(heat_model.bins),
         "heatpump_slot_profiles": len(heat_model.slot_profiles),
     }

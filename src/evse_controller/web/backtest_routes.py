@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import timedelta
+from pathlib import Path
 
 from flask import Response, jsonify, render_template, request
 
@@ -16,6 +17,7 @@ from evse_controller.planner.backtest_jobs import (
 )
 from evse_controller.planner.history import PlannerHistory, planner_history
 from evse_controller.planner.version import SOLVER_VERSION
+from evse_controller.utils.config import config
 
 
 WINDOW_CHOICES = (7, 30, 90)
@@ -249,6 +251,41 @@ def register_backtest_routes(
         baseline_source = str(
             payload.get("baseline_source") or "first_plan"
         )
+        load_source = str(payload.get("load_source") or "recorded")
+        if load_source not in ("recorded", "component"):
+            return (
+                jsonify({"error": f"Unsupported load source: {load_source}"}),
+                400,
+            )
+        component_model_path = str(
+            payload.get("component_model_path")
+            or config.NET_GRID_MODEL_FILE
+        )
+        weather_forecast_path = str(
+            payload.get("weather_forecast_path")
+            or config.WEATHER_FORECAST_HISTORY_FILE
+        )
+        if load_source == "component":
+            missing = [
+                path
+                for path in (
+                    component_model_path,
+                    weather_forecast_path,
+                )
+                if not Path(path).expanduser().is_file()
+            ]
+            if missing:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Component load source needs these files: "
+                                + ", ".join(missing)
+                            )
+                        }
+                    ),
+                    400,
+                )
         available = history.available_days()
         if not available:
             return jsonify({"error": "No recorded planner days are available"}), 400
@@ -263,6 +300,9 @@ def register_backtest_routes(
                     "scope": scope,
                     "state_source": state_source,
                     "baseline_source": baseline_source,
+                    "load_source": load_source,
+                    "component_model_path": component_model_path,
+                    "weather_forecast_path": weather_forecast_path,
                     "planner": tariff.shadow_planner_spec(),
                     "solver_version": SOLVER_VERSION,
                     "solver_mode": getattr(
