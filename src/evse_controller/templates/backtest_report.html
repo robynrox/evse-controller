@@ -284,9 +284,19 @@
             <div class="value">{{ fmt_money(job_summary.get('resolved', {}).get('dp_cost_gbp')) }}</div>
         </div>
         <div class="card">
-            <div class="label">Improvement</div>
+            <div class="label">Solver improvement</div>
             <div class="value">{{ fmt_money(job_summary.get('improvement_gbp')) }}</div>
-            <div class="note">baseline minus re-solved</div>
+            <div class="note">baseline DP minus re-solved DP</div>
+        </div>
+        <div class="card">
+            <div class="label">Baseline vs heuristic</div>
+            <div class="value">{{ fmt_money(job_summary.get('baseline', {}).get('delta_gbp')) }}</div>
+            <div class="note">actual minus baseline DP; positive is better</div>
+        </div>
+        <div class="card">
+            <div class="label">Re-solved vs heuristic</div>
+            <div class="value">{{ fmt_money(job_summary.get('resolved', {}).get('delta_gbp')) }}</div>
+            <div class="note">actual minus re-solved DP; positive is better</div>
         </div>
         <div class="card">
             <div class="label">Days</div>
@@ -306,6 +316,7 @@
                     <th>Improvement</th>
                     <th>Baseline delta</th>
                     <th>Re-solved delta</th>
+                    <th>Vehicle</th>
                     <th>Action match</th>
                 </tr>
             </thead>
@@ -324,6 +335,10 @@
                     </td>
                     <td>{{ fmt_money(baseline.get('delta_gbp')) }}</td>
                     <td>{{ fmt_money(resolved.get('delta_gbp')) }}</td>
+                    <td title="Away slots: {{ item.get('disconnected_slots', [])|join(', ') }}">
+                        {{ item.get('vehicle_events', 0) }} events ·
+                        {{ item.get('disconnected_slots', [])|length }} away
+                    </td>
                     <td>{{ fmt_pct(resolved.get('action_match_rate')) }}</td>
                 </tr>
                 {% endfor %}
@@ -355,6 +370,14 @@
     </div>
 
     {% if rows %}
+        <div class="panel" style="margin-top:18px;">
+            <strong>Historical first-plan reference</strong>
+            <p style="margin:8px 0 0;">
+                This lower report always compares the recorded first plan with
+                the heuristic's actual cost. It is a stable historical
+                reference; for the current solver use the A/B re-solve above.
+            </p>
+        </div>
         <div class="cards">
             <div class="card">
                 <div class="label">Paired days</div>
@@ -362,9 +385,9 @@
                 <div class="note">Days with both costs</div>
             </div>
             <div class="card">
-                <div class="label">DP plan cost</div>
+                <div class="label">First-plan DP cost</div>
                 <div class="value">{{ fmt_money(metrics.dp_cost_gbp) }}</div>
-                <div class="note">Replayed grid cost</div>
+                <div class="note">recorded first plan</div>
             </div>
             <div class="card">
                 <div class="label">Heuristic actual</div>
@@ -374,7 +397,7 @@
             <div class="card">
                 <div class="label">Delta</div>
                 <div class="value">{{ fmt_money(metrics.delta_gbp) }}</div>
-                <div class="note">Actual minus DP; positive is better</div>
+                <div class="note">Actual minus first-plan DP; positive is better</div>
             </div>
             <div class="card">
                 <div class="label">SoC MAE</div>

@@ -978,7 +978,10 @@ Both are A/B tests of the solver generation, not replacements for the recorded
 history. Vehicle disconnect and reconnect events are recorded with the
 reported SoC; a rolling re-solve leaves fully disconnected slots idle and
 applies the measured reconnect SoC change, clamped to the 10–97% vehicle
-range.
+range. The A/B summary separates **baseline versus heuristic**, **re-solved
+versus heuristic** and **solver improvement**, so the two kinds of saving are
+not accidentally added together. The lower historical table remains the
+recorded first-plan reference.
 
 The job runs in a separate low-priority worker process, so a long re-solve
 cannot delay the control loop. One job runs at a time. Progress and results

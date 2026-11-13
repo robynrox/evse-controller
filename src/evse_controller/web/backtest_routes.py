@@ -143,7 +143,11 @@ def _render(history, log, days: int, manager=None):
     except BacktestJobError:
         job = None
     job_days = manager.load_days(selected_job) if job else []
-    job_summary = manager.load_summary(selected_job) if job else None
+    job_summary = (
+        (manager.load_summary(selected_job) or (job or {}).get("summary"))
+        if job
+        else None
+    )
     return render_template(
         "backtest_report.html",
         rows=rows,

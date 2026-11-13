@@ -1,6 +1,7 @@
 """Web routes for the DP backtest report."""
 
 from datetime import date
+import json
 from pathlib import Path
 
 from flask import Flask
@@ -117,7 +118,7 @@ def test_page_renders_cards_chart_and_table():
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert "DP backtest" in body
-    assert "DP plan cost" in body
+    assert "First-plan DP cost" in body
     assert "Heuristic actual" in body
     assert "Action match" in body
     assert "<svg" in body
@@ -223,6 +224,74 @@ def test_start_job_route_accepts_rolling_scope(tmp_path, monkeypatch):
     assert job["scope"] == "rolling"
     assert job["state_source"] == "recorded"
     assert job["baseline_source"] == "plan_in_force"
+
+
+def test_job_ab_view_shows_heuristic_and_vehicle_columns(
+    tmp_path,
+):
+    manager = BacktestJobManager(tmp_path)
+    job_dir = tmp_path / "job-ab"
+    job_dir.mkdir()
+    (job_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-ab",
+                "status": "complete",
+                "created_at": "2026-11-13T12:00:00+00:00",
+                "scope": "rolling",
+                "state_source": "recorded",
+                "baseline_source": "plan_in_force",
+                "solver_version": "dp-test",
+                "days_total": 1,
+                "days_done": 1,
+                "summary": {
+                    "baseline": {
+                        "dp_cost_gbp": 1.0,
+                        "delta_gbp": 0.20,
+                        "paired_days": 1,
+                    },
+                    "resolved": {
+                        "dp_cost_gbp": 0.8,
+                        "delta_gbp": 0.40,
+                        "paired_days": 1,
+                    },
+                    "improvement_gbp": 0.20,
+                    "days_skipped": 0,
+                },
+            }
+        )
+    )
+    (job_dir / "days.jsonl").write_text(
+        json.dumps(
+            {
+                "day": DAY.isoformat(),
+                "baseline": {
+                    "dp_cost_gbp": 1.0,
+                    "delta_gbp": 0.20,
+                },
+                "resolved": {
+                    "dp_cost_gbp": 0.8,
+                    "delta_gbp": 0.40,
+                    "action_match_rate": 0.5,
+                },
+                "vehicle_events": 2,
+                "disconnected_slots": [10, 11],
+            }
+        )
+        + "\n"
+    )
+
+    response = _client(jobs=manager).get(
+        f"/reports/backtest?days=7&job=job-ab"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Re-solved vs heuristic" in body
+    assert "Baseline vs heuristic" in body
+    assert "Solver improvement" in body
+    assert "2 events" in body
+    assert "2 away" in body
 
 
 def test_empty_history_shows_the_explanation():

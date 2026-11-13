@@ -422,7 +422,9 @@ completed fixes.
   clamped to 10–97%.  Results live under `data/state/backtest_jobs/<job_id>/`
   (`job.json`, `days.jsonl`, `summary.json`) and never modify the recorded
   planner history.  A stale `running` job whose PID has gone is marked
-  `interrupted` on the next listing or start.
+  `interrupted` on the next listing or start.  The A/B summary separates
+  baseline-vs-heuristic, re-solved-vs-heuristic and solver improvement; the
+  per-day table shows vehicle-event and away-slot counts.
 - `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
   7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
   shows an explanation rather than a score before any shadow plan exists.
