@@ -836,6 +836,9 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
     fetch with per-day JSON caching and tidy CSV output.
   - `src/evse_controller/tools/analyse_weather_components.py` — UTC-aligned
     solar/heat-pump audit, including solar position with the equation of time.
+  - `src/evse_controller/tools/fit_solar_forecast.py` and
+    `forecasting/solar.py` — capped solar model with a learned sun-position
+    shading mask, fitted and evaluated on a holdout period.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).

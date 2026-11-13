@@ -1351,6 +1351,29 @@ of time, so the shading analysis follows the sun rather than the clock. The
 tool uses the configured weather geometry by default; pass `--latitude` and
 `--longitude` when running against a copied dataset without that config.
 
+To fit and evaluate the capped solar model:
+
+```bash
+python -m evse_controller.tools.fit_solar_forecast \
+    --kwp 4.7 --inverter-limit-kw 3.6 \
+    --latitude 51.5 --longitude -3.2 \
+    --test-days 60
+```
+
+The model is:
+
+```text
+P_dc = kWp × GTI/1000 × performance_ratio × shade(elevation, azimuth)
+P_ac = min(P_dc, inverter_limit)
+```
+
+The performance ratio is fitted from high-irradiance, unclipped samples, and
+the shading mask is learned from the installation's own measurements by sun
+position. The last `--test-days` are held out for evaluation. Outputs are
+written under `data/analysis/solar_model/`: `model.json`, `evaluation.csv` and
+`summary.json`. The model is not yet wired into DP control; this is the
+forecast-quality stage.
+
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
