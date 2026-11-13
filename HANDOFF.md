@@ -834,6 +834,8 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
     discovery, resolution/aggregation and without pandas.
   - `src/evse_controller/tools/fetch_weather_history.py` — Open-Meteo archive
     fetch with per-day JSON caching and tidy CSV output.
+  - `src/evse_controller/tools/analyse_weather_components.py` — UTC-aligned
+    solar/heat-pump audit, including solar position with the equation of time.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).

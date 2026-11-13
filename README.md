@@ -1321,6 +1321,30 @@ This tool is optional and only useful when InfluxDB logging is enabled. The
 daily backup script above remains the right choice for long-term backups; the
 range exporter is for analysis and weather-correlation work.
 
+### Weather-component audit
+
+Once the InfluxDB and historical-weather CSVs are in `data/analysis`, run:
+
+```bash
+python -m evse_controller.tools.analyse_weather_components \
+    --latitude 51.5 --longitude -3.2 \
+    --output-dir data/analysis/weather_component_audit
+```
+
+It aligns both exports in UTC, aggregates the five-minute energy data to
+hourly means, and writes:
+
+- `summary.json` — coverage, correlations and counts;
+- `solar_by_month_hour.csv` — solar ratio by month and local clock hour;
+- `solar_by_sun_position.csv` — solar ratio by actual sun elevation/azimuth;
+- `heatpump_by_temperature.csv` — heat-pump power by outdoor-temperature bin;
+- `heatpump_daily.csv` — daily heat-pump kWh versus daily mean temperature.
+
+The sun-position table uses the NOAA solar equations, including the equation
+of time, so the shading analysis follows the sun rather than the clock. The
+tool uses the configured weather geometry by default; pass `--latitude` and
+`--longitude` when running against a copied dataset without that config.
+
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
