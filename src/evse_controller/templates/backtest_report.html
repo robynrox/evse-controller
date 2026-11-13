@@ -287,6 +287,16 @@
         uses the recorded load profile, so the comparison shows whether the
         better forecast changes the decisions.
     </p>
+    {% if selected_job.skipped_weather_days %}
+    <p class="note">
+        These days were skipped because the forecast weather file did not
+        cover them:
+        {% for item in selected_job.skipped_weather_days %}
+            {{ item.day }}{% if not loop.last %}, {% endif %}
+        {% endfor %}.
+        Refresh the weather file and re-run to include them.
+    </p>
+    {% endif %}
     {% endif %}
     {% if job_summary %}
     <div class="cards">

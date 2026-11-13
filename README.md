@@ -1046,8 +1046,16 @@ most recent 30-day backtest out of training. The job refuses a window whose
 first day with recorded runs is on or before the model's recorded
 `training_end`, so a component comparison cannot silently score days the
 model was fitted on. Empty leading days in the requested window are skipped
-and do not trigger that check. A missing weather slot fails the job rather
-than being filled with a synthetic zero.
+and do not trigger that check. A day with missing forecast weather is skipped
+and listed on the A/B page; it is never filled with a synthetic zero. Refresh
+the weather file through the current day before running (without `--end`,
+`--days` stops at yesterday):
+
+```bash
+python -m evse_controller.tools.fetch_weather_history \
+    --source historical-forecast --days 365 --end "$(date +%F)" \
+    --output data/analysis/weather_forecast_history.csv.gz
+```
 
 Both are A/B tests of the solver generation, not replacements for the recorded
 history. Vehicle disconnect and reconnect events are recorded with the

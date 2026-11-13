@@ -440,8 +440,9 @@ completed fixes.
   historical forecast weather CSV.  Prices, sessions, follow gates and the
   initial SoC stay recorded, and the baseline always keeps the recorded load.
   The model defaults to `data/analysis/net_grid_model/model.json` and the
-  weather to `data/analysis/weather_forecast_history.csv.gz`; a missing
-  weather slot fails the job rather than being filled with a synthetic zero.
+  weather to `data/analysis/weather_forecast_history.csv.gz`; a day with
+  missing forecast weather is skipped and listed on the A/B page, never
+  filled with a synthetic zero.
   The model records `training_end`, and the route refuses a backtest whose
   first day with recorded runs is on or before it, so a component comparison
   cannot score days the model was fitted on.  Empty leading days in the

@@ -10,6 +10,10 @@ from evse_controller.forecasting.heatpump import HeatPumpModel
 from evse_controller.forecasting.solar import SolarModel
 
 
+class MissingForecastWeather(ValueError):
+    """Raised when a component run has no forecast weather for a slot."""
+
+
 class ComponentLoadModel:
     """Baseload + heat-pump − solar forecast with residual quantiles."""
 
@@ -141,7 +145,7 @@ def apply_component_load_to_run(
         temperature_c = temperature.get(hour)
         gti_wm2 = gti.get(hour)
         if temperature_c is None or gti_wm2 is None:
-            raise ValueError(
+            raise MissingForecastWeather(
                 "No historical forecast weather for "
                 f"{local.isoformat()}"
             )

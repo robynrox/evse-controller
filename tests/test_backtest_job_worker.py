@@ -3,6 +3,7 @@
 from datetime import date
 import json
 
+from evse_controller.forecasting.component import MissingForecastWeather
 from evse_controller.tools import backtest_job
 
 
@@ -224,6 +225,46 @@ def test_worker_applies_component_load_source(tmp_path, monkeypatch):
     assert rows[0]["load_source"] == "component"
     job = json.loads((job_dir / "job.json").read_text())
     assert job["load_source"] == "component"
+
+
+def test_worker_skips_a_day_without_forecast_weather(
+    tmp_path, monkeypatch
+):
+    def fake_context(job):
+        return ("model", "weather")
+
+    def fake_apply(run, model, weather):
+        raise MissingForecastWeather(
+            "No historical forecast weather for 2026-11-07T00:30:00+00:00"
+        )
+
+    monkeypatch.setattr(backtest_job, "_component_context", fake_context)
+    monkeypatch.setattr(
+        backtest_job, "apply_component_load_to_run", fake_apply
+    )
+
+    job_dir, code = _run_worker(
+        tmp_path,
+        monkeypatch,
+        load_source="component",
+        component_model_path="model.json",
+        weather_forecast_path="weather.csv.gz",
+    )
+
+    assert code == 0
+    job = json.loads((job_dir / "job.json").read_text())
+    assert job["status"] == "complete"
+    assert job["days_skipped"] == 1
+    assert job["skipped_weather_days"] == [
+        {
+            "day": DAY.isoformat(),
+            "reason": (
+                "No historical forecast weather for "
+                "2026-11-07T00:30:00+00:00"
+            ),
+        }
+    ]
+    assert not (job_dir / "days.jsonl").exists()
 
 
 def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):

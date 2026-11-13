@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from evse_controller.daily_report import daily_log
 from evse_controller.forecasting.component import (
     ComponentLoadModel,
+    MissingForecastWeather,
     apply_component_load_to_run,
 )
 from evse_controller.planner.backtest import (
@@ -257,10 +258,25 @@ def run_job(job_dir: Path) -> int:
             component_runs = runs
             if component is not None:
                 model, weather = component
-                component_runs = [
-                    apply_component_load_to_run(item, model, weather)
-                    for item in runs
-                ]
+                try:
+                    component_runs = [
+                        apply_component_load_to_run(item, model, weather)
+                        for item in runs
+                    ]
+                except MissingForecastWeather as error:
+                    days_skipped += 1
+                    days_done += 1
+                    job.setdefault("skipped_weather_days", []).append(
+                        {
+                            "day": day.isoformat(),
+                            "reason": str(error),
+                        }
+                    )
+                    job["days_done"] = days_done
+                    job["days_skipped"] = days_skipped
+                    _write_job(job_path, job)
+                    day += timedelta(days=1)
+                    continue
             baseline = simulate_run(
                 day,
                 baseline_run,
