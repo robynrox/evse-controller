@@ -106,6 +106,19 @@ def test_rolling_uses_idle_when_no_recorded_plan_covers_a_slot():
     assert rolling["actions"][1]["soc_after"] == pytest.approx(50.1)
 
 
+def test_rolling_tolerates_a_missing_start_timestamp():
+    run = _run(0)
+    run["actions"][0]["start"] = None
+    run["inputs"][0]["start"] = None
+
+    rolling = rolling_resolve(
+        DAY, [run], FakePlanner(), PARAMS, solver_version="dp-test"
+    )
+
+    assert len(rolling["actions"]) == 48
+    assert rolling["actions"][0]["slot"] == 0
+
+
 def test_rolling_can_be_cancelled_between_slots():
     runs = [_run(slot) for slot in range(48)]
     checks = {"count": 0}

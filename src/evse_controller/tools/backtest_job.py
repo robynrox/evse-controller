@@ -181,6 +181,7 @@ def run_job(job_dir: Path) -> int:
                 job["status"] = "cancelled"
                 break
             job["current_day"] = day.isoformat()
+            job["current_slot"] = None
             _write_job(job_path, job)
 
             runs = history.runs_for_day(day)
@@ -276,7 +277,16 @@ def run_job(job_dir: Path) -> int:
         return 0
     except Exception as error:
         job["status"] = "failed"
-        job["error"] = f"{type(error).__name__}: {error}"
+        job["error_day"] = job.get("current_day")
+        job["error_slot"] = job.get("current_slot")
+        location = ""
+        if job.get("error_day"):
+            location = f" on {job['error_day']}"
+            if job.get("error_slot") is not None:
+                location += f" slot {job['error_slot']}"
+        job["error"] = (
+            f"{type(error).__name__}: {error}{location}"
+        )
         job["traceback"] = traceback.format_exc()[-4000:]
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         _write_job(job_path, job)

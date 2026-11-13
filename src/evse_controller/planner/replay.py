@@ -8,7 +8,7 @@ changes is the solver generation, not the historical forecast.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from evse_controller.planner.dp import PlannerAction, PlannerSlot
@@ -19,6 +19,13 @@ def _number(value: Any, default: Optional[float] = None) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_start(value: Any, fallback: Optional[datetime] = None) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def slots_from_run(
@@ -37,7 +44,9 @@ def slots_from_run(
         if not isinstance(item, Mapping):
             continue
         try:
-            start = datetime.fromisoformat(str(item["start"]))
+            start = _parse_start(item.get("start"))
+            if start is None:
+                continue
             slot = int(item["slot"])
             import_p = float(item["import_p"])
             export_p = float(item["export_p"])
@@ -88,9 +97,15 @@ def slots_from_run(
 
 def action_to_dict(action: PlannerAction) -> dict:
     """Serialise a planner action in the recorded-run format."""
+    start = action.start
+    start_text = (
+        start.isoformat()
+        if isinstance(start, datetime)
+        else str(start or "")
+    )
     return {
         "slot": action.slot,
-        "start": action.start.isoformat(),
+        "start": start_text,
         "kind": action.kind,
         "current_a": round(action.current_a, 3),
         "commanded_current_a": action.commanded_current_a,
@@ -221,14 +236,16 @@ def rolling_resolve(
     first = ordered[0]
     start_slot = int(first.get("slot") or 0)
     first_actions = action_maps[0]
+    fallback_start = datetime.combine(day, time.min)
     if start_slot in first_actions:
-        start = datetime.fromisoformat(
-            str(first_actions[start_slot].get("start"))
+        start = _parse_start(
+            first_actions[start_slot].get("start"), fallback_start
         )
     else:
-        start = datetime.fromisoformat(
-            str((first.get("inputs") or [{}])[0].get("start"))
-        )
+        first_input = (first.get("inputs") or [{}])[0]
+        start = _parse_start(first_input.get("start"), fallback_start)
+    if start is None:
+        start = fallback_start
     simulated_soc = initial_soc(first)
     actions: list[dict] = []
 
@@ -248,6 +265,7 @@ def rolling_resolve(
                 progress(slot, simulated_soc)
             continue
 
+        action_dict = None
         try:
             slots = tuple(
                 item
@@ -265,12 +283,12 @@ def rolling_resolve(
                 ),
                 None,
             )
+            if action is not None:
+                action_dict = action_to_dict(action)
         except Exception:
-            action = None
+            action_dict = None
 
-        if action is not None:
-            action_dict = action_to_dict(action)
-        else:
+        if action_dict is None:
             recorded = _actions_by_slot(source).get(slot)
             if recorded is None:
                 action_dict = _idle_action(
