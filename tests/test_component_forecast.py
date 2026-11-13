@@ -93,3 +93,14 @@ def test_component_load_requires_weather_for_every_slot():
             _model(),
             {"temperature_c": {}, "tilted_irradiance_wm2": {}},
         )
+
+
+def test_component_samples_include_the_residual_quantiles():
+    model = _model()
+    when = datetime(2026, 11, 7, 0, 0, tzinfo=timezone.utc)
+
+    samples = model.samples(when, 9.0, 0.0)
+
+    assert [kw for kw, _ in samples] == pytest.approx([0.05, 0.15, 0.35])
+    assert sum(weight for _, weight in samples) == pytest.approx(1.0)
+    assert model.predict(when, 9.0, 0.0) == pytest.approx(0.15)

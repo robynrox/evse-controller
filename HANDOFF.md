@@ -859,9 +859,14 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
     `forecasting/heatpump.py` — per-slot temperature response with learned
     daily/DHW profiles and P50/P90 output.
   - `src/evse_controller/tools/evaluate_net_grid_forecast.py` — combined
-    baseload + heat − solar forecast versus slot persistence.  The first
-    evaluation uses archive actual weather, so live forecast skill will be
-    lower until it is tested with historical forecast weather.
+    baseload + heat − solar forecast versus slot persistence, with residual
+    quantiles for the DP.  Use the historical forecast weather for realistic
+    skill; the component forecast beat persistence in all four seasonal
+    holdouts.
+  - `forecasting/component.py` — loads the combined model and replaces a
+    recorded run's load inputs with component samples for the shadow backtest.
+    The re-solve job's `load_source=component` uses it; the baseline stays on
+    the recorded load.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).
