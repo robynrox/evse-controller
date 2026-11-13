@@ -259,33 +259,32 @@ def register_backtest_routes(
                 400,
             )
         component_model_path = str(
-            Path(
-                str(
-                    payload.get("component_model_path")
-                    or config.NET_GRID_MODEL_FILE
-                )
-            )
-            .expanduser()
-            .resolve()
+            payload.get("component_model_path") or ""
         )
         weather_forecast_path = str(
-            Path(
-                str(
-                    payload.get("weather_forecast_path")
-                    or config.WEATHER_FORECAST_HISTORY_FILE
-                )
-            )
-            .expanduser()
-            .resolve()
+            payload.get("weather_forecast_path") or ""
         )
         if load_source == "component":
+            component_model_path = str(
+                Path(component_model_path or config.NET_GRID_MODEL_FILE)
+                .expanduser()
+                .resolve()
+            )
+            weather_forecast_path = str(
+                Path(
+                    weather_forecast_path
+                    or config.WEATHER_FORECAST_HISTORY_FILE
+                )
+                .expanduser()
+                .resolve()
+            )
             missing = [
                 path
                 for path in (
                     component_model_path,
                     weather_forecast_path,
                 )
-                if not Path(path).expanduser().is_file()
+                if not Path(path).is_file()
             ]
             if missing:
                 return (
