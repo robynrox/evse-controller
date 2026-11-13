@@ -4,16 +4,40 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import timedelta
 
 from flask import Response, jsonify, render_template, request
 
 from evse_controller.daily_report import daily_log
 from evse_controller.planner.backtest import backtest_days, summarise
+from evse_controller.planner.backtest_jobs import (
+    BacktestJobError,
+    BacktestJobManager,
+)
 from evse_controller.planner.history import PlannerHistory, planner_history
+from evse_controller.planner.version import SOLVER_VERSION
 
 
 WINDOW_CHOICES = (7, 30, 90)
 DEFAULT_WINDOW = 30
+
+backtest_jobs = BacktestJobManager()
+
+
+def _active_tariff():
+    """Return the active tariff without importing the controller at module load."""
+    from evse_controller.smart_evse_controller import tariffManager
+
+    return tariffManager.get_tariff()
+
+
+def _public_job(job: dict) -> dict:
+    """Strip large or internal fields from a job before sending it to a page."""
+    return {
+        key: value
+        for key, value in job.items()
+        if key not in ("planner", "traceback")
+    }
 
 
 def _fmt_money(value) -> str:
@@ -109,8 +133,17 @@ def _delta_chart(rows) -> str:
     return "".join(svg)
 
 
-def _render(history, log, days: int):
+def _render(history, log, days: int, manager=None):
+    manager = manager or backtest_jobs
     rows = backtest_days(history=history, log=log, days=days)
+    jobs = manager.list_jobs()
+    selected_job = request.args.get("job")
+    try:
+        job = manager.load_job(selected_job) if selected_job else None
+    except BacktestJobError:
+        job = None
+    job_days = manager.load_days(selected_job) if job else []
+    job_summary = manager.load_summary(selected_job) if job else None
     return render_template(
         "backtest_report.html",
         rows=rows,
@@ -118,6 +151,10 @@ def _render(history, log, days: int):
         days=days,
         window_choices=WINDOW_CHOICES,
         chart=_delta_chart(rows),
+        jobs=jobs,
+        selected_job=job,
+        job_days=job_days,
+        job_summary=job_summary,
         fmt_money=_fmt_money,
         fmt_pct=_fmt_pct,
         fmt_pp=_fmt_pp,
@@ -176,12 +213,100 @@ def register_backtest_routes(
     app,
     history: PlannerHistory = planner_history,
     log=daily_log,
+    jobs: BacktestJobManager | None = None,
 ) -> None:
     """Attach the DP backtest endpoints to *app*."""
+    manager = jobs or backtest_jobs
+
+    @app.route("/api/reports/backtest/jobs")
+    def backtest_jobs_list():
+        return jsonify({"jobs": [_public_job(job) for job in manager.list_jobs()]})
+
+    @app.route("/reports/backtest/jobs", methods=["POST"])
+    def backtest_job_start():
+        tariff = _active_tariff()
+        if tariff is None or not hasattr(tariff, "shadow_planner_spec"):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "No Learning mode planner is active, so there is "
+                            "nothing to re-solve."
+                        )
+                    }
+                ),
+                400,
+            )
+        payload = request.get_json(silent=True) or request.form or {}
+        scope = str(payload.get("scope") or "first_plan")
+        available = history.available_days()
+        if not available:
+            return jsonify({"error": "No recorded planner days are available"}), 400
+        days = _requested_days()
+        end = max(available)
+        start = end - timedelta(days=days - 1)
+        try:
+            job = manager.start(
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "scope": scope,
+                    "planner": tariff.shadow_planner_spec(),
+                    "solver_version": SOLVER_VERSION,
+                    "solver_mode": getattr(
+                        tariff, "_learning_mode", "preview"
+                    ),
+                    "history_dir": str(
+                        getattr(history, "directory", "") or ""
+                    ),
+                    "daily_report_dir": str(
+                        getattr(log, "directory", "") or ""
+                    ),
+                }
+            )
+        except BacktestJobError as error:
+            return jsonify({"error": str(error)}), 409
+        return jsonify(_public_job(job)), 202
+
+    @app.route("/api/reports/backtest/jobs/<job_id>")
+    def backtest_job_status(job_id):
+        try:
+            job = manager.load_job(job_id)
+        except BacktestJobError as error:
+            return jsonify({"error": str(error)}), 400
+        if job is None:
+            return jsonify({"error": "Job not found"}), 404
+        return jsonify(_public_job(job))
+
+    @app.route(
+        "/api/reports/backtest/jobs/<job_id>/cancel", methods=["POST"]
+    )
+    def backtest_job_cancel(job_id):
+        try:
+            job = manager.request_cancel(job_id)
+        except BacktestJobError as error:
+            return jsonify({"error": str(error)}), 404
+        return jsonify(_public_job(job))
+
+    @app.route("/api/reports/backtest/jobs/<job_id>/results")
+    def backtest_job_results(job_id):
+        try:
+            job = manager.load_job(job_id)
+        except BacktestJobError as error:
+            return jsonify({"error": str(error)}), 400
+        if job is None:
+            return jsonify({"error": "Job not found"}), 404
+        return jsonify(
+            {
+                "job": _public_job(job),
+                "summary": manager.load_summary(job_id),
+                "days": manager.load_days(job_id),
+            }
+        )
 
     @app.route("/reports/backtest")
     def backtest_report_page():
-        return _render(history, log, _requested_days())
+        return _render(history, log, _requested_days(), manager)
 
     @app.route("/api/reports/backtest")
     def backtest_report_api():

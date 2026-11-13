@@ -135,6 +135,29 @@
         border-radius: 7px;
         color: #666;
     }
+    .job-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin: 10px 0;
+    }
+    .job-controls button {
+        padding: 7px 12px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        color: #222;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .job-controls button:disabled { opacity: 0.55; cursor: default; }
+    .job-status { font-size: 13px; color: #555; }
+    .job-status.running { color: #0b5cad; }
+    .job-status.complete { color: #1b5e20; }
+    .job-status.failed, .job-status.cancelled, .job-status.interrupted {
+        color: #b00020;
+    }
     .footer-link { margin-top: 18px; }
     .footer-link a { color: #0b5cad; font-weight: 600; }
 </style>
@@ -156,6 +179,128 @@
             produced each day.
         </p>
     </div>
+
+    <div class="panel" id="backtest-job-panel">
+        <h2 style="margin-top:0;">Re-solve with the current solver</h2>
+        <p style="margin-top:0;">
+            Re-runs the first recorded plan for each day using the current
+            planner parameters and writes the results to a new job directory.
+            The recorded runs are never modified, so jobs can be compared by
+            solver version and by date.
+        </p>
+        <div class="job-controls">
+            <button type="button" id="start-backtest-job"
+                    data-days="{{ days }}">Re-run solver (first plan)</button>
+            <button type="button" id="cancel-backtest-job" hidden>Cancel</button>
+            <span id="backtest-job-status" class="job-status"></span>
+        </div>
+    </div>
+
+    {% if jobs %}
+    <h2>Re-solve jobs</h2>
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th>Days</th>
+                    <th>Solver</th>
+                    <th>Improvement</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                {% set summary = job.get('summary') %}
+                <tr>
+                    <td>{{ job.created_at }}</td>
+                    <td>{{ job.status }}{% if job.days_total %} · {{ job.days_done }}/{{ job.days_total }}{% endif %}</td>
+                    <td>{{ job.scope }}</td>
+                    <td>{{ job.solver_version }}</td>
+                    <td>
+                        {% if summary and summary.get('improvement_gbp') is not none %}
+                            {{ fmt_money(summary.get('improvement_gbp')) }}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if job.status == 'complete' %}
+                            <a href="/reports/backtest?days={{ days }}&job={{ job.job_id }}">A/B</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if selected_job %}
+    <h2>A/B re-solve: {{ selected_job.job_id }}</h2>
+    <p>
+        Baseline is the recorded first plan. Resolved is the same recorded
+        inputs re-solved with {{ selected_job.solver_version }}. Positive
+        improvement means the re-solved plan was cheaper on grid cost.
+    </p>
+    {% if job_summary %}
+    <div class="cards">
+        <div class="card">
+            <div class="label">Baseline DP cost</div>
+            <div class="value">{{ fmt_money(job_summary.get('baseline', {}).get('dp_cost_gbp')) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Re-solved DP cost</div>
+            <div class="value">{{ fmt_money(job_summary.get('resolved', {}).get('dp_cost_gbp')) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Improvement</div>
+            <div class="value">{{ fmt_money(job_summary.get('improvement_gbp')) }}</div>
+            <div class="note">baseline minus re-solved</div>
+        </div>
+        <div class="card">
+            <div class="label">Days</div>
+            <div class="value">{{ job_summary.get('baseline', {}).get('paired_days', 0) }}</div>
+            <div class="note">{{ job_summary.get('days_skipped', 0) }} skipped</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if job_days %}
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Baseline DP</th>
+                    <th>Re-solved DP</th>
+                    <th>Improvement</th>
+                    <th>Baseline delta</th>
+                    <th>Re-solved delta</th>
+                    <th>Action match</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in job_days %}
+                {% set baseline = item.get('baseline', {}) %}
+                {% set resolved = item.get('resolved', {}) %}
+                <tr>
+                    <td>{{ item.get('day') }}</td>
+                    <td>{{ fmt_money(baseline.get('dp_cost_gbp')) }}</td>
+                    <td>{{ fmt_money(resolved.get('dp_cost_gbp')) }}</td>
+                    <td>
+                        {% if baseline.get('dp_cost_gbp') is not none and resolved.get('dp_cost_gbp') is not none %}
+                            {{ fmt_money(baseline.get('dp_cost_gbp') - resolved.get('dp_cost_gbp')) }}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>{{ fmt_money(baseline.get('delta_gbp')) }}</td>
+                    <td>{{ fmt_money(resolved.get('delta_gbp')) }}</td>
+                    <td>{{ fmt_pct(resolved.get('action_match_rate')) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endif %}
 
     <div class="nav-links">
         <a href="/">← Dashboard</a>
@@ -271,4 +416,101 @@
         </p>
     {% endif %}
 </div>
+<script>
+(function () {
+    const startButton = document.getElementById('start-backtest-job');
+    const cancelButton = document.getElementById('cancel-backtest-job');
+    const statusElement = document.getElementById('backtest-job-status');
+    if (!startButton || !statusElement) return;
+
+    let activeJobId = null;
+    let pollTimer = null;
+
+    function setStatus(text, state) {
+        statusElement.textContent = text;
+        statusElement.className = 'job-status' + (state ? ' ' + state : '');
+    }
+
+    async function pollJob() {
+        if (!activeJobId) return;
+        try {
+            const response = await fetch(
+                '/api/reports/backtest/jobs/' + encodeURIComponent(activeJobId)
+            );
+            const job = await response.json();
+            if (!response.ok) throw new Error(job.error || 'Status failed');
+            setStatus(
+                job.status + ' · ' + (job.days_done || 0) + '/' +
+                (job.days_total || 0) + ' days',
+                job.status
+            );
+            if (job.status === 'complete') {
+                clearInterval(pollTimer);
+                pollTimer = null;
+                cancelButton.hidden = true;
+                const days = encodeURIComponent(startButton.dataset.days);
+                window.location.href = '/reports/backtest?days=' + days +
+                    '&job=' + encodeURIComponent(activeJobId);
+                return;
+            }
+            if (['failed', 'cancelled', 'interrupted'].includes(job.status)) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+                cancelButton.hidden = true;
+                startButton.disabled = false;
+                setStatus(
+                    job.status + (job.error ? ': ' + job.error : ''),
+                    job.status
+                );
+            }
+        } catch (error) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            cancelButton.hidden = true;
+            startButton.disabled = false;
+            setStatus(error.message, 'failed');
+        }
+    }
+
+    startButton.addEventListener('click', async () => {
+        startButton.disabled = true;
+        cancelButton.hidden = false;
+        setStatus('Starting…', 'running');
+        try {
+            const days = encodeURIComponent(startButton.dataset.days);
+            const response = await fetch(
+                '/reports/backtest/jobs?days=' + days,
+                {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({scope: 'first_plan'})
+                }
+            );
+            const job = await response.json();
+            if (!response.ok) throw new Error(job.error || 'Could not start');
+            activeJobId = job.job_id;
+            setStatus('queued · 0/' + job.days_total + ' days', 'running');
+            pollTimer = setInterval(pollJob, 2000);
+        } catch (error) {
+            startButton.disabled = false;
+            cancelButton.hidden = true;
+            setStatus(error.message, 'failed');
+        }
+    });
+
+    cancelButton.addEventListener('click', async () => {
+        if (!activeJobId) return;
+        cancelButton.disabled = true;
+        try {
+            await fetch(
+                '/api/reports/backtest/jobs/' +
+                encodeURIComponent(activeJobId) + '/cancel',
+                {method: 'POST'}
+            );
+        } finally {
+            cancelButton.disabled = false;
+        }
+    });
+})();
+</script>
 {% endblock %}

@@ -953,6 +953,33 @@ The same result is on the **DP Backtest** page (`/reports/backtest`, with 7,
 30 or 90-day windows, CSV and JSON). It appears only after Learning mode
 preview has recorded at least one run.
 
+##### Re-running the solver
+
+The backtest page also has **Re-run solver (first plan)**. This takes the first
+recorded plan of each day, re-solves it with the current planner parameters,
+and prices the result against the same measured day. It is an A/B test of the
+solver generation, not a replacement for the recorded history.
+
+The job runs in a separate low-priority worker process, so a long re-solve
+cannot delay the control loop. One job runs at a time. Progress and results
+are written under:
+
+```text
+data/state/backtest_jobs/<job_id>/
+    job.json       # status, progress, solver version and parameters
+    days.jsonl     # baseline and re-solved result for each day
+    summary.json   # aggregate comparison
+```
+
+The page polls the job status and reloads with an A/B table when it completes.
+Recorded planner history is never overwritten. The job id includes the solver
+version, so future solver generations can be compared directly.
+
+For timing: one full 48-slot plan is roughly 0.6 s on the development machine.
+A first-plan re-solve is therefore tens of seconds for 30 days and a minute or
+two for 90 days. A future rolling re-solve, which re-plans every slot, is much
+more expensive and will reuse the same job framework.
+
 ##### DP policy map (`/reports/policy`)
 
 The **DP Policy** link replays a recorded Learning mode preview run and shows

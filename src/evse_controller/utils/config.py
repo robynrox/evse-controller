@@ -157,6 +157,12 @@ class Config:
         return get_data_dir() / "state" / "planner_history"
 
     @property
+    def BACKTEST_JOBS_DIR(self):
+        """Directory holding re-solver jobs and their A/B results."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "backtest_jobs"
+
+    @property
     def WEATHER_CACHE_FILE(self):
         """Cached Open-Meteo snapshot, or absent until the first fetch."""
         self._ensure_initialized()

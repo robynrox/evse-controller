@@ -1315,6 +1315,40 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # a shadow plan must never break control
             warning(f"IOCTGO_AGILEOUT: Shadow DP plan failed: {exc}")
 
+    def shadow_planner_spec(
+        self, *, load_fallback_kw: Optional[float] = None
+    ) -> dict:
+        """Current planner parameters, for replay and backtest jobs."""
+        return {
+            "capacity_kwh": self.SOC_CAPACITY_KWH,
+            "soc_step_percent": self.SHADOW_SOC_STEP_PERCENT,
+            "min_current_a": float(self.MIN_DISCHARGE_CURRENT),
+            "charge_cap_percent": self.charge_cap_percent(),
+            "protection_floor_percent": self.absolute_min_soc_percent(),
+            "target_soc_percent": None,
+            "terminal_energy_value_p_per_kwh": (
+                self.dp_terminal_energy_value_p_per_kwh()
+            ),
+            "discharge_floor_percent": max(
+                self.absolute_min_soc_percent(),
+                float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
+            ),
+            "degradation_p_per_kwh": 0.0,
+            "load_fallback_kw": float(
+                self.SHADOW_LOAD_FALLBACK_KW
+                if load_fallback_kw is None
+                else load_fallback_kw
+            ),
+            "load_prior": "uniform_0_400",
+            "max_charge_current_a": float(
+                config.WALLBOX_MAX_CHARGE_CURRENT
+            ),
+            "max_discharge_current_a": float(
+                config.WALLBOX_MAX_DISCHARGE_CURRENT
+            ),
+            "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
+        }
+
     def _shadow_run_dict(
         self,
         now,
@@ -1347,33 +1381,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "relaxed": result.relaxed,
             "final_soc": result.final_soc,
             "total_cost_p": result.total_cost_p,
-            "planner": {
-                "capacity_kwh": self.SOC_CAPACITY_KWH,
-                "soc_step_percent": self.SHADOW_SOC_STEP_PERCENT,
-                "min_current_a": float(self.MIN_DISCHARGE_CURRENT),
-                "charge_cap_percent": self.charge_cap_percent(),
-                "protection_floor_percent": self.absolute_min_soc_percent(),
-                "target_soc_percent": None,
-                "terminal_energy_value_p_per_kwh": (
-                    self.dp_terminal_energy_value_p_per_kwh()
-                ),
-                "discharge_floor_percent": max(
-                    self.absolute_min_soc_percent(),
-                    float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
-                ),
-                "degradation_p_per_kwh": 0.0,
-                "load_fallback_kw": float(
-                    planner_input.load_fallback_kw
-                ),
-                "load_prior": "uniform_0_400",
-                "max_charge_current_a": float(
-                    config.WALLBOX_MAX_CHARGE_CURRENT
-                ),
-                "max_discharge_current_a": float(
-                    config.WALLBOX_MAX_DISCHARGE_CURRENT
-                ),
-                "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
-            },
+            "planner": self.shadow_planner_spec(
+                load_fallback_kw=planner_input.load_fallback_kw
+            ),
             "actions": [
                 {
                     "slot": action.slot,

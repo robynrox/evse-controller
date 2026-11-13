@@ -19,7 +19,7 @@ have been executed exactly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -136,6 +136,31 @@ class DayBacktest:
         if self.action_slots == 0:
             return None
         return self.action_matches / self.action_slots
+
+
+def day_backtest_to_dict(result: DayBacktest) -> dict:
+    """Serialise one day's result for a persisted backtest job."""
+    return {
+        "day": result.day.isoformat(),
+        "start_slot": result.start_slot,
+        "run_ts": result.run_ts,
+        "solver_version": result.solver_version,
+        "solver_mode": result.solver_mode,
+        "linked_slots": result.linked_slots,
+        "skipped_slots": result.skipped_slots,
+        "dp_cost_gbp": result.dp_cost_gbp,
+        "actual_cost_gbp": result.actual_cost_gbp,
+        "delta_gbp": result.delta_gbp,
+        "action_matches": result.action_matches,
+        "action_slots": result.action_slots,
+        "soc_pairs": result.soc_pairs,
+        "soc_abs_error_sum": result.soc_abs_error_sum,
+        "soc_error_sum": result.soc_error_sum,
+        "soc_mae": result.soc_mae,
+        "soc_bias": result.soc_bias,
+        "action_match_rate": result.action_match_rate,
+        "rows": [asdict(row) for row in result.rows],
+    }
 
 
 def simulate_run(

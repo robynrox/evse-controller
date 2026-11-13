@@ -408,6 +408,13 @@ completed fixes.
   simulation; a rolling re-solver is the next confidence step. Each row
   carries `solver_version` and `solver_mode` so legacy and current planner
   generations can be separated.
+- The backtest page can start a **first-plan re-solve** job.  The web process
+  writes a job spec, launches `tools/backtest_job.py` as a separate
+  low-priority process, and polls `job.json`; one job runs at a time.  Results
+  live under `data/state/backtest_jobs/<job_id>/` (`job.json`, `days.jsonl`,
+  `summary.json`) and never modify the recorded planner history.  A future
+  rolling re-solve can reuse the same job framework.  A stale `running` job
+  whose PID has gone is marked `interrupted` on the next listing or start.
 - `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
   7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
   shows an explanation rather than a score before any shadow plan exists.
