@@ -372,6 +372,54 @@ def test_job_ab_view_shows_heuristic_and_vehicle_columns(
     assert "2 away" in body
 
 
+def test_component_job_labels_the_improvement_as_resolved(tmp_path):
+    manager = BacktestJobManager(tmp_path)
+    job_dir = tmp_path / "job-component"
+    job_dir.mkdir()
+    (job_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-component",
+                "status": "complete",
+                "created_at": "2026-11-13T12:00:00+00:00",
+                "scope": "rolling",
+                "state_source": "recorded",
+                "baseline_source": "plan_in_force",
+                "load_source": "component",
+                "solver_version": "dp-test",
+                "days_total": 1,
+                "days_done": 1,
+                "summary": {
+                    "baseline": {
+                        "dp_cost_gbp": 1.0,
+                        "delta_gbp": 0.20,
+                        "paired_days": 1,
+                    },
+                    "resolved": {
+                        "dp_cost_gbp": 0.8,
+                        "delta_gbp": 0.40,
+                        "paired_days": 1,
+                    },
+                    "improvement_gbp": 0.20,
+                    "days_skipped": 0,
+                },
+            }
+        )
+    )
+
+    response = _client(jobs=manager).get(
+        "/reports/backtest?days=7&job=job-component"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Resolved improvement" in body
+    assert "baseline DP minus component-load DP" in body
+    assert "actual minus component-load DP" in body
+    assert "Solver improvement" not in body
+    assert "component net-grid forecast" in body
+
+
 def test_empty_history_shows_the_explanation():
     response = _client(runs=False).get("/reports/backtest?days=7")
 
