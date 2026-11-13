@@ -17,7 +17,7 @@ module converts once at the request boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import threading
@@ -31,6 +31,7 @@ from evse_controller.utils.logging_config import debug, info, warning
 
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 HOURLY_VARIABLES = (
     "temperature_2m",
     "shortwave_radiation",
@@ -94,6 +95,120 @@ def _api_azimuth(compass_azimuth: float) -> float:
     while value > 180.0:
         value -= 360.0
     return value
+
+
+def _value_at(hourly: dict, key: str, index: int) -> Optional[float]:
+    values = hourly.get(key)
+    if not isinstance(values, list) or index >= len(values):
+        return None
+    return _optional_float(values[index])
+
+
+def parse_weather_payload(
+    payload: dict,
+    *,
+    fetched_at: Optional[datetime] = None,
+    source: str = "open-meteo",
+) -> WeatherSnapshot:
+    """Normalise an Open-Meteo forecast or archive payload."""
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    rows = []
+    for index, text in enumerate(times):
+        try:
+            when = datetime.fromisoformat(str(text))
+        except ValueError:
+            continue
+        rows.append(
+            WeatherHour(
+                time=when,
+                temperature_c=_value_at(hourly, "temperature_2m", index),
+                shortwave_radiation_wm2=_value_at(
+                    hourly, "shortwave_radiation", index
+                ),
+                direct_normal_irradiance_wm2=_value_at(
+                    hourly, "direct_normal_irradiance", index
+                ),
+                diffuse_radiation_wm2=_value_at(
+                    hourly, "diffuse_radiation", index
+                ),
+                tilted_irradiance_wm2=_value_at(
+                    hourly, "global_tilted_irradiance", index
+                ),
+                cloud_cover_pct=_value_at(hourly, "cloud_cover", index),
+            )
+        )
+    return WeatherSnapshot(
+        fetched_at=fetched_at or datetime.now(),
+        latitude=float(payload.get("latitude", 0.0)),
+        longitude=float(payload.get("longitude", 0.0)),
+        panel_azimuth=float(config.WEATHER_PANEL_AZIMUTH),
+        panel_tilt=float(config.WEATHER_PANEL_TILT),
+        timezone=str(payload.get("timezone", "")),
+        hours=tuple(rows),
+        source=source,
+        model=str(payload.get("model", "best_match")),
+    )
+
+
+def snapshot_to_payload(snapshot: WeatherSnapshot) -> dict:
+    """Serialise a snapshot for the forecast or archive cache."""
+    return {
+        "source": snapshot.source,
+        "model": snapshot.model,
+        "fetched_at": snapshot.fetched_at.isoformat(),
+        "latitude": snapshot.latitude,
+        "longitude": snapshot.longitude,
+        "panel_azimuth": snapshot.panel_azimuth,
+        "panel_tilt": snapshot.panel_tilt,
+        "timezone": snapshot.timezone,
+        "hours": [
+            {
+                "time": hour.time.isoformat(),
+                "temperature_c": hour.temperature_c,
+                "shortwave_radiation_wm2": hour.shortwave_radiation_wm2,
+                "direct_normal_irradiance_wm2": (
+                    hour.direct_normal_irradiance_wm2
+                ),
+                "diffuse_radiation_wm2": hour.diffuse_radiation_wm2,
+                "tilted_irradiance_wm2": hour.tilted_irradiance_wm2,
+                "cloud_cover_pct": hour.cloud_cover_pct,
+            }
+            for hour in snapshot.hours
+        ],
+    }
+
+
+def snapshot_from_payload(payload: dict) -> WeatherSnapshot:
+    """Read a snapshot written by :func:`snapshot_to_payload`."""
+    hours = []
+    for row in payload.get("hours") or []:
+        hours.append(
+            WeatherHour(
+                time=datetime.fromisoformat(row["time"]),
+                temperature_c=row.get("temperature_c"),
+                shortwave_radiation_wm2=row.get(
+                    "shortwave_radiation_wm2"
+                ),
+                direct_normal_irradiance_wm2=row.get(
+                    "direct_normal_irradiance_wm2"
+                ),
+                diffuse_radiation_wm2=row.get("diffuse_radiation_wm2"),
+                tilted_irradiance_wm2=row.get("tilted_irradiance_wm2"),
+                cloud_cover_pct=row.get("cloud_cover_pct"),
+            )
+        )
+    return WeatherSnapshot(
+        fetched_at=datetime.fromisoformat(payload["fetched_at"]),
+        latitude=float(payload["latitude"]),
+        longitude=float(payload["longitude"]),
+        panel_azimuth=float(payload["panel_azimuth"]),
+        panel_tilt=float(payload["panel_tilt"]),
+        timezone=str(payload.get("timezone", "")),
+        hours=tuple(hours),
+        source=str(payload.get("source", "open-meteo")),
+        model=str(payload.get("model", "best_match")),
+    )
 
 
 class OpenMeteoClient:
@@ -201,81 +316,13 @@ class OpenMeteoClient:
     def _parse(
         self, payload: dict, *, at: Optional[datetime] = None
     ) -> WeatherSnapshot:
-        hourly = payload.get("hourly") or {}
-        times = hourly.get("time") or []
-        rows = []
-        for index, text in enumerate(times):
-            try:
-                when = datetime.fromisoformat(str(text))
-            except ValueError:
-                continue
-            rows.append(
-                WeatherHour(
-                    time=when,
-                    temperature_c=self._value(
-                        hourly, "temperature_2m", index
-                    ),
-                    shortwave_radiation_wm2=self._value(
-                        hourly, "shortwave_radiation", index
-                    ),
-                    direct_normal_irradiance_wm2=self._value(
-                        hourly, "direct_normal_irradiance", index
-                    ),
-                    diffuse_radiation_wm2=self._value(
-                        hourly, "diffuse_radiation", index
-                    ),
-                    tilted_irradiance_wm2=self._value(
-                        hourly, "global_tilted_irradiance", index
-                    ),
-                    cloud_cover_pct=self._value(
-                        hourly, "cloud_cover", index
-                    ),
-                )
-            )
-        return WeatherSnapshot(
-            fetched_at=at or datetime.now(),
-            latitude=float(payload.get("latitude", 0.0)),
-            longitude=float(payload.get("longitude", 0.0)),
-            panel_azimuth=float(config.WEATHER_PANEL_AZIMUTH),
-            panel_tilt=float(config.WEATHER_PANEL_TILT),
-            timezone=str(payload.get("timezone", "")),
-            hours=tuple(rows),
-            model=str(payload.get("model", "best_match")),
+        return parse_weather_payload(
+            payload, fetched_at=at, source="open-meteo"
         )
-
-    @staticmethod
-    def _value(hourly: dict, key: str, index: int) -> Optional[float]:
-        values = hourly.get(key)
-        if not isinstance(values, list) or index >= len(values):
-            return None
-        return _optional_float(values[index])
 
     def _write_cache(self, snapshot: WeatherSnapshot) -> None:
         path = self.cache_file
-        payload = {
-            "source": snapshot.source,
-            "model": snapshot.model,
-            "fetched_at": snapshot.fetched_at.isoformat(),
-            "latitude": snapshot.latitude,
-            "longitude": snapshot.longitude,
-            "panel_azimuth": snapshot.panel_azimuth,
-            "panel_tilt": snapshot.panel_tilt,
-            "timezone": snapshot.timezone,
-            "hours": [
-                {
-                    "time": hour.time.isoformat(),
-                    "temperature_c": hour.temperature_c,
-                    "shortwave_radiation_wm2": hour.shortwave_radiation_wm2,
-                    "direct_normal_irradiance_wm2": (
-                        hour.direct_normal_irradiance_wm2
-                    ),
-                    "diffuse_radiation_wm2": hour.diffuse_radiation_wm2,
-                    "tilted_irradiance_wm2": hour.tilted_irradiance_wm2,
-                    "cloud_cover_pct": hour.cloud_cover_pct,
-                }
-                for hour in snapshot.hours
-            ],
-        }
+        payload = snapshot_to_payload(snapshot)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(path.name + ".tmp")
@@ -287,36 +334,81 @@ class OpenMeteoClient:
 
     @staticmethod
     def _from_dict(payload: dict) -> WeatherSnapshot:
-        hours = []
-        for row in payload.get("hours") or []:
-            hours.append(
-                WeatherHour(
-                    time=datetime.fromisoformat(row["time"]),
-                    temperature_c=row.get("temperature_c"),
-                    shortwave_radiation_wm2=row.get(
-                        "shortwave_radiation_wm2"
-                    ),
-                    direct_normal_irradiance_wm2=row.get(
-                        "direct_normal_irradiance_wm2"
-                    ),
-                    diffuse_radiation_wm2=row.get(
-                        "diffuse_radiation_wm2"
-                    ),
-                    tilted_irradiance_wm2=row.get(
-                        "tilted_irradiance_wm2"
-                    ),
-                    cloud_cover_pct=row.get("cloud_cover_pct"),
-                )
+        return snapshot_from_payload(payload)
+
+
+class OpenMeteoArchiveClient:
+    """Fetch historical hourly weather from Open-Meteo's archive API."""
+
+    def __init__(self, *, session=None, timeout: float = 60.0):
+        self._session = session or requests.Session()
+        self.timeout = float(timeout)
+
+    @property
+    def configured(self) -> bool:
+        return bool(config.WEATHER_CONFIGURED)
+
+    def fetch_range(
+        self,
+        start: date,
+        end: date,
+        *,
+        chunk_days: int = 31,
+    ) -> WeatherSnapshot:
+        """Fetch *start*..*end* inclusive, in bounded API requests."""
+        if not self.configured:
+            raise WeatherNotConfigured(
+                "Weather latitude, longitude, panel azimuth and panel tilt "
+                "must all be configured"
             )
+        if start > end:
+            raise ValueError("start must not be after end")
+        if chunk_days <= 0:
+            raise ValueError("chunk_days must be positive")
+
+        hours: dict[datetime, WeatherHour] = {}
+        first_payload: Optional[dict] = None
+        cursor = start
+        while cursor <= end:
+            chunk_end = min(
+                end, cursor + timedelta(days=chunk_days - 1)
+            )
+            params = {
+                "latitude": config.WEATHER_LATITUDE,
+                "longitude": config.WEATHER_LONGITUDE,
+                "hourly": ",".join(HOURLY_VARIABLES),
+                "tilt": config.WEATHER_PANEL_TILT,
+                "azimuth": _api_azimuth(config.WEATHER_PANEL_AZIMUTH),
+                "start_date": cursor.isoformat(),
+                "end_date": chunk_end.isoformat(),
+                "timezone": "auto",
+            }
+            response = self._session.get(
+                OPEN_METEO_ARCHIVE_URL,
+                params=params,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if first_payload is None:
+                first_payload = payload
+            snapshot = parse_weather_payload(
+                payload, source="open-meteo-archive"
+            )
+            for hour in snapshot.hours:
+                hours[hour.time] = hour
+            cursor = chunk_end + timedelta(days=1)
+
+        payload = first_payload or {}
         return WeatherSnapshot(
-            fetched_at=datetime.fromisoformat(payload["fetched_at"]),
-            latitude=float(payload["latitude"]),
-            longitude=float(payload["longitude"]),
-            panel_azimuth=float(payload["panel_azimuth"]),
-            panel_tilt=float(payload["panel_tilt"]),
+            fetched_at=datetime.now(),
+            latitude=float(payload.get("latitude", 0.0)),
+            longitude=float(payload.get("longitude", 0.0)),
+            panel_azimuth=float(config.WEATHER_PANEL_AZIMUTH),
+            panel_tilt=float(config.WEATHER_PANEL_TILT),
             timezone=str(payload.get("timezone", "")),
-            hours=tuple(hours),
-            source=str(payload.get("source", "open-meteo")),
+            hours=tuple(hours[key] for key in sorted(hours)),
+            source="open-meteo-archive",
             model=str(payload.get("model", "best_match")),
         )
 

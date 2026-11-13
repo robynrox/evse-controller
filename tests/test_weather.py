@@ -6,9 +6,14 @@ import pytest
 
 from evse_controller.utils.config import config
 from evse_controller.weather import (
+    OPEN_METEO_ARCHIVE_URL,
     OPEN_METEO_URL,
+    OpenMeteoArchiveClient,
     OpenMeteoClient,
     WeatherNotConfigured,
+    parse_weather_payload,
+    snapshot_from_payload,
+    snapshot_to_payload,
 )
 
 
@@ -155,3 +160,33 @@ def test_unconfigured_client_refuses_to_fetch(monkeypatch, tmp_path):
     with pytest.raises(WeatherNotConfigured):
         client.fetch()
     assert not (tmp_path / "weather.json").exists()
+
+
+def test_archive_client_chunks_and_deduplicates(configured):
+    session = FakeSession(payload())
+    client = OpenMeteoArchiveClient(session=session)
+
+    snapshot = client.fetch_range(
+        date(2026, 11, 7), date(2026, 11, 9), chunk_days=2
+    )
+
+    assert len(session.calls) == 2
+    assert session.calls[0][0] == OPEN_METEO_ARCHIVE_URL
+    assert session.calls[0][1]["start_date"] == "2026-11-07"
+    assert session.calls[0][1]["end_date"] == "2026-11-08"
+    assert session.calls[1][1]["start_date"] == "2026-11-09"
+    assert session.calls[1][1]["end_date"] == "2026-11-09"
+    assert session.calls[0][1]["tilt"] == pytest.approx(35.0)
+    assert session.calls[0][1]["azimuth"] == pytest.approx(0.0)
+    assert snapshot.source == "open-meteo-archive"
+    assert len(snapshot.hours) == 3
+
+
+def test_snapshot_payload_round_trip(configured):
+    snapshot = parse_weather_payload(payload(), source="archive")
+
+    restored = snapshot_from_payload(snapshot_to_payload(snapshot))
+
+    assert restored.source == "archive"
+    assert restored.hours[1].tilted_irradiance_wm2 == pytest.approx(210.0)
+    assert restored.panel_tilt == pytest.approx(35.0)

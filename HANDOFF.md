@@ -240,6 +240,10 @@ completed fixes.
   a snapshot older than three hours, and retries failures after fifteen
   minutes. The controller loop and the load-profile report both trigger it in
   the background; weather is never a control dependency.
+  `tools/fetch_weather_history.py` uses the archive API for retrospective work,
+  caches one JSON file per day under `data/state/weather_history/`, skips
+  already-cached days, and writes tidy `timestamp,series,value` CSV. It uses
+  the same configured geometry as the live client.
 - `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
   forecast-versus-actual fan chart with a rounded min-to-max axis that includes
   negative solar/export values, a 14-day heatmap with blue positive and green
@@ -828,6 +832,8 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
   - `src/evse_controller/tools/export_influxdb_range.py` — analysis export of
     an arbitrary range as tidy `timestamp,series,value` CSV, with field
     discovery, resolution/aggregation and without pandas.
+  - `src/evse_controller/tools/fetch_weather_history.py` — Open-Meteo archive
+    fetch with per-day JSON caching and tidy CSV output.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).

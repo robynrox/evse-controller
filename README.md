@@ -273,6 +273,30 @@ poetry run python -m evse_controller.weather --day 2026-11-07
 
 The command falls back to the cached snapshot when the fetch fails.
 
+For retrospective solar and heat-pump work, use the archive fetcher instead of
+repeatedly querying Open-Meteo:
+
+```bash
+# Fetch a year ending yesterday and write a tidy CSV
+python -m evse_controller.tools.fetch_weather_history \
+    --days 365 --output data/analysis/weather_history.csv.gz
+
+# Fetch or extend a specific range; cached days are skipped
+python -m evse_controller.tools.fetch_weather_history \
+    --start 2025-11-13 --end 2026-11-12
+
+# Force a refresh of the range
+python -m evse_controller.tools.fetch_weather_history \
+    --start 2026-01-01 --end 2026-11-12 --force
+```
+
+Each day is cached as `data/state/weather_history/YYYY-MM-DD.json`, so
+rerunning a range only fetches the missing days. The output is tidy
+`timestamp,series,value` CSV with `temperature_c`, `ghi_wm2`, `dni_wm2`,
+`dhi_wm2`, `tilted_irradiance_wm2` and `cloud_cover_pct`, matching the shape
+of the InfluxDB range exporter. The archive fetch uses the same configured
+latitude, longitude, panel azimuth and tilt as the live weather client.
+
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
