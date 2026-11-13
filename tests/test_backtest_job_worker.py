@@ -3,7 +3,10 @@
 from datetime import date
 import json
 
+import pytest
+
 from evse_controller.forecasting.component import MissingForecastWeather
+from evse_controller.planner.backtest import DayBacktest
 from evse_controller.tools import backtest_job
 
 
@@ -265,6 +268,48 @@ def test_worker_skips_a_day_without_forecast_weather(
         }
     ]
     assert not (job_dir / "days.jsonl").exists()
+
+
+def _day_result(*, end_soc, dp_cost, actual_cost):
+    return DayBacktest(
+        day=DAY,
+        start_slot=0,
+        run_ts=None,
+        solver_version=None,
+        solver_mode=None,
+        linked_slots=48,
+        skipped_slots=0,
+        dp_cost_gbp=dp_cost,
+        actual_cost_gbp=actual_cost,
+        action_matches=0,
+        action_slots=0,
+        soc_pairs=0,
+        soc_abs_error_sum=0.0,
+        soc_error_sum=0.0,
+        end_soc=end_soc,
+        rows=(),
+    )
+
+
+def test_terminal_value_adjustment_credits_extra_end_soc():
+    baseline = _day_result(end_soc=50.0, dp_cost=1.0, actual_cost=1.0)
+    resolved = _day_result(end_soc=60.0, dp_cost=1.2, actual_cost=1.0)
+
+    result = backtest_job._terminal_value_adjustment(
+        [baseline],
+        [resolved],
+        {
+            "capacity_kwh": 10.0,
+            "terminal_energy_value_p_per_kwh": 10.0,
+        },
+    )
+
+    assert result["days"] == 1
+    assert result["soc_delta_pp"] == pytest.approx(10.0)
+    assert result["terminal_value_gbp"] == pytest.approx(0.10)
+    # Raw grid improvement is −£0.20; the extra 10 pp of stored energy
+    # is worth £0.10, so the adjusted result is −£0.10.
+    assert result["adjusted_improvement_gbp"] == pytest.approx(-0.10)
 
 
 def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):

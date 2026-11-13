@@ -1066,6 +1066,14 @@ versus heuristic** and **solver improvement**, so the two kinds of saving are
 not accidentally added together. The lower historical table remains the
 recorded first-plan reference.
 
+The A/B page also shows the **planned end-of-day SoC** for the baseline and
+re-solved plans, plus a **terminal-value adjustment**. The raw improvement is
+grid cost only; the SoC-adjusted improvement adds the value of the difference
+in stored energy at the end of the day, using the planner's configured
+capacity and terminal energy value. This matters when one plan ends the day
+with more energy than the other: the plan that bought that energy can look
+more expensive on grid cost alone.
+
 The job runs in a separate low-priority worker process, so a long re-solve
 cannot delay the control loop. One job runs at a time. Progress and results
 are written under:

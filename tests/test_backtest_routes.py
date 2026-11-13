@@ -455,6 +455,10 @@ def test_job_ab_view_shows_heuristic_and_vehicle_columns(
     assert "Re-solved vs heuristic" in body
     assert "Baseline vs heuristic" in body
     assert "Solver improvement" in body
+    assert "Terminal value adjustment" in body
+    assert "SoC-adjusted improvement" in body
+    assert "Mean planned SoC Δ" in body
+    assert "Planned end SoC" in body
     assert "Plan in force" in body
     assert "2 events" in body
     assert "2 away" in body

@@ -111,6 +111,7 @@ class DayBacktest:
     soc_pairs: int
     soc_abs_error_sum: float
     soc_error_sum: float
+    end_soc: Optional[float]
     rows: tuple[SlotOutcome, ...]
 
     @property
@@ -159,6 +160,7 @@ def day_backtest_to_dict(result: DayBacktest) -> dict:
         "soc_mae": result.soc_mae,
         "soc_bias": result.soc_bias,
         "action_match_rate": result.action_match_rate,
+        "end_soc": result.end_soc,
         "rows": [asdict(row) for row in result.rows],
     }
 
@@ -203,6 +205,7 @@ def simulate_run(
     soc_abs = 0.0
     soc_sum = 0.0
     skipped = 0
+    end_soc = None
 
     for slot in range(start_slot, SLOTS_PER_DAY):
         action = actions.get(slot)
@@ -267,6 +270,10 @@ def simulate_run(
             if action is not None
             else None
         )
+        if action is not None:
+            after_soc = _number(action.get("soc_after"))
+            if after_soc is not None:
+                end_soc = after_soc
         estimated_soc = samples.get(slot)
         if planned_soc is not None and estimated_soc is not None:
             soc_pairs += 1
@@ -312,6 +319,7 @@ def simulate_run(
         soc_pairs=soc_pairs,
         soc_abs_error_sum=soc_abs,
         soc_error_sum=soc_sum,
+        end_soc=end_soc,
         rows=tuple(rows),
     )
 

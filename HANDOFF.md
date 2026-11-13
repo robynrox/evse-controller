@@ -433,7 +433,12 @@ completed fixes.
   planner history.  A stale `running` job whose PID has gone is marked
   `interrupted` on the next listing or start.  The A/B summary separates
   baseline-vs-heuristic, re-solved-vs-heuristic and solver improvement; the
-  per-day table shows vehicle-event and away-slot counts.
+  per-day table shows vehicle-event and away-slot counts.  The A/B page also
+  shows planned end-of-day SoC and a terminal-value adjustment: the raw
+  improvement is grid cost only, while the SoC-adjusted improvement adds the
+  value of the difference in stored energy using the planner's capacity and
+  terminal energy value.  This prevents a plan that ends with more energy from
+  looking worse on grid cost alone.
 - The re-solve job also has a `load_source` of `recorded` or `component`.
   `component` replaces only the re-solved run's load inputs with the fitted
   `ComponentLoadModel` forecast (baseload + heat pump − solar), using the

@@ -150,12 +150,70 @@ def _append_day(path: Path, payload: dict) -> None:
         )
 
 
+def _terminal_value_adjustment(
+    baseline: list,
+    resolved: list,
+    planner_params: dict,
+) -> dict:
+    """Value the difference in planned end-of-day SoC between two runs."""
+    capacity_kwh = float(
+        planner_params.get("capacity_kwh", DASHBOARD_SOC_CAPACITY_KWH)
+    )
+    value_p_per_kwh = float(
+        planner_params.get("terminal_energy_value_p_per_kwh", 0.0) or 0.0
+    )
+    paired = []
+    for base, res in zip(baseline, resolved):
+        if base.day != res.day:
+            continue
+        if base.end_soc is None or res.end_soc is None:
+            continue
+        if base.dp_cost_gbp is None or res.dp_cost_gbp is None:
+            continue
+        if base.actual_cost_gbp is None or res.actual_cost_gbp is None:
+            continue
+        paired.append((base, res))
+    if not paired:
+        return {
+            "days": 0,
+            "soc_delta_pp": None,
+            "terminal_value_gbp": None,
+            "adjusted_improvement_gbp": None,
+            "capacity_kwh": capacity_kwh,
+            "terminal_energy_value_p_per_kwh": value_p_per_kwh,
+        }
+    soc_delta_pp = sum(
+        res.end_soc - base.end_soc for base, res in paired
+    ) / len(paired)
+    terminal_value_gbp = sum(
+        (res.end_soc - base.end_soc) / 100.0
+        * capacity_kwh
+        * value_p_per_kwh
+        / 100.0
+        for base, res in paired
+    )
+    raw_improvement_gbp = sum(
+        base.dp_cost_gbp - res.dp_cost_gbp for base, res in paired
+    )
+    return {
+        "days": len(paired),
+        "soc_delta_pp": soc_delta_pp,
+        "terminal_value_gbp": terminal_value_gbp,
+        "adjusted_improvement_gbp": (
+            raw_improvement_gbp + terminal_value_gbp
+        ),
+        "capacity_kwh": capacity_kwh,
+        "terminal_energy_value_p_per_kwh": value_p_per_kwh,
+    }
+
+
 def _summary(
     baseline: list,
     resolved: list,
     *,
     days_skipped: int,
     runtime_seconds: float,
+    planner_params: Optional[dict] = None,
 ) -> dict:
     baseline_summary = summarise(baseline)
     resolved_summary = summarise(resolved)
@@ -166,10 +224,23 @@ def _summary(
         if baseline_cost is None or resolved_cost is None
         else float(baseline_cost) - float(resolved_cost)
     )
+    terminal = _terminal_value_adjustment(
+        baseline, resolved, planner_params or {}
+    )
     return {
         "baseline": baseline_summary,
         "resolved": resolved_summary,
         "improvement_gbp": improvement,
+        "terminal_value_gbp": terminal.get("terminal_value_gbp"),
+        "improvement_after_terminal_gbp": terminal.get(
+            "adjusted_improvement_gbp"
+        ),
+        "soc_delta_pp": terminal.get("soc_delta_pp"),
+        "terminal_value_days": terminal.get("days"),
+        "capacity_kwh": terminal.get("capacity_kwh"),
+        "terminal_energy_value_p_per_kwh": terminal.get(
+            "terminal_energy_value_p_per_kwh"
+        ),
         "days_skipped": days_skipped,
         "runtime_seconds": round(runtime_seconds, 2),
     }
@@ -194,6 +265,13 @@ def run_job(job_dir: Path) -> int:
     state_source = str(job.get("state_source") or "simulated")
     baseline_source = str(job.get("baseline_source") or "first_plan")
     load_source = str(job.get("load_source") or "recorded")
+    planner_params = job.get("planner") or {}
+    capacity_kwh = float(
+        planner_params.get("capacity_kwh", DASHBOARD_SOC_CAPACITY_KWH)
+    )
+    terminal_value_p_per_kwh = float(
+        planner_params.get("terminal_energy_value_p_per_kwh", 0.0) or 0.0
+    )
     component = None
     start_day = date.fromisoformat(str(job["start"]))
     end_day = date.fromisoformat(str(job["end"]))
@@ -325,6 +403,27 @@ def run_job(job_dir: Path) -> int:
 
             baseline_results.append(baseline)
             resolved_results.append(resolved)
+            soc_delta_pp = None
+            terminal_value_gbp = None
+            improvement_after_terminal_gbp = None
+            if baseline.end_soc is not None and resolved.end_soc is not None:
+                soc_delta_pp = resolved.end_soc - baseline.end_soc
+                terminal_value_gbp = (
+                    soc_delta_pp
+                    / 100.0
+                    * capacity_kwh
+                    * terminal_value_p_per_kwh
+                    / 100.0
+                )
+                if (
+                    baseline.dp_cost_gbp is not None
+                    and resolved.dp_cost_gbp is not None
+                ):
+                    improvement_after_terminal_gbp = (
+                        baseline.dp_cost_gbp
+                        - resolved.dp_cost_gbp
+                        + terminal_value_gbp
+                    )
             _append_day(
                 days_path,
                 {
@@ -338,6 +437,11 @@ def run_job(job_dir: Path) -> int:
                     "solver_version": solver_version,
                     "vehicle_events": len(vehicle_events),
                     "disconnected_slots": sorted(away),
+                    "soc_delta_pp": soc_delta_pp,
+                    "terminal_value_gbp": terminal_value_gbp,
+                    "improvement_after_terminal_gbp": (
+                        improvement_after_terminal_gbp
+                    ),
                     "baseline": day_backtest_to_dict(baseline),
                     "resolved": day_backtest_to_dict(resolved),
                 },
@@ -355,6 +459,7 @@ def run_job(job_dir: Path) -> int:
             resolved_results,
             days_skipped=days_skipped,
             runtime_seconds=time.perf_counter() - started,
+            planner_params=planner_params,
         )
         _write_json(job_dir / SUMMARY_FILE, summary)
         job["summary"] = summary
@@ -373,6 +478,7 @@ def run_job(job_dir: Path) -> int:
             resolved_results,
             days_skipped=days_skipped,
             runtime_seconds=time.perf_counter() - started,
+            planner_params=planner_params,
         )
         _write_json(job_dir / SUMMARY_FILE, summary)
         job["summary"] = summary

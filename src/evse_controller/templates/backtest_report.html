@@ -394,11 +394,31 @@
             <div class="value">{{ fmt_money(job_summary.get('improvement_gbp')) }}</div>
             <div class="note">
                 {% if selected_job.load_source == 'component' %}
-                    baseline DP minus component-load DP
+                    baseline DP minus component-load DP, grid cost only
                 {% else %}
-                    baseline DP minus re-solved DP
+                    baseline DP minus re-solved DP, grid cost only
                 {% endif %}
             </div>
+        </div>
+        <div class="card">
+            <div class="label">Terminal value adjustment</div>
+            <div class="value">{{ fmt_money(job_summary.get('terminal_value_gbp')) }}</div>
+            <div class="note">
+                value of re-solved minus baseline planned end SoC
+                {% if job_summary.get('terminal_value_days') is not none %}
+                    · {{ job_summary.get('terminal_value_days') }} days
+                {% endif %}
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">SoC-adjusted improvement</div>
+            <div class="value">{{ fmt_money(job_summary.get('improvement_after_terminal_gbp')) }}</div>
+            <div class="note">resolved improvement plus terminal energy value</div>
+        </div>
+        <div class="card">
+            <div class="label">Mean planned SoC Δ</div>
+            <div class="value">{{ fmt_pp(job_summary.get('soc_delta_pp')) }}</div>
+            <div class="note">re-solved minus baseline, average per paired day</div>
         </div>
         <div class="card">
             <div class="label">Baseline vs heuristic</div>
@@ -438,6 +458,9 @@
                             Improvement
                         {% endif %}
                     </th>
+                    <th>Planned end SoC</th>
+                    <th>SoC Δ</th>
+                    <th>SoC-adjusted gain</th>
                     <th>Baseline delta</th>
                     <th>Re-solved delta</th>
                     <th>Vehicle</th>
@@ -457,6 +480,14 @@
                             {{ fmt_money(baseline.get('dp_cost_gbp') - resolved.get('dp_cost_gbp')) }}
                         {% else %}—{% endif %}
                     </td>
+                    <td>
+                        {% if baseline.get('end_soc') is not none and resolved.get('end_soc') is not none %}
+                            {{ '%.1f'|format(baseline.get('end_soc')) }}% →
+                            {{ '%.1f'|format(resolved.get('end_soc')) }}%
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>{{ fmt_pp(item.get('soc_delta_pp')) }}</td>
+                    <td>{{ fmt_money(item.get('improvement_after_terminal_gbp')) }}</td>
                     <td>{{ fmt_money(baseline.get('delta_gbp')) }}</td>
                     <td>{{ fmt_money(resolved.get('delta_gbp')) }}</td>
                     <td title="Away slots: {{ item.get('disconnected_slots', [])|join(', ') }}">

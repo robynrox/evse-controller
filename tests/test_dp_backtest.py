@@ -98,6 +98,7 @@ def test_replays_house_load_and_frozen_prices():
     assert result.dp_cost_gbp == pytest.approx(0.40)
     assert result.actual_cost_gbp == pytest.approx(0.30)
     assert result.delta_gbp == pytest.approx(-0.10)
+    assert result.end_soc == pytest.approx(61.0)
 
 
 def test_soc_and_action_comparisons_use_matched_slots_only():
