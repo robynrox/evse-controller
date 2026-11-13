@@ -325,6 +325,8 @@ def fit_and_evaluate(
         },
         "baseload_overall_kw": baseload_overall,
         "residual_quantiles_kw": residual_quantiles,
+        "training_end": train[-1].when.isoformat(),
+        "test_start": test_start.isoformat(),
         "solar_model": solar_model.to_dict(),
         "heatpump_model": heat_model.to_dict(),
     }

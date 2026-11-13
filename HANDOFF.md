@@ -442,9 +442,9 @@ completed fixes.
   The model defaults to `data/analysis/net_grid_model/model.json` and the
   weather to `data/analysis/weather_forecast_history.csv.gz`; a missing
   weather slot fails the job rather than being filled with a synthetic zero.
-  Use a model trained before the backtest window (the default 60-day holdout
-  leaves the recent 30-day backtest out of training).  Job rows and `job.json`
-  record the load source.
+  The model records `training_end`, and the route refuses a backtest window
+  that starts on or before it, so a component comparison cannot score days
+  the model was fitted on.  Job rows and `job.json` record the load source.
 - `web/backtest_routes.py` serves `/reports/backtest`: the same comparison over
   7/30/90 days as cards, a daily delta chart, a day table, CSV and JSON. It
   shows an explanation rather than a score before any shadow plan exists.

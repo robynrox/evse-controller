@@ -1042,8 +1042,10 @@ python -m evse_controller.tools.evaluate_net_grid_forecast \
 The default paths are `data/analysis/net_grid_model/model.json` and
 `data/analysis/weather_forecast_history.csv.gz`. Use a model whose training
 cutoff is before the backtest window; the default 60-day holdout leaves the
-most recent 30-day backtest out of training. A missing weather slot fails the
-job rather than being filled with a synthetic zero.
+most recent 30-day backtest out of training. The job refuses a window that
+starts on or before the model's recorded `training_end`, so a component
+comparison cannot silently score days the model was fitted on. A missing
+weather slot fails the job rather than being filled with a synthetic zero.
 
 Both are A/B tests of the solver generation, not replacements for the recorded
 history. Vehicle disconnect and reconnect events are recorded with the

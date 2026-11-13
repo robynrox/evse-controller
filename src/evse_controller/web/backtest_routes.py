@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Response, jsonify, render_template, request
@@ -292,6 +293,49 @@ def register_backtest_routes(
         days = _requested_days()
         end = max(available)
         start = end - timedelta(days=days - 1)
+        if load_source == "component":
+            try:
+                model_payload = json.loads(
+                    Path(component_model_path)
+                    .expanduser()
+                    .read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as error:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Could not read the component model: "
+                                f"{error}"
+                            )
+                        }
+                    ),
+                    400,
+                )
+            training_end = model_payload.get("training_end")
+            if training_end:
+                try:
+                    cutoff = datetime.fromisoformat(
+                        str(training_end)
+                    ).date()
+                except ValueError:
+                    cutoff = None
+                if cutoff is not None and start <= cutoff:
+                    return (
+                        jsonify(
+                            {
+                                "error": (
+                                    "The component model was trained "
+                                    f"through {cutoff.isoformat()}, which "
+                                    "overlaps the backtest window starting "
+                                    f"{start.isoformat()}. Refit the model "
+                                    "with an earlier cutoff or shorten the "
+                                    "window."
+                                )
+                            }
+                        ),
+                        400,
+                    )
         try:
             job = manager.start(
                 {
