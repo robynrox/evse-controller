@@ -1374,6 +1374,20 @@ written under `data/analysis/solar_model/`: `model.json`, `evaluation.csv` and
 `summary.json`. The model is not yet wired into DP control; this is the
 forecast-quality stage.
 
+To fit and evaluate the heat-pump model:
+
+```bash
+python -m evse_controller.tools.fit_heatpump_forecast \
+    --test-days 60 --output-dir data/analysis/heatpump_model
+```
+
+It learns a per-slot daily profile plus a temperature response within each
+slot. The slot profile captures regular hot-water cycles and thermostat
+behaviour; temperature bins capture weather compensation and cold-day
+running. Sparse temperature bins fall back to the slot profile, and P50/P90
+are both stored. Outputs are `model.json`, `evaluation.csv` and `summary.json`
+under `data/analysis/heatpump_model/`.
+
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:

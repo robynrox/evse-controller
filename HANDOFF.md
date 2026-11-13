@@ -839,6 +839,9 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
   - `src/evse_controller/tools/fit_solar_forecast.py` and
     `forecasting/solar.py` — capped solar model with a learned sun-position
     shading mask, fitted and evaluated on a holdout period.
+  - `src/evse_controller/tools/fit_heatpump_forecast.py` and
+    `forecasting/heatpump.py` — per-slot temperature response with learned
+    daily/DHW profiles and P50/P90 output.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).
