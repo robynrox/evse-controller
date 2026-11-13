@@ -328,7 +328,7 @@ def test_start_job_route_rejects_a_model_that_saw_the_window(
     client = _client(jobs=manager)
     model = tmp_path / "model.json"
     weather = tmp_path / "weather.csv.gz"
-    model.write_text(json.dumps({"training_end": "2026-11-05T23:30:00"}))
+    model.write_text(json.dumps({"training_end": "2026-11-07T00:00:00"}))
     weather.write_text("")
 
     response = client.post(
@@ -341,7 +341,51 @@ def test_start_job_route_rejects_a_model_that_saw_the_window(
     )
 
     assert response.status_code == 400
-    assert "overlaps the backtest window" in response.get_json()["error"]
+    assert "overlaps the backtest days" in response.get_json()["error"]
+
+
+def test_start_job_route_allows_a_cutoff_before_the_recorded_days(
+    tmp_path, monkeypatch
+):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager,
+        "_spawn",
+        lambda job_dir: type("Process", (), {"pid": 1234})(),
+    )
+
+    class FakeTariff:
+        _learning_mode = "preview"
+
+        def shadow_planner_spec(self):
+            return {"capacity_kwh": 36.0}
+
+    import evse_controller.web.backtest_routes as backtest_routes
+
+    monkeypatch.setattr(
+        backtest_routes, "_active_tariff", lambda: FakeTariff()
+    )
+    client = _client(jobs=manager)
+    model = tmp_path / "model.json"
+    weather = tmp_path / "weather.csv.gz"
+    # The nominal 30-day window starts in October, but the only recorded
+    # day is 2026-11-07, so this model is clean for the days that will
+    # actually be re-solved.
+    model.write_text(json.dumps({"training_end": "2026-10-20T23:30:00"}))
+    weather.write_text("")
+
+    response = client.post(
+        "/reports/backtest/jobs?days=30",
+        json={
+            "load_source": "component",
+            "component_model_path": str(model),
+            "weather_forecast_path": str(weather),
+        },
+    )
+
+    assert response.status_code == 202
+    job = response.get_json()
+    assert job["load_source"] == "component"
 
 
 def test_job_ab_view_shows_heuristic_and_vehicle_columns(

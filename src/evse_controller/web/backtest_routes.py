@@ -304,6 +304,8 @@ def register_backtest_routes(
         days = _requested_days()
         end = max(available)
         start = end - timedelta(days=days - 1)
+        first_recorded = min(available)
+        first_resolved = max(start, first_recorded)
         if load_source == "component":
             try:
                 model_payload = json.loads(
@@ -331,17 +333,17 @@ def register_backtest_routes(
                     ).date()
                 except ValueError:
                     cutoff = None
-                if cutoff is not None and start <= cutoff:
+                if cutoff is not None and first_resolved <= cutoff:
                     return (
                         jsonify(
                             {
                                 "error": (
                                     "The component model was trained "
                                     f"through {cutoff.isoformat()}, which "
-                                    "overlaps the backtest window starting "
-                                    f"{start.isoformat()}. Refit the model "
-                                    "with an earlier cutoff or shorten the "
-                                    "window."
+                                    "overlaps the backtest days starting "
+                                    f"{first_resolved.isoformat()}. Refit "
+                                    "the model with an earlier cutoff or "
+                                    "shorten the window."
                                 )
                             }
                         ),
