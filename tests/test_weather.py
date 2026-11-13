@@ -7,9 +7,11 @@ import pytest
 from evse_controller.utils.config import config
 from evse_controller.weather import (
     OPEN_METEO_ARCHIVE_URL,
+    OPEN_METEO_HISTORICAL_FORECAST_URL,
     OPEN_METEO_URL,
     OpenMeteoArchiveClient,
     OpenMeteoClient,
+    OpenMeteoHistoricalForecastClient,
     WeatherNotConfigured,
     parse_weather_payload,
     snapshot_from_payload,
@@ -190,3 +192,15 @@ def test_snapshot_payload_round_trip(configured):
     assert restored.source == "archive"
     assert restored.hours[1].tilted_irradiance_wm2 == pytest.approx(210.0)
     assert restored.panel_tilt == pytest.approx(35.0)
+
+
+def test_historical_forecast_client_uses_its_own_endpoint(configured):
+    session = FakeSession(payload())
+    client = OpenMeteoHistoricalForecastClient(session=session)
+
+    snapshot = client.fetch_range(
+        date(2026, 11, 7), date(2026, 11, 7)
+    )
+
+    assert session.calls[0][0] == OPEN_METEO_HISTORICAL_FORECAST_URL
+    assert snapshot.source == "open-meteo-historical-forecast"

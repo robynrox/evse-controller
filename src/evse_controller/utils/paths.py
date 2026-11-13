@@ -42,6 +42,9 @@ def ensure_data_dirs():
     (data_dir / "state" / "weather_history").mkdir(
         parents=True, exist_ok=True
     )
+    (data_dir / "state" / "weather_forecast_history").mkdir(
+        parents=True, exist_ok=True
+    )
     (data_dir / "reports" / "daily").mkdir(parents=True, exist_ok=True)
 
 def get_config_file() -> Path:

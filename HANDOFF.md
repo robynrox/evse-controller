@@ -243,7 +243,12 @@ completed fixes.
   `tools/fetch_weather_history.py` uses the archive API for retrospective work,
   caches one JSON file per day under `data/state/weather_history/`, skips
   already-cached days, and writes tidy `timestamp,series,value` CSV. It uses
-  the same configured geometry as the live client.
+  the same configured geometry as the live client.  With
+  `--source historical-forecast` it uses Open-Meteo's archived forecast runs
+  and the `data/state/weather_forecast_history/` cache instead.  The component
+  net-grid forecast beat slot persistence in all four seasonal holdouts using
+  the historical forecast weather; the winter gain was modest and the
+  spring/summer gains were large.
 - `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
   forecast-versus-actual fan chart with a rounded min-to-max axis that includes
   negative solar/export values, a 14-day heatmap with blue positive and green

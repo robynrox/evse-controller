@@ -174,6 +174,12 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "weather_history"
 
+    @property
+    def WEATHER_FORECAST_HISTORY_DIR(self):
+        """Per-day cached historical-forecast snapshots for research."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "weather_forecast_history"
+
     def _optional_weather_float(
         self, key: str, minimum: float, maximum: float
     ) -> Optional[float]:

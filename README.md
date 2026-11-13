@@ -297,6 +297,25 @@ rerunning a range only fetches the missing days. The output is tidy
 of the InfluxDB range exporter. The archive fetch uses the same configured
 latitude, longitude, panel azimuth and tilt as the live weather client.
 
+For a realistic forecast-skill test, fetch the archived forecast runs instead:
+
+```bash
+python -m evse_controller.tools.fetch_weather_history \
+    --source historical-forecast \
+    --start 2025-11-13 --end 2026-11-12 \
+    --output data/analysis/weather_forecast_history.csv.gz
+```
+
+This uses Open-Meteo's Historical Forecast API, which stitches the first hours
+of successive forecast runs into a continuous series. It is the right archive
+for testing forecast-driven models, but it is not a fixed lead-time forecast;
+use the Previous Runs API later if we need to measure skill at 1–7 days ahead.
+Its per-day cache lives under `data/state/weather_forecast_history/`.
+
+The fetch tool also accepts `--latitude`, `--longitude`, `--panel-azimuth`
+and `--panel-tilt` when running against a copied dataset without the
+production weather configuration.
+
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
@@ -1408,9 +1427,27 @@ and compares it with the per-slot median net grid. Outputs are
 `model.json`, `evaluation.csv` and `summary.json` under
 `data/analysis/net_grid_model/`.
 
-Important: this first comparison uses the historical **archive weather**,
-which is effectively actual weather. Live forecast skill will be lower. A
-proper live-skill test needs historical forecast weather, not reanalysis.
+The comparison should use `data/analysis/weather_forecast_history.csv.gz`,
+not the reanalysis archive, for a realistic forecast-skill test. Against the
+historical forecast weather, the component forecast beat slot persistence in
+all four seasonal holdouts (last 60 days each):
+
+| Test window ends | Component MAE | Persistence MAE |
+|---|---:|---:|
+| 2026-02-15 | 0.339 kW | 0.369 kW |
+| 2026-05-15 | 0.432 kW | 0.939 kW |
+| 2026-08-15 | 0.351 kW | 1.110 kW |
+| 2026-11-12 | 0.313 kW | 0.462 kW |
+
+The winter improvement is modest; spring and summer improve substantially
+because the persistence profile cannot anticipate the solar and heat-pump
+seasonal shift. Weather forecast errors were small enough not to erase the
+gain: temperature MAE about 0.98°C, tilted-irradiance MAE about 45 W/m².
+
+These are still holdout backtests with a stitched historical forecast series,
+not a live control result. The next step is to use the component forecast in
+the shadow DP and compare rolling plans against the current persistence
+input.
 
 ## API Documentation
 

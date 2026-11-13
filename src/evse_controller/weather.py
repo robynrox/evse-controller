@@ -32,6 +32,9 @@ from evse_controller.utils.logging_config import debug, info, warning
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_HISTORICAL_FORECAST_URL = (
+    "https://historical-forecast-api.open-meteo.com/v1/forecast"
+)
 HOURLY_VARIABLES = (
     "temperature_2m",
     "shortwave_radiation",
@@ -340,6 +343,9 @@ class OpenMeteoClient:
 class OpenMeteoArchiveClient:
     """Fetch historical hourly weather from Open-Meteo's archive API."""
 
+    url = OPEN_METEO_ARCHIVE_URL
+    source = "open-meteo-archive"
+
     def __init__(self, *, session=None, timeout: float = 60.0):
         self._session = session or requests.Session()
         self.timeout = float(timeout)
@@ -384,7 +390,7 @@ class OpenMeteoArchiveClient:
                 "timezone": "auto",
             }
             response = self._session.get(
-                OPEN_METEO_ARCHIVE_URL,
+                self.url,
                 params=params,
                 timeout=self.timeout,
             )
@@ -393,7 +399,7 @@ class OpenMeteoArchiveClient:
             if first_payload is None:
                 first_payload = payload
             snapshot = parse_weather_payload(
-                payload, source="open-meteo-archive"
+                payload, source=self.source
             )
             for hour in snapshot.hours:
                 hours[hour.time] = hour
@@ -408,9 +414,16 @@ class OpenMeteoArchiveClient:
             panel_tilt=float(config.WEATHER_PANEL_TILT),
             timezone=str(payload.get("timezone", "")),
             hours=tuple(hours[key] for key in sorted(hours)),
-            source="open-meteo-archive",
+            source=self.source,
             model=str(payload.get("model", "best_match")),
         )
+
+
+class OpenMeteoHistoricalForecastClient(OpenMeteoArchiveClient):
+    """Fetch archived forecast runs from Open-Meteo's historical API."""
+
+    url = OPEN_METEO_HISTORICAL_FORECAST_URL
+    source = "open-meteo-historical-forecast"
 
 
 class WeatherRefresher:

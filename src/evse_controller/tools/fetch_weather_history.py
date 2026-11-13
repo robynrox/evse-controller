@@ -38,6 +38,7 @@ from typing import Iterable, Iterator, Optional, Sequence
 from evse_controller.utils.config import config
 from evse_controller.weather import (
     OpenMeteoArchiveClient,
+    OpenMeteoHistoricalForecastClient,
     WeatherHour,
     WeatherNotConfigured,
     WeatherSnapshot,
@@ -45,6 +46,8 @@ from evse_controller.weather import (
     snapshot_to_payload,
 )
 
+
+FORECAST_DEFAULT_OUTPUT = "data/analysis/weather_forecast_history.csv.gz"
 
 CONFIG_TEMPLATE = """\
 weather:
@@ -216,13 +219,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lookback when --start is omitted (default: 365)",
     )
     parser.add_argument(
+        "--latitude",
+        type=float,
+        default=None,
+        help="Override configured weather latitude",
+    )
+    parser.add_argument(
+        "--longitude",
+        type=float,
+        default=None,
+        help="Override configured weather longitude",
+    )
+    parser.add_argument(
+        "--panel-azimuth",
+        type=float,
+        default=None,
+        help="Override configured panel azimuth (compass bearing)",
+    )
+    parser.add_argument(
+        "--panel-tilt",
+        type=float,
+        default=None,
+        help="Override configured panel tilt in degrees",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("archive", "historical-forecast"),
+        default="archive",
+        help=(
+            "archive = historical weather/reanalysis; "
+            "historical-forecast = archived forecast runs"
+        ),
+    )
+    parser.add_argument(
         "--cache-dir",
-        default=str(config.WEATHER_HISTORY_DIR),
-        help="Per-day JSON cache directory",
+        default=None,
+        help="Per-day JSON cache directory (source-specific default)",
     )
     parser.add_argument(
         "--output",
-        default="data/analysis/weather_history.csv.gz",
+        default=None,
         help="Tidy CSV or .gz output; use '-' for stdout",
     )
     parser.add_argument(
@@ -261,13 +297,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(CONFIG_TEMPLATE)
         return 0
 
+    for attribute, value in (
+        ("WEATHER_LATITUDE", args.latitude),
+        ("WEATHER_LONGITUDE", args.longitude),
+        ("WEATHER_PANEL_AZIMUTH", args.panel_azimuth),
+        ("WEATHER_PANEL_TILT", args.panel_tilt),
+    ):
+        if value is not None:
+            setattr(config, attribute, value)
+
     try:
         start, end = resolve_range(args.start, args.end, args.days)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    directory = Path(args.cache_dir).expanduser()
+    if args.source == "historical-forecast":
+        default_cache = config.WEATHER_FORECAST_HISTORY_DIR
+        default_output = FORECAST_DEFAULT_OUTPUT
+        client_class = OpenMeteoHistoricalForecastClient
+    else:
+        default_cache = config.WEATHER_HISTORY_DIR
+        default_output = "data/analysis/weather_history.csv.gz"
+        client_class = OpenMeteoArchiveClient
+    cache_dir = args.cache_dir or str(default_cache)
+    output = args.output or default_output
+    directory = Path(cache_dir).expanduser()
     days = list(day_range(start, end))
     missing = [
         day
@@ -276,11 +331,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ]
     if not args.quiet:
         print(
-            f"{len(days)} day(s) in range; {len(missing)} need fetching",
+            f"{args.source}: {len(days)} day(s) in range; "
+            f"{len(missing)} need fetching",
             file=sys.stderr,
         )
 
-    client = OpenMeteoArchiveClient(timeout=args.timeout)
+    client = client_class(timeout=args.timeout)
     try:
         for group_start, group_end in _groups(
             missing, max(1, int(args.chunk_days))
@@ -313,20 +369,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if read_cached(cache_path(directory, day)) is None
     ]
     try:
-        count = write_csv(directory, start, end, args.output)
+        count = write_csv(directory, start, end, output)
     except OSError as error:
         print(f"error: could not write CSV: {error}", file=sys.stderr)
         return 1
     if not args.quiet:
         print(
             f"Wrote {count} weather rows"
-            + (f" to {args.output}" if args.output else " to stdout"),
+            + (f" to {output}" if output else " to stdout"),
             file=sys.stderr,
         )
     if missing_after:
         print(
             f"warning: {len(missing_after)} day(s) are still missing "
-            "from the archive cache",
+            "from the cache",
             file=sys.stderr,
         )
         return 1
