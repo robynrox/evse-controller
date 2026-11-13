@@ -95,6 +95,14 @@ def test_component_load_requires_weather_for_every_slot():
         )
 
 
+def test_component_load_rejects_an_input_without_a_start():
+    run = _run()
+    del run["inputs"][0]["start"]
+
+    with pytest.raises(ValueError, match="without a valid start"):
+        apply_component_load_to_run(run, _model(), _weather())
+
+
 def test_component_samples_include_the_residual_quantiles():
     model = _model()
     when = datetime(2026, 11, 7, 0, 0, tzinfo=timezone.utc)

@@ -123,14 +123,17 @@ def apply_component_load_to_run(
     inputs = []
     for item in run.get("inputs") or []:
         if not isinstance(item, Mapping):
-            inputs.append(item)
-            continue
+            raise ValueError(
+                "Component load source found a non-mapping input row"
+            )
         updated = dict(item)
         try:
             when = datetime.fromisoformat(str(item["start"]))
         except (KeyError, TypeError, ValueError):
-            inputs.append(updated)
-            continue
+            raise ValueError(
+                "Component load source found an input row without a "
+                f"valid start: {item!r}"
+            ) from None
         local = _aware(when, zone)
         hour = local.astimezone(timezone.utc).replace(
             minute=0, second=0, microsecond=0
