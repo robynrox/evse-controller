@@ -699,15 +699,16 @@ terms. The same page can also record when the EV is expected to be away. Three
 kinds are supported, named for what they do rather than for one supplier's
 marketing:
 
-- **Free Energy Session** (`free_import`): import costs 0p for the window. The
-  controller charges at maximum up to the 97% charge cap, the import price used
-  by both the decision logic and the savings ledger becomes 0p, and the energy
-  is therefore booked at what it actually cost. Free slots are excluded from
+- **Free Energy Session (Max Charge)** (`free_import`): import costs 0p for
+  the window. The controller charges at maximum up to the 97% charge cap, the
+  import price used by both the decision logic and the savings ledger becomes
+  0p, and the energy is therefore booked at what it actually cost. Free slots are excluded from
   the export plan, because charging at 0p is worth more than selling stored
   energy and the Wallbox cannot do both.
-- **Save Energy Session** (`grid_support`): the supplier has asked for less
-  grid demand. For a battery-backed installation the useful response is maximum
-  export for the window, regardless of the quoted export price, down to
+- **Save Energy Session (Max Discharge)** (`grid_support`): the supplier has
+  asked for less grid demand. For a battery-backed installation the useful
+  response is maximum export for the window, regardless of the quoted export
+  price, down to
   `absolute_min_soc_percent` (25% by default). The supplier's reward is not a
   price the tariff can see, so it is deliberately not modelled or booked; the
   dashboard says the request is the reason for exporting.
@@ -766,9 +767,10 @@ the automatic session is still possible; disabling a single window does not
 stop the scheduler from choosing another when the next interval is due.
 
 All kinds are selected on the **Energy Sessions & EV Availability** page
-(`/sessions`, linked from the dashboard and the schedule page). Click a
-half-hour cell, or drag across several, choose the kind, and add the window. On
-a touch screen, tap one end and then the other. Selections are quantised to
+(`/sessions`, linked from the dashboard and the schedule page). The page has
+**Today** and **Tomorrow** selectors, so the same strip can create sessions for
+either day. Click a half-hour cell, or drag across several, choose the kind,
+and add the window. On a touch screen, tap one end and then the other. Selections are quantised to
 half-hour slots — `start` is floored and the exclusive `end` is ceiled —
 because utilities settle on half-hour periods. Overlapping windows are rejected
 rather than resolved. Windows persist in `data/state/sessions.json`. Price and

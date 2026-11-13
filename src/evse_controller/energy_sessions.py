@@ -79,8 +79,8 @@ CONTROL_SESSION_KINDS = frozenset(
 #: Display labels.  Kept out of the stored data so the wording can change (or
 #: be translated) without migrating the file.
 SESSION_LABELS = {
-    FREE_IMPORT: "Free Energy Session",
-    GRID_SUPPORT: "Save Energy Session",
+    FREE_IMPORT: "Free Energy Session (Max Charge)",
+    GRID_SUPPORT: "Save Energy Session (Max Discharge)",
     EV_AWAY: "EV Away",
     HOME_ONLY: "Home only",
     BIDIRECTIONAL: "Bidirectional",

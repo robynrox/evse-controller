@@ -3347,7 +3347,9 @@ class TestEnergySessions:
 
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.DISCHARGE
-        assert snapshot.mode.startswith("Save Energy Session 12:00–13:00")
+        assert snapshot.mode.startswith(
+            "Save Energy Session (Max Discharge) 12:00–13:00"
+        )
         assert "grid support" in snapshot.reason.lower()
         assert "Save Energy Session" in reason
         assert snapshot.discharge_min_a == pytest.approx(

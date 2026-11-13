@@ -7160,14 +7160,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         '<span><span style="display:inline-block;width:10px;'
                         'height:10px;background:#2563eb;border-radius:2px;'
                         'margin-right:4px;vertical-align:middle;"></span>'
-                        'Free Energy Session</span>'
+                        'Free Energy Session (Max Charge)</span>'
                     )
                 if grid_support_slots:
                     legend_items.append(
                         '<span><span style="display:inline-block;width:10px;'
                         'height:10px;background:#d97706;border-radius:2px;'
                         'margin-right:4px;vertical-align:middle;"></span>'
-                        'Save Energy Session (grid support)</span>'
+                        'Save Energy Session (Max Discharge)</span>'
                     )
                 if away_slots:
                     legend_items.append(
@@ -7854,7 +7854,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         ):
             self._record_decision(
                 mode=(
-                    f"Save Energy Session {session.start:%H:%M}–"
+                    f"{session.label} {session.start:%H:%M}–"
                     f"{session.end:%H:%M} · export inhibited"
                 ),
                 reason=(
@@ -7898,7 +7898,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             self._record_decision(
                 mode=(
-                    f"Save Energy Session {session.start:%H:%M}–"
+                    f"{session.label} {session.start:%H:%M}–"
                     f"{session.end:%H:%M} · max export"
                 ),
                 reason=(

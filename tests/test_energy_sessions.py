@@ -203,6 +203,25 @@ class TestSessionFromSlots:
         assert session.end == at(23, 30) + timedelta(minutes=30)
         assert session.end.strftime("%H:%M") == "00:00"
 
+    def test_a_future_day_can_be_selected(self):
+        tomorrow = self.NOW.date() + timedelta(days=1)
+
+        session = session_from_slots(
+            FREE_IMPORT,
+            24,
+            26,
+            day=tomorrow,
+            now=self.NOW,
+        )
+
+        assert session.start.date() == tomorrow
+        assert session.start == datetime.combine(
+            tomorrow, datetime.min.time()
+        ) + timedelta(hours=12)
+        assert session.end == datetime.combine(
+            tomorrow, datetime.min.time()
+        ) + timedelta(hours=13)
+
     def test_strings_from_json_are_accepted(self):
         session = self.build(start="24", end="26")
         assert session.start == at(12, 0)

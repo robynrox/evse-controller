@@ -16,6 +16,35 @@
         border-radius: 4px;
     }
 
+    .day-picker {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin-top: 18px;
+        font-weight: 600;
+    }
+
+    .day-picker a {
+        padding: 6px 12px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        color: #0b5cad;
+        text-decoration: none;
+    }
+
+    .day-picker a.current {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+    }
+
+    .day-picker .day-date {
+        color: #666;
+        font-weight: 400;
+    }
+
     .scheduled-events {
         margin-top: 20px;
         padding: 20px;
@@ -372,6 +401,15 @@
     tariff is active; a manual command still takes priority.
 </p>
 
+<div class="day-picker">
+    <span>Day:</span>
+    <a class="{% if selected_day == today %}current{% endif %}"
+       href="/sessions?day=today">Today</a>
+    <a class="{% if selected_day == tomorrow %}current{% endif %}"
+       href="/sessions?day=tomorrow">Tomorrow</a>
+    <span class="day-date">{{ selected_day.strftime('%A %d %b') }}</span>
+</div>
+
 <div class="session-form">
     <h2>Select a window</h2>
 
@@ -379,7 +417,7 @@
         <label class="kind-option checked">
             <input type="radio" name="kind" value="{{ free_kind }}" checked>
             <span>
-                <span class="kind-title">Free Energy Session</span>
+                <span class="kind-title">{{ labels[free_kind] }}</span>
                 <span class="kind-detail">
                     Import costs 0p for the window, so the pack is bulk charged
                     up to its charge cap. The energy is booked at 0p.
@@ -389,7 +427,7 @@
         <label class="kind-option">
             <input type="radio" name="kind" value="{{ grid_kind }}">
             <span>
-                <span class="kind-title">Save Energy Session</span>
+                <span class="kind-title">{{ labels[grid_kind] }}</span>
                 <span class="kind-detail">
                     Your supplier has asked for grid support, so the pack
                     exports at maximum for the window, above the battery
@@ -400,7 +438,7 @@
         <label class="kind-option">
             <input type="radio" name="kind" value="{{ away_kind }}">
             <span>
-                <span class="kind-title">EV Away</span>
+                <span class="kind-title">{{ labels[away_kind] }}</span>
                 <span class="kind-detail">
                     The EV is expected to be disconnected. These slots are left
                     out of the 23:30 SoC projection and export plan, but the
@@ -420,7 +458,8 @@
     </div>
 
     <div class="strip-wrap">
-        <div id="strip" class="strip">
+        <div id="strip" class="strip"
+             data-day="{{ selected_day.isoformat() }}">
             {% for slot in slots %}
             <div class="cell{% if slot.slot % 2 == 0 %} hour-start{% endif %}{% if slot.slot in free_slots %} session-free{% endif %}{% if slot.slot in grid_slots %} session-grid{% endif %}{% if slot.slot in away_slots %} session-away{% endif %}{% if slot.slot in control_slots %} session-control{% endif %}{% if slot.slot == now_slot %} now{% endif %}"
                  data-slot="{{ slot.slot }}"
@@ -448,9 +487,9 @@
     <div id="error" class="error" hidden></div>
 
     <div class="legend">
-        <span class="swatch-free">Free Energy Session</span>
-        <span class="swatch-grid">Save Energy Session</span>
-        <span class="swatch-away">EV Away</span>
+        <span class="swatch-free">{{ labels[free_kind] }}</span>
+        <span class="swatch-grid">{{ labels[grid_kind] }}</span>
+        <span class="swatch-away">{{ labels[away_kind] }}</span>
         <span class="swatch-control">Control session</span>
         <span class="swatch-selected">Selected</span>
         <span class="swatch-now">Now</span>
@@ -499,6 +538,7 @@
 <script>
 (function () {
     const strip = document.getElementById('strip');
+    const day = strip.dataset.day;
     const cells = Array.from(strip.querySelectorAll('.cell'));
     const readout = document.getElementById('selection');
     const errorBox = document.getElementById('error');
@@ -664,10 +704,12 @@
         try {
             await post('/api/sessions', {
                 kind: document.querySelector('input[name="kind"]:checked').value,
+                day: day,
                 start_slot: range[0],
                 end_slot: range[1] + 1
             });
-            window.location.reload();
+            window.location.href = '/sessions?day=' +
+                encodeURIComponent(day);
         } catch (error) {
             showError(error.message);
             addButton.disabled = false;

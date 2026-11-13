@@ -7,7 +7,7 @@ from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.utils.config import config
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from evse_controller.utils.logging_config import info, error, debug
 from evse_controller.web.form_values import (
     form_float as _form_float,
@@ -96,8 +96,8 @@ VALID_COMMANDS = {
 }
 
 
-def _today_slot_rates() -> list[dict]:
-    """The 48 half-hour slots with today's export rate, if it is known.
+def _slot_rates_for_day(day: date) -> list[dict]:
+    """The 48 half-hour slots with *day*'s export rate, if it is known.
 
     Rates come from whichever tariff is active.  ``None`` means the rate is
     unknown (no tariff, no fetch yet, or a different user), which the strip
@@ -105,7 +105,6 @@ def _today_slot_rates() -> list[dict]:
     """
     tariff = tariffManager.get_tariff()
     rates = getattr(tariff, "agile_rates", None) if tariff else None
-    today = datetime.now().date()
     by_slot: dict[int, float] = {}
     for entry in rates or []:
         start = entry.get("start")
@@ -114,7 +113,7 @@ def _today_slot_rates() -> list[dict]:
                 start = datetime.fromisoformat(start)
             except ValueError:
                 continue
-        if start is None or start.date() != today:
+        if start is None or start.date() != day:
             continue
         slot = start.hour * 2 + (1 if start.minute >= 30 else 0)
         rate = entry.get("rate")
@@ -154,13 +153,21 @@ def _rate_colour(rate, all_rates) -> str:
 def _session_from_payload(data: dict, now: datetime | None = None) -> EnergySession:
     """Validate an API payload into a snapped session.
 
-    Slots are indices into today's 48 half-hours.  ``end_slot`` is exclusive,
-    so selecting the last slot of the day gives 48 and ends at midnight.
+    Slots are indices into the selected day's 48 half-hours.  ``end_slot`` is
+    exclusive, so selecting the last slot of the day gives 48 and ends at
+    midnight.
     """
+    day = None
+    if data.get("day"):
+        try:
+            day = date.fromisoformat(str(data["day"]))
+        except ValueError:
+            raise ValueError("Invalid session day") from None
     return session_from_slots(
         data.get("kind"),
         data.get("start_slot"),
         data.get("end_slot"),
+        day=day,
         now=now,
     )
 
@@ -448,20 +455,38 @@ def sessions_page():
     """Select supplier energy-session windows on a half-hour strip."""
     now = datetime.now()
     today = now.date()
+    tomorrow = today + timedelta(days=1)
+    requested_day = request.args.get("day")
+    if requested_day == "tomorrow":
+        selected_day = tomorrow
+    elif requested_day and requested_day != "today":
+        try:
+            selected_day = date.fromisoformat(requested_day)
+        except ValueError:
+            selected_day = today
+    else:
+        selected_day = today
+    if selected_day not in (today, tomorrow):
+        selected_day = today
     return render_template(
         'sessions.html',
-        slots=_today_slot_rates(),
+        slots=_slot_rates_for_day(selected_day),
         sessions=session_store.upcoming(now),
         labels=SESSION_LABELS,
+        selected_day=selected_day,
+        today=today,
+        tomorrow=tomorrow,
         free_kind=FREE_IMPORT,
         grid_kind=GRID_SUPPORT,
         away_kind=EV_AWAY,
-        free_slots=session_store.slots_for_kind(today, FREE_IMPORT),
-        grid_slots=session_store.slots_for_kind(today, GRID_SUPPORT),
-        away_slots=session_store.away_slots(today),
+        free_slots=session_store.slots_for_kind(selected_day, FREE_IMPORT),
+        grid_slots=session_store.slots_for_kind(
+            selected_day, GRID_SUPPORT
+        ),
+        away_slots=session_store.away_slots(selected_day),
         control_slots=set().union(
             *(
-                session_store.slots_for_kind(today, kind)
+                session_store.slots_for_kind(selected_day, kind)
                 for kind in CONTROL_SESSION_KINDS
             )
         ),
@@ -508,7 +533,11 @@ def sessions_page():
                 ),
             },
         ],
-        now_slot=now.hour * 2 + (1 if now.minute >= 30 else 0),
+        now_slot=(
+            now.hour * 2 + (1 if now.minute >= 30 else 0)
+            if selected_day == today
+            else None
+        ),
         now=now,
     )
 
