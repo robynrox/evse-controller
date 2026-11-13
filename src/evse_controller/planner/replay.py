@@ -8,8 +8,8 @@ changes is the solver generation, not the historical forecast.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Mapping, Optional, Sequence
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from evse_controller.planner.dp import PlannerAction, PlannerSlot
 
@@ -135,3 +135,164 @@ def initial_soc(run: Mapping[str, Any]) -> float:
         if value is not None:
             return value
     return 0.0
+
+
+class RollingCancelled(RuntimeError):
+    """Raised when a rolling re-solve is cancelled between slots."""
+
+
+def _actions_by_slot(run: Mapping[str, Any]) -> dict[int, dict]:
+    actions = {}
+    for action in run.get("actions") or []:
+        if not isinstance(action, Mapping):
+            continue
+        slot = action.get("slot")
+        if isinstance(slot, int):
+            actions[slot] = dict(action)
+    return actions
+
+
+def _run_for_slot(
+    runs: Sequence[Mapping[str, Any]],
+    action_maps: Sequence[dict[int, dict]],
+    slot: int,
+) -> Optional[Mapping[str, Any]]:
+    """Pick the latest recorded plan that has an action for *slot*."""
+    candidates = [
+        (int(run.get("slot") or 0), str(run.get("ts") or ""), index)
+        for index, (run, actions) in enumerate(zip(runs, action_maps))
+        if int(run.get("slot") or 0) <= slot and slot in actions
+    ]
+    if not candidates:
+        return None
+    _, _, index = max(candidates)
+    return runs[index]
+
+
+def _idle_action(
+    slot: int,
+    start: datetime,
+    soc_percent: float,
+) -> dict:
+    return {
+        "slot": slot,
+        "start": start.isoformat(),
+        "kind": "idle",
+        "current_a": 0.0,
+        "commanded_current_a": 0,
+        "ac_power_kw": 0.0,
+        "soc_before": soc_percent,
+        "soc_after": soc_percent,
+        "cost_p": 0.0,
+        "session": None,
+        "current_min_a": 0.0,
+        "current_max_a": 0.0,
+        "follow": False,
+        "horizon_index": 0,
+    }
+
+
+def rolling_resolve(
+    day: date,
+    runs: Sequence[Mapping[str, Any]],
+    planner,
+    planner_params: Mapping[str, Any],
+    *,
+    solver_version: str,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    progress: Optional[Callable[[int, float], None]] = None,
+) -> dict:
+    """Re-solve at each slot, carrying the simulated SoC forward.
+
+    Each slot uses the latest recorded plan that contains that slot.  The
+    result is a synthetic run whose actions can be priced by ``simulate_run``
+    against the measured day.
+    """
+    if not runs:
+        raise ValueError("No recorded runs to re-solve")
+    ordered = sorted(
+        runs,
+        key=lambda run: (
+            int(run.get("slot") or 0),
+            str(run.get("ts") or ""),
+        ),
+    )
+    action_maps = [_actions_by_slot(run) for run in ordered]
+    first = ordered[0]
+    start_slot = int(first.get("slot") or 0)
+    first_actions = action_maps[0]
+    if start_slot in first_actions:
+        start = datetime.fromisoformat(
+            str(first_actions[start_slot].get("start"))
+        )
+    else:
+        start = datetime.fromisoformat(
+            str((first.get("inputs") or [{}])[0].get("start"))
+        )
+    simulated_soc = initial_soc(first)
+    actions: list[dict] = []
+
+    for slot in range(start_slot, 48):
+        if cancel_check is not None and cancel_check():
+            raise RollingCancelled()
+        source = _run_for_slot(ordered, action_maps, slot)
+        if source is None:
+            actions.append(
+                _idle_action(
+                    slot,
+                    start + timedelta(minutes=30 * (slot - start_slot)),
+                    simulated_soc,
+                )
+            )
+            if progress is not None:
+                progress(slot, simulated_soc)
+            continue
+
+        try:
+            slots = tuple(
+                item
+                for item in slots_from_run(source, planner_params)
+                if item.start.date() == day and item.slot >= slot
+            )
+            if not slots:
+                raise ValueError("No slots remain in the source plan")
+            result = planner.plan(slots, simulated_soc)
+            action = next(
+                (
+                    item
+                    for item in result.actions
+                    if item.slot == slot
+                ),
+                None,
+            )
+        except Exception:
+            action = None
+
+        if action is not None:
+            action_dict = action_to_dict(action)
+        else:
+            recorded = _actions_by_slot(source).get(slot)
+            if recorded is None:
+                action_dict = _idle_action(
+                    slot,
+                    start + timedelta(minutes=30 * (slot - start_slot)),
+                    simulated_soc,
+                )
+            else:
+                action_dict = dict(recorded)
+                action_dict["soc_before"] = simulated_soc
+        actions.append(action_dict)
+        after = _number(action_dict.get("soc_after"))
+        if after is not None:
+            simulated_soc = after
+        if progress is not None:
+            progress(slot, simulated_soc)
+
+    rolling = dict(first)
+    rolling["slot"] = start_slot
+    rolling["actions"] = actions
+    rolling["solver_version"] = solver_version
+    rolling["solver_mode"] = "rolling"
+    rolling["resolved_from_ts"] = first.get("ts")
+    rolling["resolved_from_slot"] = first.get("slot")
+    return rolling

@@ -184,7 +184,7 @@ class BacktestJobManager:
                     + str(active.get("job_id"))
                 )
             scope = str(spec.get("scope") or "first_plan")
-            if scope != "first_plan":
+            if scope not in ("first_plan", "rolling"):
                 raise BacktestJobError(
                     f"Unsupported backtest scope: {scope!r}"
                 )

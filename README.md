@@ -955,10 +955,16 @@ preview has recorded at least one run.
 
 ##### Re-running the solver
 
-The backtest page also has **Re-run solver (first plan)**. This takes the first
-recorded plan of each day, re-solves it with the current planner parameters,
-and prices the result against the same measured day. It is an A/B test of the
-solver generation, not a replacement for the recorded history.
+The backtest page also has **Re-run solver** with two scopes:
+
+- **First plan (fast)** — take the first recorded plan of each day, re-solve
+  it with the current planner parameters, and price it against the same
+  measured day.
+- **Rolling, every slot (slower)** — re-solve at each slot, using the latest
+  recorded plan available at that time and carrying the simulated SoC forward.
+
+Both are A/B tests of the solver generation, not replacements for the recorded
+history.
 
 The job runs in a separate low-priority worker process, so a long re-solve
 cannot delay the control loop. One job runs at a time. Progress and results
@@ -975,10 +981,13 @@ The page polls the job status and reloads with an A/B table when it completes.
 Recorded planner history is never overwritten. The job id includes the solver
 version, so future solver generations can be compared directly.
 
-For timing: one full 48-slot plan is roughly 0.6 s on the development machine.
-A first-plan re-solve is therefore tens of seconds for 30 days and a minute or
-two for 90 days. A future rolling re-solve, which re-plans every slot, is much
-more expensive and will reuse the same job framework.
+For timing: one full 48-slot plan is roughly 0.6 s on the development machine,
+and production is currently around 1 s per day for a first-plan re-solve.
+First-plan is therefore tens of seconds for 30 days and a minute or two for
+90 days. Rolling re-plans every slot: roughly 15–30 s per day on the
+development machine, or about 10–20 minutes for 30 days and 30–60 minutes for
+90 days, with slower production hardware taking longer. Both scopes use the
+same background job framework.
 
 ##### DP policy map (`/reports/policy`)
 

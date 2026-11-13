@@ -148,15 +148,21 @@ def test_worker_progress_does_not_lose_a_cancel_request(tmp_path):
     assert json.loads(job_path.read_text())["cancel_requested"] is True
 
 
-def test_worker_writes_an_ab_row_and_summary(tmp_path, monkeypatch):
-    job_dir = tmp_path / "job-1"
+def _run_worker(tmp_path, monkeypatch, scope="first_plan"):
+    job_dir = tmp_path / ("job-" + scope)
     job_dir.mkdir()
-    (job_dir / "job.json").write_text(json.dumps(_job()))
+    job = _job()
+    job["scope"] = scope
+    (job_dir / "job.json").write_text(json.dumps(job))
     monkeypatch.setattr(backtest_job, "PlannerHistory", FakeHistory)
     monkeypatch.setattr(backtest_job, "daily_log", FakeDailyLog())
+    return job_dir, backtest_job.run_job(job_dir)
 
-    assert backtest_job.run_job(job_dir) == 0
 
+def test_worker_writes_an_ab_row_and_summary(tmp_path, monkeypatch):
+    job_dir, code = _run_worker(tmp_path, monkeypatch)
+
+    assert code == 0
     job = json.loads((job_dir / "job.json").read_text())
     assert job["status"] == "complete"
     assert job["days_done"] == 1
@@ -172,3 +178,19 @@ def test_worker_writes_an_ab_row_and_summary(tmp_path, monkeypatch):
     assert rows[0]["baseline"]["actual_cost_gbp"] == 0.10
     assert "resolved" in rows[0]
     assert (job_dir / "summary.json").exists()
+
+
+def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):
+    job_dir, code = _run_worker(tmp_path, monkeypatch, scope="rolling")
+
+    assert code == 0
+    job = json.loads((job_dir / "job.json").read_text())
+    assert job["status"] == "complete"
+    rows = [
+        json.loads(line)
+        for line in (job_dir / "days.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "rolling"
+    assert rows[0]["resolved"]["solver_mode"] == "rolling"

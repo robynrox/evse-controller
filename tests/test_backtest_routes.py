@@ -188,6 +188,36 @@ def test_start_job_route_creates_a_persisted_job(tmp_path, monkeypatch):
     assert status["job_id"] == job["job_id"]
 
 
+def test_start_job_route_accepts_rolling_scope(tmp_path, monkeypatch):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager,
+        "_spawn",
+        lambda job_dir: type("Process", (), {"pid": 1234})(),
+    )
+
+    class FakeTariff:
+        _learning_mode = "preview"
+
+        def shadow_planner_spec(self):
+            return {"capacity_kwh": 36.0}
+
+    import evse_controller.web.backtest_routes as backtest_routes
+
+    monkeypatch.setattr(
+        backtest_routes, "_active_tariff", lambda: FakeTariff()
+    )
+    client = _client(jobs=manager)
+
+    response = client.post(
+        "/reports/backtest/jobs?days=7",
+        json={"scope": "rolling"},
+    )
+
+    assert response.status_code == 202
+    assert response.get_json()["scope"] == "rolling"
+
+
 def test_empty_history_shows_the_explanation():
     response = _client(runs=False).get("/reports/backtest?days=7")
 

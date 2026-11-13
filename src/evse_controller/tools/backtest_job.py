@@ -28,8 +28,10 @@ from evse_controller.planner.backtest import (
 from evse_controller.planner.dp import DpPlanner
 from evse_controller.planner.history import PlannerHistory
 from evse_controller.planner.replay import (
+    RollingCancelled,
     initial_soc,
     resolved_run_dict,
+    rolling_resolve,
     slots_from_run,
 )
 from evse_controller.tariffs.octopus.battery_efficiency import (
@@ -195,11 +197,27 @@ def run_job(job_dir: Path) -> int:
             snapshot = daily_log.snapshot_for(day)
             soc_samples = history.soc_samples_for_day(day)
             baseline = simulate_run(day, run, snapshot, soc_samples)
-            slots = slots_from_run(run, job.get("planner") or {})
-            result = planner.plan(slots, initial_soc(run))
-            resolved_run = resolved_run_dict(
-                run, result, solver_version=solver_version
-            )
+            if scope == "rolling":
+                def on_slot(slot, soc):
+                    job["current_slot"] = slot
+                    _write_job(job_path, job)
+
+                resolved_run = rolling_resolve(
+                    day,
+                    runs,
+                    planner,
+                    job.get("planner") or {},
+                    solver_version=solver_version,
+                    cancel_check=lambda: _cancel_requested(job_path),
+                    progress=on_slot,
+                )
+            else:
+                slots = slots_from_run(run, job.get("planner") or {})
+                result = planner.plan(slots, initial_soc(run))
+                resolved_run = resolved_run_dict(
+                    run, result, solver_version=solver_version
+                )
+            job["current_slot"] = None
             resolved = simulate_run(
                 day, resolved_run, snapshot, soc_samples
             )
@@ -240,6 +258,19 @@ def run_job(job_dir: Path) -> int:
             job["status"] = "cancelled"
         else:
             job["status"] = "complete"
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _write_job(job_path, job)
+        return 0
+    except RollingCancelled:
+        summary = _summary(
+            baseline_results,
+            resolved_results,
+            days_skipped=days_skipped,
+            runtime_seconds=time.perf_counter() - started,
+        )
+        _write_json(job_dir / SUMMARY_FILE, summary)
+        job["summary"] = summary
+        job["status"] = "cancelled"
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         _write_job(job_path, job)
         return 0

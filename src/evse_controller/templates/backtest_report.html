@@ -183,14 +183,20 @@
     <div class="panel" id="backtest-job-panel">
         <h2 style="margin-top:0;">Re-solve with the current solver</h2>
         <p style="margin-top:0;">
-            Re-runs the first recorded plan for each day using the current
-            planner parameters and writes the results to a new job directory.
-            The recorded runs are never modified, so jobs can be compared by
-            solver version and by date.
+            Re-runs recorded plans using the current planner parameters and
+            writes the results to a new job directory. First plan is fast;
+            rolling re-solves at every slot and is much slower. The recorded
+            runs are never modified, so jobs can be compared by solver version
+            and by date.
         </p>
         <div class="job-controls">
+            <label for="backtest-job-scope">Scope</label>
+            <select id="backtest-job-scope">
+                <option value="first_plan">First plan (fast)</option>
+                <option value="rolling">Rolling, every slot (slower)</option>
+            </select>
             <button type="button" id="start-backtest-job"
-                    data-days="{{ days }}">Re-run solver (first plan)</button>
+                    data-days="{{ days }}">Re-run solver</button>
             <button type="button" id="cancel-backtest-job" hidden>Cancel</button>
             <span id="backtest-job-status" class="job-status"></span>
         </div>
@@ -238,9 +244,16 @@
     {% if selected_job %}
     <h2>A/B re-solve: {{ selected_job.job_id }}</h2>
     <p>
-        Baseline is the recorded first plan. Resolved is the same recorded
-        inputs re-solved with {{ selected_job.solver_version }}. Positive
-        improvement means the re-solved plan was cheaper on grid cost.
+        Baseline is the recorded first plan.
+        {% if selected_job.scope == 'rolling' %}
+            Resolved is a rolling re-solve: each slot uses the latest recorded
+            plan available at that time, carrying the simulated SoC forward.
+        {% else %}
+            Resolved is the same recorded inputs re-solved with
+            {{ selected_job.solver_version }}.
+        {% endif %}
+        Positive improvement means the re-solved plan was cheaper on grid
+        cost.
     </p>
     {% if job_summary %}
     <div class="cards">
@@ -420,6 +433,7 @@
 (function () {
     const startButton = document.getElementById('start-backtest-job');
     const cancelButton = document.getElementById('cancel-backtest-job');
+    const scopeElement = document.getElementById('backtest-job-scope');
     const statusElement = document.getElementById('backtest-job-status');
     if (!startButton || !statusElement) return;
 
@@ -439,9 +453,13 @@
             );
             const job = await response.json();
             if (!response.ok) throw new Error(job.error || 'Status failed');
+            const slotText = (
+                job.current_slot !== null &&
+                job.current_slot !== undefined
+            ) ? ' · slot ' + job.current_slot : '';
             setStatus(
                 job.status + ' · ' + (job.days_done || 0) + '/' +
-                (job.days_total || 0) + ' days',
+                (job.days_total || 0) + ' days' + slotText,
                 job.status
             );
             if (job.status === 'complete') {
@@ -458,6 +476,7 @@
                 pollTimer = null;
                 cancelButton.hidden = true;
                 startButton.disabled = false;
+                if (scopeElement) scopeElement.disabled = false;
                 setStatus(
                     job.status + (job.error ? ': ' + job.error : ''),
                     job.status
@@ -468,22 +487,25 @@
             pollTimer = null;
             cancelButton.hidden = true;
             startButton.disabled = false;
+            if (scopeElement) scopeElement.disabled = false;
             setStatus(error.message, 'failed');
         }
     }
 
     startButton.addEventListener('click', async () => {
         startButton.disabled = true;
+        if (scopeElement) scopeElement.disabled = true;
         cancelButton.hidden = false;
         setStatus('Starting…', 'running');
         try {
             const days = encodeURIComponent(startButton.dataset.days);
+            const scope = scopeElement ? scopeElement.value : 'first_plan';
             const response = await fetch(
                 '/reports/backtest/jobs?days=' + days,
                 {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({scope: 'first_plan'})
+                    body: JSON.stringify({scope: scope})
                 }
             );
             const job = await response.json();
@@ -493,6 +515,7 @@
             pollTimer = setInterval(pollJob, 2000);
         } catch (error) {
             startButton.disabled = false;
+            if (scopeElement) scopeElement.disabled = false;
             cancelButton.hidden = true;
             setStatus(error.message, 'failed');
         }
