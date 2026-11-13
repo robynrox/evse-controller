@@ -207,6 +207,14 @@ class BacktestJobManager:
                 raise BacktestJobError(
                     f"Unsupported load source: {load_source!r}"
                 )
+            if load_source == "component" and not (
+                spec.get("component_model_path")
+                and spec.get("weather_forecast_path")
+            ):
+                raise BacktestJobError(
+                    "Component load source needs a model and a weather "
+                    "forecast"
+                )
             start_day = date.fromisoformat(str(spec["start"]))
             end_day = date.fromisoformat(str(spec["end"]))
             if end_day < start_day:

@@ -85,6 +85,16 @@ def test_start_rejects_an_unknown_load_source(tmp_path, monkeypatch):
         manager.start(_spec(load_source="synthetic"))
 
 
+def test_start_rejects_component_load_without_paths(tmp_path, monkeypatch):
+    manager = BacktestJobManager(tmp_path)
+    monkeypatch.setattr(
+        manager, "_spawn", lambda job_dir: FakeProcess(1234)
+    )
+
+    with pytest.raises(BacktestJobError, match="needs a model"):
+        manager.start(_spec(load_source="component"))
+
+
 def test_start_rejects_a_second_active_job(tmp_path, monkeypatch):
     manager = BacktestJobManager(tmp_path)
     monkeypatch.setattr(
