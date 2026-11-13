@@ -770,7 +770,10 @@ Five further kinds are temporary control sessions rather than price overlays:
 - **Solar only** (`solar_only`): charge from solar surplus only.
 - **Pause** (`pause`): hold the Wallbox dormant.
 - **OCPP handoff** (`ocpp`): give the supplier's OCPP schedule the Wallbox.
-  The report books the resulting import at the tariff's off-peak rate.
+  The report books the resulting import at the tariff's off-peak rate only
+  when OCPP is on **and** the Wallbox actually charged for at least a minute
+  in that slot. A handoff on its own is not enough, because Octopus may enable
+  OCPP without the vehicle taking any power.
 
 While a control session owns the Wallbox, the configured tariff keeps running
 as an observer: SoC estimates, planner history and decisions continue. A

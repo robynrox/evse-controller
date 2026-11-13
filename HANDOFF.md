@@ -288,7 +288,10 @@ completed fixes.
   `ocpp` are temporary overrides stored alongside the supplier windows in
   `data/state/sessions.json`. `TariffManager.observe(dayMinute)` runs the
   active tariff without applying its actuator tuple. OCPP slots are flagged in
-  the daily report and booked at the tariff's off-peak import price.
+  the daily report and booked at the tariff's off-peak import price only when
+  OCPP is on and the Wallbox has actually charged for at least 60 seconds in
+  the slot; the handoff alone is not enough.  The timing rule lives in
+  `ocpp_slot.py` so it is testable without hardware threads.
 - **Automatic OCPP handoff.** `ocpp_auto.py` chooses the cheapest contiguous
   block in a preferred window, skips overlaps and adds a normal OCPP session
   marked `auto`. The interval is measured from the last handoff's start date

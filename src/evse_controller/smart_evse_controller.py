@@ -45,6 +45,10 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
+from evse_controller.ocpp_slot import (
+    OcppChargeTracker,
+    should_flag_ocpp_slot,
+)
 from evse_controller.planner.history import planner_history
 from evse_controller.weather import weather_refresher
 
@@ -70,6 +74,8 @@ _soc_probe_started_at: Optional[datetime] = None
 _soc_probe_start_soc: Optional[int] = None
 #: Last disconnect event, used to pair it with the next reconnect.
 _last_vehicle_disconnect: Optional[dict] = None
+#: Continuous OCPP-controlled charging time within the current slot.
+_ocpp_charge_tracker = OcppChargeTracker()
 #: Reconnect waiting for the SoC probe to measure the new battery level.
 _pending_vehicle_reconnect: Optional[dict] = None
 #: Last valid SoC seen while the car was connected.
@@ -641,16 +647,46 @@ def _maybe_schedule_auto_ocpp(now: datetime) -> None:
         )
 
 
-def _flag_ocpp_slot_if_active() -> None:
-    """Record an OCPP-driven slot for off-peak import pricing."""
+def _evse_is_charging() -> bool:
+    """True when the Wallbox is actually delivering power to the vehicle."""
+    state = EvseThreadInterface.get_instance().get_state()
+    return (
+        state.evse_state == EvseState.CHARGING
+        and (
+            state.current > 0
+            or state.power_watts > 0
+            or state.ac_power > 0
+        )
+    )
+
+
+def _flag_ocpp_slot_if_active(
+    now: Optional[datetime] = None,
+) -> None:
+    """Record an OCPP-charged slot for off-peak import pricing.
+
+    Two conditions must hold: OCPP is on, and the Wallbox has been charging
+    under that handoff for at least a minute in this slot.  A handoff on its
+    own is not enough, because Octopus may enable OCPP without the vehicle
+    taking any power.
+    """
+    now = now or datetime.now()
     try:
         from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
 
         if ocpp_manager.get_state() is not True:
+            _ocpp_charge_tracker.reset()
+            return
+        if not should_flag_ocpp_slot(
+            _ocpp_charge_tracker,
+            now,
+            ocpp_active=True,
+            charging=_evse_is_charging(),
+        ):
             return
         from evse_controller.daily_report import daily_log
 
-        daily_log.flag(datetime.now(), "ocpp")
+        daily_log.flag(now, "ocpp")
     except Exception as exc:
         debug(f"Could not flag OCPP slot: {exc}")
 
@@ -1225,6 +1261,7 @@ def main():
                 # In OCPP state, we don't send any control commands to the EVSE
                 # The EVSE operates via OCPP protocol, which is handled by the Wallbox API
                 info("CONTROL OCPP - EVSE operating via OCPP protocol")
+                _flag_ocpp_slot_if_active(now_for_sessions)
                 # No action needed - the EVSE is operating via OCPP
                 _observe_tariff(dayMinute)
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:
