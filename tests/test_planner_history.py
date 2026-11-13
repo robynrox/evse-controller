@@ -82,3 +82,36 @@ def test_set_directory_redirects_the_store(tmp_path):
     history.record_run(DAY, {"slot": 2})
 
     assert (tmp_path / f"{DAY.isoformat()}.runs.jsonl").exists()
+
+
+def test_vehicle_events_round_trip(tmp_path):
+    history = PlannerHistory(tmp_path)
+
+    history.record_vehicle_event(
+        DAY,
+        {
+            "ts": "2026-11-07T01:00:00",
+            "event": "disconnect",
+            "slot": 2,
+            "soc": 60.0,
+        },
+    )
+    history.record_vehicle_event(
+        DAY,
+        {
+            "ts": "2026-11-07T02:30:00",
+            "event": "reconnect",
+            "slot": 5,
+            "soc_before": 60.0,
+            "soc": 54.0,
+            "soc_delta": -6.0,
+        },
+    )
+
+    events = history.vehicle_events_for_day(DAY)
+
+    assert [event["event"] for event in events] == [
+        "disconnect",
+        "reconnect",
+    ]
+    assert events[1]["soc_delta"] == -6.0

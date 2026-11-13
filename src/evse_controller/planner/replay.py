@@ -8,6 +8,7 @@ changes is the solver generation, not the historical forecast.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -156,6 +157,137 @@ class RollingCancelled(RuntimeError):
     """Raised when a rolling re-solve is cancelled between slots."""
 
 
+@dataclass(frozen=True)
+class VehicleInterval:
+    """A disconnected interval and the measured SoC change across it."""
+
+    disconnect_slot: int
+    reconnect_slot: int
+    soc_delta: Optional[float]
+    crosses_midnight: bool = False
+
+
+def _event_slot(event: Mapping[str, Any]) -> int:
+    slot = event.get("slot")
+    if isinstance(slot, int):
+        return slot
+    try:
+        value = datetime.fromisoformat(str(event.get("ts")))
+    except (TypeError, ValueError):
+        return 0
+    return value.hour * 2 + (1 if value.minute >= 30 else 0)
+
+
+def vehicle_intervals(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    end_slot: int = 48,
+) -> tuple[VehicleInterval, ...]:
+    """Pair disconnect and reconnect events into intervals."""
+    pending: Optional[Mapping[str, Any]] = None
+    pending_slot = 0
+    intervals: list[VehicleInterval] = []
+    ordered = sorted(
+        (event for event in events if isinstance(event, Mapping)),
+        key=lambda event: str(event.get("ts") or ""),
+    )
+    for event in ordered:
+        kind = str(event.get("event") or "")
+        slot = _event_slot(event)
+        if kind == "disconnect":
+            if pending is not None:
+                intervals.append(
+                    VehicleInterval(pending_slot, slot, None)
+                )
+            pending = event
+            pending_slot = slot
+        elif kind == "reconnect" and pending is not None:
+            delta = (
+                None
+                if event.get("soc_measured") is False
+                else _number(event.get("soc_delta"))
+            )
+            if delta is None and event.get("soc_measured") is not False:
+                before = _number(event.get("soc_before"))
+                after = _number(event.get("soc"))
+                if before is not None and after is not None:
+                    delta = after - before
+            crosses = _crosses_midnight(pending, event)
+            intervals.append(
+                VehicleInterval(
+                    pending_slot,
+                    slot,
+                    delta,
+                    crosses_midnight=crosses,
+                )
+            )
+            pending = None
+    if pending is not None:
+        intervals.append(
+            VehicleInterval(pending_slot, end_slot, None)
+        )
+    return tuple(intervals)
+
+
+def _crosses_midnight(
+    disconnect: Mapping[str, Any],
+    reconnect: Mapping[str, Any],
+) -> bool:
+    try:
+        first = datetime.fromisoformat(str(disconnect.get("ts"))).date()
+        second = datetime.fromisoformat(str(reconnect.get("ts"))).date()
+    except (TypeError, ValueError):
+        return False
+    return second > first
+
+
+def disconnected_slots(
+    intervals: Sequence[VehicleInterval],
+    *,
+    end_slot: int = 48,
+) -> set[int]:
+    """Slots wholly between a disconnect and its reconnect.
+
+    The disconnect and reconnect slots themselves are left available for the
+    plan, because the car may have been connected for part of each slot.
+    """
+    slots: set[int] = set()
+    for interval in intervals:
+        if interval.crosses_midnight:
+            slots.update(range(0, min(end_slot, interval.reconnect_slot)))
+            continue
+        start = max(0, interval.disconnect_slot + 1)
+        stop = min(end_slot, interval.reconnect_slot)
+        slots.update(range(start, stop))
+    return slots
+
+
+def soc_deltas_by_slot(
+    intervals: Sequence[VehicleInterval],
+    *,
+    end_slot: int = 48,
+) -> dict[int, tuple[float, ...]]:
+    """Map reconnect slots to measured SoC changes."""
+    deltas: dict[int, list[float]] = {}
+    for interval in intervals:
+        if interval.soc_delta is None:
+            continue
+        slot = min(max(0, interval.reconnect_slot), end_slot - 1)
+        deltas.setdefault(slot, []).append(float(interval.soc_delta))
+    return {slot: tuple(values) for slot, values in deltas.items()}
+
+
+def apply_soc_delta(
+    soc_percent: float,
+    delta: float,
+    *,
+    low: float = 10.0,
+    high: float = 97.0,
+) -> float:
+    """Apply a disconnected-period SoC change, clamped to vehicle limits."""
+    return max(low, min(high, float(soc_percent) + float(delta)))
+
+
 def _actions_by_slot(run: Mapping[str, Any]) -> dict[int, dict]:
     actions = {}
     for action in run.get("actions") or []:
@@ -167,21 +299,31 @@ def _actions_by_slot(run: Mapping[str, Any]) -> dict[int, dict]:
     return actions
 
 
-def _run_for_slot(
+def _source_and_action_for_slot(
     runs: Sequence[Mapping[str, Any]],
     action_maps: Sequence[dict[int, dict]],
     slot: int,
-) -> Optional[Mapping[str, Any]]:
-    """Pick the latest recorded plan that has an action for *slot*."""
+) -> tuple[Optional[Mapping[str, Any]], Optional[dict]]:
+    """Pick the latest recorded plan and its action for *slot*."""
     candidates = [
         (int(run.get("slot") or 0), str(run.get("ts") or ""), index)
         for index, (run, actions) in enumerate(zip(runs, action_maps))
         if int(run.get("slot") or 0) <= slot and slot in actions
     ]
     if not candidates:
-        return None
+        return None, None
     _, _, index = max(candidates)
-    return runs[index]
+    return runs[index], action_maps[index][slot]
+
+
+def _run_for_slot(
+    runs: Sequence[Mapping[str, Any]],
+    action_maps: Sequence[dict[int, dict]],
+    slot: int,
+) -> Optional[Mapping[str, Any]]:
+    """Pick the latest recorded plan that has an action for *slot*."""
+    source, _ = _source_and_action_for_slot(runs, action_maps, slot)
+    return source
 
 
 def _idle_action(
@@ -207,6 +349,67 @@ def _idle_action(
     }
 
 
+def _first_start(
+    first: Mapping[str, Any],
+    start_slot: int,
+    action_maps: Sequence[dict[int, dict]],
+) -> datetime:
+    if start_slot in action_maps[0]:
+        parsed = _parse_start(action_maps[0][start_slot].get("start"))
+        if parsed is not None:
+            return parsed
+    first_input = (first.get("inputs") or [{}])[0]
+    parsed = _parse_start(first_input.get("start"))
+    if parsed is not None:
+        return parsed
+    return datetime.combine(datetime.now().date(), time.min)
+
+
+def plan_in_force_run(
+    runs: Sequence[Mapping[str, Any]],
+) -> dict:
+    """Stitch the latest recorded action for each slot into one run."""
+    if not runs:
+        raise ValueError("No recorded runs to replay")
+    ordered = sorted(
+        runs,
+        key=lambda run: (
+            int(run.get("slot") or 0),
+            str(run.get("ts") or ""),
+        ),
+    )
+    action_maps = [_actions_by_slot(run) for run in ordered]
+    first = ordered[0]
+    start_slot = int(first.get("slot") or 0)
+    start = _first_start(first, start_slot, action_maps)
+    simulated_soc = initial_soc(first)
+    actions: list[dict] = []
+    for slot in range(start_slot, 48):
+        source, action = _source_and_action_for_slot(
+            ordered, action_maps, slot
+        )
+        if action is None:
+            actions.append(
+                _idle_action(
+                    slot,
+                    start + timedelta(minutes=30 * (slot - start_slot)),
+                    simulated_soc,
+                )
+            )
+        else:
+            action = dict(action)
+            actions.append(action)
+            after = _number(action.get("soc_after"))
+            if after is not None:
+                simulated_soc = after
+    run = dict(first)
+    run["slot"] = start_slot
+    run["actions"] = actions
+    run["solver_version"] = first.get("solver_version")
+    run["solver_mode"] = "plan_in_force"
+    return run
+
+
 def rolling_resolve(
     day: date,
     runs: Sequence[Mapping[str, Any]],
@@ -214,6 +417,9 @@ def rolling_resolve(
     planner_params: Mapping[str, Any],
     *,
     solver_version: str,
+    vehicle_events: Optional[Sequence[Mapping[str, Any]]] = None,
+    state_source: str = "simulated",
+    soc_by_slot: Optional[Mapping[int, float]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     progress: Optional[Callable[[int, float], None]] = None,
 ) -> dict:
@@ -225,6 +431,8 @@ def rolling_resolve(
     """
     if not runs:
         raise ValueError("No recorded runs to re-solve")
+    if state_source not in ("simulated", "recorded"):
+        raise ValueError(f"Unknown rolling state source: {state_source!r}")
     ordered = sorted(
         runs,
         key=lambda run: (
@@ -235,23 +443,38 @@ def rolling_resolve(
     action_maps = [_actions_by_slot(run) for run in ordered]
     first = ordered[0]
     start_slot = int(first.get("slot") or 0)
-    first_actions = action_maps[0]
-    fallback_start = datetime.combine(day, time.min)
-    if start_slot in first_actions:
-        start = _parse_start(
-            first_actions[start_slot].get("start"), fallback_start
-        )
-    else:
-        first_input = (first.get("inputs") or [{}])[0]
-        start = _parse_start(first_input.get("start"), fallback_start)
-    if start is None:
-        start = fallback_start
-    simulated_soc = initial_soc(first)
+    start = _first_start(first, start_slot, action_maps)
+    if start.date() != day:
+        start = datetime.combine(day, time.min)
+    simulated_soc = apply_soc_delta(initial_soc(first), 0.0)
+    intervals = vehicle_intervals(vehicle_events or ())
+    away = disconnected_slots(intervals)
+    reconnect_deltas = soc_deltas_by_slot(intervals)
     actions: list[dict] = []
 
     for slot in range(start_slot, 48):
         if cancel_check is not None and cancel_check():
             raise RollingCancelled()
+        used_recorded_soc = False
+        if state_source == "recorded" and soc_by_slot:
+            recorded_soc = soc_by_slot.get(slot)
+            if recorded_soc is not None:
+                simulated_soc = apply_soc_delta(float(recorded_soc), 0.0)
+                used_recorded_soc = True
+        if not used_recorded_soc:
+            for delta in reconnect_deltas.get(slot, ()):
+                simulated_soc = apply_soc_delta(simulated_soc, delta)
+        if slot in away:
+            actions.append(
+                _idle_action(
+                    slot,
+                    start + timedelta(minutes=30 * (slot - start_slot)),
+                    simulated_soc,
+                )
+            )
+            if progress is not None:
+                progress(slot, simulated_soc)
+            continue
         source = _run_for_slot(ordered, action_maps, slot)
         if source is None:
             actions.append(

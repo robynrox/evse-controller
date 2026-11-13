@@ -195,6 +195,16 @@
                 <option value="first_plan">First plan (fast)</option>
                 <option value="rolling">Rolling, every slot (slower)</option>
             </select>
+            <label for="backtest-job-baseline">Baseline</label>
+            <select id="backtest-job-baseline">
+                <option value="first_plan">First plan</option>
+                <option value="plan_in_force">Plan in force</option>
+            </select>
+            <label for="backtest-job-state">Rolling SoC</label>
+            <select id="backtest-job-state">
+                <option value="simulated">Simulated (closed loop)</option>
+                <option value="recorded">Recorded estimate</option>
+            </select>
             <button type="button" id="start-backtest-job"
                     data-days="{{ days }}">Re-run solver</button>
             <button type="button" id="cancel-backtest-job" hidden>Cancel</button>
@@ -244,10 +254,18 @@
     {% if selected_job %}
     <h2>A/B re-solve: {{ selected_job.job_id }}</h2>
     <p>
-        Baseline is the recorded first plan.
+        {% if selected_job.baseline_source == 'plan_in_force' %}
+            Baseline is the recorded plan in force at each slot.
+        {% else %}
+            Baseline is the recorded first plan.
+        {% endif %}
         {% if selected_job.scope == 'rolling' %}
-            Resolved is a rolling re-solve: each slot uses the latest recorded
-            plan available at that time, carrying the simulated SoC forward.
+            Resolved is a rolling re-solve using the
+            {% if selected_job.state_source == 'recorded' %}
+                recorded SoC estimate at each slot.
+            {% else %}
+                simulated SoC path carried forward from the solver.
+            {% endif %}
         {% else %}
             Resolved is the same recorded inputs re-solved with
             {{ selected_job.solver_version }}.
@@ -434,6 +452,8 @@
     const startButton = document.getElementById('start-backtest-job');
     const cancelButton = document.getElementById('cancel-backtest-job');
     const scopeElement = document.getElementById('backtest-job-scope');
+    const baselineElement = document.getElementById('backtest-job-baseline');
+    const stateElement = document.getElementById('backtest-job-state');
     const statusElement = document.getElementById('backtest-job-status');
     if (!startButton || !statusElement) return;
 
@@ -477,6 +497,8 @@
                 cancelButton.hidden = true;
                 startButton.disabled = false;
                 if (scopeElement) scopeElement.disabled = false;
+                if (baselineElement) baselineElement.disabled = false;
+                if (stateElement) stateElement.disabled = false;
                 setStatus(
                     job.status + (job.error ? ': ' + job.error : ''),
                     job.status
@@ -488,6 +510,8 @@
             cancelButton.hidden = true;
             startButton.disabled = false;
             if (scopeElement) scopeElement.disabled = false;
+            if (baselineElement) baselineElement.disabled = false;
+            if (stateElement) stateElement.disabled = false;
             setStatus(error.message, 'failed');
         }
     }
@@ -495,17 +519,29 @@
     startButton.addEventListener('click', async () => {
         startButton.disabled = true;
         if (scopeElement) scopeElement.disabled = true;
+        if (baselineElement) baselineElement.disabled = true;
+        if (stateElement) stateElement.disabled = true;
         cancelButton.hidden = false;
         setStatus('Starting…', 'running');
         try {
             const days = encodeURIComponent(startButton.dataset.days);
             const scope = scopeElement ? scopeElement.value : 'first_plan';
+            const baselineSource = baselineElement
+                ? baselineElement.value
+                : 'first_plan';
+            const stateSource = stateElement
+                ? stateElement.value
+                : 'simulated';
             const response = await fetch(
                 '/reports/backtest/jobs?days=' + days,
                 {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({scope: scope})
+                    body: JSON.stringify({
+                        scope: scope,
+                        baseline_source: baselineSource,
+                        state_source: stateSource
+                    })
                 }
             );
             const job = await response.json();
@@ -516,6 +552,8 @@
         } catch (error) {
             startButton.disabled = false;
             if (scopeElement) scopeElement.disabled = false;
+            if (baselineElement) baselineElement.disabled = false;
+            if (stateElement) stateElement.disabled = false;
             cancelButton.hidden = true;
             setStatus(error.message, 'failed');
         }

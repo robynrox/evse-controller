@@ -920,6 +920,10 @@ History is append-only JSONL, one file per local day, under
   `ControlState`, written whenever either changes. The plan report shows the
   last decision in each slot and does not carry it into slots the controller
   has not reached yet.
+- `YYYY-MM-DD.vehicle.jsonl` — disconnect and reconnect events. Each reconnect
+  carries the reported or probed SoC, the SoC before the disconnect, the
+  measured delta, the duration and whether the value was measured or timed
+  out.
 
 Set `learning.mode` to `off` to stop both the preview plan and the estimator.
 The class-level `ENABLE_SHADOW_PLANNER` remains as a test/instance override,
@@ -961,10 +965,18 @@ The backtest page also has **Re-run solver** with two scopes:
   it with the current planner parameters, and price it against the same
   measured day.
 - **Rolling, every slot (slower)** — re-solve at each slot, using the latest
-  recorded plan available at that time and carrying the simulated SoC forward.
+  recorded plan available at that time and carrying the SoC forward.
+
+The baseline can be the **first plan** or the **plan in force** at each slot.
+Rolling can use either a **simulated closed-loop SoC** or the **recorded SoC
+estimate** at each slot. The latter isolates policy decisions from simulated
+SoC drift.
 
 Both are A/B tests of the solver generation, not replacements for the recorded
-history.
+history. Vehicle disconnect and reconnect events are recorded with the
+reported SoC; a rolling re-solve leaves fully disconnected slots idle and
+applies the measured reconnect SoC change, clamped to the 10–97% vehicle
+range.
 
 The job runs in a separate low-priority worker process, so a long re-solve
 cannot delay the control loop. One job runs at a time. Progress and results

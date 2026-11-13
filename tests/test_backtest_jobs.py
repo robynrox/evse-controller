@@ -47,6 +47,8 @@ def test_start_writes_job_and_spawns_worker(tmp_path, monkeypatch):
     assert job["pid"] == 1234
     assert job["days_total"] == 1
     assert job["scope"] == "first_plan"
+    assert job["state_source"] == "simulated"
+    assert job["baseline_source"] == "first_plan"
     stored = json.loads(
         (tmp_path / job["job_id"] / "job.json").read_text()
     )

@@ -45,6 +45,7 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
+from evse_controller.planner.history import planner_history
 from evse_controller.weather import weather_refresher
 
 # Setup logging
@@ -67,6 +68,12 @@ _awaiting_reconnect = False
 #: The 3 A post-reconnect SoC probe, if one is running.
 _soc_probe_started_at: Optional[datetime] = None
 _soc_probe_start_soc: Optional[int] = None
+#: Last disconnect event, used to pair it with the next reconnect.
+_last_vehicle_disconnect: Optional[dict] = None
+#: Reconnect waiting for the SoC probe to measure the new battery level.
+_pending_vehicle_reconnect: Optional[dict] = None
+#: Last valid SoC seen while the car was connected.
+_last_valid_vehicle_soc: Optional[float] = None
 
 SOC_PROBE_CURRENT_A = 3
 SOC_PROBE_TIMEOUT_SECONDS = 90.0
@@ -234,6 +241,120 @@ def _tariff_display_name() -> str:
     return tariff.__class__.__name__.replace("Tariff", "")
 
 
+def _valid_soc(value) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0 or number > 100:
+        return None
+    return number
+
+
+def _reported_soc() -> Optional[float]:
+    try:
+        return _valid_soc(evseController.getBatteryChargeLevel())
+    except Exception:
+        return None
+
+
+def _vehicle_slot(now: datetime) -> int:
+    return now.hour * 2 + (1 if now.minute >= 30 else 0)
+
+
+def _record_vehicle_event(event: dict) -> None:
+    try:
+        day = datetime.fromisoformat(str(event["ts"])).date()
+        planner_history.record_vehicle_event(day, event)
+    except Exception as exc:
+        warning(f"CONTROL VEHICLE EVENT: could not record event: {exc}")
+
+
+def _record_vehicle_disconnect() -> None:
+    """Record the time and reported SoC when the car disappears."""
+    global _last_vehicle_disconnect
+
+    now = datetime.now()
+    soc = _reported_soc()
+    if soc is None:
+        soc = _last_valid_vehicle_soc
+    if _pending_vehicle_reconnect is not None:
+        _finalize_vehicle_reconnect(soc, "disconnected_before_measure")
+    event = {
+        "ts": now.isoformat(),
+        "day": now.date().isoformat(),
+        "slot": _vehicle_slot(now),
+        "event": "disconnect",
+        "soc": soc,
+        "soc_source": "reported" if soc is not None else "unavailable",
+    }
+    _last_vehicle_disconnect = event
+    _record_vehicle_event(event)
+
+
+def _start_vehicle_reconnect() -> None:
+    """Start pairing a reconnect with the last disconnect."""
+    global _pending_vehicle_reconnect
+
+    now = datetime.now()
+    disconnect = _last_vehicle_disconnect or {}
+    before = disconnect.get("soc")
+    if before is None:
+        before = _last_valid_vehicle_soc
+    _pending_vehicle_reconnect = {
+        "ts": now.isoformat(),
+        "day": now.date().isoformat(),
+        "slot": _vehicle_slot(now),
+        "event": "reconnect",
+        "soc_before": before,
+        "disconnect_ts": disconnect.get("ts"),
+    }
+
+
+def _finalize_vehicle_reconnect(soc, source: str) -> None:
+    """Write the reconnect event once the new SoC has been measured."""
+    global _pending_vehicle_reconnect
+
+    pending = _pending_vehicle_reconnect
+    if pending is None:
+        return
+    measured = _valid_soc(soc)
+    if measured is None:
+        measured = _reported_soc()
+    before = _valid_soc(pending.get("soc_before"))
+    delta = (
+        measured - before
+        if measured is not None and before is not None
+        else None
+    )
+    duration = None
+    disconnect_ts = pending.get("disconnect_ts")
+    reconnect_ts = pending.get("ts")
+    if disconnect_ts and reconnect_ts:
+        try:
+            duration = (
+                datetime.fromisoformat(str(reconnect_ts))
+                - datetime.fromisoformat(str(disconnect_ts))
+            ).total_seconds()
+        except (TypeError, ValueError):
+            duration = None
+    event = {
+        **pending,
+        "event": "reconnect",
+        "measured_at": datetime.now().isoformat(),
+        "soc": measured,
+        "soc_source": source,
+        "soc_delta": delta,
+        "soc_measured": (
+            measured is not None
+            and source in ("probe", "probe_timeout", "timeout", "reported")
+        ),
+        "duration_s": duration,
+    }
+    _record_vehicle_event(event)
+    _pending_vehicle_reconnect = None
+
+
 def _begin_soc_probe() -> None:
     """Charge briefly at 3 A so a reconnected car reports its new SoC."""
     global _soc_probe_started_at, _soc_probe_start_soc
@@ -275,7 +396,7 @@ def _check_evse_transition() -> None:
     state updates about once a second, so the transition is handled here and
     the 20 s loop only deals with tariff control and timed overrides.
     """
-    global _last_evse_state, _awaiting_reconnect
+    global _last_evse_state, _awaiting_reconnect, _last_valid_vehicle_soc
 
     try:
         state = evseController.getEvseState()
@@ -286,6 +407,29 @@ def _check_evse_transition() -> None:
     disconnected = state in DISCONNECTED_STATES
     previous = _last_evse_state
     _last_evse_state = state
+
+    was_disconnected = previous in DISCONNECTED_STATES
+    if previous is not None and not was_disconnected and not disconnected:
+        current_soc = _reported_soc()
+        if current_soc is not None:
+            _last_valid_vehicle_soc = current_soc
+    if previous is not None and not was_disconnected and disconnected:
+        _record_vehicle_disconnect()
+    elif previous is not None and was_disconnected and not disconnected:
+        _start_vehicle_reconnect()
+
+    # A reconnect outside the normal SMART/probe path still needs its event
+    # closed, otherwise the backtest cannot apply the measured SoC change.
+    if _pending_vehicle_reconnect is not None and not disconnected:
+        try:
+            started = datetime.fromisoformat(
+                str(_pending_vehicle_reconnect.get("ts"))
+            )
+            elapsed = (datetime.now() - started).total_seconds()
+        except (TypeError, ValueError):
+            elapsed = SOC_PROBE_TIMEOUT_SECONDS
+        if elapsed >= SOC_PROBE_TIMEOUT_SECONDS:
+            _finalize_vehicle_reconnect(_reported_soc(), "timeout")
 
     if (
         active_override is not None
@@ -329,6 +473,14 @@ def _check_evse_transition() -> None:
         ):
             info(f"SoC probe complete (battery now {current_soc}%)")
             _awaiting_reconnect = False
+            _finalize_vehicle_reconnect(
+                current_soc,
+                (
+                    "probe_timeout"
+                    if elapsed >= SOC_PROBE_TIMEOUT_SECONDS
+                    else "probe"
+                ),
+            )
             _finish_soc_probe("SoC probe complete")
         return
 

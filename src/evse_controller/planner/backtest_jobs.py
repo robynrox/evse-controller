@@ -188,6 +188,20 @@ class BacktestJobManager:
                 raise BacktestJobError(
                     f"Unsupported backtest scope: {scope!r}"
                 )
+            state_source = str(
+                spec.get("state_source") or "simulated"
+            )
+            if state_source not in ("simulated", "recorded"):
+                raise BacktestJobError(
+                    f"Unsupported rolling state source: {state_source!r}"
+                )
+            baseline_source = str(
+                spec.get("baseline_source") or "first_plan"
+            )
+            if baseline_source not in ("first_plan", "plan_in_force"):
+                raise BacktestJobError(
+                    f"Unsupported baseline source: {baseline_source!r}"
+                )
             start_day = date.fromisoformat(str(spec["start"]))
             end_day = date.fromisoformat(str(spec["end"]))
             if end_day < start_day:
@@ -216,6 +230,8 @@ class BacktestJobManager:
                 "finished_at": None,
                 "pid": None,
                 "scope": scope,
+                "state_source": state_source,
+                "baseline_source": baseline_source,
                 "solver_version": version,
                 "solver_mode": spec.get("solver_mode"),
                 "start": start_day.isoformat(),

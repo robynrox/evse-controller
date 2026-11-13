@@ -9,6 +9,7 @@ The format is one JSON object per line, one file per local day:
     data/state/planner_history/YYYY-MM-DD.runs.jsonl
     data/state/planner_history/YYYY-MM-DD.soc.jsonl
     data/state/planner_history/YYYY-MM-DD.decisions.jsonl
+    data/state/planner_history/YYYY-MM-DD.vehicle.jsonl
 
 JSONL is deliberate for the first slice: it is append-only, trivially
 inspectable, and needs no schema migration.  The volume is small because a run
@@ -54,6 +55,10 @@ class PlannerHistory:
     def record_decision(self, day: date, decision: dict) -> None:
         self._append(self._path(day, "decisions"), decision)
 
+    def record_vehicle_event(self, day: date, event: dict) -> None:
+        """Record a disconnect or reconnect event with the measured SoC."""
+        self._append(self._path(day, "vehicle"), event)
+
     def runs_for_day(self, day: date) -> list[dict]:
         return self._read(self._path(day, "runs"))
 
@@ -62,6 +67,9 @@ class PlannerHistory:
 
     def decisions_for_day(self, day: date) -> list[dict]:
         return self._read(self._path(day, "decisions"))
+
+    def vehicle_events_for_day(self, day: date) -> list[dict]:
+        return self._read(self._path(day, "vehicle"))
 
     def available_days(self) -> list[date]:
         days = []

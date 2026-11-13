@@ -29,10 +29,13 @@ from evse_controller.planner.dp import DpPlanner
 from evse_controller.planner.history import PlannerHistory
 from evse_controller.planner.replay import (
     RollingCancelled,
+    disconnected_slots,
     initial_soc,
+    plan_in_force_run,
     resolved_run_dict,
     rolling_resolve,
     slots_from_run,
+    vehicle_intervals,
 )
 from evse_controller.tariffs.octopus.battery_efficiency import (
     BatteryEfficiencyModel,
@@ -161,6 +164,8 @@ def run_job(job_dir: Path) -> int:
     planner = _build_planner(job.get("planner") or {})
     solver_version = str(job.get("solver_version") or "unknown")
     scope = str(job.get("scope") or "first_plan")
+    state_source = str(job.get("state_source") or "simulated")
+    baseline_source = str(job.get("baseline_source") or "first_plan")
     start_day = date.fromisoformat(str(job["start"]))
     end_day = date.fromisoformat(str(job["end"]))
     days_total = (end_day - start_day).days + 1
@@ -197,7 +202,36 @@ def run_job(job_dir: Path) -> int:
 
             snapshot = daily_log.snapshot_for(day)
             soc_samples = history.soc_samples_for_day(day)
-            baseline = simulate_run(day, run, snapshot, soc_samples)
+            soc_by_slot = {
+                int(sample["slot"]): float(sample["estimate"])
+                for sample in soc_samples
+                if isinstance(sample.get("slot"), int)
+                and sample.get("estimate") is not None
+            }
+            if hasattr(history, "vehicle_events_for_day"):
+                # A disconnect can cross midnight; the previous day's events
+                # provide the matching reconnect context for today.
+                vehicle_events = (
+                    history.vehicle_events_for_day(
+                        day - timedelta(days=1)
+                    )
+                    + history.vehicle_events_for_day(day)
+                )
+            else:
+                vehicle_events = []
+            away = disconnected_slots(vehicle_intervals(vehicle_events))
+            baseline_run = (
+                plan_in_force_run(runs)
+                if baseline_source == "plan_in_force"
+                else run
+            )
+            baseline = simulate_run(
+                day,
+                baseline_run,
+                snapshot,
+                soc_samples,
+                disconnected_slots=away,
+            )
             if scope == "rolling":
                 def on_slot(slot, soc):
                     job["current_slot"] = slot
@@ -209,6 +243,9 @@ def run_job(job_dir: Path) -> int:
                     planner,
                     job.get("planner") or {},
                     solver_version=solver_version,
+                    vehicle_events=vehicle_events,
+                    state_source=state_source,
+                    soc_by_slot=soc_by_slot,
                     cancel_check=lambda: _cancel_requested(job_path),
                     progress=on_slot,
                 )
@@ -220,7 +257,11 @@ def run_job(job_dir: Path) -> int:
                 )
             job["current_slot"] = None
             resolved = simulate_run(
-                day, resolved_run, snapshot, soc_samples
+                day,
+                resolved_run,
+                snapshot,
+                soc_samples,
+                disconnected_slots=away,
             )
 
             baseline_results.append(baseline)
@@ -230,9 +271,13 @@ def run_job(job_dir: Path) -> int:
                 {
                     "day": day.isoformat(),
                     "scope": scope,
+                    "state_source": state_source,
+                    "baseline_source": baseline_source,
                     "source_run_ts": run.get("ts"),
                     "source_run_slot": run.get("slot"),
                     "solver_version": solver_version,
+                    "vehicle_events": len(vehicle_events),
+                    "disconnected_slots": sorted(away),
                     "baseline": day_backtest_to_dict(baseline),
                     "resolved": day_backtest_to_dict(resolved),
                 },

@@ -239,6 +239,12 @@ def register_backtest_routes(
             )
         payload = request.get_json(silent=True) or request.form or {}
         scope = str(payload.get("scope") or "first_plan")
+        state_source = str(
+            payload.get("state_source") or "simulated"
+        )
+        baseline_source = str(
+            payload.get("baseline_source") or "first_plan"
+        )
         available = history.available_days()
         if not available:
             return jsonify({"error": "No recorded planner days are available"}), 400
@@ -251,6 +257,8 @@ def register_backtest_routes(
                     "start": start.isoformat(),
                     "end": end.isoformat(),
                     "scope": scope,
+                    "state_source": state_source,
+                    "baseline_source": baseline_source,
                     "planner": tariff.shadow_planner_spec(),
                     "solver_version": SOLVER_VERSION,
                     "solver_mode": getattr(

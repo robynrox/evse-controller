@@ -139,6 +139,22 @@ def test_a_different_plan_action_does_not_match():
     assert result.action_match_rate == pytest.approx(0.5)
 
 
+def test_disconnected_slots_do_not_execute_the_plan_action():
+    result = simulate_run(
+        DAY,
+        _run(),
+        _snapshot(),
+        _samples(),
+        disconnected_slots={0},
+    )
+
+    # Slot 0 would have charged 2 kW, but the car was away, so the plan
+    # contributes no EVSE power.
+    assert result.rows[0].dp_import_kwh == pytest.approx(0.5)
+    assert result.rows[0].dp_cost_gbp == pytest.approx(0.10)
+    assert result.dp_cost_gbp == pytest.approx(0.20)
+
+
 def test_missing_prices_are_skipped():
     snapshot = _snapshot()
     for index in (0, 1):

@@ -413,8 +413,13 @@ completed fixes.
   `tools/backtest_job.py` as a separate low-priority process, and polls
   `job.json`; one job runs at a time.  `first_plan` re-solves the first
   recorded plan of each day.  `rolling` re-solves at every slot using the
-  latest recorded plan available at that time and carries the simulated SoC
-  forward.  Results live under `data/state/backtest_jobs/<job_id>/`
+  latest recorded plan available at that time and carries the SoC forward;
+  the state source can be the simulated path or the recorded estimate.  The
+  baseline can be the first plan or the plan in force at each slot.  Vehicle
+  disconnect/reconnect events live under
+  `planner_history/YYYY-MM-DD.vehicle.jsonl`; rolling leaves fully
+  disconnected slots idle and applies the measured reconnect SoC delta,
+  clamped to 10–97%.  Results live under `data/state/backtest_jobs/<job_id>/`
   (`job.json`, `days.jsonl`, `summary.json`) and never modify the recorded
   planner history.  A stale `running` job whose PID has gone is marked
   `interrupted` on the next listing or start.

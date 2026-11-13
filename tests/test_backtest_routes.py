@@ -211,11 +211,18 @@ def test_start_job_route_accepts_rolling_scope(tmp_path, monkeypatch):
 
     response = client.post(
         "/reports/backtest/jobs?days=7",
-        json={"scope": "rolling"},
+        json={
+            "scope": "rolling",
+            "state_source": "recorded",
+            "baseline_source": "plan_in_force",
+        },
     )
 
     assert response.status_code == 202
-    assert response.get_json()["scope"] == "rolling"
+    job = response.get_json()
+    assert job["scope"] == "rolling"
+    assert job["state_source"] == "recorded"
+    assert job["baseline_source"] == "plan_in_force"
 
 
 def test_empty_history_shows_the_explanation():

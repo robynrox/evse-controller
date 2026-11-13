@@ -148,11 +148,12 @@ def test_worker_progress_does_not_lose_a_cancel_request(tmp_path):
     assert json.loads(job_path.read_text())["cancel_requested"] is True
 
 
-def _run_worker(tmp_path, monkeypatch, scope="first_plan"):
+def _run_worker(tmp_path, monkeypatch, scope="first_plan", **overrides):
     job_dir = tmp_path / ("job-" + scope)
     job_dir.mkdir()
     job = _job()
     job["scope"] = scope
+    job.update(overrides)
     (job_dir / "job.json").write_text(json.dumps(job))
     monkeypatch.setattr(backtest_job, "PlannerHistory", FakeHistory)
     monkeypatch.setattr(backtest_job, "daily_log", FakeDailyLog())
@@ -181,7 +182,13 @@ def test_worker_writes_an_ab_row_and_summary(tmp_path, monkeypatch):
 
 
 def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):
-    job_dir, code = _run_worker(tmp_path, monkeypatch, scope="rolling")
+    job_dir, code = _run_worker(
+        tmp_path,
+        monkeypatch,
+        scope="rolling",
+        state_source="recorded",
+        baseline_source="plan_in_force",
+    )
 
     assert code == 0
     job = json.loads((job_dir / "job.json").read_text())
@@ -193,4 +200,6 @@ def test_worker_runs_a_rolling_scope(tmp_path, monkeypatch):
     ]
     assert len(rows) == 1
     assert rows[0]["scope"] == "rolling"
+    assert rows[0]["state_source"] == "recorded"
+    assert rows[0]["baseline_source"] == "plan_in_force"
     assert rows[0]["resolved"]["solver_mode"] == "rolling"

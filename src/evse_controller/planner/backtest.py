@@ -168,6 +168,7 @@ def simulate_run(
     run: dict,
     snapshot: dict,
     soc_samples: Optional[list[dict]] = None,
+    disconnected_slots: Optional[set[int]] = None,
 ) -> DayBacktest:
     """Replay one plan against the measured day."""
     actions = {}
@@ -221,6 +222,9 @@ def simulate_run(
             and export_p is not None
         ):
             plan_kw = _number(action.get("ac_power_kw")) or 0.0
+            if disconnected_slots and slot in disconnected_slots:
+                # The car was not connected, so no plan action could run.
+                plan_kw = 0.0
             net_kw = house_kw + plan_kw
             dp_import = max(net_kw, 0.0) * SLOT_HOURS
             dp_export = max(-net_kw, 0.0) * SLOT_HOURS
