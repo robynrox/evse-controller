@@ -1079,7 +1079,9 @@ data/state/backtest_jobs/<job_id>/
 
 The page polls the job status and reloads with an A/B table when it completes.
 Recorded planner history is never overwritten. The job id includes the solver
-version, so future solver generations can be compared directly.
+version, so future solver generations can be compared directly. The jobs
+table shows the scope, baseline, rolling SoC source and load input for every
+run, and the panel has a collapsible explanation of what each setting means.
 
 For timing: one full 48-slot plan is roughly 0.6 s on the development machine,
 and production is currently around 1 s per day for a first-plan re-solve.

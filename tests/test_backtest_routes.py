@@ -124,6 +124,9 @@ def test_page_renders_cards_chart_and_table():
     assert "<svg" in body
     assert "Daily detail" in body
     assert "Re-run solver" in body
+    assert "What do these settings mean?" in body
+    assert "Rolling SoC" in body
+    assert "Load input" in body
     assert body.count("data-chart-zoom") == 1
     assert "£" in body
 
@@ -452,6 +455,7 @@ def test_job_ab_view_shows_heuristic_and_vehicle_columns(
     assert "Re-solved vs heuristic" in body
     assert "Baseline vs heuristic" in body
     assert "Solver improvement" in body
+    assert "Plan in force" in body
     assert "2 events" in body
     assert "2 away" in body
 

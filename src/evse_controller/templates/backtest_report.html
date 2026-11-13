@@ -158,6 +158,19 @@
     .job-status.failed, .job-status.cancelled, .job-status.interrupted {
         color: #b00020;
     }
+    .job-help {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #444;
+    }
+    .job-help summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: #0b5cad;
+    }
+    .job-help dl { margin: 8px 0 0; }
+    .job-help dt { font-weight: 600; margin-top: 7px; }
+    .job-help dd { margin: 1px 0 0 18px; }
     .footer-link { margin-top: 18px; }
     .footer-link a { color: #0b5cad; font-weight: 600; }
 </style>
@@ -190,22 +203,34 @@
             and by date.
         </p>
         <div class="job-controls">
-            <label for="backtest-job-scope">Scope</label>
+            <label for="backtest-job-scope"
+                   title="First plan re-solves only the first recorded plan of each day. Rolling re-solves at every slot.">
+                Scope
+            </label>
             <select id="backtest-job-scope">
                 <option value="first_plan">First plan (fast)</option>
                 <option value="rolling">Rolling, every slot (slower)</option>
             </select>
-            <label for="backtest-job-baseline">Baseline</label>
+            <label for="backtest-job-baseline"
+                   title="The recorded plan the re-solved plan is compared against.">
+                Baseline
+            </label>
             <select id="backtest-job-baseline">
                 <option value="first_plan">First plan</option>
                 <option value="plan_in_force">Plan in force</option>
             </select>
-            <label for="backtest-job-state">Rolling SoC</label>
+            <label for="backtest-job-state"
+                   title="Rolling only: carry the solver's SoC forward, or use the recorded SoC estimate at each slot.">
+                Rolling SoC
+            </label>
             <select id="backtest-job-state">
                 <option value="simulated">Simulated (closed loop)</option>
                 <option value="recorded">Recorded estimate</option>
             </select>
-            <label for="backtest-job-load">Load input</label>
+            <label for="backtest-job-load"
+                   title="Use the recorded load profile, or the weather-driven baseload + heat-pump − solar forecast.">
+                Load input
+            </label>
             <select id="backtest-job-load">
                 <option value="recorded">Recorded load</option>
                 <option value="component">Component forecast</option>
@@ -215,6 +240,50 @@
             <button type="button" id="cancel-backtest-job" hidden>Cancel</button>
             <span id="backtest-job-status" class="job-status"></span>
         </div>
+        <details class="job-help">
+            <summary>What do these settings mean?</summary>
+            <dl>
+                <dt>Scope</dt>
+                <dd>
+                    <strong>First plan</strong> re-solves only the first
+                    recorded plan of each day, then prices it against the
+                    measured day. It is fast and is the right choice for a
+                    first look. <strong>Rolling</strong> re-solves at every
+                    half-hour slot using the latest recorded plan available at
+                    that time. It is much slower but closer to how the planner
+                    would behave in a live closed loop.
+                </dd>
+                <dt>Baseline</dt>
+                <dd>
+                    The recorded plan the re-solved plan is compared against.
+                    <strong>First plan</strong> uses the day's first recorded
+                    plan. <strong>Plan in force</strong> stitches together the
+                    latest recorded action for each slot, which is what the
+                    controller was actually following at the time. The
+                    baseline always keeps the recorded load input.
+                </dd>
+                <dt>Rolling SoC</dt>
+                <dd>
+                    Only used by the rolling scope. <strong>Simulated</strong>
+                    carries the solver's own SoC path forward from slot to
+                    slot. <strong>Recorded estimate</strong> uses the SoC
+                    estimate recorded at each slot instead, which isolates
+                    policy decisions from simulated SoC drift.
+                </dd>
+                <dt>Load input</dt>
+                <dd>
+                    <strong>Recorded load</strong> uses the load profile
+                    recorded with the original plan. <strong>Component
+                    forecast</strong> replaces the re-solved plan's load with
+                    the weather-driven forecast:
+                    baseload(slot) + heat pump(temperature) − solar(irradiance).
+                    The baseline still uses recorded load, so the A/B result
+                    shows whether the better forecast changes decisions.
+                    Days with missing forecast weather are skipped and listed
+                    in the result.
+                </dd>
+            </dl>
+        </details>
     </div>
 
     {% if jobs %}
@@ -226,7 +295,10 @@
                     <th>Created</th>
                     <th>Status</th>
                     <th>Days</th>
-                    <th>Load</th>
+                    <th>Scope</th>
+                    <th>Baseline</th>
+                    <th>Rolling SoC</th>
+                    <th>Load input</th>
                     <th>Solver</th>
                     <th>Improvement</th>
                     <th></th>
@@ -238,8 +310,11 @@
                 <tr>
                     <td>{{ job.created_at }}</td>
                     <td>{{ job.status }}{% if job.days_total %} · {{ job.days_done }}/{{ job.days_total }}{% endif %}</td>
-                    <td>{{ job.scope }}</td>
-                    <td>{{ job.load_source or 'recorded' }}</td>
+                    <td>{{ job.days_total or '—' }}</td>
+                    <td>{% if job.scope == 'rolling' %}Rolling{% else %}First plan{% endif %}</td>
+                    <td>{% if job.baseline_source == 'plan_in_force' %}Plan in force{% else %}First plan{% endif %}</td>
+                    <td>{% if job.state_source == 'recorded' %}Recorded{% else %}Simulated{% endif %}</td>
+                    <td>{% if job.load_source == 'component' %}Component{% else %}Recorded{% endif %}</td>
                     <td>{{ job.solver_version }}</td>
                     <td>
                         {% if summary and summary.get('improvement_gbp') is not none %}
