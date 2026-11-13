@@ -512,6 +512,81 @@ def test_component_job_labels_the_improvement_as_resolved(tmp_path):
     assert "component net-grid forecast" in body
 
 
+def test_job_ab_view_shows_end_soc_and_terminal_value(tmp_path):
+    manager = BacktestJobManager(tmp_path)
+    job_dir = tmp_path / "job-soc"
+    job_dir.mkdir()
+    (job_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-soc",
+                "status": "complete",
+                "created_at": "2026-11-13T12:00:00+00:00",
+                "scope": "rolling",
+                "state_source": "recorded",
+                "baseline_source": "plan_in_force",
+                "load_source": "component",
+                "solver_version": "dp-test",
+                "days_total": 1,
+                "days_done": 1,
+                "summary": {
+                    "baseline": {
+                        "dp_cost_gbp": 1.0,
+                        "delta_gbp": 0.20,
+                        "paired_days": 1,
+                    },
+                    "resolved": {
+                        "dp_cost_gbp": 0.8,
+                        "delta_gbp": 0.40,
+                        "paired_days": 1,
+                    },
+                    "improvement_gbp": 0.20,
+                    "terminal_value_gbp": 0.42,
+                    "improvement_after_terminal_gbp": 0.62,
+                    "soc_delta_pp": 2.5,
+                    "terminal_value_days": 1,
+                    "days_skipped": 0,
+                },
+            }
+        )
+    )
+    (job_dir / "days.jsonl").write_text(
+        json.dumps(
+            {
+                "day": DAY.isoformat(),
+                "soc_delta_pp": 2.5,
+                "terminal_value_gbp": 0.42,
+                "improvement_after_terminal_gbp": 0.62,
+                "baseline": {
+                    "dp_cost_gbp": 1.0,
+                    "delta_gbp": 0.20,
+                    "end_soc": 50.0,
+                },
+                "resolved": {
+                    "dp_cost_gbp": 0.8,
+                    "delta_gbp": 0.40,
+                    "end_soc": 52.5,
+                },
+                "vehicle_events": 0,
+                "disconnected_slots": [],
+            }
+        )
+        + "\n"
+    )
+
+    response = _client(jobs=manager).get(
+        "/reports/backtest?days=7&job=job-soc"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "50.0% →" in body
+    assert "52.5%" in body
+    assert "+2.50pp" in body
+    assert "£0.42" in body
+    assert "£0.62" in body
+
+
 def test_empty_history_shows_the_explanation():
     response = _client(runs=False).get("/reports/backtest?days=7")
 
