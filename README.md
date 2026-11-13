@@ -1337,8 +1337,14 @@ hourly means, and writes:
 - `summary.json` — coverage, correlations and counts;
 - `solar_by_month_hour.csv` — solar ratio by month and local clock hour;
 - `solar_by_sun_position.csv` — solar ratio by actual sun elevation/azimuth;
+- `solar_by_gti.csv` — solar output by tilted-irradiance bin, exposing inverter
+  clipping;
 - `heatpump_by_temperature.csv` — heat-pump power by outdoor-temperature bin;
 - `heatpump_daily.csv` — daily heat-pump kWh versus daily mean temperature.
+
+Pass `--inverter-limit-kw` to record the AC limit in the summary and count
+hours at or above it. The GTI table shows the plateau directly even when the
+measured maximum is slightly below the nominal limit.
 
 The sun-position table uses the NOAA solar equations, including the equation
 of time, so the shading analysis follows the sun rather than the clock. The

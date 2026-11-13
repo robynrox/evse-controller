@@ -229,6 +229,7 @@ def analyse(
     start: Optional[date] = None,
     end: Optional[date] = None,
     min_gti: float = 100.0,
+    inverter_limit_kw: Optional[float] = None,
     quiet: bool = False,
 ) -> dict:
     influx, influx_raw = load_influx(influx_path)
@@ -394,6 +395,35 @@ def analyse(
         sun_rows,
     )
 
+    gti_bins: dict[int, list[float]] = defaultdict(list)
+    for hour in hours:
+        if hour in solar and hour in gti and gti[hour] >= 0:
+            gti_bins[_bin(gti[hour], 100.0)].append(solar[hour])
+    gti_rows = []
+    for lower, values in sorted(gti_bins.items()):
+        gti_rows.append(
+            [
+                lower,
+                lower + 100,
+                len(values),
+                round(statistics.mean(values), 4),
+                round(statistics.median(values), 4),
+                round(max(values), 4),
+            ]
+        )
+    _write_csv(
+        output / "solar_by_gti.csv",
+        [
+            "gti_from_wm2",
+            "gti_to_wm2",
+            "n",
+            "mean_kw",
+            "median_kw",
+            "max_kw",
+        ],
+        gti_rows,
+    )
+
     temperature_bins: dict[int, list[float]] = defaultdict(list)
     for hour in hours:
         if hour in heatpump and hour in temperature:
@@ -461,6 +491,18 @@ def analyse(
             "daytime_samples": sum(len(v) for v in by_month_hour.values()),
             "month_hour_rows": len(month_rows),
             "sun_position_rows": len(sun_rows),
+            "gti_rows": len(gti_rows),
+            "max_kw": max(solar.values()) if solar else None,
+            "inverter_limit_kw": inverter_limit_kw,
+            "hours_at_or_above_limit": (
+                sum(
+                    1
+                    for value in solar.values()
+                    if value >= inverter_limit_kw
+                )
+                if inverter_limit_kw
+                else None
+            ),
         },
         "heatpump": {
             "temperature_bins": len(heat_rows),
@@ -518,6 +560,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=100.0,
         help="Minimum tilted irradiance for solar ratio bins (default: 100)",
     )
+    parser.add_argument(
+        "--inverter-limit-kw",
+        type=float,
+        default=None,
+        help="Optional AC inverter limit for clipping summary",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser
 
@@ -549,6 +597,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             start=start,
             end=end,
             min_gti=args.min_gti,
+            inverter_limit_kw=args.inverter_limit_kw,
             quiet=args.quiet,
         )
     except (OSError, ValueError) as error:

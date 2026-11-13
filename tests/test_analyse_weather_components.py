@@ -87,6 +87,7 @@ def test_analysis_writes_repeatable_summaries(tmp_path):
         longitude=-3.2,
         local_zone=ZoneInfo("Europe/London"),
         min_gti=0.0,
+        inverter_limit_kw=3.6,
         quiet=True,
     )
 
@@ -95,9 +96,12 @@ def test_analysis_writes_repeatable_summaries(tmp_path):
     assert summary["correlations"]["heatpump_vs_temperature"] == pytest.approx(
         -1.0
     )
+    assert summary["solar"]["max_kw"] == pytest.approx(1.5)
+    assert summary["solar"]["hours_at_or_above_limit"] == 0
     assert (output / "summary.json").exists()
     assert (output / "solar_by_month_hour.csv").exists()
     assert (output / "solar_by_sun_position.csv").exists()
+    assert (output / "solar_by_gti.csv").exists()
     assert (output / "heatpump_by_temperature.csv").exists()
     stored = json.loads((output / "summary.json").read_text())
     assert stored["coverage"]["solar"] == 3
