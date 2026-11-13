@@ -61,16 +61,21 @@ def _open(path: str | Path):
     return path.open("r", newline="", encoding="utf-8")
 
 
-def _hour_utc(value: datetime) -> datetime:
+def _slot_utc(value: datetime, slot_minutes: int = 60) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).replace(
-        minute=0, second=0, microsecond=0
-    )
+    value = value.astimezone(timezone.utc)
+    minute = (value.minute // slot_minutes) * slot_minutes
+    return value.replace(minute=minute, second=0, microsecond=0)
 
 
-def load_influx(path: str | Path) -> tuple[dict[str, dict[datetime, float]], dict[str, int]]:
-    """Read tidy Influx rows and average each series into UTC hours."""
+def load_influx(
+    path: str | Path, *, slot_minutes: int = 60
+) -> tuple[dict[str, dict[datetime, float]], dict[str, int]]:
+    """Read tidy Influx rows and average each series into UTC slots."""
+    if slot_minutes not in (1, 5, 10, 15, 30, 60):
+        raise ValueError("slot_minutes must divide an hour")
+
     sums: dict[str, dict[datetime, float]] = defaultdict(
         lambda: defaultdict(float)
     )
@@ -86,7 +91,7 @@ def load_influx(path: str | Path) -> tuple[dict[str, dict[datetime, float]], dic
                 value = float(row["value"])
             except (KeyError, TypeError, ValueError):
                 continue
-            hour = _hour_utc(when)
+            hour = _slot_utc(when, slot_minutes)
             series = str(row["series"])
             sums[series][hour] += value
             counts[series][hour] += 1
@@ -122,7 +127,7 @@ def load_weather(
                 continue
             if when.tzinfo is None:
                 when = when.replace(tzinfo=local_zone)
-            hour = _hour_utc(when)
+            hour = _slot_utc(when, 60)
             series = str(row["series"])
             values[series][hour] = value
             raw[series] += 1

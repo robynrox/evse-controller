@@ -842,6 +842,10 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
   - `src/evse_controller/tools/fit_heatpump_forecast.py` and
     `forecasting/heatpump.py` — per-slot temperature response with learned
     daily/DHW profiles and P50/P90 output.
+  - `src/evse_controller/tools/evaluate_net_grid_forecast.py` — combined
+    baseload + heat − solar forecast versus slot persistence.  The first
+    evaluation uses archive actual weather, so live forecast skill will be
+    lower until it is tested with historical forecast weather.
 - InfluxDB config lives in `data/config/config.yaml` on prod; the tool takes
   `--config`, `INFLUXDB_*` environment variables, or CLI flags, in that order of
   precedence (CLI > env > file).

@@ -63,13 +63,19 @@ def build_samples(
     weather_path: str | Path,
     local_zone: ZoneInfo,
     *,
+    slot_minutes: int = 30,
     start: Optional[date] = None,
     end: Optional[date] = None,
 ) -> list[HeatPumpSample]:
-    influx, _ = load_influx(influx_path)
+    influx, _ = load_influx(influx_path, slot_minutes=slot_minutes)
     weather, _ = load_weather(weather_path, local_zone)
     heatpump = influx.get("heatpump", {})
-    temperature = weather.get("temperature_c", {})
+    hourly_temperature = weather.get("temperature_c", {})
+    temperature = {}
+    for hour, value in hourly_temperature.items():
+        temperature[hour] = value
+        if slot_minutes == 30:
+            temperature[hour + timedelta(minutes=30)] = value
     samples = []
     for hour in sorted(set(heatpump) & set(temperature)):
         local_date = hour.astimezone(local_zone).date()
@@ -95,6 +101,7 @@ def fit_and_evaluate(
     temperature_bin_c: float,
     min_samples: int,
     output_dir: str | Path,
+    slot_minutes: int = 30,
     quiet: bool = False,
 ) -> dict:
     if not samples:
@@ -174,6 +181,7 @@ def fit_and_evaluate(
 
     summary = {
         "timezone": timezone,
+        "slot_minutes": slot_minutes,
         "temperature_bin_c": temperature_bin_c,
         "training_samples": len(train),
         "test_samples": len(test),
@@ -224,6 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hold out the last N days for evaluation (default: 60)",
     )
     parser.add_argument(
+        "--slot-minutes",
+        type=int,
+        default=30,
+        choices=(30, 60),
+        help="Aggregation slot width (default: 30)",
+    )
+    parser.add_argument(
         "--temperature-bin",
         type=float,
         default=DEFAULT_TEMPERATURE_BIN_C,
@@ -256,6 +271,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.influx,
             args.weather,
             local_zone,
+            slot_minutes=args.slot_minutes,
             start=start,
             end=end,
         )
@@ -266,6 +282,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             temperature_bin_c=args.temperature_bin,
             min_samples=args.min_samples,
             output_dir=args.output_dir,
+            slot_minutes=args.slot_minutes,
             quiet=args.quiet,
         )
     except (OSError, ValueError) as error:

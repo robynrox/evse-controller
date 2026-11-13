@@ -1388,6 +1388,30 @@ running. Sparse temperature bins fall back to the slot profile, and P50/P90
 are both stored. Outputs are `model.json`, `evaluation.csv` and `summary.json`
 under `data/analysis/heatpump_model/`.
 
+To compare the combined component forecast with net-grid persistence:
+
+```bash
+python -m evse_controller.tools.evaluate_net_grid_forecast \
+    --kwp 4.7 --inverter-limit-kw 3.6 \
+    --latitude 51.5 --longitude -3.2 \
+    --test-days 60
+```
+
+It fits the baseload profile, solar model and heat-pump model on the training
+period, then forecasts:
+
+```text
+net_grid = baseload(slot) + heat_pump(T) − solar(GTI)
+```
+
+and compares it with the per-slot median net grid. Outputs are
+`model.json`, `evaluation.csv` and `summary.json` under
+`data/analysis/net_grid_model/`.
+
+Important: this first comparison uses the historical **archive weather**,
+which is effectively actual weather. Live forecast skill will be lower. A
+proper live-skill test needs historical forecast weather, not reanalysis.
+
 ## API Documentation
 
 The system provides a REST API that can be explored and tested using the built-in Swagger UI:
