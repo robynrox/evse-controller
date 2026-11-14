@@ -1220,6 +1220,10 @@ the optimal action for every half-hour slot and every SoC state:
   one-direction follows; the one-direction arcs return only when the
   bidirectional arc cannot reach that SoC's floor or cap. The selected slot
   shows the conservative and aggressive house-import gates and floors.
+  Follow-house and follow-solar options show the current at which support
+  starts (for example `≥3 A`), because the live loop varies with the measured
+  load up to the Wallbox limit. Bidirectional follows still show their signed
+  charge/discharge range.
 
 Below the map, the selected slot is collapsed into contiguous SoC bands, and
 a selected cell lists every feasible action with its immediate cost, future

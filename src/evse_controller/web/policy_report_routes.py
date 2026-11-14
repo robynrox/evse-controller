@@ -63,7 +63,24 @@ def _fmt_current(value) -> str:
     return "—" if value is None else f"{value:.0f} A"
 
 
-def _fmt_action_current(value, minimum=None, maximum=None) -> str:
+def _min_current_magnitude(*values) -> Optional[float]:
+    candidates = [
+        abs(float(value))
+        for value in values
+        if value is not None
+    ]
+    positive = [value for value in candidates if value > 0]
+    return min(positive) if positive else None
+
+
+def _fmt_action_current(kind, value, minimum=None, maximum=None) -> str:
+    if kind in (
+        "follow_house_conservative",
+        "follow_house_aggressive",
+        "follow_solar",
+    ):
+        start = _min_current_magnitude(minimum, maximum, value)
+        return "—" if start is None else f"≥{start:.0f} A"
     if minimum is not None and maximum is not None and minimum != maximum:
         if minimum < 0 < maximum:
             return f"{minimum:+.0f}…{maximum:+.0f} A"
@@ -595,7 +612,7 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
                 title = (
                     f"{slot.start.strftime('%H:%M')} · {soc:.1f}% · "
                     f"{_mode_label(action.kind)} "
-                    f"{_fmt_action_current(action.current_a, action.current_min_a, action.current_max_a)} · "
+                    f"{_fmt_action_current(action.kind, action.current_a, action.current_min_a, action.current_max_a)} · "
                     f"immediate {action.immediate_cost_p:.1f}p · "
                     f"future {action.future_cost_p:.1f}p · "
                     f"total {action.total_cost_p:.1f}p{margin}{target}"
@@ -941,7 +958,7 @@ def _why_text(ctx, slot_index, cell, options) -> str:
     return (
         f"At {slot.start.strftime('%H:%M')} and {cell.soc_percent:.1f}% SoC, "
         f"{_mode_label(best.kind)} at "
-        f"{_fmt_action_current(best.current_a, best.current_min_a, best.current_max_a)} "
+        f"{_fmt_action_current(best.kind, best.current_a, best.current_min_a, best.current_max_a)} "
         f"is best: {comparison}. Import is {slot.import_p:.1f}p/kWh, "
         f"export is {slot.export_p:.1f}p/kWh, load is "
         f"{slot.load_kw:.2f} kW. {target}"

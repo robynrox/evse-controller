@@ -539,7 +539,7 @@
                             </td>
                             <td>
                                 {% if band.action %}
-                                    {{ fmt_action_current(band.action.current_a, band.action.current_min_a, band.action.current_max_a) }}
+                                    {{ fmt_action_current(band.action.kind, band.action.current_a, band.action.current_min_a, band.action.current_max_a) }}
                                 {% else %}—{% endif %}
                             </td>
                             <td>{{ fmt_pence(band.action.immediate_cost_p) if band.action else '—' }}</td>
@@ -595,7 +595,7 @@
                     {% for option in options %}
                         <tr>
                             <td class="action-{{ option.kind }}">{{ mode_label(option.kind) }}</td>
-                            <td>{{ fmt_action_current(option.current_a, option.current_min_a, option.current_max_a) }}</td>
+                            <td>{{ fmt_action_current(option.kind, option.current_a, option.current_min_a, option.current_max_a) }}</td>
                             <td>{{ '%.2f'|format(option.ac_power_kw) }}</td>
                             <td>{{ fmt_pence(option.immediate_cost_p) }}</td>
                             <td>{{ fmt_pence(option.future_cost_p) }}</td>
@@ -620,7 +620,9 @@
             Score includes the target penalty used to rank paths; it is hidden
             when the target is already unreachable. Total is the real immediate
             plus future energy cost. Future uses the recorded inputs, not
-            today's forecast.
+            today's forecast. Follow arcs show the current at which support
+            starts (≥N A); the live loop varies with the measured house load
+            up to the Wallbox limit.
         </p>
         {% endif %}
 

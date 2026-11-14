@@ -11,6 +11,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
     BatteryEfficiencyModel,
 )
 from evse_controller.web.policy_report_routes import (
+    _fmt_action_current,
     register_policy_report_routes,
 )
 
@@ -108,6 +109,32 @@ def client(history):
     register_policy_report_routes(app, history=history)
     app.config.update(TESTING=True)
     return app.test_client()
+
+
+def test_follow_arcs_show_the_starting_current_only():
+    assert (
+        _fmt_action_current(
+            "follow_house_conservative", 7.5, 3.0, 12.0
+        )
+        == "≥3 A"
+    )
+    assert (
+        _fmt_action_current(
+            "follow_house_aggressive", 7.5, 3.0, 16.0
+        )
+        == "≥3 A"
+    )
+    assert (
+        _fmt_action_current("follow_solar", 5.0, 4.0, 9.0)
+        == "≥4 A"
+    )
+    assert (
+        _fmt_action_current(
+            "follow_bidirectional_conservative", 0.0, -3.0, 6.0
+        )
+        == "-3…+6 A"
+    )
+    assert _fmt_action_current("charge", 7.0, 7.0, 7.0) == "7 A"
 
 
 def test_page_renders_policy_map_and_tables(client):
