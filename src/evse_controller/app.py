@@ -13,6 +13,7 @@ from evse_controller.utils.logging_config import info, error, debug
 from evse_controller.web.form_values import (
     form_float as _form_float,
     form_int as _form_int,
+    parse_shelly_monitor as _parse_shelly_monitor,
 )
 
 # Ensure data directories exist before anything else
@@ -643,17 +644,111 @@ def config_page():
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
             config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')
 
-            # Update Grid monitoring settings
-            config.SHELLY_GRID_DEVICE = request.form.get('shelly[grid][device]')
-            config.SHELLY_GRID_CHANNEL = _form_int(
-                request.form.get('shelly[grid][channel]'),
-                config.SHELLY_GRID_CHANNEL,
-            )
+            # Device assignments.  The form uses one combined
+            # "device:channel" value per role; the old separate fields are
+            # accepted for compatibility.
+            grid_monitor = request.form.get('shelly[grid][monitor]')
+            if grid_monitor is not None:
+                (
+                    config.SHELLY_GRID_DEVICE,
+                    config.SHELLY_GRID_CHANNEL,
+                ) = _parse_shelly_monitor(grid_monitor)
+            else:
+                config.SHELLY_GRID_DEVICE = request.form.get(
+                    'shelly[grid][device]'
+                )
+                config.SHELLY_GRID_CHANNEL = _form_int(
+                    request.form.get('shelly[grid][channel]'),
+                    config.SHELLY_GRID_CHANNEL,
+                )
 
-            # Update EVSE monitoring settings
-            config.SHELLY_EVSE_DEVICE = request.form.get('shelly[evse][device]') or ""
-            evse_channel = request.form.get('shelly[evse][channel]')
-            config.SHELLY_EVSE_CHANNEL = int(evse_channel) if evse_channel else None
+            evse_monitor = request.form.get('shelly[evse][monitor]')
+            if evse_monitor is not None:
+                (
+                    config.SHELLY_EVSE_DEVICE,
+                    config.SHELLY_EVSE_CHANNEL,
+                ) = _parse_shelly_monitor(evse_monitor)
+            else:
+                config.SHELLY_EVSE_DEVICE = (
+                    request.form.get('shelly[evse][device]') or ""
+                )
+                evse_channel = request.form.get('shelly[evse][channel]')
+                config.SHELLY_EVSE_CHANNEL = (
+                    int(evse_channel) if evse_channel else None
+                )
+
+            config.SOLAR_AVAILABLE = (
+                request.form.get('shelly[solar][available]') == 'on'
+            )
+            solar_monitor = request.form.get('shelly[solar][monitor]')
+            if solar_monitor is not None:
+                (
+                    config.SOLAR_MONITOR_DEVICE,
+                    config.SOLAR_MONITOR_CHANNEL,
+                ) = _parse_shelly_monitor(solar_monitor)
+            if not config.SOLAR_AVAILABLE:
+                config.SOLAR_MONITOR_DEVICE = ""
+                config.SOLAR_MONITOR_CHANNEL = None
+
+            config.HEATPUMP_AVAILABLE = (
+                request.form.get('shelly[heatpump][available]') == 'on'
+            )
+            heatpump_monitor = request.form.get(
+                'shelly[heatpump][monitor]'
+            )
+            if heatpump_monitor is not None:
+                (
+                    config.HEATPUMP_MONITOR_DEVICE,
+                    config.HEATPUMP_MONITOR_CHANNEL,
+                ) = _parse_shelly_monitor(heatpump_monitor)
+            if not config.HEATPUMP_AVAILABLE:
+                config.HEATPUMP_MONITOR_DEVICE = ""
+                config.HEATPUMP_MONITOR_CHANNEL = None
+
+            # One Shelly channel can only be assigned to one role.
+            assignments = [
+                (
+                    "Grid",
+                    config.SHELLY_GRID_DEVICE,
+                    config.SHELLY_GRID_CHANNEL,
+                ),
+                (
+                    "EVSE",
+                    config.SHELLY_EVSE_DEVICE,
+                    config.SHELLY_EVSE_CHANNEL,
+                ),
+                (
+                    "Solar",
+                    config.SOLAR_MONITOR_DEVICE,
+                    config.SOLAR_MONITOR_CHANNEL,
+                ),
+                (
+                    "Heat pump",
+                    config.HEATPUMP_MONITOR_DEVICE,
+                    config.HEATPUMP_MONITOR_CHANNEL,
+                ),
+            ]
+            used = {}
+            for label, device, channel in assignments:
+                if not device or channel not in (1, 2):
+                    continue
+                key = (device, channel)
+                if key in used:
+                    shelly_name = (
+                        "Shelly 1" if device == "primary" else "Shelly 2"
+                    )
+                    raise ValueError(
+                        f"{label} and {used[key]} both use "
+                        f"{shelly_name} Channel {channel}"
+                    )
+                used[key] = label
+            if any(
+                device == "secondary"
+                for _, device, _ in assignments
+            ) and not config.SHELLY_SECONDARY_URL:
+                raise ValueError(
+                    "Shelly 2 is selected but no Shelly 2 URL is configured"
+                )
 
             # Update InfluxDB settings
             config.INFLUXDB_ENABLED = bool(request.form.get('influxdb[enabled]'))

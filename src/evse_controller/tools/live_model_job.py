@@ -62,6 +62,8 @@ def run_job(job_dir: Path) -> int:
     start = today - timedelta(days=int(job["history_days"]))
     source = str(job.get("source") or "influx")
     job["source"] = source
+    solar_available = bool(job.get("solar_available", True))
+    heatpump_available = bool(job.get("heatpump_available", True))
 
     try:
         from evse_controller.tools.fetch_weather_history import main as fetch_main
@@ -125,7 +127,11 @@ def run_job(job_dir: Path) -> int:
             records = build_records(influx_tmp, weather_tmp, local_zone)
         elif source == "daily_reports":
             records = build_records_from_daily_reports(
-                job["daily_report_dir"], weather_tmp, local_zone
+                job["daily_report_dir"],
+                weather_tmp,
+                local_zone,
+                solar_available=solar_available,
+                heatpump_available=heatpump_available,
             )
         else:
             raise ValueError(f"Unknown live-model source: {source!r}")
@@ -179,6 +185,8 @@ def run_job(job_dir: Path) -> int:
             output_dir=model_path.parent,
             model_name=model_tmp.name,
             min_days=min_days,
+            solar_available=solar_available,
+            heatpump_available=heatpump_available,
             quiet=True,
         )
         os.replace(model_tmp, model_path)

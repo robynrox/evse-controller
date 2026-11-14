@@ -132,7 +132,11 @@ def test_daily_reports_can_supply_component_records(tmp_path):
     )
 
     records = build_records_from_daily_reports(
-        daily, weather, ZoneInfo("Europe/London")
+        daily,
+        weather,
+        ZoneInfo("Europe/London"),
+        solar_available=True,
+        heatpump_available=True,
     )
 
     assert len(records) == 1
@@ -147,6 +151,49 @@ def test_daily_reports_can_supply_component_records(tmp_path):
     assert record.solar_kw == pytest.approx(2.0)
     assert record.heat_kw == pytest.approx(0.4)
     assert record.baseload_kw == pytest.approx(2.4)
+
+
+def test_daily_reports_can_omit_unavailable_components(tmp_path):
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    report = {
+        "date": "2026-07-01",
+        "timezone": "Europe/London",
+        "series": {
+            "grid": {"label": "Grid"},
+            "evse": {"label": "EVSE"},
+        },
+        "slots": [
+            {
+                "index": 24,
+                "start": "2026-07-01T12:00:00",
+                "energy": {
+                    "grid": {"in": 0.5, "out": 0.0},
+                    "evse": {"in": 0.1, "out": 0.0},
+                },
+            }
+        ],
+    }
+    (daily / "2026-07-01.json").write_text(json.dumps(report))
+    weather = tmp_path / "weather.csv"
+    weather.write_text(
+        "timestamp,series,value\n"
+        "2026-07-01T12:00:00,temperature_c,18.0\n"
+        "2026-07-01T12:00:00,tilted_irradiance_wm2,500.0\n"
+    )
+
+    records = build_records_from_daily_reports(
+        daily,
+        weather,
+        ZoneInfo("Europe/London"),
+        solar_available=False,
+        heatpump_available=False,
+    )
+
+    assert len(records) == 1
+    assert records[0].solar_kw == pytest.approx(0.0)
+    assert records[0].heat_kw == pytest.approx(0.0)
+    assert records[0].baseload_kw == pytest.approx(0.8)
 
 
 def test_daily_reports_require_solar_and_heat_series(tmp_path):
@@ -169,5 +216,9 @@ def test_daily_reports_require_solar_and_heat_series(tmp_path):
 
     with pytest.raises(ValueError, match="solar series"):
         build_records_from_daily_reports(
-            daily, weather, ZoneInfo("Europe/London")
+            daily,
+            weather,
+            ZoneInfo("Europe/London"),
+            solar_available=True,
+            heatpump_available=True,
         )

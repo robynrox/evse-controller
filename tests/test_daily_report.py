@@ -467,6 +467,41 @@ class TestConfiguration:
             "shelly.secondary.channel2",
         ]
 
+    def test_solar_and_heatpump_roles_use_the_assigned_channels(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(config, "SHELLY_GRID_DEVICE", "primary")
+        monkeypatch.setattr(config, "SHELLY_GRID_CHANNEL", 1)
+        monkeypatch.setattr(config, "SHELLY_EVSE_DEVICE", "primary")
+        monkeypatch.setattr(config, "SHELLY_EVSE_CHANNEL", 2)
+        monkeypatch.setattr(config, "SOLAR_AVAILABLE", True)
+        monkeypatch.setattr(config, "SOLAR_MONITOR_DEVICE", "secondary")
+        monkeypatch.setattr(config, "SOLAR_MONITOR_CHANNEL", 2)
+        monkeypatch.setattr(config, "HEATPUMP_AVAILABLE", True)
+        monkeypatch.setattr(config, "HEATPUMP_MONITOR_DEVICE", "secondary")
+        monkeypatch.setattr(config, "HEATPUMP_MONITOR_CHANNEL", 1)
+        monkeypatch.setattr(
+            config, "is_channel_in_use", lambda device, channel: True
+        )
+        monkeypatch.setattr(
+            config,
+            "get_channel_name",
+            lambda device, channel: f"{device}-{channel}",
+        )
+
+        specs = configured_series()
+        by_key = {spec.key: spec for spec in specs}
+
+        assert by_key["shelly.secondary.channel2"].label == "Solar"
+        assert by_key["shelly.secondary.channel1"].label == "Heatpump"
+        assert [spec.key for spec in specs] == [
+            "grid",
+            "evse",
+            "battery_dc",
+            "shelly.secondary.channel2",
+            "shelly.secondary.channel1",
+        ]
+
     def test_clock_change_day_is_flagged(self, monkeypatch):
         import time as time_module
 

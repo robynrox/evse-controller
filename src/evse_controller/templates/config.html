@@ -103,18 +103,18 @@
     <div class="config-section">
         <h2>Shelly Configuration</h2>
         <div class="form-group">
-            <label for="shelly_url">Primary Shelly EM URL:</label>
+            <label for="shelly_url">Shelly 1 URL:</label>
             <input type="text" id="shelly_url" name="shelly[primary_url]" value="{{ config.shelly.primary_url }}"
                 required>
         </div>
         <div class="form-group">
-            <label for="shelly_secondary_url">Secondary Shelly EM URL (optional):</label>
+            <label for="shelly_secondary_url">Shelly 2 URL (optional):</label>
             <input type="text" id="shelly_secondary_url" name="shelly[secondary_url]"
                 value="{{ config.shelly.secondary_url }}">
         </div>
 
-        <!-- Primary Shelly Channel Configuration -->
-        <h3>Primary Shelly Channels</h3>
+        <!-- Shelly 1 Channel Configuration -->
+        <h3>Shelly 1 Channels</h3>
         <div class="channel-config">
             <h4>Channel 1</h4>
             <div class="form-group">
@@ -161,9 +161,9 @@
             </div>
         </div>
 
-        <!-- Secondary Shelly Channel Configuration (if configured) -->
+        <!-- Shelly 2 Channel Configuration (if configured) -->
         {% if config.shelly.secondary_url %}
-        <h3>Secondary Shelly Channels</h3>
+        <h3>Shelly 2 Channels</h3>
         <div class="channel-config">
             <h4>Channel 1</h4>
             <div class="form-group">
@@ -215,55 +215,76 @@
         </div>
         {% endif %}
 
-        <!-- Grid Monitoring Configuration -->
+        <!-- Device Assignment -->
         <h3>Device Assignment</h3>
+        <p>
+            Each monitored channel can be assigned once. Shelly 1 and Shelly 2
+            refer to the two configured Shelly EM URLs above.
+        </p>
+        {% set grid_monitor = (config.shelly.grid.device or '') ~ ':' ~ (config.shelly.grid.channel or '') %}
+        {% set evse_monitor = (config.shelly.evse.device or '') ~ ':' ~ (config.shelly.evse.channel or '') %}
+        {% set solar = config.shelly.get('solar', {}) %}
+        {% set heatpump = config.shelly.get('heatpump', {}) %}
+        {% set solar_monitor = (solar.get('device') or '') ~ ':' ~ (solar.get('channel') or '') %}
+        {% set heatpump_monitor = (heatpump.get('device') or '') ~ ':' ~ (heatpump.get('channel') or '') %}
+
         <div class="form-group">
-            <label for="grid_device">Grid Monitoring Device:</label>
-            <select id="grid_device" name="shelly[grid][device]" required>
-                <option value="primary" {% if config.shelly.grid.device=="primary" %}selected{% endif %}>Primary
-                    Shelly</option>
-                {% if config.shelly.secondary_url %}
-                <option value="secondary" {% if config.shelly.grid.device=="secondary" %}selected{% endif %}>
-                    Secondary Shelly</option>
-                {% endif %}
-            </select>
-        </div>
-        <div class="form-group">
-            <label for="grid_channel">Grid Monitoring Channel:</label>
-            <select id="grid_channel" name="shelly[grid][channel]" required>
-                <option value="1" {% if config.shelly.grid.channel==1 %}selected{% endif %}>Channel 1</option>
-                <option value="2" {%- if config.shelly.grid.channel==2 -%}selected{%- endif -%}>Channel 2</option>
+            <label for="grid_monitor">Grid monitoring:</label>
+            <select id="grid_monitor" name="shelly[grid][monitor]" required>
+                <option value="primary:1" {% if grid_monitor == 'primary:1' %}selected{% endif %}>Shelly 1 · Channel 1</option>
+                <option value="primary:2" {% if grid_monitor == 'primary:2' %}selected{% endif %}>Shelly 1 · Channel 2</option>
+                <option value="secondary:1" {% if grid_monitor == 'secondary:1' %}selected{% endif %}>Shelly 2 · Channel 1</option>
+                <option value="secondary:2" {% if grid_monitor == 'secondary:2' %}selected{% endif %}>Shelly 2 · Channel 2</option>
             </select>
         </div>
 
-        <!-- EVSE Monitoring Configuration -->
+        <div class="form-group">
+            <label for="evse_monitor">EVSE monitoring:</label>
+            <select id="evse_monitor" name="shelly[evse][monitor]">
+                <option value="" {% if not config.shelly.evse.device %}selected{% endif %}>None</option>
+                <option value="primary:1" {% if evse_monitor == 'primary:1' %}selected{% endif %}>Shelly 1 · Channel 1</option>
+                <option value="primary:2" {% if evse_monitor == 'primary:2' %}selected{% endif %}>Shelly 1 · Channel 2</option>
+                <option value="secondary:1" {% if evse_monitor == 'secondary:1' %}selected{% endif %}>Shelly 2 · Channel 1</option>
+                <option value="secondary:2" {% if evse_monitor == 'secondary:2' %}selected{% endif %}>Shelly 2 · Channel 2</option>
+            </select>
+        </div>
+
         <div class="form-group">
             <label>
-                <input type="checkbox" id="evse_enabled" {% if config.shelly.evse.device %}checked{% endif %}>
-                Enable EVSE Monitoring
+                <input type="checkbox" id="solar_available"
+                       name="shelly[solar][available]"
+                       {% if solar.get('available') %}checked{% endif %}>
+                Solar generation at this property
             </label>
         </div>
-        <div id="evse_settings" style="display: {% if config.shelly.evse.device %}block{% else %}none{% endif %}">
-            <div class="form-group">
-                <label for="evse_device">EVSE Monitoring Device:</label>
-                <select id="evse_device" name="shelly[evse][device]">
-                    <option value="" {% if not config.shelly.evse.device %}selected{% endif %}>None</option>
-                    <option value="primary" {% if config.shelly.evse.device=="primary" %}selected{% endif %}>Primary
-                        Shelly</option>
-                    {% if config.shelly.secondary_url %}
-                    <option value="secondary" {% if config.shelly.evse.device=="secondary" %}selected{% endif %}>
-                        Secondary Shelly</option>
-                    {% endif %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="evse_channel">EVSE Monitoring Channel:</label>
-                <select id="evse_channel" name="shelly[evse][channel]">
-                    <option value="" {% if not config.shelly.evse.channel %}selected{% endif %}>None</option>
-                    <option value="1" {% if config.shelly.evse.channel==1 %}selected{% endif %}>Channel 1</option>
-                    <option value="2" {% if config.shelly.evse.channel==2 %}selected{% endif %}>Channel 2</option>
-                </select>
-            </div>
+        <div class="form-group">
+            <label for="solar_monitor">Solar monitoring:</label>
+            <select id="solar_monitor" name="shelly[solar][monitor]">
+                <option value="" {% if not solar.get('device') %}selected{% endif %}>None</option>
+                <option value="primary:1" {% if solar_monitor == 'primary:1' %}selected{% endif %}>Shelly 1 · Channel 1</option>
+                <option value="primary:2" {% if solar_monitor == 'primary:2' %}selected{% endif %}>Shelly 1 · Channel 2</option>
+                <option value="secondary:1" {% if solar_monitor == 'secondary:1' %}selected{% endif %}>Shelly 2 · Channel 1</option>
+                <option value="secondary:2" {% if solar_monitor == 'secondary:2' %}selected{% endif %}>Shelly 2 · Channel 2</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="heatpump_available"
+                       name="shelly[heatpump][available]"
+                       {% if heatpump.get('available') %}checked{% endif %}>
+                Heat pump at this property
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="heatpump_monitor">Heat pump monitoring:</label>
+            <select id="heatpump_monitor" name="shelly[heatpump][monitor]">
+                <option value="" {% if not heatpump.get('device') %}selected{% endif %}>None</option>
+                <option value="primary:1" {% if heatpump_monitor == 'primary:1' %}selected{% endif %}>Shelly 1 · Channel 1</option>
+                <option value="primary:2" {% if heatpump_monitor == 'primary:2' %}selected{% endif %}>Shelly 1 · Channel 2</option>
+                <option value="secondary:1" {% if heatpump_monitor == 'secondary:1' %}selected{% endif %}>Shelly 2 · Channel 1</option>
+                <option value="secondary:2" {% if heatpump_monitor == 'secondary:2' %}selected{% endif %}>Shelly 2 · Channel 2</option>
+            </select>
         </div>
     </div>
 
@@ -919,20 +940,6 @@
     // InfluxDB toggle
     document.getElementById('influxdb_enabled').addEventListener('change', function () {
         document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
-    });
-
-    // EVSE monitoring toggle
-    document.getElementById('evse_enabled').addEventListener('change', function () {
-        const evseSettings = document.getElementById('evse_settings');
-        const evseDevice = document.getElementById('evse_device');
-        const evseChannel = document.getElementById('evse_channel');
-
-        evseSettings.style.display = this.checked ? 'block' : 'none';
-
-        if (!this.checked) {
-            evseDevice.value = '';
-            evseChannel.value = '';
-        }
     });
 </script>
 {% endblock %}

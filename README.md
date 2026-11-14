@@ -130,33 +130,41 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       max_charge_current: 32           # Maximum charging current, integer between 3-32 (amperes)
       max_discharge_current: 32        # Maximum discharging current, integer between 3-32 (amperes)
     shelly:
-      primary_url: "shellyem-123456ABCDEF.ultrahub"  # Hostname or IP address
-      secondary_url: null              # Optional second Shelly
+      primary_url: "shellyem-123456ABCDEF.ultrahub"  # Shelly 1 (internal key: primary)
+      secondary_url: null              # Shelly 2 (internal key: secondary)
       channels:
-        primary:
+        primary:                       # Shelly 1 channels
           channel1:
-            name: "Primary Channel 1"  # Custom name for the channel
-            abbreviation: "Pri1"       # Short name for display
+            name: "Shelly 1 Channel 1" # Custom name for the channel
+            abbreviation: "S1C1"       # Short name for display
             in_use: true               # Whether this channel is active
           channel2:
-            name: "Primary Channel 2"
-            abbreviation: "Pri2"
+            name: "Shelly 1 Channel 2"
+            abbreviation: "S1C2"
             in_use: true
-        secondary:                     # Only used if secondary_url is configured
+        secondary:                     # Shelly 2 channels, if configured
           channel1:
-            name: "Secondary Channel 1"
-            abbreviation: "Sec1"
+            name: "Shelly 2 Channel 1"
+            abbreviation: "S2C1"
             in_use: true
           channel2:
-            name: "Secondary Channel 2"
-            abbreviation: "Sec2"
+            name: "Shelly 2 Channel 2"
+            abbreviation: "S2C2"
             in_use: true
       grid:
-        device: "primary"              # primary or secondary
+        device: "primary"              # primary = Shelly 1, secondary = Shelly 2
         channel: 1                     # 1 or 2
       evse:
-        device: ""                     # primary or secondary, empty if not used
+        device: ""                     # primary/secondary, empty if not used
         channel: null                  # 1 or 2, null if not used
+      solar:
+        available: true                # Solar generation at this property
+        device: "secondary"            # Shelly monitoring it, or "" for none
+        channel: 2                     # 1 or 2
+      heatpump:
+        available: true                # Heat pump at this property
+        device: "secondary"            # Shelly monitoring it, or "" for none
+        channel: 1                     # 1 or 2
     influxdb:
       enabled: false                   # Whether to enable InfluxDB logging
       url: "http://localhost:8086"     # InfluxDB server URL
@@ -243,8 +251,10 @@ Detailed explanation of each configuration option:
 - `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
 
 #### Shelly Section
-- `primary_url`: IP address or hostname of your primary Shelly EM
-- `secondary_url`: IP address or hostname of your second Shelly EM (optional)
+- `primary_url`: IP address or hostname of Shelly 1 (the internal key stays `primary` for history compatibility)
+- `secondary_url`: IP address or hostname of Shelly 2 (optional; internal key `secondary`)
+- `grid`, `evse`, `solar`, `heatpump`: each role has a `device` and `channel` assignment. The config page shows these as one dropdown: Shelly 1/2 · Channel 1/2.
+- `solar.available` / `heatpump.available`: whether the property has solar generation or a heat pump. If a component is present but no monitoring channel is assigned, the component forecast treats it as zero rather than failing.
 
 #### InfluxDB Section
 - `enabled`: Whether to enable InfluxDB logging (true/false)
@@ -417,7 +427,7 @@ discharge ramp, still uses its built-in timing.
 The dashboard status panel carries a compact **Link health** row, fed by the
 existing one-second `/api/ext_status` poll. For each configured device it shows
 the percentage of successful polls over the last 1, 5 and 60 minutes and how
-long ago the last success was. The secondary Shelly is hidden when no URL is
+long ago the last success was. Shelly 2 is hidden when no URL is
 configured; the Wallbox is shown as `Wallbox` or `Wallbox (sim)`.
 
 A poll is one complete device read. Internal TCP retries are not counted as

@@ -336,9 +336,14 @@ completed fixes.
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It
   integrates instantaneous power (never the reset-prone Shelly counters),
   splits intervals at slot boundaries, caps a gap at 300 s and records
-  per-series coverage. `grid` and `evse` are the only semantic series; every
-  other in-use channel is a named in/out meter, and `battery_dc` comes from
-  Wallbox `dc_voltage × dc_current`. Missing data is `null`, never zero.
+  per-series coverage. `grid`, `evse`, `solar` and `heatpump` are semantic
+  roles when configured; the daily report labels the assigned solar and
+  heat-pump channels accordingly. Every other in-use channel is a named in/out
+  meter, and `battery_dc` comes from Wallbox `dc_voltage × dc_current`.
+  Missing data is `null`, never zero. The config page assigns each role to a
+  single `Shelly 1`/`Shelly 2` channel and marks whether solar and a heat pump
+  are present at the property; the internal keys remain `primary`/`secondary`
+  for history continuity.
   Import and export prices are frozen into each slot when it closes; the
   shared `slot_prices.price_book` reads or fetches the Agile cache in
   `data/state/agile_rates/YYYY-MM-DD.json`. `slot_prices` replicates the

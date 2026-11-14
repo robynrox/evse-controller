@@ -120,7 +120,7 @@ def test_worker_uses_daily_reports_without_influx(
         calls["export"] += 1
         return 0
 
-    def fake_daily_records(directory, weather_path, zone):
+    def fake_daily_records(directory, weather_path, zone, **kwargs):
         return _records(14)
 
     def fake_fit_all(records, **kwargs):

@@ -19,6 +19,8 @@ def _patch_config(monkeypatch, tmp_path, **overrides):
         "LIVE_MODEL_MIN_DAYS": 14,
         "LIVE_MODEL_HISTORY_DAYS": 400,
         "SOLAR_MODEL_CONFIGURED": True,
+        "SOLAR_MONITORED": True,
+        "HEATPUMP_MONITORED": True,
         "INFLUXDB_ENABLED": True,
         "WEATHER_ARRAY_KWP": 4.7,
         "WEATHER_INVERTER_LIMIT_KW": 3.6,
@@ -103,6 +105,8 @@ def test_spec_carries_the_configured_geometry(tmp_path, monkeypatch):
     assert spec["inverter_limit_kw"] == 3.6
     assert spec["min_days"] == 14
     assert spec["history_days"] == 400
+    assert spec["solar_available"] is True
+    assert spec["heatpump_available"] is True
     assert spec["influx_path"].endswith("influx.csv.gz")
     assert spec["weather_path"].endswith("weather.csv.gz")
     assert spec["model_path"].endswith("live_model.json")

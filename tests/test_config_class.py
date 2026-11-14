@@ -167,6 +167,9 @@ class TestConfig:
         config.WEATHER_LONGITUDE = -3.2
         config.WEATHER_PANEL_AZIMUTH = 180.0
         config.WEATHER_PANEL_TILT = 35.0
+        config.SOLAR_AVAILABLE = True
+        config.SOLAR_MONITOR_DEVICE = "primary"
+        config.SOLAR_MONITOR_CHANNEL = 1
         config.WEATHER_ARRAY_KWP = None
 
         assert config.SOLAR_MODEL_CONFIGURED is False
@@ -175,6 +178,41 @@ class TestConfig:
 
         assert config.WEATHER_ARRAY_KWP == pytest.approx(4.7)
         assert config.SOLAR_MODEL_CONFIGURED is True
+
+        # Without solar monitoring, the weather geometry is enough for the
+        # heat-pump and baseload components.
+        config.SOLAR_AVAILABLE = False
+        config.SOLAR_MONITOR_DEVICE = ""
+        config.SOLAR_MONITOR_CHANNEL = None
+        config.WEATHER_ARRAY_KWP = None
+        assert config.SOLAR_MODEL_CONFIGURED is True
+
+    def test_solar_and_heatpump_monitoring_configuration(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        assert config.SOLAR_AVAILABLE is False
+        assert config.SOLAR_MONITOR_DEVICE == ""
+        assert config.SOLAR_MONITOR_CHANNEL is None
+        assert config.HEATPUMP_AVAILABLE is False
+        assert config.HEATPUMP_MONITOR_DEVICE == ""
+        assert config.HEATPUMP_MONITOR_CHANNEL is None
+
+        config.SOLAR_AVAILABLE = True
+        config.SOLAR_MONITOR_DEVICE = "secondary"
+        config.SOLAR_MONITOR_CHANNEL = 2
+        config.HEATPUMP_AVAILABLE = True
+        config.HEATPUMP_MONITOR_DEVICE = "secondary"
+        config.HEATPUMP_MONITOR_CHANNEL = 1
+
+        assert config.SOLAR_AVAILABLE is True
+        assert config.SOLAR_MONITOR_DEVICE == "secondary"
+        assert config.SOLAR_MONITOR_CHANNEL == 2
+        assert config.SOLAR_MONITORED is True
+        assert config.HEATPUMP_AVAILABLE is True
+        assert config.HEATPUMP_MONITOR_DEVICE == "secondary"
+        assert config.HEATPUMP_MONITOR_CHANNEL == 1
+        assert config.HEATPUMP_MONITORED is True
 
     def test_charging_property_getters_and_setters(self):
         """Test charging property getters and setters"""

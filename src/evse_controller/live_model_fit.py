@@ -170,11 +170,13 @@ class LiveModelFitScheduler:
             "source": (
                 "influx" if config.INFLUXDB_ENABLED else "daily_reports"
             ),
+            "solar_available": config.SOLAR_MONITORED,
+            "heatpump_available": config.HEATPUMP_MONITORED,
             "daily_report_dir": str(config.DAILY_REPORT_DIR),
             "influx_path": str(config.INFLUX_ANALYSIS_FILE),
             "weather_path": str(config.WEATHER_FORECAST_HISTORY_FILE),
             "model_path": str(config.LIVE_COMPONENT_MODEL_FILE),
-            "kwp": config.WEATHER_ARRAY_KWP,
+            "kwp": float(config.WEATHER_ARRAY_KWP or 1.0),
             "inverter_limit_kw": config.WEATHER_INVERTER_LIMIT_KW,
             "latitude": config.WEATHER_LATITUDE,
             "longitude": config.WEATHER_LONGITUDE,

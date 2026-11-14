@@ -369,16 +369,8 @@ class Config:
     )
 
     SOLAR_MODEL_CONFIGURED = property(
-        lambda self: all(
-            value is not None
-            for value in (
-                self.WEATHER_ARRAY_KWP,
-                self.WEATHER_LATITUDE,
-                self.WEATHER_LONGITUDE,
-                self.WEATHER_PANEL_AZIMUTH,
-                self.WEATHER_PANEL_TILT,
-            )
-        )
+        lambda self: self.WEATHER_CONFIGURED
+        and (not self.SOLAR_MONITORED or self.WEATHER_ARRAY_KWP is not None)
     )
 
     WEATHER_CONFIGURED = property(
@@ -936,6 +928,68 @@ class Config:
         lambda self, value: self._set_config_value("shelly.evse", "channel", value)
     )
 
+    SOLAR_AVAILABLE = property(
+        lambda self: bool(
+            self._get_config_value("shelly.solar", "available", False)
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.solar", "available", bool(value)
+        ),
+    )
+
+    SOLAR_MONITOR_DEVICE = property(
+        lambda self: self._get_config_value("shelly.solar", "device", ""),
+        lambda self, value: self._set_config_value(
+            "shelly.solar", "device", value
+        ),
+    )
+
+    SOLAR_MONITOR_CHANNEL = property(
+        lambda self: self._get_config_value(
+            "shelly.solar", "channel", None
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.solar", "channel", value
+        ),
+    )
+
+    SOLAR_MONITORED = property(
+        lambda self: self.SOLAR_AVAILABLE
+        and bool(self.SOLAR_MONITOR_DEVICE)
+        and self.SOLAR_MONITOR_CHANNEL in (1, 2)
+    )
+
+    HEATPUMP_AVAILABLE = property(
+        lambda self: bool(
+            self._get_config_value("shelly.heatpump", "available", False)
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.heatpump", "available", bool(value)
+        ),
+    )
+
+    HEATPUMP_MONITOR_DEVICE = property(
+        lambda self: self._get_config_value("shelly.heatpump", "device", ""),
+        lambda self, value: self._set_config_value(
+            "shelly.heatpump", "device", value
+        ),
+    )
+
+    HEATPUMP_MONITOR_CHANNEL = property(
+        lambda self: self._get_config_value(
+            "shelly.heatpump", "channel", None
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.heatpump", "channel", value
+        ),
+    )
+
+    HEATPUMP_MONITORED = property(
+        lambda self: self.HEATPUMP_AVAILABLE
+        and bool(self.HEATPUMP_MONITOR_DEVICE)
+        and self.HEATPUMP_MONITOR_CHANNEL in (1, 2)
+    )
+
     # InfluxDB section properties
     INFLUXDB_ENABLED = property(
         lambda self: self._get_config_value("influxdb", "enabled", False),
@@ -1276,6 +1330,16 @@ class Config:
                 'evse': {
                     'device': self.SHELLY_EVSE_DEVICE,
                     'channel': self.SHELLY_EVSE_CHANNEL
+                },
+                'solar': {
+                    'available': self.SOLAR_AVAILABLE,
+                    'device': self.SOLAR_MONITOR_DEVICE,
+                    'channel': self.SOLAR_MONITOR_CHANNEL,
+                },
+                'heatpump': {
+                    'available': self.HEATPUMP_AVAILABLE,
+                    'device': self.HEATPUMP_MONITOR_DEVICE,
+                    'channel': self.HEATPUMP_MONITOR_CHANNEL,
                 },
                 'channels': self._get_channels_dict()
             },

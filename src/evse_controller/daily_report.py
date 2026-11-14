@@ -60,9 +60,9 @@ class SeriesSpec:
 def configured_series() -> list[SeriesSpec]:
     """The series this installation can measure, from the live config.
 
-    ``grid`` and ``evse`` are the only semantic roles.  Every other in-use
-    Shelly channel is a named meter; nothing here assumes solar, a heat pump
-    or any particular hardware beyond the grid clamp and the Wallbox.
+    ``grid``, ``evse``, ``solar`` and ``heatpump`` are semantic roles when
+    configured.  Every other in-use Shelly channel is a named meter; nothing
+    here assumes any particular hardware beyond the grid clamp and Wallbox.
     """
     grid_source = (config.SHELLY_GRID_DEVICE, config.SHELLY_GRID_CHANNEL)
     evse_device = config.SHELLY_EVSE_DEVICE
@@ -72,17 +72,49 @@ def configured_series() -> list[SeriesSpec]:
         if evse_device and evse_channel in (1, 2)
         else None
     )
+    solar_source = (
+        (config.SOLAR_MONITOR_DEVICE, config.SOLAR_MONITOR_CHANNEL)
+        if config.SOLAR_MONITORED
+        else None
+    )
+    heatpump_source = (
+        (
+            config.HEATPUMP_MONITOR_DEVICE,
+            config.HEATPUMP_MONITOR_CHANNEL,
+        )
+        if config.HEATPUMP_MONITORED
+        else None
+    )
 
     specs = [
         SeriesSpec("grid", "Grid", "Imported", "Exported"),
         SeriesSpec("evse", "EVSE", "Charged", "Discharged"),
         SeriesSpec("battery_dc", "EV battery", "In", "Out"),
     ]
+    if solar_source is not None:
+        specs.append(
+            SeriesSpec(
+                f"shelly.{solar_source[0]}.channel{solar_source[1]}",
+                "Solar",
+            )
+        )
+    if heatpump_source is not None:
+        specs.append(
+            SeriesSpec(
+                f"shelly.{heatpump_source[0]}.channel{heatpump_source[1]}",
+                "Heatpump",
+            )
+        )
     for device in ("primary", "secondary"):
         for channel in (1, 2):
             if not config.is_channel_in_use(device, channel):
                 continue
-            if (device, channel) in (grid_source, evse_source):
+            if (device, channel) in (
+                grid_source,
+                evse_source,
+                solar_source,
+                heatpump_source,
+            ):
                 continue
             specs.append(
                 SeriesSpec(

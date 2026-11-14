@@ -217,13 +217,19 @@ def build_records_from_daily_reports(
     *,
     start: Optional[date] = None,
     end: Optional[date] = None,
+    solar_available: Optional[bool] = None,
+    heatpump_available: Optional[bool] = None,
 ) -> list[Record]:
     """Build component records from the controller's daily report files.
 
     This is the no-InfluxDB path.  It needs the daily reports to include a
-    solar series and a heat-pump series; the labels are matched
-    case-insensitively ("solar", "heat").
+    solar series and a heat-pump series when those components are available;
+    the labels are matched case-insensitively ("solar", "heat").
     """
+    if solar_available is None:
+        solar_available = config.SOLAR_MONITORED
+    if heatpump_available is None:
+        heatpump_available = config.HEATPUMP_MONITORED
     weather, _ = load_weather(weather_path, local_zone)
     temperature = weather.get("temperature_c", {})
     gti = weather.get("tilted_irradiance_wm2", {})
@@ -243,12 +249,17 @@ def build_records_from_daily_reports(
         if end is not None and day > end:
             continue
         series = report.get("series") or {}
-        solar_key = _series_key(series, "solar")
-        heat_key = _series_key(series, "heat")
-        if solar_key is None or heat_key is None:
+        solar_key = _series_key(series, "solar") if solar_available else None
+        heat_key = _series_key(series, "heat") if heatpump_available else None
+        if solar_available and solar_key is None:
             raise ValueError(
-                "Daily reports must include a solar series and a heat-pump "
-                "series"
+                "Daily reports must include a solar series because solar is "
+                "marked available"
+            )
+        if heatpump_available and heat_key is None:
+            raise ValueError(
+                "Daily reports must include a heat-pump series because a "
+                "heat pump is marked available"
             )
         for index, slot in enumerate(report.get("slots") or []):
             if not isinstance(slot, dict):
@@ -256,8 +267,16 @@ def build_records_from_daily_reports(
             energy = slot.get("energy") or {}
             grid = _signed_energy_kw(energy.get("grid"))
             evse = _signed_energy_kw(energy.get("evse"))
-            solar = _signed_energy_kw(energy.get(solar_key))
-            heat = _signed_energy_kw(energy.get(heat_key))
+            solar = (
+                0.0
+                if solar_key is None
+                else _signed_energy_kw(energy.get(solar_key))
+            )
+            heat = (
+                0.0
+                if heat_key is None
+                else _signed_energy_kw(energy.get(heat_key))
+            )
             if (
                 grid is None
                 or evse is None
@@ -309,40 +328,58 @@ def fit_components(
     min_gti: float,
     pr_min_gti: float,
     temperature_bin_c: float,
+    solar_available: bool = True,
+    heatpump_available: bool = True,
 ) -> FittedComponents:
     """Fit the solar, heat-pump and baseload components on *records*."""
     if not records:
         raise ValueError("No records to fit")
-    solar_model = fit_solar_model(
-        [
-            SolarSample(
-                when=record.when,
-                gti_wm2=record.gti_wm2,
-                actual_kw=record.solar_kw,
-            )
-            for record in records
-        ],
-        kwp=kwp,
-        latitude=latitude,
-        longitude=longitude,
-        inverter_limit_kw=inverter_limit_kw,
-        min_samples=min_samples,
-        min_gti=min_gti,
-        pr_min_gti=pr_min_gti,
-    )
-    heat_model = fit_heatpump_model(
-        [
-            HeatPumpSample(
-                when=record.when,
-                temperature_c=record.temperature_c,
-                power_w=record.heat_kw * 1000.0,
-            )
-            for record in records
-        ],
-        timezone=timezone,
-        temperature_bin_c=temperature_bin_c,
-        min_samples=min_samples,
-    )
+    if solar_available:
+        solar_model = fit_solar_model(
+            [
+                SolarSample(
+                    when=record.when,
+                    gti_wm2=record.gti_wm2,
+                    actual_kw=record.solar_kw,
+                )
+                for record in records
+            ],
+            kwp=kwp,
+            latitude=latitude,
+            longitude=longitude,
+            inverter_limit_kw=inverter_limit_kw,
+            min_samples=min_samples,
+            min_gti=min_gti,
+            pr_min_gti=pr_min_gti,
+        )
+    else:
+        # A zero-PR model predicts no solar without needing daylight samples.
+        solar_model = SolarModel(
+            kwp=max(1.0, float(kwp)),
+            latitude=latitude,
+            longitude=longitude,
+            performance_ratio=0.0,
+            inverter_limit_kw=inverter_limit_kw,
+        )
+    if heatpump_available:
+        heat_model = fit_heatpump_model(
+            [
+                HeatPumpSample(
+                    when=record.when,
+                    temperature_c=record.temperature_c,
+                    power_w=record.heat_kw * 1000.0,
+                )
+                for record in records
+            ],
+            timezone=timezone,
+            temperature_bin_c=temperature_bin_c,
+            min_samples=min_samples,
+        )
+    else:
+        heat_model = HeatPumpModel(
+            timezone=timezone,
+            temperature_bin_c=temperature_bin_c,
+        )
     baseload_profile, baseload_overall = _profile(
         records, lambda record: record.baseload_kw
     )
@@ -423,6 +460,8 @@ def fit_and_evaluate(
     pr_min_gti: float,
     temperature_bin_c: float,
     output_dir: str | Path,
+    solar_available: bool = True,
+    heatpump_available: bool = True,
     quiet: bool = False,
 ) -> dict:
     if not records:
@@ -448,6 +487,8 @@ def fit_and_evaluate(
         min_gti=min_gti,
         pr_min_gti=pr_min_gti,
         temperature_bin_c=temperature_bin_c,
+        solar_available=solar_available,
+        heatpump_available=heatpump_available,
     )
     solar_model = fitted.solar_model
     heat_model = fitted.heat_model
@@ -576,6 +617,8 @@ def fit_all(
     output_dir: str | Path,
     model_name: str = "model.json",
     min_days: int = 1,
+    solar_available: bool = True,
+    heatpump_available: bool = True,
     quiet: bool = False,
 ) -> dict:
     """Fit the component model on every record and write a live model."""
@@ -603,6 +646,8 @@ def fit_all(
         min_gti=min_gti,
         pr_min_gti=pr_min_gti,
         temperature_bin_c=temperature_bin_c,
+        solar_available=solar_available,
+        heatpump_available=heatpump_available,
     )
     model = component_model_dict(
         fitted,
@@ -675,6 +720,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Minimum distinct measured days in --fit-all mode (default: 1)",
     )
+    parser.add_argument(
+        "--no-solar",
+        action="store_true",
+        help="Fit a zero solar component for a property without solar",
+    )
+    parser.add_argument(
+        "--no-heatpump",
+        action="store_true",
+        help="Fit a zero heat-pump component for a property without one",
+    )
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--min-gti", type=float, default=100.0)
     parser.add_argument("--pr-min-gti", type=float, default=700.0)
@@ -726,6 +781,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 output_dir=args.output_dir,
                 model_name=args.model_name,
                 min_days=args.min_days,
+                solar_available=not args.no_solar,
+                heatpump_available=not args.no_heatpump,
                 quiet=args.quiet,
             )
         else:
@@ -742,6 +799,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 pr_min_gti=args.pr_min_gti,
                 temperature_bin_c=args.temperature_bin,
                 output_dir=args.output_dir,
+                solar_available=not args.no_solar,
+                heatpump_available=not args.no_heatpump,
                 quiet=args.quiet,
             )
     except (OSError, ValueError) as error:
