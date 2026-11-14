@@ -608,6 +608,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_shadow_run = None
         self._last_component_shadow_run = None
         self._component_model = None
+        self._component_model_path = None
         self._component_model_mtime = None
         self._learning_mode = self._resolve_learning_mode()
         self._shadow_enabled = (
@@ -1252,20 +1253,31 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
     def _live_component_model(self):
-        """Load the component model, refreshing it if the file changed."""
-        path = Path(config.NET_GRID_MODEL_FILE)
+        """Load the live component model, falling back to the holdout model."""
+        paths = (
+            Path(config.LIVE_COMPONENT_MODEL_FILE),
+            Path(config.NET_GRID_MODEL_FILE),
+        )
+        path = next(
+            (candidate for candidate in paths if candidate.is_file()),
+            None,
+        )
+        if path is None:
+            return None
         try:
             mtime = path.stat().st_mtime
         except OSError:
             return None
         if (
             self._component_model is not None
+            and self._component_model_path == path
             and self._component_model_mtime == mtime
         ):
             return self._component_model
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             self._component_model = ComponentLoadModel.from_dict(payload)
+            self._component_model_path = path
             self._component_model_mtime = mtime
         except (OSError, ValueError, TypeError, KeyError) as exc:
             warning(
@@ -1273,6 +1285,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"{exc}"
             )
             self._component_model = None
+            self._component_model_path = None
             self._component_model_mtime = None
         return self._component_model
 

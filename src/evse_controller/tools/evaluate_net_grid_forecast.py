@@ -14,6 +14,14 @@ Example::
     python -m evse_controller.tools.evaluate_net_grid_forecast \
         --kwp 4.7 --inverter-limit-kw 3.6 \
         --latitude 51.5 --longitude -3.2 --test-days 60
+
+Use ``--fit-all`` to fit on every record and write a live model without a
+holdout evaluation::
+
+    python -m evse_controller.tools.evaluate_net_grid_forecast \
+        --fit-all --model-name live_model.json \
+        --kwp 4.7 --inverter-limit-kw 3.6 \
+        --latitude 51.5 --longitude -3.2
 """
 
 from __future__ import annotations
@@ -32,10 +40,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from evse_controller.forecasting.heatpump import (
     DEFAULT_TEMPERATURE_BIN_C,
+    HeatPumpModel,
     HeatPumpSample,
     fit_heatpump_model,
 )
 from evse_controller.forecasting.solar import (
+    SolarModel,
     SolarSample,
     fit_solar_model,
 )
@@ -62,6 +72,17 @@ class Record:
     solar_kw: float
     heat_kw: float
     baseload_kw: float
+
+
+@dataclass(frozen=True)
+class FittedComponents:
+    solar_model: SolarModel
+    heat_model: HeatPumpModel
+    baseload_profile: dict[int, float]
+    baseload_overall: float
+    house_profile: dict[int, float]
+    house_overall: float
+    residual_quantiles: dict[str, float]
 
 
 def _percentile(values: Sequence[float], fraction: float) -> float:
@@ -166,6 +187,118 @@ def _profile(
     return profile, overall
 
 
+def fit_components(
+    records: Sequence[Record],
+    *,
+    kwp: float,
+    inverter_limit_kw: Optional[float],
+    latitude: float,
+    longitude: float,
+    timezone: str,
+    min_samples: int,
+    min_gti: float,
+    pr_min_gti: float,
+    temperature_bin_c: float,
+) -> FittedComponents:
+    """Fit the solar, heat-pump and baseload components on *records*."""
+    if not records:
+        raise ValueError("No records to fit")
+    solar_model = fit_solar_model(
+        [
+            SolarSample(
+                when=record.when,
+                gti_wm2=record.gti_wm2,
+                actual_kw=record.solar_kw,
+            )
+            for record in records
+        ],
+        kwp=kwp,
+        latitude=latitude,
+        longitude=longitude,
+        inverter_limit_kw=inverter_limit_kw,
+        min_samples=min_samples,
+        min_gti=min_gti,
+        pr_min_gti=pr_min_gti,
+    )
+    heat_model = fit_heatpump_model(
+        [
+            HeatPumpSample(
+                when=record.when,
+                temperature_c=record.temperature_c,
+                power_w=record.heat_kw * 1000.0,
+            )
+            for record in records
+        ],
+        timezone=timezone,
+        temperature_bin_c=temperature_bin_c,
+        min_samples=min_samples,
+    )
+    baseload_profile, baseload_overall = _profile(
+        records, lambda record: record.baseload_kw
+    )
+    house_profile, house_overall = _profile(
+        records, lambda record: record.house_kw
+    )
+    residuals = []
+    for record in records:
+        solar_pred = solar_model.predict(record.when, record.gti_wm2)
+        heat_pred = (
+            heat_model.predict(
+                record.when, record.temperature_c, quantile="p50"
+            )
+            / 1000.0
+        )
+        baseload_pred = baseload_profile.get(
+            record.slot, baseload_overall
+        )
+        residuals.append(
+            record.house_kw
+            - (baseload_pred + heat_pred - solar_pred)
+        )
+    residual_quantiles = {
+        str(fraction): _percentile(residuals, fraction)
+        for fraction in (0.1, 0.3, 0.5, 0.7, 0.9)
+    }
+    return FittedComponents(
+        solar_model=solar_model,
+        heat_model=heat_model,
+        baseload_profile=baseload_profile,
+        baseload_overall=baseload_overall,
+        house_profile=house_profile,
+        house_overall=house_overall,
+        residual_quantiles=residual_quantiles,
+    )
+
+
+def component_model_dict(
+    fitted: FittedComponents,
+    *,
+    timezone: str,
+    kwp: float,
+    inverter_limit_kw: Optional[float],
+    training_end: str,
+    test_start: Optional[str],
+    fit_mode: str,
+) -> dict:
+    """Serialise a fitted component model for the live planner or backtest."""
+    return {
+        "timezone": timezone,
+        "kwp": kwp,
+        "inverter_limit_kw": inverter_limit_kw,
+        "baseload_profile_kw": {
+            str(slot): value
+            for slot, value in sorted(fitted.baseload_profile.items())
+        },
+        "baseload_overall_kw": fitted.baseload_overall,
+        "residual_quantiles_kw": fitted.residual_quantiles,
+        "training_end": training_end,
+        "test_start": test_start,
+        "fit_mode": fit_mode,
+        "solar_model": fitted.solar_model.to_dict(),
+        "heatpump_model": fitted.heat_model.to_dict(),
+    }
+
+
 def fit_and_evaluate(
     records: Sequence[Record],
     *,
@@ -194,63 +327,25 @@ def fit_and_evaluate(
     if not test:
         raise ValueError("No test records in the selected period")
 
-    solar_model = fit_solar_model(
-        [
-            SolarSample(
-                when=record.when,
-                gti_wm2=record.gti_wm2,
-                actual_kw=record.solar_kw,
-            )
-            for record in train
-        ],
+    fitted = fit_components(
+        train,
         kwp=kwp,
+        inverter_limit_kw=inverter_limit_kw,
         latitude=latitude,
         longitude=longitude,
-        inverter_limit_kw=inverter_limit_kw,
+        timezone=timezone,
         min_samples=min_samples,
         min_gti=min_gti,
         pr_min_gti=pr_min_gti,
-    )
-    heat_model = fit_heatpump_model(
-        [
-            HeatPumpSample(
-                when=record.when,
-                temperature_c=record.temperature_c,
-                power_w=record.heat_kw * 1000.0,
-            )
-            for record in train
-        ],
-        timezone=timezone,
         temperature_bin_c=temperature_bin_c,
-        min_samples=min_samples,
     )
-    baseload_profile, baseload_overall = _profile(
-        train, lambda record: record.baseload_kw
-    )
-    house_profile, house_overall = _profile(
-        train, lambda record: record.house_kw
-    )
-
-    training_residuals = []
-    for record in train:
-        solar_pred = solar_model.predict(record.when, record.gti_wm2)
-        heat_pred = (
-            heat_model.predict(
-                record.when, record.temperature_c, quantile="p50"
-            )
-            / 1000.0
-        )
-        baseload_pred = baseload_profile.get(
-            record.slot, baseload_overall
-        )
-        training_residuals.append(
-            record.house_kw
-            - (baseload_pred + heat_pred - solar_pred)
-        )
-    residual_quantiles = {
-        str(fraction): _percentile(training_residuals, fraction)
-        for fraction in (0.1, 0.3, 0.5, 0.7, 0.9)
-    }
+    solar_model = fitted.solar_model
+    heat_model = fitted.heat_model
+    baseload_profile = fitted.baseload_profile
+    baseload_overall = fitted.baseload_overall
+    house_profile = fitted.house_profile
+    house_overall = fitted.house_overall
+    residual_quantiles = fitted.residual_quantiles
 
     component_pairs = []
     persistence_pairs = []
@@ -315,21 +410,15 @@ def fit_and_evaluate(
         )
         writer.writerows(rows)
 
-    model = {
-        "timezone": timezone,
-        "kwp": kwp,
-        "inverter_limit_kw": inverter_limit_kw,
-        "baseload_profile_kw": {
-            str(slot): value
-            for slot, value in sorted(baseload_profile.items())
-        },
-        "baseload_overall_kw": baseload_overall,
-        "residual_quantiles_kw": residual_quantiles,
-        "training_end": train[-1].when.isoformat(),
-        "test_start": test_start.isoformat(),
-        "solar_model": solar_model.to_dict(),
-        "heatpump_model": heat_model.to_dict(),
-    }
+    model = component_model_dict(
+        fitted,
+        timezone=timezone,
+        kwp=kwp,
+        inverter_limit_kw=inverter_limit_kw,
+        training_end=train[-1].when.isoformat(),
+        test_start=test_start.isoformat(),
+        fit_mode="holdout",
+    )
     (output / "model.json").write_text(
         json.dumps(model, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -362,6 +451,71 @@ def fit_and_evaluate(
     return summary
 
 
+def fit_all(
+    records: Sequence[Record],
+    *,
+    kwp: float,
+    inverter_limit_kw: Optional[float],
+    latitude: float,
+    longitude: float,
+    timezone: str,
+    min_samples: int,
+    min_gti: float,
+    pr_min_gti: float,
+    temperature_bin_c: float,
+    output_dir: str | Path,
+    model_name: str = "model.json",
+    quiet: bool = False,
+) -> dict:
+    """Fit the component model on every record and write a live model."""
+    if not records:
+        raise ValueError("No aligned net-grid records found")
+    fitted = fit_components(
+        records,
+        kwp=kwp,
+        inverter_limit_kw=inverter_limit_kw,
+        latitude=latitude,
+        longitude=longitude,
+        timezone=timezone,
+        min_samples=min_samples,
+        min_gti=min_gti,
+        pr_min_gti=pr_min_gti,
+        temperature_bin_c=temperature_bin_c,
+    )
+    model = component_model_dict(
+        fitted,
+        timezone=timezone,
+        kwp=kwp,
+        inverter_limit_kw=inverter_limit_kw,
+        training_end=records[-1].when.isoformat(),
+        test_start=None,
+        fit_mode="all",
+    )
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / model_name
+    path.write_text(
+        json.dumps(model, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "fit_mode": "all",
+        "training_records": len(records),
+        "training_start": records[0].when.isoformat(),
+        "training_end": records[-1].when.isoformat(),
+        "model_path": str(path),
+        "performance_ratio": fitted.solar_model.performance_ratio,
+        "shading_bins": len(fitted.solar_model.shading),
+        "residual_quantiles_kw": fitted.residual_quantiles,
+        "heatpump_temperature_bins": len(fitted.heat_model.bins),
+        "heatpump_slot_profiles": len(fitted.heat_model.slot_profiles),
+    }
+    if not quiet:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(f"Wrote live component model to {path}")
+    return summary
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -380,6 +534,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--longitude", type=float, default=config.WEATHER_LONGITUDE)
     parser.add_argument("--timezone", default="Europe/London")
     parser.add_argument("--test-days", type=int, default=60)
+    parser.add_argument(
+        "--fit-all",
+        action="store_true",
+        help=(
+            "Fit on every record and write a live model without a holdout "
+            "evaluation"
+        ),
+    )
+    parser.add_argument(
+        "--model-name",
+        default="model.json",
+        help="Model filename in --fit-all mode (default: model.json)",
+    )
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--min-gti", type=float, default=100.0)
     parser.add_argument("--pr-min-gti", type=float, default=700.0)
@@ -416,21 +583,38 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             start=start,
             end=end,
         )
-        fit_and_evaluate(
-            records,
-            kwp=args.kwp,
-            inverter_limit_kw=args.inverter_limit_kw,
-            latitude=float(args.latitude),
-            longitude=float(args.longitude),
-            timezone=args.timezone,
-            test_days=args.test_days,
-            min_samples=args.min_samples,
-            min_gti=args.min_gti,
-            pr_min_gti=args.pr_min_gti,
-            temperature_bin_c=args.temperature_bin,
-            output_dir=args.output_dir,
-            quiet=args.quiet,
-        )
+        if args.fit_all:
+            fit_all(
+                records,
+                kwp=args.kwp,
+                inverter_limit_kw=args.inverter_limit_kw,
+                latitude=float(args.latitude),
+                longitude=float(args.longitude),
+                timezone=args.timezone,
+                min_samples=args.min_samples,
+                min_gti=args.min_gti,
+                pr_min_gti=args.pr_min_gti,
+                temperature_bin_c=args.temperature_bin,
+                output_dir=args.output_dir,
+                model_name=args.model_name,
+                quiet=args.quiet,
+            )
+        else:
+            fit_and_evaluate(
+                records,
+                kwp=args.kwp,
+                inverter_limit_kw=args.inverter_limit_kw,
+                latitude=float(args.latitude),
+                longitude=float(args.longitude),
+                timezone=args.timezone,
+                test_days=args.test_days,
+                min_samples=args.min_samples,
+                min_gti=args.min_gti,
+                pr_min_gti=args.pr_min_gti,
+                temperature_bin_c=args.temperature_bin,
+                output_dir=args.output_dir,
+                quiet=args.quiet,
+            )
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

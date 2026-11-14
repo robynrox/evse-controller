@@ -5062,6 +5062,56 @@ class TestShadowPlannerAndEstimator:
         assert len(updated.slots[0].load_samples) == 2
         assert planner_input.slots[0].load_source == "profile"
 
+    def test_live_component_model_prefers_the_live_file(
+        self, tmp_path, monkeypatch
+    ):
+        live = tmp_path / "live_model.json"
+        holdout = tmp_path / "model.json"
+        payload = {
+            "timezone": "Europe/London",
+            "baseload_profile_kw": {"24": 0.3},
+            "baseload_overall_kw": 0.3,
+            "residual_quantiles_kw": {"0.5": 0.0},
+            "solar_model": {
+                "kwp": 4.7,
+                "latitude": 51.5,
+                "longitude": -3.2,
+                "performance_ratio": 0.8,
+                "inverter_limit_kw": 3.6,
+                "shading": {},
+            },
+            "heatpump_model": {
+                "timezone": "Europe/London",
+                "bins": {},
+                "slot_profiles": {},
+                "overall": {"n": 0, "p50": 0.0, "p90": 0.0},
+            },
+        }
+        live.write_text(json.dumps(payload))
+        holdout.write_text(json.dumps(payload))
+        monkeypatch.setattr(
+            Config,
+            "LIVE_COMPONENT_MODEL_FILE",
+            property(lambda self: live),
+        )
+        monkeypatch.setattr(
+            Config,
+            "NET_GRID_MODEL_FILE",
+            property(lambda self: holdout),
+        )
+        tariff = _build_tariff()
+
+        assert tariff._live_component_model() is not None
+        assert tariff._component_model_path == live
+
+        live.unlink()
+        tariff._component_model = None
+        tariff._component_model_path = None
+        tariff._component_model_mtime = None
+
+        assert tariff._live_component_model() is not None
+        assert tariff._component_model_path == holdout
+
     def test_learning_preview_label_is_absent_when_preview_is_off(self):
         tariff = _build_tariff()
         tariff._learning_mode = "off"

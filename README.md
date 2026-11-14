@@ -972,6 +972,23 @@ the backtest. If the model or weather snapshot is missing or stale, the
 component label is omitted and the recorded-load preview continues. Weather
 is optional and never a control dependency.
 
+The live preview prefers a model fitted on all recent data and falls back to
+the backtest model. Write the live model separately:
+
+```bash
+python -m evse_controller.tools.evaluate_net_grid_forecast \
+    --fit-all --model-name live_model.json \
+    --weather data/analysis/weather_forecast_history.csv.gz \
+    --kwp 4.7 --inverter-limit-kw 3.6 \
+    --latitude 51.5 --longitude -3.2
+```
+
+The backtest keeps using `model.json`, whose holdout cutoff protects the
+comparison from training leakage. `live_model.json` is fitted on every
+available record and is the better input for the live preview. Re-run the
+fit-all command as new measured days arrive; the preview reloads the file
+when its modification time changes.
+
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can
 alter the chosen action or its cost, even if the configuration is unchanged.

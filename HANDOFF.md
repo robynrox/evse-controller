@@ -419,7 +419,10 @@ completed fixes.
   written to planner history, so it does not replace the recorded-load
   baseline used by the backtest.  If the model or weather is missing or stale,
   only the recorded-load preview is shown; weather is never a control
-  dependency.
+  dependency.  The live preview prefers
+  `data/analysis/net_grid_model/live_model.json`, fitted on all recent data
+  with `evaluate_net_grid_forecast --fit-all`, and falls back to the holdout
+  `model.json` used by the backtest.
 - `planner/backtest.py` and `tools/dp_backtest.py` replay the first Learning
   mode preview plan of each day against the measured grid load and frozen
   prices. The tool compares DP grid cost with the heuristic's actual cost, SoC

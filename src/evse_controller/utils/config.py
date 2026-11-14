@@ -187,6 +187,17 @@ class Config:
         return get_data_dir() / "analysis" / "net_grid_model" / "model.json"
 
     @property
+    def LIVE_COMPONENT_MODEL_FILE(self):
+        """Component model fitted on all recent data for live preview."""
+        self._ensure_initialized()
+        return (
+            get_data_dir()
+            / "analysis"
+            / "net_grid_model"
+            / "live_model.json"
+        )
+
+    @property
     def WEATHER_FORECAST_HISTORY_FILE(self):
         """Tidy historical-forecast weather CSV for shadow backtests."""
         self._ensure_initialized()
