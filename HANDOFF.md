@@ -411,6 +411,15 @@ completed fixes.
   slot, price, SoC, load-profile, plan, estimator, decision and weather-cache
   coverage over 7/30/90 days. A completed day is good only when all 48 slots
   have measured data, a grid reading and a frozen price; today is not scored.
+- While Learning mode is in `preview`, the shadow planner also computes a
+  second in-memory DP plan with the live component load forecast when
+  `data/analysis/net_grid_model/model.json` and a recent weather snapshot are
+  available.  The dashboard shows both actions, e.g.
+  `Would: Charge 11A · Component: Charge 12A`.  The component plan is not
+  written to planner history, so it does not replace the recorded-load
+  baseline used by the backtest.  If the model or weather is missing or stale,
+  only the recorded-load preview is shown; weather is never a control
+  dependency.
 - `planner/backtest.py` and `tools/dp_backtest.py` replay the first Learning
   mode preview plan of each day against the measured grid load and frozen
   prices. The tool compares DP grid cost with the heuristic's actual cost, SoC

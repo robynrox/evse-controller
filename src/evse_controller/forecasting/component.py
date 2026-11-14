@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from evse_controller.forecasting.heatpump import HeatPumpModel
 from evse_controller.forecasting.solar import SolarModel
+from evse_controller.planner.dp import PlannerSlot
 
 
 class MissingForecastWeather(ValueError):
@@ -110,6 +112,37 @@ def _aware(when: datetime, zone: ZoneInfo) -> datetime:
     return when
 
 
+def _samples_for_when(
+    model: ComponentLoadModel,
+    weather: Mapping[str, Mapping[datetime, float]],
+    when: datetime,
+) -> tuple[tuple[tuple[float, float], ...], float]:
+    """Return component samples and their weighted mean for *when*."""
+    zone = ZoneInfo(model.timezone)
+    local = _aware(when, zone)
+    hour = local.astimezone(timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    )
+    temperature_c = (weather.get("temperature_c") or {}).get(hour)
+    gti_wm2 = (weather.get("tilted_irradiance_wm2") or {}).get(hour)
+    if temperature_c is None or gti_wm2 is None:
+        raise MissingForecastWeather(
+            "No forecast weather for " f"{local.isoformat()}"
+        )
+    samples = model.samples(
+        local, float(temperature_c), float(gti_wm2)
+    )
+    total_weight = sum(weight for _, weight in samples)
+    if total_weight <= 0:
+        raise ValueError(
+            f"Component forecast has no weight for {local.isoformat()}"
+        )
+    load_kw = sum(
+        kw * weight for kw, weight in samples
+    ) / total_weight
+    return samples, load_kw
+
+
 def apply_component_load_to_run(
     run: Mapping[str, Any],
     model: ComponentLoadModel,
@@ -118,12 +151,9 @@ def apply_component_load_to_run(
     """Return a copy of *run* with component net-grid load inputs.
 
     Prices, sessions, follow gates and the initial SoC are left untouched.
-    The recorded load is replaced only where historical forecast weather is
-    available; a missing slot is an error rather than a synthetic zero.
+    The recorded load is replaced only where forecast weather is available;
+    a missing slot is an error rather than a synthetic zero.
     """
-    zone = ZoneInfo(model.timezone)
-    temperature = weather.get("temperature_c") or {}
-    gti = weather.get("tilted_irradiance_wm2") or {}
     inputs = []
     for item in run.get("inputs") or []:
         if not isinstance(item, Mapping):
@@ -138,28 +168,7 @@ def apply_component_load_to_run(
                 "Component load source found an input row without a "
                 f"valid start: {item!r}"
             ) from None
-        local = _aware(when, zone)
-        hour = local.astimezone(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        temperature_c = temperature.get(hour)
-        gti_wm2 = gti.get(hour)
-        if temperature_c is None or gti_wm2 is None:
-            raise MissingForecastWeather(
-                "No historical forecast weather for "
-                f"{local.isoformat()}"
-            )
-        samples = model.samples(
-            local, float(temperature_c), float(gti_wm2)
-        )
-        total_weight = sum(weight for _, weight in samples)
-        if total_weight <= 0:
-            raise ValueError(
-                f"Component forecast has no weight for {local.isoformat()}"
-            )
-        load_kw = sum(
-            kw * weight for kw, weight in samples
-        ) / total_weight
+        samples, load_kw = _samples_for_when(model, weather, when)
         updated["load_kw"] = round(load_kw, 6)
         updated["load_samples"] = [
             [round(kw, 6), weight] for kw, weight in samples
@@ -169,4 +178,52 @@ def apply_component_load_to_run(
     result = dict(run)
     result["inputs"] = inputs
     return result
+
+
+def apply_component_load_to_slots(
+    slots: Sequence[PlannerSlot],
+    model: ComponentLoadModel,
+    weather: Mapping[str, Mapping[datetime, float]],
+) -> tuple[PlannerSlot, ...]:
+    """Return planner slots with component net-grid load samples."""
+    updated = []
+    for slot in slots:
+        samples, load_kw = _samples_for_when(model, weather, slot.start)
+        updated.append(
+            replace(
+                slot,
+                load_kw=round(load_kw, 6),
+                load_samples=tuple(
+                    (round(kw, 6), weight) for kw, weight in samples
+                ),
+                load_source="component",
+            )
+        )
+    return tuple(updated)
+
+
+def weather_from_snapshot(snapshot: Any) -> dict[str, dict[datetime, float]]:
+    """Convert a live weather snapshot into the component weather mapping."""
+    zone = ZoneInfo(str(getattr(snapshot, "timezone", "Europe/London")))
+    temperature: dict[datetime, float] = {}
+    gti: dict[datetime, float] = {}
+    for hour in getattr(snapshot, "hours", ()):
+        when = getattr(hour, "time", None)
+        if when is None:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=zone)
+        utc = when.astimezone(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        temperature_c = getattr(hour, "temperature_c", None)
+        gti_wm2 = getattr(hour, "tilted_irradiance_wm2", None)
+        if temperature_c is not None:
+            temperature[utc] = float(temperature_c)
+        if gti_wm2 is not None:
+            gti[utc] = float(gti_wm2)
+    return {
+        "temperature_c": temperature,
+        "tilted_irradiance_wm2": gti,
+    }
 

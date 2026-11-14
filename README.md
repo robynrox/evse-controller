@@ -952,6 +952,26 @@ would take, such as `Would: Charge 11A`, `Would: Harvest solar >=4A` or
 `Would: Cover house aggr >=4A from 830W`. Preview is safe to leave on, but it
 does not actuate.
 
+When the component model and a recent live weather snapshot are available,
+the dashboard also shows a second preview action, for example:
+
+```text
+Would: Charge 11A · Component: Charge 12A
+```
+
+The first action uses the recorded load profile. The second uses the
+weather-driven component forecast:
+
+```text
+baseload(slot) + heat_pump(temperature) − solar(irradiance)
+```
+
+The component preview is computed in memory only and is not written to the
+planner history, so it does not replace the recorded-load baseline used by
+the backtest. If the model or weather snapshot is missing or stale, the
+component label is omitted and the recorded-load preview continues. Weather
+is optional and never a control dependency.
+
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can
 alter the chosen action or its cost, even if the configuration is unchanged.

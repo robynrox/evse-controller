@@ -10,6 +10,12 @@ from evse_controller.energy_sessions import (
     session_store,
 )
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.forecasting.component import (
+    ComponentLoadModel,
+    MissingForecastWeather,
+    apply_component_load_to_slots,
+    weather_from_snapshot,
+)
 from evse_controller.load_profile import LoadProfile, SlotLoad
 from evse_controller.planner.dp import DpPlanner
 from evse_controller.planner.history import PlannerHistory
@@ -23,6 +29,7 @@ from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.price_tiers import IOG_PRESETS
 from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
+from evse_controller.weather import weather_refresher
 import threading
 import queue
 import math
@@ -599,6 +606,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_shadow_slot = -1
         self._last_shadow_soc = None
         self._last_shadow_run = None
+        self._last_component_shadow_run = None
+        self._component_model = None
+        self._component_model_mtime = None
         self._learning_mode = self._resolve_learning_mode()
         self._shadow_enabled = (
             self.ENABLE_SHADOW_PLANNER
@@ -749,7 +759,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ),
             None,
         )
-        return f"Would: {action_label(action, slot_input)}"
+        label = f"Would: {action_label(action, slot_input)}"
+        component = self._component_preview_label(now)
+        if component:
+            label += f" · Component: {component}"
+        return label
 
     def _time_to_minutes(self, time_str: str) -> int:
         """Convert time string in HH:MM format to minutes since midnight."""
@@ -1237,6 +1251,85 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"IOCTGO_AGILEOUT: Could not record decision history: {exc}"
             )
 
+    def _live_component_model(self):
+        """Load the component model, refreshing it if the file changed."""
+        path = Path(config.NET_GRID_MODEL_FILE)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None
+        if (
+            self._component_model is not None
+            and self._component_model_mtime == mtime
+        ):
+            return self._component_model
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self._component_model = ComponentLoadModel.from_dict(payload)
+            self._component_model_mtime = mtime
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            warning(
+                "IOCTGO_AGILEOUT: Could not load the component model: "
+                f"{exc}"
+            )
+            self._component_model = None
+            self._component_model_mtime = None
+        return self._component_model
+
+    def _component_planner_input(self, planner_input):
+        """Return a planner input using the live component load forecast."""
+        if not self._shadow_enabled:
+            return None
+        model = self._live_component_model()
+        if model is None:
+            debug("IOCTGO_AGILEOUT: Component preview has no model")
+            return None
+        try:
+            snapshot = weather_refresher.client.latest(max_age_hours=6.0)
+            if snapshot is None:
+                debug(
+                    "IOCTGO_AGILEOUT: Component preview has no recent "
+                    "weather snapshot"
+                )
+                return None
+            weather = weather_from_snapshot(snapshot)
+            slots = apply_component_load_to_slots(
+                planner_input.slots, model, weather
+            )
+        except MissingForecastWeather as exc:
+            debug(f"IOCTGO_AGILEOUT: Component preview unavailable: {exc}")
+            return None
+        except Exception as exc:
+            warning(f"IOCTGO_AGILEOUT: Component preview failed: {exc}")
+            return None
+        return replace(planner_input, slots=slots)
+
+    def _component_preview_label(self, now: datetime) -> Optional[str]:
+        """The component-load action for the current slot, if one exists."""
+        run = self._last_component_shadow_run
+        if run is None or run.get("day") != now.date().isoformat():
+            return None
+        slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        action = next(
+            (
+                item
+                for item in run.get("actions") or []
+                if item.get("slot") == slot
+            ),
+            None,
+        )
+        if action is None:
+            return None
+        slot_input = next(
+            (
+                item
+                for item in run.get("inputs") or []
+                if item.get("slot") == slot
+            ),
+            None,
+        )
+        return action_label(action, slot_input)
+
     def _shadow_plan(self, state, current_slot: int, now) -> None:
         """Run the DP as an observer and record its plan.  Never actuate it."""
         if not self._shadow_enabled:
@@ -1276,6 +1369,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 unknown_export_p=0.0,
             )
             planner_input = self._with_follow_gates(planner_input)
+            component_input = self._component_planner_input(planner_input)
             planner = DpPlanner(
                 efficiency_model=self.EFFICIENCY_MODEL,
                 capacity_kwh=self.SOC_CAPACITY_KWH,
@@ -1307,6 +1401,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._last_shadow_run = run
             self._last_shadow_slot = current_slot
             self._last_shadow_soc = battery
+            if component_input is not None:
+                try:
+                    component_result = planner.plan(
+                        component_input.slots,
+                        component_input.initial_soc,
+                    )
+                    component_run = self._shadow_run_dict(
+                        now,
+                        current_slot,
+                        battery,
+                        component_input,
+                        component_result,
+                    )
+                    component_run["solver_mode"] = "preview-component"
+                    component_run["load_source"] = "component"
+                    self._last_component_shadow_run = component_run
+                    debug(
+                        "IOCTGO_AGILEOUT: Component preview for slot "
+                        f"{current_slot}: SoC {component_result.final_soc:.1f}%, "
+                        f"cost {component_result.total_cost_p:.1f}p, "
+                        f"success={component_result.success}"
+                    )
+                except Exception as exc:
+                    warning(
+                        "IOCTGO_AGILEOUT: Component preview plan failed: "
+                        f"{exc}"
+                    )
             debug(
                 f"IOCTGO_AGILEOUT: Shadow DP plan for slot {current_slot}: "
                 f"SoC {result.final_soc:.1f}%, cost {result.total_cost_p:.1f}p, "

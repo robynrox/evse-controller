@@ -4973,6 +4973,95 @@ class TestShadowPlannerAndEstimator:
 
         assert tariff.learning_preview_label() == "Would: Charge 11A"
 
+    def test_learning_preview_label_includes_the_component_action(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=12, minute=10, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff._learning_mode = "preview"
+        tariff._shadow_enabled = True
+        tariff._last_shadow_run = {
+            "day": fixed.date().isoformat(),
+            "slot": 24,
+            "actions": [
+                {"slot": 24, "kind": "charge", "current_a": 11.0},
+                {"slot": 25, "kind": "idle", "current_a": 0.0},
+            ],
+            "inputs": [{"slot": 24}],
+        }
+        tariff._last_component_shadow_run = {
+            "day": fixed.date().isoformat(),
+            "slot": 24,
+            "actions": [
+                {"slot": 24, "kind": "discharge", "current_a": 5.0},
+                {"slot": 25, "kind": "idle", "current_a": 0.0},
+            ],
+            "inputs": [{"slot": 24}],
+        }
+
+        assert tariff.learning_preview_label() == (
+            "Would: Charge 11A · Component: Discharge 5A"
+        )
+
+    def test_component_planner_input_uses_the_live_weather(
+        self, monkeypatch
+    ):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+        import evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing as module
+
+        class StubModel:
+            timezone = "Europe/London"
+
+            def samples(self, when, temperature_c, gti_wm2):
+                return ((0.5, 0.5), (1.0, 0.5))
+
+        class Hour:
+            time = datetime(2026, 11, 14, 12, 0)
+            temperature_c = 8.0
+            tilted_irradiance_wm2 = 200.0
+
+        class Snapshot:
+            timezone = "Europe/London"
+            hours = (Hour(),)
+
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        monkeypatch.setattr(
+            tariff, "_live_component_model", lambda: StubModel()
+        )
+        monkeypatch.setattr(
+            module.weather_refresher.client,
+            "latest",
+            lambda **kwargs: Snapshot(),
+        )
+        planner_input = PlannerInput(
+            day=datetime(2026, 11, 14).date(),
+            slots=(
+                PlannerSlot(
+                    start=datetime(2026, 11, 14, 12, 0),
+                    slot=24,
+                    import_p=20.0,
+                    export_p=5.0,
+                    load_kw=0.2,
+                    load_samples=((0.2, 1.0),),
+                    load_source="profile",
+                ),
+            ),
+            initial_soc=50.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        updated = tariff._component_planner_input(planner_input)
+
+        assert updated is not None
+        assert updated.slots[0].load_source == "component"
+        assert updated.slots[0].load_kw == pytest.approx(0.75)
+        assert len(updated.slots[0].load_samples) == 2
+        assert planner_input.slots[0].load_source == "profile"
+
     def test_learning_preview_label_is_absent_when_preview_is_off(self):
         tariff = _build_tariff()
         tariff._learning_mode = "off"

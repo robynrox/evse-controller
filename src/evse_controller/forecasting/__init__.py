@@ -4,6 +4,8 @@ from evse_controller.forecasting.component import (
     ComponentLoadModel,
     MissingForecastWeather,
     apply_component_load_to_run,
+    apply_component_load_to_slots,
+    weather_from_snapshot,
 )
 from evse_controller.forecasting.heatpump import (
     HeatPumpModel,
@@ -24,6 +26,8 @@ __all__ = [
     "SolarModel",
     "SolarSample",
     "apply_component_load_to_run",
+    "apply_component_load_to_slots",
     "fit_heatpump_model",
     "fit_solar_model",
+    "weather_from_snapshot",
 ]

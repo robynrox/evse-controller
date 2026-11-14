@@ -7,7 +7,10 @@ import pytest
 from evse_controller.forecasting.component import (
     ComponentLoadModel,
     apply_component_load_to_run,
+    apply_component_load_to_slots,
+    weather_from_snapshot,
 )
+from evse_controller.planner.dp import PlannerSlot
 
 
 class StubSolar:
@@ -87,7 +90,7 @@ def test_component_load_replaces_only_load_fields():
 
 
 def test_component_load_requires_weather_for_every_slot():
-    with pytest.raises(ValueError, match="No historical forecast weather"):
+    with pytest.raises(ValueError, match="No forecast weather"):
         apply_component_load_to_run(
             _run(),
             _model(),
@@ -112,3 +115,56 @@ def test_component_samples_include_the_residual_quantiles():
     assert [kw for kw, _ in samples] == pytest.approx([0.05, 0.15, 0.35])
     assert sum(weight for _, weight in samples) == pytest.approx(1.0)
     assert model.predict(when, 9.0, 0.0) == pytest.approx(0.15)
+
+
+def test_component_load_can_replace_planner_slots():
+    slot = PlannerSlot(
+        start=datetime(2026, 11, 7, 0, 0),
+        slot=0,
+        import_p=20.0,
+        export_p=5.0,
+        load_kw=0.2,
+        load_samples=((0.2, 1.0),),
+        load_source="profile",
+    )
+
+    updated = apply_component_load_to_slots(
+        [slot], _model(), _weather()
+    )
+
+    assert len(updated) == 1
+    assert updated[0].load_source == "component"
+    assert updated[0].import_p == 20.0
+    assert updated[0].load_kw == pytest.approx(0.183333, abs=1e-6)
+    assert len(updated[0].load_samples) == 3
+    assert slot.load_source == "profile"
+
+
+def test_weather_from_snapshot_converts_local_hours_to_utc():
+    class Hour:
+        def __init__(self, time, temperature, gti):
+            self.time = time
+            self.temperature_c = temperature
+            self.tilted_irradiance_wm2 = gti
+
+    class Snapshot:
+        timezone = "Europe/London"
+        hours = (
+            Hour(datetime(2026, 1, 1, 12, 0), 5.0, 100.0),
+            Hour(datetime(2026, 7, 1, 12, 0), 18.0, 500.0),
+            Hour(datetime(2026, 7, 1, 13, 0), None, None),
+        )
+
+    weather = weather_from_snapshot(Snapshot())
+
+    assert weather["temperature_c"][
+        datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    ] == pytest.approx(5.0)
+    # July is BST, so local noon is 11:00 UTC.
+    assert weather["temperature_c"][
+        datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc)
+    ] == pytest.approx(18.0)
+    assert weather["tilted_irradiance_wm2"][
+        datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc)
+    ] == pytest.approx(500.0)
+    assert len(weather["temperature_c"]) == 2
