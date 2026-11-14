@@ -423,6 +423,16 @@ completed fixes.
   `data/analysis/net_grid_model/live_model.json`, fitted on all recent data
   with `evaluate_net_grid_forecast --fit-all`, and falls back to the holdout
   `model.json` used by the backtest.
+- `live_model_fit.py` and `tools/live_model_job.py` run the live-model fit
+  once per local day after the configured hour.  The scheduler starts one
+  low-priority worker, tracks `job.json` under `data/state/live_model_fit/`
+  and marks a dead worker `interrupted`.  The worker refreshes
+  `data/analysis/influx_analysis.csv.gz` and the historical forecast weather,
+  fits on complete historic days only, and atomically replaces
+  `live_model.json`.  A skip or failure leaves the old model in place and is
+  retried the next day.  The config page shows the latest job status.  The
+  default minimum is 14 measured days; the array kWp and weather geometry must
+  be configured before the job will start.
 - `planner/backtest.py` and `tools/dp_backtest.py` replay the first Learning
   mode preview plan of each day against the measured grid load and frozen
   prices. The tool compares DP grid cost with the heuristic's actual cost, SoC

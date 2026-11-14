@@ -465,11 +465,23 @@ def fit_all(
     temperature_bin_c: float,
     output_dir: str | Path,
     model_name: str = "model.json",
+    min_days: int = 1,
     quiet: bool = False,
 ) -> dict:
     """Fit the component model on every record and write a live model."""
     if not records:
         raise ValueError("No aligned net-grid records found")
+    local_zone = ZoneInfo(timezone)
+    measured_days = {
+        record.when.astimezone(local_zone).date()
+        for record in records
+    }
+    required_days = max(1, int(min_days))
+    if len(measured_days) < required_days:
+        raise ValueError(
+            f"Only {len(measured_days)} measured day(s); need at least "
+            f"{required_days}"
+        )
     fitted = fit_components(
         records,
         kwp=kwp,
@@ -547,6 +559,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="model.json",
         help="Model filename in --fit-all mode (default: model.json)",
     )
+    parser.add_argument(
+        "--min-days",
+        type=int,
+        default=1,
+        help="Minimum distinct measured days in --fit-all mode (default: 1)",
+    )
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--min-gti", type=float, default=100.0)
     parser.add_argument("--pr-min-gti", type=float, default=700.0)
@@ -597,6 +615,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 temperature_bin_c=args.temperature_bin,
                 output_dir=args.output_dir,
                 model_name=args.model_name,
+                min_days=args.min_days,
                 quiet=args.quiet,
             )
         else:

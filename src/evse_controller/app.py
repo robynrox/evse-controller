@@ -5,6 +5,7 @@ from werkzeug.serving import WSGIRequestHandler
 from werkzeug.middleware.proxy_fix import ProxyFix
 from evse_controller.utils.paths import ensure_data_dirs
 from evse_controller.utils.config import config
+from evse_controller.live_model_fit import live_model_fit
 import logging
 import threading
 from datetime import date, datetime, timedelta
@@ -1063,8 +1064,23 @@ def config_page():
                 ("longitude", "WEATHER_LONGITUDE"),
                 ("panel_azimuth", "WEATHER_PANEL_AZIMUTH"),
                 ("panel_tilt", "WEATHER_PANEL_TILT"),
+                ("array_kwp", "WEATHER_ARRAY_KWP"),
+                ("inverter_limit_kw", "WEATHER_INVERTER_LIMIT_KW"),
             ):
                 key = f"weather[{field}]"
+                if key in request.form:
+                    setattr(config, attribute, request.form.get(key))
+
+            # Automatic live component-model fit.
+            config.LIVE_MODEL_AUTO_ENABLED = (
+                request.form.get("live_model[auto_enabled]") == "true"
+            )
+            for field, attribute in (
+                ("fit_hour", "LIVE_MODEL_FIT_HOUR"),
+                ("min_days", "LIVE_MODEL_MIN_DAYS"),
+                ("history_days", "LIVE_MODEL_HISTORY_DAYS"),
+            ):
+                key = f"live_model[{field}]"
                 if key in request.form:
                     setattr(config, attribute, request.form.get(key))
 
@@ -1084,7 +1100,8 @@ def config_page():
         config_dict = config.as_dict()
         return render_template('config.html', config=config_dict,
                                price_presets=PRESETS,
-                               solver_version=SOLVER_VERSION)
+                               solver_version=SOLVER_VERSION,
+                               live_model_job=live_model_fit.latest_job())
     except Exception as e:
         logging.error(f"Error loading configuration page: {str(e)}")
         flash(f'Error loading configuration: {str(e)}', 'error')

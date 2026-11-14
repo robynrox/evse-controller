@@ -205,6 +205,77 @@ class Config:
             get_data_dir() / "analysis" / "weather_forecast_history.csv.gz"
         )
 
+    @property
+    def INFLUX_ANALYSIS_FILE(self):
+        """Stable tidy Influx range export for the automatic live model fit."""
+        self._ensure_initialized()
+        return get_data_dir() / "analysis" / "influx_analysis.csv.gz"
+
+    @property
+    def LIVE_MODEL_FIT_DIR(self):
+        """Directory holding the daily live-model fit job and status."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "live_model_fit"
+
+    @staticmethod
+    def _bool_setting(value, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return default
+
+    def _live_model_int(
+        self, key: str, default: int, minimum: int, maximum: int
+    ) -> int:
+        value = self.get(f"live_model.{key}", default)
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(minimum, min(maximum, number))
+
+    LIVE_MODEL_AUTO_ENABLED = property(
+        lambda self: self._bool_setting(
+            self.get("live_model.auto_enabled", True), True
+        ),
+        lambda self, value: self._set_config_value(
+            "live_model", "auto_enabled", self._bool_setting(value, True)
+        ),
+    )
+
+    def _set_live_model_int(
+        self, key: str, value, minimum: int, maximum: int
+    ) -> None:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = None
+        if number is not None:
+            number = max(minimum, min(maximum, number))
+        self._set_config_value("live_model", key, number)
+
+    LIVE_MODEL_FIT_HOUR = property(
+        lambda self: self._live_model_int("fit_hour", 3, 0, 23),
+        lambda self, value: self._set_live_model_int(
+            "fit_hour", value, 0, 23
+        ),
+    )
+
+    LIVE_MODEL_MIN_DAYS = property(
+        lambda self: self._live_model_int("min_days", 14, 1, 365),
+        lambda self, value: self._set_live_model_int(
+            "min_days", value, 1, 365
+        ),
+    )
+
+    LIVE_MODEL_HISTORY_DAYS = property(
+        lambda self: self._live_model_int("history_days", 400, 7, 2000),
+        lambda self, value: self._set_live_model_int(
+            "history_days", value, 7, 2000
+        ),
+    )
+
     def _optional_weather_float(
         self, key: str, minimum: float, maximum: float
     ) -> Optional[float]:
@@ -277,6 +348,37 @@ class Config:
         lambda self, value: self._set_optional_weather_float(
             "panel_tilt", value, 0.0, 90.0
         ),
+    )
+
+    WEATHER_ARRAY_KWP = property(
+        lambda self: self._optional_weather_float(
+            "array_kwp", 0.01, 1000.0
+        ),
+        lambda self, value: self._set_optional_weather_float(
+            "array_kwp", value, 0.01, 1000.0
+        ),
+    )
+
+    WEATHER_INVERTER_LIMIT_KW = property(
+        lambda self: self._optional_weather_float(
+            "inverter_limit_kw", 0.01, 1000.0
+        ),
+        lambda self, value: self._set_optional_weather_float(
+            "inverter_limit_kw", value, 0.01, 1000.0
+        ),
+    )
+
+    SOLAR_MODEL_CONFIGURED = property(
+        lambda self: all(
+            value is not None
+            for value in (
+                self.WEATHER_ARRAY_KWP,
+                self.WEATHER_LATITUDE,
+                self.WEATHER_LONGITUDE,
+                self.WEATHER_PANEL_AZIMUTH,
+                self.WEATHER_PANEL_TILT,
+            )
+        )
     )
 
     WEATHER_CONFIGURED = property(
@@ -1235,6 +1337,14 @@ class Config:
                 'longitude': self.WEATHER_LONGITUDE,
                 'panel_azimuth': self.WEATHER_PANEL_AZIMUTH,
                 'panel_tilt': self.WEATHER_PANEL_TILT,
+                'array_kwp': self.WEATHER_ARRAY_KWP,
+                'inverter_limit_kw': self.WEATHER_INVERTER_LIMIT_KW,
+            },
+            'live_model': {
+                'auto_enabled': self.LIVE_MODEL_AUTO_ENABLED,
+                'fit_hour': self.LIVE_MODEL_FIT_HOUR,
+                'min_days': self.LIVE_MODEL_MIN_DAYS,
+                'history_days': self.LIVE_MODEL_HISTORY_DAYS,
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

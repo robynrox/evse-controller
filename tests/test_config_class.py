@@ -141,6 +141,41 @@ class TestConfig:
         assert config.IOCTGO_OCPP_ENABLE_TIME == "22:00"
         assert config.IOCTGO_OCPP_DISABLE_TIME == "10:00"
 
+    def test_live_model_defaults_and_setters(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        assert config.LIVE_MODEL_AUTO_ENABLED is True
+        assert config.LIVE_MODEL_FIT_HOUR == 3
+        assert config.LIVE_MODEL_MIN_DAYS == 14
+        assert config.LIVE_MODEL_HISTORY_DAYS == 400
+
+        config.LIVE_MODEL_AUTO_ENABLED = False
+        config.LIVE_MODEL_FIT_HOUR = 5
+        config.LIVE_MODEL_MIN_DAYS = 21
+        config.LIVE_MODEL_HISTORY_DAYS = 500
+
+        assert config.LIVE_MODEL_AUTO_ENABLED is False
+        assert config.LIVE_MODEL_FIT_HOUR == 5
+        assert config.LIVE_MODEL_MIN_DAYS == 21
+        assert config.LIVE_MODEL_HISTORY_DAYS == 500
+
+    def test_solar_model_configuration_requires_array_kwp(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+        config.WEATHER_LATITUDE = 51.5
+        config.WEATHER_LONGITUDE = -3.2
+        config.WEATHER_PANEL_AZIMUTH = 180.0
+        config.WEATHER_PANEL_TILT = 35.0
+        config.WEATHER_ARRAY_KWP = None
+
+        assert config.SOLAR_MODEL_CONFIGURED is False
+
+        config.WEATHER_ARRAY_KWP = 4.7
+
+        assert config.WEATHER_ARRAY_KWP == pytest.approx(4.7)
+        assert config.SOLAR_MODEL_CONFIGURED is True
+
     def test_charging_property_getters_and_setters(self):
         """Test charging property getters and setters"""
         config = Config()

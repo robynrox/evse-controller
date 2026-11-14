@@ -39,6 +39,9 @@ def ensure_data_dirs():
     (data_dir / "state" / "backtest_jobs").mkdir(
         parents=True, exist_ok=True
     )
+    (data_dir / "state" / "live_model_fit").mkdir(
+        parents=True, exist_ok=True
+    )
     (data_dir / "state" / "weather_history").mkdir(
         parents=True, exist_ok=True
     )

@@ -778,9 +778,10 @@
         <h2>Weather (optional)</h2>
         {% set weather = config.get('weather', {}) %}
         <p>
-            Used only for reports and forecast research. Leave all four fields
-            blank to disable weather entirely. There are no defaults: the
-            controller will not guess a location or panel geometry.
+            Used for reports, the live component forecast and forecast
+            research. Leave the location and panel fields blank to disable
+            weather entirely. There are no defaults: the controller will not
+            guess a location or panel geometry.
         </p>
         <div class="form-group">
             <label for="weather_latitude">Latitude (°N):</label>
@@ -807,6 +808,68 @@
                    value="{{ weather.get('panel_tilt') if weather.get('panel_tilt') is not none else '' }}"
                    min="0" max="90" step="1">
             <small>0° = horizontal, 90° = vertical.</small>
+        </div>
+        <div class="form-group">
+            <label for="weather_array_kwp">Array size (kWp):</label>
+            <input type="number" id="weather_array_kwp" name="weather[array_kwp]"
+                   value="{{ weather.get('array_kwp') if weather.get('array_kwp') is not none else '' }}"
+                   min="0.01" max="1000" step="0.01">
+            <small>Used by the component solar forecast, not by the live weather fetch.</small>
+        </div>
+        <div class="form-group">
+            <label for="weather_inverter_limit_kw">Inverter AC limit (kW, optional):</label>
+            <input type="number" id="weather_inverter_limit_kw" name="weather[inverter_limit_kw]"
+                   value="{{ weather.get('inverter_limit_kw') if weather.get('inverter_limit_kw') is not none else '' }}"
+                   min="0.01" max="1000" step="0.01">
+            <small>Leave blank if the array is never clipped.</small>
+        </div>
+    </div>
+
+    <div class="config-section">
+        <h2>Automatic live model fit (optional)</h2>
+        {% set live_model = config.get('live_model', {}) %}
+        <p>
+            Fits the live component forecast once a day from the measured
+            Influx history and the historical forecast weather. It needs the
+            array size and weather geometry above. If there are not enough
+            measured days yet, the fit is skipped and retried the next day.
+        </p>
+        {% if live_model_job %}
+        <p>
+            <small>
+                Last automatic fit: <strong>{{ live_model_job.status }}</strong>
+                · {{ live_model_job.finished_at or live_model_job.started_at or live_model_job.created_at }}
+                {% if live_model_job.error %} — {{ live_model_job.error }}{% endif %}
+            </small>
+        </p>
+        {% else %}
+        <p><small>No automatic fit has run yet.</small></p>
+        {% endif %}
+        <div class="form-group">
+            <label for="live_model_auto_enabled">Enabled:</label>
+            <input type="checkbox" id="live_model_auto_enabled"
+                   name="live_model[auto_enabled]" value="true"
+                   {% if live_model.get('auto_enabled', true) %}checked{% endif %}>
+        </div>
+        <div class="form-group">
+            <label for="live_model_fit_hour">Earliest local hour (0–23):</label>
+            <input type="number" id="live_model_fit_hour" name="live_model[fit_hour]"
+                   value="{{ live_model.get('fit_hour', 3) }}"
+                   min="0" max="23" step="1">
+        </div>
+        <div class="form-group">
+            <label for="live_model_min_days">Minimum measured days:</label>
+            <input type="number" id="live_model_min_days" name="live_model[min_days]"
+                   value="{{ live_model.get('min_days', 14) }}"
+                   min="1" max="365" step="1">
+            <small>Do not fit until at least this many distinct days have data.</small>
+        </div>
+        <div class="form-group">
+            <label for="live_model_history_days">History window (days):</label>
+            <input type="number" id="live_model_history_days" name="live_model[history_days]"
+                   value="{{ live_model.get('history_days', 400) }}"
+                   min="7" max="2000" step="1">
+            <small>How much measured history to refresh and fit on each day.</small>
         </div>
     </div>
 

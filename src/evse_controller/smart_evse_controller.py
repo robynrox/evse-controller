@@ -49,6 +49,7 @@ from evse_controller.ocpp_slot import (
     OcppChargeTracker,
     should_flag_ocpp_slot,
 )
+from evse_controller.live_model_fit import live_model_fit
 from evse_controller.planner.history import planner_history
 from evse_controller.weather import weather_refresher
 
@@ -1211,6 +1212,11 @@ def main():
             except Exception as exc:
                 # Weather is optional and must never disturb control.
                 warning(f"WEATHER: Refresh check failed: {exc}")
+            try:
+                live_model_fit.maybe_start(now_for_sessions)
+            except Exception as exc:
+                # A failed fit is retried on the next day.
+                warning(f"LIVE MODEL: Automatic fit check failed: {exc}")
 
             # Timed overrides expire here.  Unplug and SoC-probe transitions
             # are handled by the 1 s watcher above.

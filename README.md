@@ -989,6 +989,21 @@ available record and is the better input for the live preview. Re-run the
 fit-all command as new measured days arrive; the preview reloads the file
 when its modification time changes.
 
+##### Automatic live model fit
+
+The live model can be refitted once a day. In the config page, under
+**Automatic live model fit**, enable it and set the earliest local hour,
+minimum measured days and history window. It needs the array size and weather
+geometry above.
+
+The controller starts one low-priority worker per day after the configured
+hour. The worker refreshes the Influx analysis export and the historical
+forecast weather, fits on complete historic days only, and atomically replaces
+`live_model.json`. If there are fewer than the minimum measured days, or the
+fit fails, the old model is kept and the job retries the next day. The last
+job status is shown on the config page, and the job files are under
+`data/state/live_model_fit/`.
+
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can
 alter the chosen action or its cost, even if the configuration is unchanged.
