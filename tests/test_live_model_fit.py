@@ -86,6 +86,22 @@ def test_maybe_start_runs_once_per_day(tmp_path, monkeypatch):
     assert second["job_id"] != first["job_id"]
 
 
+def test_spec_carries_the_configured_geometry(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, tmp_path)
+    scheduler = LiveModelFitScheduler(tmp_path)
+
+    spec = scheduler._spec(datetime(2026, 11, 14, 3, 0))
+
+    assert spec is not None
+    assert spec["kwp"] == 4.7
+    assert spec["inverter_limit_kw"] == 3.6
+    assert spec["min_days"] == 14
+    assert spec["history_days"] == 400
+    assert spec["influx_path"].endswith("influx.csv.gz")
+    assert spec["weather_path"].endswith("weather.csv.gz")
+    assert spec["model_path"].endswith("live_model.json")
+
+
 def test_maybe_start_skips_without_solar_configuration(
     tmp_path, monkeypatch
 ):

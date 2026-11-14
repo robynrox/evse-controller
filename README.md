@@ -203,6 +203,13 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       longitude: -3.200000              # WGS84
       panel_azimuth: 180                # compass bearing (0=N, 90=E, 180=S, 270=W)
       panel_tilt: 35                    # degrees from horizontal
+      array_kwp: 4.7                    # DC array size for the component forecast
+      inverter_limit_kw: 3.6            # AC clipping cap; blank if not clipped
+    live_model:                         # Optional daily live-model fit
+      auto_enabled: true
+      fit_hour: 3                       # earliest local hour
+      min_days: 14                      # do not fit until this many measured days
+      history_days: 400                 # refresh/fit window
     ```
 
   B. Web Interface:
@@ -251,11 +258,24 @@ Detailed explanation of each configuration option:
 - `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
 
 #### Weather Section
-The optional `weather` section is used only for reports and forecast research. It has no defaults: all four values must be supplied before the controller will fetch weather, and leaving the section out disables it entirely.
+The optional `weather` section is used for reports, the live component forecast and forecast research. It has no defaults: the four location and panel values must be supplied before the controller will fetch weather, and leaving the section out disables it entirely.
 - `latitude`: Location latitude in decimal degrees (WGS84)
 - `longitude`: Location longitude in decimal degrees (WGS84)
 - `panel_azimuth`: Panel azimuth as a compass bearing: 0° north, 90° east, 180° south, 270° west
 - `panel_tilt`: Panel tilt in degrees from horizontal (0° horizontal, 90° vertical)
+- `array_kwp`: DC array size in kWp, used by the component solar forecast
+- `inverter_limit_kw`: Optional AC clipping cap in kW; leave blank if the array is never clipped
+
+#### Live model section
+The optional `live_model` section controls the daily automatic fit:
+- `auto_enabled`: Start one fit per day after the configured hour (default `true`)
+- `fit_hour`: Earliest local hour, 0–23 (default `3`)
+- `min_days`: Minimum distinct measured days before fitting (default `14`)
+- `history_days`: How much measured history to refresh and fit on (default `400`)
+
+The fit needs `array_kwp` and the weather location/panel values. If there are
+not enough measured days, or the fit fails, the previous live model is kept
+and the job retries the next day.
 
 When configured, the controller fetches and caches the Open-Meteo series
 automatically in the background. It checks about every ten minutes, refreshes
