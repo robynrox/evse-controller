@@ -33,7 +33,7 @@ import math
 import statistics
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -185,6 +185,116 @@ def _profile(
         else 0.0
     )
     return profile, overall
+
+
+def _signed_energy_kw(energy) -> Optional[float]:
+    """Signed average kW from a daily-report in/out energy pair."""
+    if not isinstance(energy, dict):
+        return None
+    in_kwh = energy.get("in")
+    out_kwh = energy.get("out")
+    if in_kwh is None and out_kwh is None:
+        return None
+    try:
+        return (float(in_kwh or 0.0) - float(out_kwh or 0.0)) / 0.5
+    except (TypeError, ValueError):
+        return None
+
+
+def _series_key(series, needle: str) -> Optional[str]:
+    """Find a daily-report series key by its label or key name."""
+    for key, meta in (series or {}).items():
+        label = str((meta or {}).get("label") or "").lower()
+        if needle in str(key).lower() or needle in label:
+            return str(key)
+    return None
+
+
+def build_records_from_daily_reports(
+    daily_report_dir: str | Path,
+    weather_path: str | Path,
+    local_zone: ZoneInfo,
+    *,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+) -> list[Record]:
+    """Build component records from the controller's daily report files.
+
+    This is the no-InfluxDB path.  It needs the daily reports to include a
+    solar series and a heat-pump series; the labels are matched
+    case-insensitively ("solar", "heat").
+    """
+    weather, _ = load_weather(weather_path, local_zone)
+    temperature = weather.get("temperature_c", {})
+    gti = weather.get("tilted_irradiance_wm2", {})
+    directory = Path(daily_report_dir).expanduser()
+    records: list[Record] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        try:
+            day = date.fromisoformat(str(report["date"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start is not None and day < start:
+            continue
+        if end is not None and day > end:
+            continue
+        series = report.get("series") or {}
+        solar_key = _series_key(series, "solar")
+        heat_key = _series_key(series, "heat")
+        if solar_key is None or heat_key is None:
+            raise ValueError(
+                "Daily reports must include a solar series and a heat-pump "
+                "series"
+            )
+        for index, slot in enumerate(report.get("slots") or []):
+            if not isinstance(slot, dict):
+                continue
+            energy = slot.get("energy") or {}
+            grid = _signed_energy_kw(energy.get("grid"))
+            evse = _signed_energy_kw(energy.get("evse"))
+            solar = _signed_energy_kw(energy.get(solar_key))
+            heat = _signed_energy_kw(energy.get(heat_key))
+            if (
+                grid is None
+                or evse is None
+                or solar is None
+                or heat is None
+            ):
+                continue
+            try:
+                when = datetime.fromisoformat(str(slot["start"]))
+            except (KeyError, TypeError, ValueError):
+                when = datetime.combine(
+                    day, datetime.min.time()
+                ) + timedelta(minutes=30 * index)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=local_zone)
+            utc = when.astimezone(timezone.utc)
+            hour = utc.replace(minute=0, second=0, microsecond=0)
+            temperature_c = temperature.get(hour)
+            gti_wm2 = gti.get(hour)
+            if temperature_c is None or gti_wm2 is None:
+                continue
+            house_kw = grid - evse
+            solar_kw = max(0.0, -solar)
+            heat_kw = max(0.0, heat)
+            records.append(
+                Record(
+                    when=utc,
+                    slot=int(slot.get("index", index)),
+                    temperature_c=float(temperature_c),
+                    gti_wm2=float(gti_wm2),
+                    house_kw=house_kw,
+                    solar_kw=solar_kw,
+                    heat_kw=heat_kw,
+                    baseload_kw=house_kw - heat_kw + solar_kw,
+                )
+            )
+    return records
 
 
 def fit_components(

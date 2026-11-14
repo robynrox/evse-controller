@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,6 +10,7 @@ from evse_controller.tools.evaluate_net_grid_forecast import (
     Record,
     _metrics,
     _profile,
+    build_records_from_daily_reports,
     fit_all,
 )
 
@@ -88,3 +90,84 @@ def test_fit_all_writes_a_live_model_without_a_holdout(tmp_path):
     assert payload["training_end"] == records[-1].when.isoformat()
     assert payload["residual_quantiles_kw"]
     assert summary["model_path"] == str(path)
+
+
+def test_daily_reports_can_supply_component_records(tmp_path):
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    report = {
+        "date": "2026-07-01",
+        "timezone": "Europe/London",
+        "series": {
+            "grid": {"label": "Grid"},
+            "evse": {"label": "EVSE"},
+            "shelly.secondary.channel1": {"label": "Heatpump"},
+            "shelly.secondary.channel2": {"label": "Solar"},
+        },
+        "slots": [
+            {
+                "index": 24,
+                "start": "2026-07-01T12:00:00",
+                "energy": {
+                    "grid": {"in": 0.5, "out": 0.0},
+                    "evse": {"in": 0.1, "out": 0.0},
+                    "shelly.secondary.channel1": {
+                        "in": 0.2,
+                        "out": 0.0,
+                    },
+                    "shelly.secondary.channel2": {
+                        "in": 0.0,
+                        "out": 1.0,
+                    },
+                },
+            }
+        ],
+    }
+    (daily / "2026-07-01.json").write_text(json.dumps(report))
+    weather = tmp_path / "weather.csv"
+    weather.write_text(
+        "timestamp,series,value\n"
+        "2026-07-01T12:00:00,temperature_c,18.0\n"
+        "2026-07-01T12:00:00,tilted_irradiance_wm2,500.0\n"
+    )
+
+    records = build_records_from_daily_reports(
+        daily, weather, ZoneInfo("Europe/London")
+    )
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.slot == 24
+    assert record.when == datetime(
+        2026, 7, 1, 11, 0, tzinfo=timezone.utc
+    )
+    assert record.temperature_c == pytest.approx(18.0)
+    assert record.gti_wm2 == pytest.approx(500.0)
+    assert record.house_kw == pytest.approx(0.8)
+    assert record.solar_kw == pytest.approx(2.0)
+    assert record.heat_kw == pytest.approx(0.4)
+    assert record.baseload_kw == pytest.approx(2.4)
+
+
+def test_daily_reports_require_solar_and_heat_series(tmp_path):
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    (daily / "2026-07-01.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-07-01",
+                "series": {
+                    "grid": {"label": "Grid"},
+                    "evse": {"label": "EVSE"},
+                },
+                "slots": [],
+            }
+        )
+    )
+    weather = tmp_path / "weather.csv"
+    weather.write_text("timestamp,series,value\n")
+
+    with pytest.raises(ValueError, match="solar series"):
+        build_records_from_daily_reports(
+            daily, weather, ZoneInfo("Europe/London")
+        )

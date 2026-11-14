@@ -19,6 +19,7 @@ def _patch_config(monkeypatch, tmp_path, **overrides):
         "LIVE_MODEL_MIN_DAYS": 14,
         "LIVE_MODEL_HISTORY_DAYS": 400,
         "SOLAR_MODEL_CONFIGURED": True,
+        "INFLUXDB_ENABLED": True,
         "WEATHER_ARRAY_KWP": 4.7,
         "WEATHER_INVERTER_LIMIT_KW": 3.6,
         "WEATHER_LATITUDE": 51.5,
@@ -45,6 +46,11 @@ def _patch_config(monkeypatch, tmp_path, **overrides):
         Config,
         "LIVE_COMPONENT_MODEL_FILE",
         property(lambda self: tmp_path / "live_model.json"),
+    )
+    monkeypatch.setattr(
+        Config,
+        "DAILY_REPORT_DIR",
+        property(lambda self: tmp_path / "daily"),
     )
 
 
@@ -100,6 +106,19 @@ def test_spec_carries_the_configured_geometry(tmp_path, monkeypatch):
     assert spec["influx_path"].endswith("influx.csv.gz")
     assert spec["weather_path"].endswith("weather.csv.gz")
     assert spec["model_path"].endswith("live_model.json")
+
+
+def test_spec_uses_daily_reports_when_influx_is_disabled(
+    tmp_path, monkeypatch
+):
+    _patch_config(monkeypatch, tmp_path, INFLUXDB_ENABLED=False)
+    scheduler = LiveModelFitScheduler(tmp_path)
+
+    spec = scheduler._spec(datetime(2026, 11, 14, 3, 0))
+
+    assert spec is not None
+    assert spec["source"] == "daily_reports"
+    assert spec["daily_report_dir"].endswith("daily")
 
 
 def test_maybe_start_skips_without_solar_configuration(

@@ -60,12 +60,14 @@ def run_job(job_dir: Path) -> int:
     model_tmp = model_path.with_suffix(model_path.suffix + ".tmp")
     today = date.today()
     start = today - timedelta(days=int(job["history_days"]))
+    source = str(job.get("source") or "influx")
+    job["source"] = source
 
     try:
-        from evse_controller.tools.export_influxdb_range import main as export_main
         from evse_controller.tools.fetch_weather_history import main as fetch_main
         from evse_controller.tools.evaluate_net_grid_forecast import (
             build_records,
+            build_records_from_daily_reports,
             fit_all,
         )
 
@@ -95,28 +97,38 @@ def run_job(job_dir: Path) -> int:
                 f"weather refresh failed with exit code {weather_code}"
             )
 
-        influx_code = export_main(
-            [
-                "--start",
-                start.isoformat(),
-                "--end",
-                today.isoformat(),
-                "--resolution",
-                "5m",
-                "--fields",
-                "solar,heatpump,grid,evse",
-                "--output",
-                str(influx_tmp),
-                "--quiet",
-            ]
-        )
-        if influx_code != 0:
-            raise RuntimeError(
-                f"Influx refresh failed with exit code {influx_code}"
+        local_zone = ZoneInfo(str(job["timezone"]))
+        if source == "influx":
+            from evse_controller.tools.export_influxdb_range import (
+                main as export_main,
             )
 
-        local_zone = ZoneInfo(str(job["timezone"]))
-        records = build_records(influx_tmp, weather_tmp, local_zone)
+            influx_code = export_main(
+                [
+                    "--start",
+                    start.isoformat(),
+                    "--end",
+                    today.isoformat(),
+                    "--resolution",
+                    "5m",
+                    "--fields",
+                    "solar,heatpump,grid,evse",
+                    "--output",
+                    str(influx_tmp),
+                    "--quiet",
+                ]
+            )
+            if influx_code != 0:
+                raise RuntimeError(
+                    f"Influx refresh failed with exit code {influx_code}"
+                )
+            records = build_records(influx_tmp, weather_tmp, local_zone)
+        elif source == "daily_reports":
+            records = build_records_from_daily_reports(
+                job["daily_report_dir"], weather_tmp, local_zone
+            )
+        else:
+            raise ValueError(f"Unknown live-model source: {source!r}")
         # The current local day is incomplete; fit only on complete historic
         # days so a partial morning cannot count towards the minimum history.
         records = [
@@ -126,7 +138,8 @@ def run_job(job_dir: Path) -> int:
         ]
         # The refreshed data is valid even if there is not enough history to
         # fit a model yet, so keep it for the next attempt.
-        os.replace(influx_tmp, influx_path)
+        if source == "influx":
+            os.replace(influx_tmp, influx_path)
         os.replace(weather_tmp, weather_path)
         measured_days = {
             record.when.astimezone(local_zone).date()
@@ -141,6 +154,7 @@ def run_job(job_dir: Path) -> int:
                 f"{min_days}"
             )
             job["summary"] = {
+                "source": source,
                 "measured_days": len(measured_days),
                 "min_days": min_days,
             }
@@ -169,6 +183,7 @@ def run_job(job_dir: Path) -> int:
         )
         os.replace(model_tmp, model_path)
         summary["model_path"] = str(model_path)
+        summary["source"] = source
         summary["measured_days"] = len(measured_days)
         summary["runtime_seconds"] = round(
             time.perf_counter() - started, 2

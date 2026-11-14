@@ -10,13 +10,15 @@ from evse_controller.tools import live_model_job
 from evse_controller.tools.evaluate_net_grid_forecast import Record
 
 
-def _job(tmp_path, *, min_days=14):
+def _job(tmp_path, *, min_days=14, source="influx"):
     return {
         "job_id": "live-model-test",
         "status": "queued",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "min_days": min_days,
         "history_days": 400,
+        "source": source,
+        "daily_report_dir": str(tmp_path / "daily"),
         "influx_path": str(tmp_path / "influx.csv.gz"),
         "weather_path": str(tmp_path / "weather.csv.gz"),
         "model_path": str(tmp_path / "live_model.json"),
@@ -103,6 +105,50 @@ def test_worker_writes_the_live_model(tmp_path, monkeypatch):
     assert (tmp_path / "live_model.json").exists()
     assert (tmp_path / "influx.csv.gz").exists()
     assert (tmp_path / "weather.csv.gz").exists()
+
+
+def test_worker_uses_daily_reports_without_influx(
+    tmp_path, monkeypatch
+):
+    import evse_controller.tools.export_influxdb_range as export_tool
+    import evse_controller.tools.evaluate_net_grid_forecast as forecast_tool
+    import evse_controller.tools.fetch_weather_history as fetch_tool
+
+    calls = {"export": 0}
+
+    def fake_export(argv):
+        calls["export"] += 1
+        return 0
+
+    def fake_daily_records(directory, weather_path, zone):
+        return _records(14)
+
+    def fake_fit_all(records, **kwargs):
+        path = Path(kwargs["output_dir"]) / kwargs["model_name"]
+        path.write_text(json.dumps({"fit_mode": "all"}))
+        return {"fit_mode": "all", "model_path": str(path)}
+
+    monkeypatch.setattr(fetch_tool, "main", _fake_refresh)
+    monkeypatch.setattr(export_tool, "main", fake_export)
+    monkeypatch.setattr(
+        forecast_tool,
+        "build_records_from_daily_reports",
+        fake_daily_records,
+    )
+    monkeypatch.setattr(forecast_tool, "fit_all", fake_fit_all)
+
+    job_dir, code = _run(
+        tmp_path, _job(tmp_path, source="daily_reports")
+    )
+
+    assert code == 0
+    assert calls["export"] == 0
+    job = json.loads((job_dir / "job.json").read_text())
+    assert job["status"] == "complete"
+    assert job["summary"]["source"] == "daily_reports"
+    assert (tmp_path / "live_model.json").exists()
+    assert (tmp_path / "weather.csv.gz").exists()
+    assert not (tmp_path / "influx.csv.gz").exists()
 
 
 def test_worker_skips_when_there_are_too_few_days(

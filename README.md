@@ -1017,12 +1017,19 @@ minimum measured days and history window. It needs the array size and weather
 geometry above.
 
 The controller starts one low-priority worker per day after the configured
-hour. The worker refreshes the Influx analysis export and the historical
-forecast weather, fits on complete historic days only, and atomically replaces
-`live_model.json`. If there are fewer than the minimum measured days, or the
-fit fails, the old model is kept and the job retries the next day. The last
-job status is shown on the config page, and the job files are under
-`data/state/live_model_fit/`.
+hour. The worker refreshes the Influx analysis export when InfluxDB is
+enabled, or reads the daily report files when it is not, and refreshes the
+historical forecast weather. It fits on complete historic days only and
+atomically replaces `live_model.json`. If there are fewer than the minimum
+measured days, or the fit fails, the old model is kept and the job retries the
+next day. The last job status and data source are shown on the config page,
+and the job files are under `data/state/live_model_fit/`.
+
+The no-InfluxDB path uses `data/reports/daily/YYYY-MM-DD.json`. It needs the
+daily reports to include a solar series and a heat-pump series; the fit
+matches their labels case-insensitively (`solar`, `heat`). The normal Shelly
+channel labels already do this if the solar and heat-pump meters are
+configured.
 
 Every run records `solver_version` and `solver_mode`. Bump
 `evse_controller.planner.version.SOLVER_VERSION` whenever a planner change can

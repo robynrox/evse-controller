@@ -167,6 +167,10 @@ class LiveModelFitScheduler:
             "summary": None,
             "min_days": config.LIVE_MODEL_MIN_DAYS,
             "history_days": config.LIVE_MODEL_HISTORY_DAYS,
+            "source": (
+                "influx" if config.INFLUXDB_ENABLED else "daily_reports"
+            ),
+            "daily_report_dir": str(config.DAILY_REPORT_DIR),
             "influx_path": str(config.INFLUX_ANALYSIS_FILE),
             "weather_path": str(config.WEATHER_FORECAST_HISTORY_FILE),
             "model_path": str(config.LIVE_COMPONENT_MODEL_FILE),

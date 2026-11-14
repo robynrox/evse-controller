@@ -829,15 +829,17 @@
         <h2>Automatic live model fit (optional)</h2>
         {% set live_model = config.get('live_model', {}) %}
         <p>
-            Fits the live component forecast once a day from the measured
-            Influx history and the historical forecast weather. It needs the
-            array size and weather geometry above. If there are not enough
-            measured days yet, the fit is skipped and retried the next day.
+            Fits the live component forecast once a day from InfluxDB when
+            enabled, or from the daily energy reports when it is not, plus
+            the historical forecast weather. It needs the array size and
+            weather geometry above. If there are not enough measured days
+            yet, the fit is skipped and retried the next day.
         </p>
         {% if live_model_job %}
         <p>
             <small>
                 Last automatic fit: <strong>{{ live_model_job.status }}</strong>
+                {% if live_model_job.source %} · {{ live_model_job.source }}{% endif %}
                 · {{ live_model_job.finished_at or live_model_job.started_at or live_model_job.created_at }}
                 {% if live_model_job.error %} — {{ live_model_job.error }}{% endif %}
             </small>
