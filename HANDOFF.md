@@ -342,8 +342,12 @@ completed fixes.
   Import and export prices are frozen into each slot when it closes; the
   shared `slot_prices.price_book` reads or fetches the Agile cache in
   `data/state/agile_rates/YYYY-MM-DD.json`. `slot_prices` replicates the
-  tariff's 23:30–05:30 band and free-import override. The tariff publishes
-  its fetched rates to the same book and exposes `saved_for_slot(day, slot)`
+  tariff's 23:30–05:30 band and free-import override. The tariff fetches
+  today's and tomorrow's Agile series in one request and publishes both to
+  the price book; a 46-slot day is complete at 23:00 and a 48-slot day at
+  23:30.  New rates set a shadow re-plan flag so the policy surface updates
+  in the same slot rather than waiting for the next one.  The tariff exposes
+  `saved_for_slot(day, slot)`
   from a persisted `[48]` array whose sum always equals `saved_today_gbp`;
   `TariffManager` registers that provider only while a suitable tariff is
   active, so the report shows `—` rather than £0 when no tariff is running.

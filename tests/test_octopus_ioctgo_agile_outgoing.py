@@ -3195,11 +3195,10 @@ class TestRateFetchState:
     """The rate cache must be usable before the first successful fetch."""
 
     def test_complete_rates_check_before_first_fetch(self):
-        """A fresh process has no _last_fetch_date until a fetch stores one.
+        """A fresh process can check per-date completeness directly.
 
-        The check short-circuits on an empty rate list today, but the
-        attribute must still exist so externally supplied rates or a future
-        reordering cannot raise AttributeError.
+        ``_last_fetch_date`` is only used to detect a new day; the
+        completeness check filters the stored rates by their own date.
         """
         mock_thread = Mock()
         mock_thread.getBatteryChargeLevel = Mock(return_value=75)
@@ -3216,7 +3215,47 @@ class TestRateFetchState:
         tariff.agile_rates = create_mock_agile_rates()
 
         assert tariff._last_fetch_date is None
-        assert tariff._have_complete_rates_for_date(datetime.now().date()) is False
+        assert tariff._have_complete_rates_for_date(datetime.now().date()) is True
+
+    def test_fetch_rates_from_api_requests_today_and_tomorrow(
+        self, monkeypatch
+    ):
+        import evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing as module
+
+        tariff = _build_tariff()
+        calls = []
+
+        def fake_fetch(region, days, tariff_code=None):
+            calls.append((region, list(days)))
+            return []
+
+        monkeypatch.setattr(module, "fetch_rates", fake_fetch)
+
+        tariff._fetch_rates_from_api()
+
+        today = datetime.now().date()
+        assert calls[0][1] == [today, today + timedelta(days=1)]
+
+    def test_complete_rates_are_checked_per_date(self):
+        tariff = _build_tariff()
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+
+        def rates_for(day):
+            base = datetime.combine(day, datetime.min.time())
+            return [
+                {
+                    "start": base + timedelta(minutes=30 * index),
+                    "end": base + timedelta(minutes=30 * (index + 1)),
+                    "rate": 5.0,
+                }
+                for index in range(48)
+            ]
+
+        tariff.agile_rates = rates_for(today) + rates_for(tomorrow)
+
+        assert tariff._have_complete_rates_for_date(today) is True
+        assert tariff._have_complete_rates_for_date(tomorrow) is True
 
 
 class TestEnergySessions:
@@ -4892,7 +4931,10 @@ class TestShadowPlannerAndEstimator:
     def test_shadow_plan_runs_once_per_slot_until_the_soc_moves(
         self, tmp_path
     ):
-        tariff = _build_tariff()
+        with patch.object(
+            IOctGoWithAgileOutgoingTariff, "_fetch_rates_async"
+        ):
+            tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
         today = datetime.now().date()

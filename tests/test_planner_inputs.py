@@ -307,6 +307,32 @@ def test_dynamic_export_horizon_includes_the_next_day_when_published():
     assert result.horizon_limited_by_export is True
 
 
+def test_dynamic_export_includes_a_46_slot_next_day():
+    tomorrow = DAY + timedelta(days=1)
+    source = DaySource(
+        {
+            DAY: [10.0] * 48,
+            tomorrow: [12.0] * 46 + [None] * 2,
+        }
+    )
+    result = build_planner_input(
+        source,
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert len(result.slots) == 48 + 46
+    assert result.slots[-1].start.date() == tomorrow
+    assert result.slots[-1].slot == 45
+    assert result.horizon_end_date == tomorrow
+    assert result.horizon_limited_by_export is True
+
+
 def test_dynamic_export_without_next_day_prices_stops_at_midnight():
     tomorrow = DAY + timedelta(days=1)
     source = DaySource(

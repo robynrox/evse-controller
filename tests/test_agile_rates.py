@@ -95,6 +95,37 @@ def test_rates_include_the_first_local_hour_on_a_bst_day(
     assert all(rate["start"].date() == date(2026, 6, 1) for rate in rates)
 
 
+def test_fetch_rates_can_return_today_and_tomorrow(
+    london_tz, monkeypatch
+):
+    results = [
+        {
+            "valid_from": "2026-06-01T10:00:00Z",
+            "valid_to": "2026-06-01T10:30:00Z",
+            "value_inc_vat": 5.0,
+        },
+        {
+            "valid_from": "2026-06-02T10:00:00Z",
+            "valid_to": "2026-06-02T10:30:00Z",
+            "value_inc_vat": 6.0,
+        },
+    ]
+    monkeypatch.setattr(
+        agile_rates.urllib.request,
+        "urlopen",
+        lambda request, timeout=10: _response(results),
+    )
+
+    rates = agile_rates.fetch_rates(
+        "K", [date(2026, 6, 1), date(2026, 6, 2)]
+    )
+
+    assert {rate["start"].date() for rate in rates} == {
+        date(2026, 6, 1),
+        date(2026, 6, 2),
+    }
+
+
 def test_failed_fetch_is_unknown_rather_than_free(monkeypatch):
     def failing_urlopen(request, timeout=10):
         raise OSError("offline")

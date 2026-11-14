@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 import json
 import urllib.request
+from typing import Sequence
 
 from evse_controller.utils.logging_config import error, warning
 
@@ -39,19 +40,21 @@ def tariff_code_for_region(region: str) -> str:
     return AGILE_TARIFF_CODES.get(region, DEFAULT_AGILE_TARIFF_CODE)
 
 
-def fetch_day_rates(
+def fetch_rates(
     region: str,
-    day: date | None = None,
+    days: Sequence[date],
     tariff_code: str | None = None,
 ) -> list:
-    """Fetch Agile Outgoing rates for *day* from the Octopus API.
+    """Fetch Agile Outgoing rates for the requested local days.
 
     Returns a list of ``{"start", "end", "rate"}`` dicts, where the datetimes
     are local and ``rate`` is p/kWh including VAT.  An empty list means the
     fetch failed or no rates were returned; callers must treat that as
     "price unknown" rather than "free".
     """
-    day = day or datetime.now().date()
+    requested = sorted(set(days))
+    if not requested:
+        return []
     tariff_code = tariff_code or tariff_code_for_region(region)
     tariff_id = f"E-1R-{tariff_code}-{region}"
     base_url = (
@@ -59,15 +62,17 @@ def fetch_day_rates(
         f"/electricity-tariffs/{tariff_id}"
     )
 
-    # The API window is UTC, but the requested day is local.  Local midnight
+    # The API window is UTC, but the requested days are local.  Local midnight
     # is 23:00 UTC on a BST day, and a clock-change day is 23 or 25 hours
     # long, so a one-day UTC window would drop the first local hour (and part
     # of a transition day).  Ask for a day either side and filter the parsed
-    # rates back to the requested local date below.
-    start = datetime.combine(day - timedelta(days=1), time.min).strftime(
+    # rates back to the requested local dates below.
+    first = requested[0]
+    last = requested[-1]
+    start = datetime.combine(first - timedelta(days=1), time.min).strftime(
         '%Y-%m-%dT00:00:00Z'
     )
-    end = datetime.combine(day + timedelta(days=2), time.min).strftime(
+    end = datetime.combine(last + timedelta(days=2), time.min).strftime(
         '%Y-%m-%dT00:00:00Z'
     )
     url = (
@@ -82,6 +87,7 @@ def fetch_day_rates(
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
 
+        allowed = set(requested)
         rates = []
         for result in data.get('results', []):
             valid_from = result.get('valid_from')
@@ -98,6 +104,8 @@ def fetch_day_rates(
             # This is critical on DST transition days when UTC hour != local hour.
             start_dt = start_dt.astimezone()
             end_dt = end_dt.astimezone()
+            if start_dt.date() not in allowed:
+                continue
 
             rates.append({
                 'start': start_dt,
@@ -107,25 +115,38 @@ def fetch_day_rates(
 
         rates.sort(key=lambda r: r['start'])
 
-        # Filter to the requested day after the timezone conversion.  On DST
-        # days this correctly keeps 46 or 50 local half-hours.
+        # Filter duplicates after the timezone conversion.  On DST days this
+        # correctly keeps 46 or 50 local half-hours.
         unique_rates = {}
         for rate_data in rates:
-            if rate_data['start'].date() != day:
-                continue
             key = rate_data['start'].strftime('%Y-%m-%d %H:%M')
             if key not in unique_rates:
                 unique_rates[key] = rate_data
 
         rates = sorted(unique_rates.values(), key=lambda r: r['start'])
-
-        if len(rates) not in (46, 48):
-            warning(
-                f"AGILE_RATES: Expected 46 or 48 slots for {day}, "
-                f"got {len(rates)}."
-            )
+        counts = {}
+        for rate_data in rates:
+            rate_day = rate_data['start'].date()
+            counts[rate_day] = counts.get(rate_day, 0) + 1
+        for rate_day in requested:
+            count = counts.get(rate_day, 0)
+            if count not in (46, 48):
+                warning(
+                    f"AGILE_RATES: Expected 46 or 48 slots for {rate_day}, "
+                    f"got {count}."
+                )
 
         return rates
     except Exception as exc:
-        error(f"AGILE_RATES: API fetch failed for {day}: {exc}")
+        error(f"AGILE_RATES: API fetch failed for {requested}: {exc}")
         return []
+
+
+def fetch_day_rates(
+    region: str,
+    day: date | None = None,
+    tariff_code: str | None = None,
+) -> list:
+    """Fetch Agile Outgoing rates for one local day."""
+    day = day or datetime.now().date()
+    return fetch_rates(region, [day], tariff_code=tariff_code)

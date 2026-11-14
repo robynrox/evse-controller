@@ -1278,6 +1278,11 @@ never treated as 0p. Fixed-export tariffs still plan to the end of the local
 day. The policy page shows the horizon end, marks the day boundary, and says
 whether the horizon was limited by export prices.
 
+Agile Outgoing now fetches and stores both today's and tomorrow's series.
+Agile publishes 46 or 48 slots per day: a 46-slot day ends at 23:00 and a
+48-slot day ends at 23:30. The planner uses the last contiguous published
+slot, so tomorrow's surface normally ends at 22:30–23:00 on a 46-slot day.
+
 The shadow DP has **no fixed end-of-day SoC target**. It optimises the priced
 horizon within the configured limits:
 
