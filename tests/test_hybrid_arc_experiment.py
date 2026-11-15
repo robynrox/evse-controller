@@ -44,6 +44,38 @@ def test_hybrid_floor_actuator_stays_at_the_floor():
     ) == pytest.approx(-12 * 240 / 1000)
 
 
+def test_run_case_realised_uses_hybrid_slots(monkeypatch):
+    slots = [
+        experiment._slot(
+            index,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        )
+        for index in range(3)
+    ]
+    calls = []
+
+    def fake_realised(day, case_slots, actions):
+        calls.append(case_slots)
+        return 0.0, 1
+
+    monkeypatch.setattr(experiment, "_realised_cost", fake_realised)
+
+    experiment._run_case(
+        "test",
+        slots,
+        initial_soc=60.0,
+        floors=[11.0],
+        quiet=True,
+        realised_day=slots[0].start.date(),
+    )
+
+    assert calls[0] is slots
+    assert any(slot.follow_hybrid_floors for slot in calls[1])
+
+
 def test_realised_cost_uses_the_actual_house_load(monkeypatch):
     slot = _slot()
     day = slot.start.date()

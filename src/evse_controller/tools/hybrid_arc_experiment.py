@@ -384,7 +384,7 @@ def _run_case(
             realised_day, slots, baseline.actions
         )
         realised_hybrid, hybrid_slots_used = _realised_cost(
-            realised_day, slots, hybrid.actions
+            realised_day, hybrid_slots, hybrid.actions
         )
         if (
             realised_baseline is not None
