@@ -865,8 +865,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except (TypeError, ValueError):
             return None
 
+    def _dp_action_blocked(self, state, action: Mapping[str, Any]) -> bool:
+        """Return True when a DP action would cross a hard SoC guard."""
+        kind = str(action.get("kind") or "")
+        battery_level = getattr(state, "battery_level", -1)
+        charge_blocked = battery_level >= self.charge_cap_percent()
+        discharge_blocked = self._discharge_inhibited
+        if kind in ("charge", "follow_solar"):
+            return charge_blocked
+        if kind in (
+            "discharge",
+            "follow_house_conservative",
+            "follow_house_aggressive",
+        ):
+            return discharge_blocked
+        if kind.startswith("follow_bidirectional"):
+            return charge_blocked or discharge_blocked
+        return False
+
     def _apply_dp_home_demand_levels(
-        self, evseController, dayMinute: int
+        self, evseController, state, dayMinute: int
     ) -> bool:
         """Apply the current DP action's load-following ranges.
 
@@ -878,18 +896,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return False
         kind = str(action.get("kind") or "")
         minimum = int(math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9))
+        battery_level = getattr(state, "battery_level", -1)
+        charge_blocked = battery_level >= self.charge_cap_percent()
+        discharge_blocked = self._discharge_inhibited
         if kind == "idle":
             return True
         if kind == "charge":
+            if charge_blocked:
+                return False
             amps = self._dp_action_amps(action)
             evseController.setChargeCurrentRange(amps, amps)
         elif kind == "discharge":
+            if discharge_blocked:
+                return False
             amps = self._dp_action_amps(action)
             evseController.setDischargeCurrentRange(amps, amps)
         elif kind == "follow_solar":
-            low, high = self._dp_action_range(action)
-            evseController.setChargeCurrentBias(0)
-            evseController.setChargeCurrentRange(low, high)
+            if charge_blocked:
+                return False
+            low, _ = self._dp_action_range(action)
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(
+                low, self.MAX_CHARGE_CURRENT
+            )
             evseController.setChargeActivationPower(
                 self._charge_activation_w_for_current(low)
             )
@@ -897,33 +926,47 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "follow_house_conservative",
             "follow_house_aggressive",
         ):
+            if discharge_blocked:
+                return False
             gate = self._dp_follow_gate(action)
             if gate is None:
                 return False
-            low, high = self._dp_action_range(action)
-            evseController.setDischargeCurrentBias(0)
-            evseController.setDischargeCurrentRange(low, high)
+            low, _ = self._dp_action_range(action)
+            bias = (
+                self.CONSERVATIVE_DISCHARGE_BIAS_A
+                if kind.endswith("conservative")
+                else self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
+            evseController.setDischargeCurrentBias(bias)
+            evseController.setDischargeCurrentRange(
+                low, self.MAX_DISCHARGE_CURRENT
+            )
             evseController.setDischargeActivationPower(gate)
         elif kind in (
             "follow_bidirectional_conservative",
             "follow_bidirectional_aggressive",
         ):
+            if discharge_blocked or charge_blocked:
+                return False
             gate = self._dp_follow_gate(action)
             if gate is None:
                 return False
-            low = int(round(float(action.get("current_min_a") or 0.0)))
-            high = int(round(float(action.get("current_max_a") or 0.0)))
-            if high >= minimum:
-                evseController.setChargeCurrentBias(0)
-                evseController.setChargeCurrentRange(minimum, high)
-                evseController.setChargeActivationPower(
-                    self._charge_activation_w_for_current(minimum)
-                )
-            if low < 0 and abs(low) >= minimum:
-                evseController.setDischargeCurrentBias(0)
-                evseController.setDischargeCurrentRange(
-                    minimum, abs(low)
-                )
+            bias = (
+                self.CONSERVATIVE_DISCHARGE_BIAS_A
+                if kind.endswith("conservative")
+                else self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(
+                minimum, self.MAX_CHARGE_CURRENT
+            )
+            evseController.setChargeActivationPower(
+                self._charge_activation_w_for_current(minimum)
+            )
+            evseController.setDischargeCurrentBias(bias)
+            evseController.setDischargeCurrentRange(
+                minimum, self.MAX_DISCHARGE_CURRENT
+            )
             evseController.setDischargeActivationPower(gate)
         else:
             return False
@@ -958,6 +1001,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         now = self.get_current_datetime()
         slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
         if self._dp_control_enabled:
+            if self._last_dp_action is None:
+                return "Heuristic fallback for this slot"
             run = self._selected_dp_run()
             if run is None:
                 return "No DP plan — heuristic fallback"
@@ -7925,6 +7970,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 "IOCTGO_AGILEOUT: DP action unavailable; using the heuristic"
             )
             return result
+        action = self._last_dp_action
+        if action and self._dp_action_blocked(state, action):
+            debug(
+                "IOCTGO_AGILEOUT: DP action blocked by the SoC guard; "
+                "using the heuristic"
+            )
+            self._last_dp_action = None
+            return result
         return dp_result
 
     def _decide_control_state(
@@ -9225,7 +9278,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         if self._dp_control_enabled:
             if self._apply_dp_home_demand_levels(
-                evseController, dayMinute
+                evseController, state, dayMinute
             ):
                 return
 

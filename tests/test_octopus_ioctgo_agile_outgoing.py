@@ -5227,6 +5227,40 @@ class TestShadowPlannerAndEstimator:
         assert result[2] == 7
         assert result[3] == "DP: Charge 7A"
 
+    def test_dp_discharge_is_blocked_at_the_absolute_floor(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        today = tariff.get_current_datetime().date().isoformat()
+        tariff._last_shadow_slot = 24
+        tariff._last_shadow_run = {
+            "day": today,
+            "slot": 24,
+            "actions": [
+                {
+                    "slot": 24,
+                    "kind": "discharge",
+                    "current_a": -7.0,
+                    "commanded_current_a": 7,
+                }
+            ],
+            "inputs": [{"slot": 24}],
+        }
+        tariff._discharge_inhibited = True
+        monkeypatch.setattr(tariff, "_shadow_plan", lambda *args: None)
+
+        result = tariff.get_control_state(create_test_state(5), 12 * 60)
+
+        assert not str(result[3]).startswith("DP:")
+        assert tariff._last_dp_action is None
+
     def test_control_comp_uses_the_component_run(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             IOctGoWithAgileOutgoingTariff,
@@ -5333,7 +5367,12 @@ class TestShadowPlannerAndEstimator:
             controller, create_test_state(60), 12 * 60
         )
 
-        controller.setDischargeCurrentRange.assert_called_once_with(3, 12)
+        controller.setDischargeCurrentRange.assert_called_once_with(
+            3, tariff.MAX_DISCHARGE_CURRENT
+        )
+        controller.setDischargeCurrentBias.assert_called_once_with(
+            tariff.CONSERVATIVE_DISCHARGE_BIAS_A
+        )
         controller.setDischargeActivationPower.assert_called_once_with(
             pytest.approx(830.0)
         )
@@ -5361,9 +5400,57 @@ class TestShadowPlannerAndEstimator:
             controller, create_test_state(60), 12 * 60
         )
 
-        controller.setChargeCurrentRange.assert_called_once_with(4, 9)
+        controller.setChargeCurrentRange.assert_called_once_with(
+            4, tariff.MAX_CHARGE_CURRENT
+        )
+        controller.setChargeCurrentBias.assert_called_once_with(-0.5)
         controller.setChargeActivationPower.assert_called_once_with(
             pytest.approx(960.0)
+        )
+
+    def test_dp_bidirectional_follow_is_not_capped_by_the_modelled_current(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "follow_bidirectional_conservative",
+            "current_a": 0.0,
+            "current_min_a": -5.0,
+            "current_max_a": 5.0,
+        }
+        tariff._last_shadow_run = {
+            "day": tariff.get_current_datetime().date().isoformat(),
+            "slot": 24,
+            "actions": [dict(tariff._last_dp_action)],
+            "inputs": [
+                {"slot": 24, "follow_conservative_gate_w": 830.0}
+            ],
+        }
+        controller = Mock()
+
+        tariff.set_home_demand_levels(
+            controller, create_test_state(60), 12 * 60
+        )
+
+        controller.setDischargeCurrentRange.assert_called_once_with(
+            3, tariff.MAX_DISCHARGE_CURRENT
+        )
+        controller.setChargeCurrentRange.assert_called_once_with(
+            3, tariff.MAX_CHARGE_CURRENT
+        )
+        controller.setDischargeCurrentBias.assert_called_once_with(
+            tariff.CONSERVATIVE_DISCHARGE_BIAS_A
+        )
+        controller.setDischargeActivationPower.assert_called_once_with(
+            pytest.approx(830.0)
         )
 
     def test_learning_preview_label_shows_dp_action_in_control_mode(
@@ -5377,6 +5464,11 @@ class TestShadowPlannerAndEstimator:
         tariff._learning_mode = "control_hist"
         tariff._shadow_enabled = True
         tariff._last_shadow_slot = 24
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "charge",
+            "current_a": 7.0,
+        }
         tariff._last_shadow_run = {
             "day": fixed.date().isoformat(),
             "slot": 24,

@@ -1035,6 +1035,15 @@ build a fresh plan, for example because the model or weather is missing or the
 plan is stale, that slot falls back to the heuristic and the dashboard says
 `heuristic fallback`.
 
+Follow actions use the DP's modelled minimum current as the floor but the
+Wallbox maximum as the ceiling. The modelled maximum is not an actuator cap,
+so a higher actual house load or solar surplus is still followed. Bidirectional
+actions use the Wallbox minimum in both directions and the DP's gate; the
+dashboard label reads `solar up to +XA house cons from YW` rather than
+`>=XA`, because the DP's discharge current is a modelled maximum, not a floor.
+A DP action that would discharge past the absolute floor or charge past the
+cap falls back to the heuristic for that slot.
+
 While the Heuristic mode is active, the dashboard also shows the action the
 current plan would take, such as `Would: Charge 11A`,
 `Would: Harvest solar >=4A` or `Would: Cover house aggr >=4A from 830W`. In a

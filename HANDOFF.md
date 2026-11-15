@@ -545,6 +545,14 @@ completed fixes.
   evaluated and recorded first. A valid DP action replaces the actuator tuple,
   except when SoC is unknown or the solver fails, where the heuristic result
   stands; the DP has its own protection and discharge floors.
+  Follow actions use the DP's modelled minimum current as the floor but the
+  Wallbox maximum as the ceiling: the modelled maximum is not an actuator cap,
+  so a higher actual house load or solar surplus is still followed.
+  Bidirectional actions use the Wallbox minimum in both directions and the
+  DP's gate; the dashboard label says `solar up to +XA house cons from YW`,
+  not `>=XA`, because the DP's discharge current is a modelled maximum rather
+  than a floor. A DP action that would discharge past the absolute floor or
+  charge past the cap falls back to the heuristic for that slot.
   Each run stores `solver_version`, `solver_mode` and `load_source`
   (`recorded` or `component`). `control_comp` records the component run as
   well as the recorded baseline; the policy map shows the latest run, so it

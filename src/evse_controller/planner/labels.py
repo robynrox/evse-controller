@@ -117,9 +117,9 @@ def action_label(
         )
         parts = ["Bidir"]
         if charge is not None and charge > 0:
-            parts.append(f"solar +{charge:.0f}A")
+            parts.append(f"solar up to +{charge:.0f}A")
         if discharge is not None and discharge < 0:
-            parts.append(f"house {variant} >={abs(discharge):.0f}A{gate}")
+            parts.append(f"house {variant}{gate}")
         return " ".join(parts) if len(parts) > 1 else "Bidir follow"
 
     if kind:
