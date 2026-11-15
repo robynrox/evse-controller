@@ -297,7 +297,11 @@ def run_job(job_dir: Path) -> int:
             job["current_slot"] = None
             _write_job(job_path, job)
 
-            runs = history.runs_for_day(day)
+            runs = [
+                run
+                for run in history.runs_for_day(day)
+                if run.get("load_source") != "component"
+            ]
             run = first_run(runs)
             if run is None:
                 days_skipped += 1

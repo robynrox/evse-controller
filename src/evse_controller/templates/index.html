@@ -309,7 +309,7 @@
                 <span class="separator">|</span>
                 <span class="status-info">
                     <strong>Learning mode:</strong>
-                    <span id="learning-mode">{{ learning_mode|capitalize }}</span><span
+                    <span id="learning-mode">{{ learning_mode_label }}</span><span
                         id="learning-preview"
                         class="learning-preview">{% if learning_preview %} · {{ learning_preview }}{% endif %}</span>
                 </span>
@@ -318,6 +318,23 @@
             <div class="status-item">
                 <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
             </div>
+        </div>
+        <div class="mode-selector" id="learning-mode-selector"
+             role="group" aria-label="Control mode">
+            <span class="mode-label">Control</span>
+            <button type="button"
+                    class="mode-button{% if learning_mode == 'preview' %} active{% endif %}"
+                    data-mode="preview"
+                    title="Heuristic in control; Learning mode observes and records.">SMART</button>
+            <button type="button"
+                    class="mode-button{% if learning_mode == 'control_hist' %} active{% endif %}"
+                    data-mode="control_hist"
+                    title="Learning mode in control using the recorded load profile.">LEARN HIST</button>
+            <button type="button"
+                    class="mode-button{% if learning_mode == 'control_comp' %} active{% endif %}"
+                    data-mode="control_comp"
+                    title="Learning mode in control using the weather-driven component forecast.">LEARN COMP</button>
+            <span id="mode-status" class="mode-status"></span>
         </div>
         <div id="link-health" class="link-health" hidden></div>
         <div class="nav-links">
@@ -515,6 +532,41 @@
     }
 
     .learning-preview {
+        color: #6c757d;
+    }
+
+    .mode-selector {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0 12px;
+    }
+    .mode-selector .mode-label {
+        font-weight: 700;
+        color: #495057;
+        font-size: 13px;
+    }
+    .mode-button {
+        padding: 6px 12px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        color: #222;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .mode-button.active {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+    }
+    .mode-button:disabled {
+        opacity: 0.55;
+        cursor: default;
+    }
+    .mode-status {
+        font-size: 12px;
         color: #6c757d;
     }
 
@@ -1069,6 +1121,65 @@
                 : 'Last transition finished';
         }
 
+        const modeSelector = document.getElementById('learning-mode-selector');
+        const modeStatus = document.getElementById('mode-status');
+        const modeButtons = modeSelector
+            ? Array.from(modeSelector.querySelectorAll('button[data-mode]'))
+            : [];
+        const modeLabels = {
+            preview: 'Smart',
+            control_hist: 'Learn hist',
+            control_comp: 'Learn comp',
+            off: 'Off'
+        };
+
+        function updateModeButtons(mode) {
+            modeButtons.forEach(button => {
+                button.classList.toggle(
+                    'active', button.dataset.mode === mode
+                );
+            });
+        }
+
+        async function changeLearningMode(mode) {
+            if (!modeButtons.length) return;
+            modeButtons.forEach(button => { button.disabled = true; });
+            if (modeStatus) modeStatus.textContent = 'Changing…';
+            try {
+                const response = await fetch('/api/learning-mode', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({mode: mode})
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Could not change mode');
+                }
+                updateModeButtons(data.mode);
+                const modeElement = document.getElementById('learning-mode');
+                if (modeElement) {
+                    modeElement.textContent = data.label ||
+                        modeLabels[data.mode] || data.mode;
+                }
+                const previewElement = document.getElementById('learning-preview');
+                if (previewElement) {
+                    previewElement.textContent = data.preview
+                        ? ` · ${data.preview}` : '';
+                }
+                if (modeStatus) modeStatus.textContent = '';
+            } catch (error) {
+                if (modeStatus) modeStatus.textContent = error.message;
+            } finally {
+                modeButtons.forEach(button => { button.disabled = false; });
+            }
+        }
+
+        modeButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                changeLearningMode(button.dataset.mode);
+            });
+        });
+
         async function updateStatus() {
             try {
                 const response = await fetch('/api/ext_status');
@@ -1083,7 +1194,9 @@
                 if (learningModeElement && data.learning_mode !== undefined) {
                     const mode = String(data.learning_mode || '');
                     learningModeElement.textContent =
+                        data.learning_mode_label ||
                         mode.charAt(0).toUpperCase() + mode.slice(1);
+                    updateModeButtons(mode);
                 }
                 const learningPreviewElement = document.getElementById('learning-preview');
                 if (learningPreviewElement) {

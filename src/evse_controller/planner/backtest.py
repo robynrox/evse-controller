@@ -325,7 +325,12 @@ def simulate_run(
 
 
 def first_run(runs: list[dict]) -> Optional[dict]:
-    usable = [run for run in runs if run.get("actions")]
+    usable = [
+        run
+        for run in runs
+        if run.get("actions")
+        and run.get("load_source") != "component"
+    ]
     if not usable:
         return None
     return min(
@@ -358,7 +363,11 @@ def backtest_days(
     day = start
     results = []
     while day <= end:
-        runs = history.runs_for_day(day)
+        runs = [
+            run
+            for run in history.runs_for_day(day)
+            if run.get("load_source") != "component"
+        ]
         run = first_run(runs)
         if run is not None:
             results.append(

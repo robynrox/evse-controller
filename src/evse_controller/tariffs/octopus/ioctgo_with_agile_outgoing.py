@@ -35,7 +35,7 @@ import queue
 import math
 import copy
 from collections import deque
-from typing import Optional
+from typing import Any, Mapping, Optional
 import json
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
@@ -608,13 +608,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_shadow_run = None
         self._shadow_force_replan = False
         self._last_component_shadow_run = None
+        self._last_dp_action = None
         self._component_model = None
         self._component_model_path = None
         self._component_model_mtime = None
         self._learning_mode = self._resolve_learning_mode()
         self._shadow_enabled = (
             self.ENABLE_SHADOW_PLANNER
-            and self._learning_mode == "preview"
+            and self._learning_mode
+            in ("preview", "control_hist", "control_comp")
         )
 
         # House-load discharge policy, derived from the projected 23:30 SoC:
@@ -692,25 +694,240 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def _resolve_learning_mode() -> str:
         """Return the configured Learning mode.
 
-        Only ``off`` and ``preview`` are available in this release.  A
-        ``control`` setting is reserved for the later control rollout; until
-        then it falls back to preview so a hand-edited config cannot start
-        unvalidated control.
+        ``off`` is heuristic-only and stops the observer.  ``preview`` keeps
+        the heuristic in control while recording the DP plan.  ``control_hist``
+        and ``control_comp`` put the DP in control using the recorded or
+        component load input respectively.
         """
         mode = str(config.LEARNING_MODE or "preview").strip().lower()
         if mode == "control":
-            warning(
-                "IOCTGO_AGILEOUT: Learning mode control is not available "
-                "yet; using preview."
-            )
-            return "preview"
-        if mode not in ("off", "preview"):
+            mode = "control_hist"
+        if mode not in ("off", "preview", "control_hist", "control_comp"):
             warning(
                 f"IOCTGO_AGILEOUT: Unknown Learning mode '{mode}'; "
                 "using preview."
             )
             return "preview"
         return mode
+
+    @property
+    def _dp_control_enabled(self) -> bool:
+        return self._learning_mode in ("control_hist", "control_comp")
+
+    def set_learning_mode(self, mode: str) -> str:
+        """Change the Learning mode at runtime and reset the next plan."""
+        value = str(mode or "").strip().lower()
+        if value == "control":
+            value = "control_hist"
+        if value not in ("off", "preview", "control_hist", "control_comp"):
+            raise ValueError(f"Unknown Learning mode: {mode!r}")
+        self._learning_mode = value
+        self._shadow_enabled = (
+            self.ENABLE_SHADOW_PLANNER
+            and value in ("preview", "control_hist", "control_comp")
+        )
+        self._last_shadow_slot = -1
+        self._last_shadow_soc = None
+        self._shadow_force_replan = True
+        self._last_dp_action = None
+        info(f"IOCTGO_AGILEOUT: Learning mode set to {value}")
+        return value
+
+    def _selected_dp_run(self) -> Optional[dict]:
+        if self._learning_mode == "control_comp":
+            return self._last_component_shadow_run
+        return self._last_shadow_run
+
+    @staticmethod
+    def _dp_action_amps(action: Mapping[str, Any]) -> int:
+        commanded = action.get("commanded_current_a")
+        if commanded is not None:
+            return max(0, int(commanded))
+        return max(0, int(round(float(action.get("current_a") or 0.0))))
+
+    def _dp_action_range(
+        self, action: Mapping[str, Any]
+    ) -> tuple[int, int]:
+        minimum = int(math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9))
+        low = int(round(float(action.get("current_min_a") or 0.0)))
+        high = int(round(float(action.get("current_max_a") or 0.0)))
+        low = max(minimum, low)
+        high = max(low, high)
+        return low, high
+
+    def _dp_action_control(self, action: Mapping[str, Any]):
+        kind = str(action.get("kind") or "")
+        if kind == "idle":
+            return ControlState.DORMANT, None, None, "DP: Idle"
+        if kind == "charge":
+            amps = self._dp_action_amps(action)
+            return (
+                ControlState.CHARGE,
+                amps,
+                amps,
+                f"DP: Charge {amps}A",
+            )
+        if kind == "discharge":
+            amps = self._dp_action_amps(action)
+            return (
+                ControlState.DISCHARGE,
+                amps,
+                amps,
+                f"DP: Discharge {amps}A",
+            )
+        if kind == "follow_solar":
+            low, high = self._dp_action_range(action)
+            return (
+                ControlState.LOAD_FOLLOW_CHARGE,
+                low,
+                high,
+                f"DP: Harvest solar {low}-{high}A",
+            )
+        if kind in (
+            "follow_house_conservative",
+            "follow_house_aggressive",
+        ):
+            low, high = self._dp_action_range(action)
+            return (
+                ControlState.LOAD_FOLLOW_DISCHARGE,
+                low,
+                high,
+                f"DP: Cover house {low}-{high}A",
+            )
+        if kind in (
+            "follow_bidirectional_conservative",
+            "follow_bidirectional_aggressive",
+        ):
+            return (
+                ControlState.LOAD_FOLLOW_BIDIRECTIONAL,
+                None,
+                None,
+                "DP: Bidirectional follow",
+            )
+        return None
+
+    def _dp_control_result(self, state, dayMinute: int):
+        """Return the DP actuator tuple for this slot, or None to fall back."""
+        current_slot = int(dayMinute) // 30
+        if self._last_shadow_slot != current_slot:
+            return None
+        run = self._selected_dp_run()
+        if run is None:
+            return None
+        if int(run.get("slot") or -1) != current_slot:
+            return None
+        today = self.get_current_datetime().date().isoformat()
+        if run.get("day") != today:
+            return None
+        action = next(
+            (
+                item
+                for item in run.get("actions") or []
+                if item.get("slot") == current_slot
+            ),
+            None,
+        )
+        if action is None:
+            return None
+        self._last_dp_action = dict(action)
+        return self._dp_action_control(action)
+
+    def _dp_follow_gate(
+        self, action: Mapping[str, Any]
+    ) -> Optional[float]:
+        run = self._selected_dp_run()
+        if run is None:
+            return None
+        slot = action.get("slot")
+        input_row = next(
+            (
+                item
+                for item in run.get("inputs") or []
+                if item.get("slot") == slot
+            ),
+            None,
+        )
+        if not input_row:
+            return None
+        kind = str(action.get("kind") or "")
+        if kind == "follow_house_conservative":
+            key = "follow_conservative_gate_w"
+        elif kind == "follow_house_aggressive":
+            key = "follow_aggressive_gate_w"
+        elif kind.endswith("conservative"):
+            key = "follow_conservative_gate_w"
+        elif kind.endswith("aggressive"):
+            key = "follow_aggressive_gate_w"
+        else:
+            return None
+        try:
+            return float(input_row.get(key))
+        except (TypeError, ValueError):
+            return None
+
+    def _apply_dp_home_demand_levels(
+        self, evseController, dayMinute: int
+    ) -> bool:
+        """Apply the current DP action's load-following ranges.
+
+        Returns True when a DP action was applied.  False means the caller
+        should fall through to the heuristic configuration.
+        """
+        action = self._last_dp_action
+        if not action or action.get("slot") != int(dayMinute) // 30:
+            return False
+        kind = str(action.get("kind") or "")
+        minimum = int(math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9))
+        if kind == "idle":
+            return True
+        if kind == "charge":
+            amps = self._dp_action_amps(action)
+            evseController.setChargeCurrentRange(amps, amps)
+        elif kind == "discharge":
+            amps = self._dp_action_amps(action)
+            evseController.setDischargeCurrentRange(amps, amps)
+        elif kind == "follow_solar":
+            low, high = self._dp_action_range(action)
+            evseController.setChargeCurrentBias(0)
+            evseController.setChargeCurrentRange(low, high)
+            evseController.setChargeActivationPower(
+                self._charge_activation_w_for_current(low)
+            )
+        elif kind in (
+            "follow_house_conservative",
+            "follow_house_aggressive",
+        ):
+            gate = self._dp_follow_gate(action)
+            if gate is None:
+                return False
+            low, high = self._dp_action_range(action)
+            evseController.setDischargeCurrentBias(0)
+            evseController.setDischargeCurrentRange(low, high)
+            evseController.setDischargeActivationPower(gate)
+        elif kind in (
+            "follow_bidirectional_conservative",
+            "follow_bidirectional_aggressive",
+        ):
+            gate = self._dp_follow_gate(action)
+            if gate is None:
+                return False
+            low = int(round(float(action.get("current_min_a") or 0.0)))
+            high = int(round(float(action.get("current_max_a") or 0.0)))
+            if high >= minimum:
+                evseController.setChargeCurrentBias(0)
+                evseController.setChargeCurrentRange(minimum, high)
+                evseController.setChargeActivationPower(
+                    self._charge_activation_w_for_current(minimum)
+                )
+            if low < 0 and abs(low) >= minimum:
+                evseController.setDischargeCurrentBias(0)
+                evseController.setDischargeCurrentRange(
+                    minimum, abs(low)
+                )
+            evseController.setDischargeActivationPower(gate)
+        else:
+            return False
+        return True
 
     def _latest_shadow_run(self) -> Optional[dict]:
         """Return the latest preview run for today, in memory or on disk."""
@@ -735,14 +952,28 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return run
 
     def learning_preview_label(self) -> Optional[str]:
-        """A short description of what the preview plan would do now."""
-        if self._learning_mode != "preview" or not self._shadow_enabled:
+        """A short description of the current preview or DP action."""
+        if self._learning_mode == "off" or not self._shadow_enabled:
             return None
-        run = self._latest_shadow_run()
-        if run is None:
-            return "No preview plan yet"
         now = self.get_current_datetime()
         slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        if self._dp_control_enabled:
+            run = self._selected_dp_run()
+            if run is None:
+                return "No DP plan — heuristic fallback"
+            if (
+                self._last_shadow_slot != slot
+                or int(run.get("slot") or -1) != slot
+            ):
+                return "DP plan stale — heuristic fallback"
+            prefix = "DP: "
+            append_component = False
+        else:
+            run = self._latest_shadow_run()
+            if run is None:
+                return "No preview plan yet"
+            prefix = "Would: "
+            append_component = True
         action = next(
             (
                 item
@@ -752,7 +983,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             None,
         )
         if action is None:
-            return "No action for this slot"
+            return (
+                "No DP action — heuristic fallback"
+                if self._dp_control_enabled
+                else "No action for this slot"
+            )
         slot_input = next(
             (
                 item
@@ -761,10 +996,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ),
             None,
         )
-        label = f"Would: {action_label(action, slot_input)}"
-        component = self._component_preview_label(now)
-        if component:
-            label += f" · Component: {component}"
+        label = f"{prefix}{action_label(action, slot_input)}"
+        if append_component:
+            component = self._component_preview_label(now)
+            if component:
+                label += f" · Component: {component}"
         return label
 
     def _time_to_minutes(self, time_str: str) -> int:
@@ -1359,6 +1595,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         ):
             return
         self._shadow_force_replan = False
+        # A component plan is only valid for the pass that produced it: if the
+        # model or weather is unavailable this time, Learn comp must fall back
+        # rather than reuse a plan built for an older SoC or slot.
+        self._last_component_shadow_run = None
 
         try:
             source = TariffSourceAdapter(self)
@@ -1413,6 +1653,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 planner_input,
                 result,
             )
+            run["solver_mode"] = (
+                "control_hist"
+                if self._learning_mode == "control_hist"
+                else (
+                    "control_comp-baseline"
+                    if self._learning_mode == "control_comp"
+                    else "preview"
+                )
+            )
+            run["load_source"] = "recorded"
             self._history.record_run(now.date(), run)
             self._last_shadow_run = run
             self._last_shadow_slot = current_slot
@@ -1430,9 +1680,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         component_input,
                         component_result,
                     )
-                    component_run["solver_mode"] = "preview-component"
+                    component_run["solver_mode"] = (
+                        "control_comp"
+                        if self._learning_mode == "control_comp"
+                        else "preview-component"
+                    )
                     component_run["load_source"] = "component"
                     self._last_component_shadow_run = component_run
+                    if self._learning_mode == "control_comp":
+                        self._history.record_run(now.date(), component_run)
                     debug(
                         "IOCTGO_AGILEOUT: Component preview for slot "
                         f"{current_slot}: SoC {component_result.final_soc:.1f}%, "
@@ -7637,17 +7893,39 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return required_amps
 
     def get_control_state(self, state: EvseAsyncState, dayMinute: int) -> tuple:
-        """Return the heuristic decision and record what was actually chosen.
+        """Return the heuristic decision, or the DP action in control modes.
 
-        The decision builder is kept separate so history can be written after
-        it returns: the mode, ``ControlState`` and message then describe the
-        action that will really be applied, not an intermediate branch.
+        The heuristic is always evaluated first so its observer history and
+        export plan stay warm.  In a control mode the DP action then replaces
+        the actuator tuple.  If the DP plan is unavailable or fails, the
+        heuristic result is the fallback.
         """
         previous = self._decision_snapshot
         result = self._decide_control_state(state, dayMinute)
         if self._decision_snapshot is not previous:
             self._record_decision_history(self._decision_snapshot, result)
-        return result
+        if not self._dp_control_enabled:
+            return result
+        # A missing or failed DP plan must leave no stale action behind for
+        # set_home_demand_levels(); the heuristic result is the fallback.
+        self._last_dp_action = None
+        try:
+            now = self.get_current_datetime()
+            current_slot = int(dayMinute) // 30
+            self._shadow_plan(state, current_slot, now)
+            dp_result = self._dp_control_result(state, dayMinute)
+        except Exception as exc:
+            warning(
+                "IOCTGO_AGILEOUT: DP control failed; using the heuristic: "
+                f"{exc}"
+            )
+            return result
+        if dp_result is None:
+            debug(
+                "IOCTGO_AGILEOUT: DP action unavailable; using the heuristic"
+            )
+            return result
+        return dp_result
 
     def _decide_control_state(
         self, state: EvseAsyncState, dayMinute: int
@@ -8944,6 +9222,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.evseController = evseController
             self.original_calculation_method = evseController.use_new_current_calculation
             evseController.use_new_current_calculation = True
+
+        if self._dp_control_enabled:
+            if self._apply_dp_home_demand_levels(
+                evseController, dayMinute
+            ):
+                return
 
         battery_level = state.battery_level
         current_slot = dayMinute // 30

@@ -748,11 +748,12 @@
         <h2>Learning mode</h2>
         <p>
             Learning mode uses dynamic programming (DP) to plan from measured
-            grid load and prices. <strong>Preview</strong> is the normal state:
-            it records plans, SoC estimates and decisions without changing
-            control. <strong>Off</strong> is for heuristic-only use and stops
-            that observer history; the heuristic still controls either way.
-            Control is not available yet.
+            grid load and prices. <strong>Smart</strong> keeps the heuristic
+            in control and lets Learning mode observe. <strong>Learn hist</strong>
+            hands control to the DP using the recorded load profile.
+            <strong>Learn comp</strong> hands control to the DP using the
+            weather-driven component forecast. <strong>Off</strong> is
+            heuristic-only and stops the observer history.
         </p>
         <div class="form-group">
             <label for="learning_mode">Mode</label>
@@ -763,7 +764,15 @@
                 </option>
                 <option value="preview"
                     {% if config.learning.get('mode', 'preview') == 'preview' %}selected{% endif %}>
-                    Preview — record plans without controlling
+                    Smart — heuristic controls, Learning mode observes
+                </option>
+                <option value="control_hist"
+                    {% if config.learning.get('mode', 'preview') == 'control_hist' %}selected{% endif %}>
+                    Learn hist — DP controls using recorded load
+                </option>
+                <option value="control_comp"
+                    {% if config.learning.get('mode', 'preview') == 'control_comp' %}selected{% endif %}>
+                    Learn comp — DP controls using component forecast
                 </option>
             </select>
             <small>

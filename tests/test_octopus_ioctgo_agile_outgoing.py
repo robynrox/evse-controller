@@ -4980,7 +4980,7 @@ class TestShadowPlannerAndEstimator:
         assert tariff._learning_mode == "preview"
         assert tariff._shadow_enabled is True
 
-    def test_control_mode_falls_back_to_preview(self, monkeypatch):
+    def test_control_mode_is_accepted(self, monkeypatch):
         monkeypatch.setattr(
             Config, "LEARNING_MODE", property(lambda self: "control")
         )
@@ -4992,8 +4992,9 @@ class TestShadowPlannerAndEstimator:
 
         tariff = _build_tariff()
 
-        assert tariff._learning_mode == "preview"
+        assert tariff._learning_mode == "control_hist"
         assert tariff._shadow_enabled is True
+        assert tariff._dp_control_enabled is True
 
     def test_learning_preview_label_uses_the_current_slot_action(self):
         tariff = _build_tariff()
@@ -5166,6 +5167,226 @@ class TestShadowPlannerAndEstimator:
         }
 
         assert tariff.learning_preview_label() is None
+
+    def test_set_learning_mode_switches_control_and_observer(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+
+        assert tariff.set_learning_mode("control_hist") == "control_hist"
+        assert tariff._learning_mode == "control_hist"
+        assert tariff._shadow_enabled is True
+        assert tariff._dp_control_enabled is True
+
+        assert tariff.set_learning_mode("control_comp") == "control_comp"
+        assert tariff._dp_control_enabled is True
+
+        assert tariff.set_learning_mode("preview") == "preview"
+        assert tariff._shadow_enabled is True
+        assert tariff._dp_control_enabled is False
+
+        assert tariff.set_learning_mode("off") == "off"
+        assert tariff._shadow_enabled is False
+        assert tariff._dp_control_enabled is False
+
+    def test_control_mode_returns_the_dp_action(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        today = tariff.get_current_datetime().date().isoformat()
+        tariff._last_shadow_slot = 24
+        tariff._last_shadow_run = {
+            "day": today,
+            "slot": 24,
+            "actions": [
+                {
+                    "slot": 24,
+                    "kind": "charge",
+                    "current_a": 7.0,
+                    "commanded_current_a": 7,
+                }
+            ],
+            "inputs": [{"slot": 24}],
+        }
+        monkeypatch.setattr(tariff, "_shadow_plan", lambda *args: None)
+
+        result = tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        assert result[0] == ControlState.CHARGE
+        assert result[1] == 7
+        assert result[2] == 7
+        assert result[3] == "DP: Charge 7A"
+
+    def test_control_comp_uses_the_component_run(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_comp")
+        today = tariff.get_current_datetime().date().isoformat()
+        tariff._last_shadow_slot = 24
+        tariff._last_shadow_run = {
+            "day": today,
+            "slot": 24,
+            "load_source": "recorded",
+            "actions": [
+                {
+                    "slot": 24,
+                    "kind": "charge",
+                    "current_a": 7.0,
+                    "commanded_current_a": 7,
+                }
+            ],
+            "inputs": [{"slot": 24}],
+        }
+        tariff._last_component_shadow_run = {
+            "day": today,
+            "slot": 24,
+            "load_source": "component",
+            "actions": [
+                {
+                    "slot": 24,
+                    "kind": "discharge",
+                    "current_a": 5.0,
+                    "commanded_current_a": 5,
+                }
+            ],
+            "inputs": [{"slot": 24}],
+        }
+        monkeypatch.setattr(tariff, "_shadow_plan", lambda *args: None)
+
+        result = tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        assert result[0] == ControlState.DISCHARGE
+        assert result[1] == 5
+        assert result[2] == 5
+        assert result[3] == "DP: Discharge 5A"
+
+    def test_control_mode_falls_back_without_a_dp_plan(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        tariff._last_shadow_slot = -1
+        tariff._last_shadow_run = None
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "charge",
+            "current_a": 7.0,
+            "commanded_current_a": 7,
+        }
+        monkeypatch.setattr(tariff, "_shadow_plan", lambda *args: None)
+
+        result = tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        assert not str(result[3]).startswith("DP:")
+        assert tariff._last_dp_action is None
+
+    def test_dp_follow_action_sets_the_load_follow_ranges(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        tariff.SMART_OCPP_OPERATION = False
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "follow_house_conservative",
+            "current_min_a": 3.0,
+            "current_max_a": 12.0,
+        }
+        tariff._last_shadow_run = {
+            "day": tariff.get_current_datetime().date().isoformat(),
+            "slot": 24,
+            "actions": [dict(tariff._last_dp_action)],
+            "inputs": [
+                {"slot": 24, "follow_conservative_gate_w": 830.0}
+            ],
+        }
+        controller = Mock()
+
+        tariff.set_home_demand_levels(
+            controller, create_test_state(60), 12 * 60
+        )
+
+        controller.setDischargeCurrentRange.assert_called_once_with(3, 12)
+        controller.setDischargeActivationPower.assert_called_once_with(
+            pytest.approx(830.0)
+        )
+
+    def test_dp_follow_solar_action_gates_on_its_own_floor(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "follow_solar",
+            "current_min_a": 4.0,
+            "current_max_a": 9.0,
+        }
+        controller = Mock()
+
+        tariff.set_home_demand_levels(
+            controller, create_test_state(60), 12 * 60
+        )
+
+        controller.setChargeCurrentRange.assert_called_once_with(4, 9)
+        controller.setChargeActivationPower.assert_called_once_with(
+            pytest.approx(960.0)
+        )
+
+    def test_learning_preview_label_shows_dp_action_in_control_mode(
+        self,
+    ):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=12, minute=10, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff._learning_mode = "control_hist"
+        tariff._shadow_enabled = True
+        tariff._last_shadow_slot = 24
+        tariff._last_shadow_run = {
+            "day": fixed.date().isoformat(),
+            "slot": 24,
+            "actions": [
+                {"slot": 24, "kind": "charge", "current_a": 7.0}
+            ],
+            "inputs": [{"slot": 24}],
+        }
+
+        assert tariff.learning_preview_label() == "DP: Charge 7A"
 
     def test_disabled_shadow_planner_records_nothing(self, tmp_path):
         tariff = _build_tariff()

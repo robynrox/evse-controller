@@ -1148,16 +1148,24 @@ def config_page():
             if button_style is not None:
                 config.UI_USE_ICON_BUTTONS = button_style != 'text'
 
-            # Learning mode.  Control is not exposed in this release, so only
-            # the safe preview/off choices are accepted from the form.
+            # Learning mode.  Preview keeps the heuristic in control; the
+            # control_* modes hand the actuator to the DP.
             learning_mode = request.form.get('learning[mode]')
             if learning_mode is not None:
                 learning_mode = learning_mode.strip().lower()
-                if learning_mode not in ('off', 'preview'):
+                if learning_mode not in (
+                    'off', 'preview', 'control_hist', 'control_comp'
+                ):
                     raise ValueError(
-                        "Learning mode must be 'off' or 'preview'"
+                        "Learning mode must be 'off', 'preview', "
+                        "'control_hist' or 'control_comp'"
                     )
                 config.LEARNING_MODE = learning_mode
+                tariff = tariffManager.get_tariff()
+                if tariff is not None and hasattr(
+                    tariff, 'set_learning_mode'
+                ):
+                    tariff.set_learning_mode(learning_mode)
 
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
@@ -1219,6 +1227,18 @@ def config_page():
         flash(f'Error loading configuration: {str(e)}', 'error')
         return redirect(url_for('index'))
 
+def _learning_mode_label(mode: str) -> str:
+    return {
+        "preview": "Smart",
+        "control_hist": "Learn hist",
+        "control_comp": "Learn comp",
+        "off": "Off",
+    }.get(
+        str(mode).lower(),
+        str(mode).replace("_", " ").capitalize(),
+    )
+
+
 def _learning_status() -> tuple[str, str]:
     """Return the effective Learning mode and the current preview action."""
     tariff = tariffManager.get_tariff()
@@ -1251,8 +1271,49 @@ def index():
                          current_state=current_state,
                          wallbox_reset_available=wallbox_reset_available,
                          learning_mode=learning_mode,
+                         learning_mode_label=_learning_mode_label(
+                             learning_mode
+                         ),
                          learning_preview=learning_preview,
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
+
+@app.route('/api/learning-mode', methods=['POST'])
+def set_learning_mode():
+    """Persist and apply a Learning-mode change from the dashboard."""
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get('mode') or '').strip().lower()
+    if mode not in ('off', 'preview', 'control_hist', 'control_comp'):
+        return jsonify({
+            'error': (
+                "Mode must be 'preview', 'control_hist', 'control_comp' "
+                "or 'off'"
+            )
+        }), 400
+    tariff = tariffManager.get_tariff()
+    if tariff is None or not hasattr(tariff, 'set_learning_mode'):
+        return jsonify({
+            'error': (
+                'Learning mode is only available on the IOctGo controller'
+            )
+        }), 409
+    try:
+        effective = tariff.set_learning_mode(mode)
+        config.LEARNING_MODE = effective
+        config.save()
+    except Exception as error:
+        logging.error(f"Could not set Learning mode: {error}")
+        return jsonify({'error': str(error)}), 500
+    preview = ""
+    try:
+        preview = tariff.learning_preview_label() or ""
+    except Exception:
+        preview = ""
+    return jsonify({
+        'mode': effective,
+        'label': _learning_mode_label(effective),
+        'preview': preview,
+    })
+
 
 @app.route('/decision')
 def decision_page():
@@ -1493,6 +1554,7 @@ def get_extended_status():
         'current_state': current_state,
         'battery_soc': battery_soc,
         'learning_mode': learning_mode,
+        'learning_mode_label': _learning_mode_label(learning_mode),
         'learning_preview': learning_preview,
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),

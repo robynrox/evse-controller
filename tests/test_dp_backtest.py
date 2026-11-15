@@ -181,6 +181,26 @@ def test_first_run_prefers_the_earliest_slot():
     assert first_run([]) is None
 
 
+def test_first_run_ignores_component_control_runs():
+    runs = [
+        {
+            "slot": 4,
+            "ts": "recorded",
+            "load_source": "recorded",
+            "actions": [{}],
+        },
+        {
+            "slot": 4,
+            "ts": "component",
+            "load_source": "component",
+            "actions": [{}],
+        },
+    ]
+
+    assert first_run(runs)["ts"] == "recorded"
+    assert first_run([runs[1]]) is None
+
+
 class FakeHistory:
     def __init__(self, runs):
         self._runs = runs
