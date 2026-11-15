@@ -340,7 +340,9 @@ class DpPlanner:
         ]
 
         for index, slot in enumerate(horizon):
-            templates = self._action_templates(slot)
+            templates = self._plan_templates(slot)
+            lower, upper = self._state_band_thresholds(templates)
+            state_cache: dict = {}
             next_dp = [float("inf")] * n_states
             next_prev = [-1] * n_states
             next_choice: list[Optional[_ActionTemplate]] = [None] * n_states
@@ -348,7 +350,9 @@ class DpPlanner:
             for state, base_cost in enumerate(dp):
                 if not math.isfinite(base_cost):
                     continue
-                for template in self._templates_for_state(templates, state):
+                for template in self._templates_for_state_cached(
+                    templates, state, lower, upper, state_cache
+                ):
                     next_state = self._feasible_next_state(
                         state, template
                     )
@@ -491,7 +495,9 @@ class DpPlanner:
         ] * n_slots
 
         for index in range(n_slots - 1, -1, -1):
-            templates = self._action_templates(horizon[index])
+            templates = self._plan_templates(horizon[index])
+            lower, upper = self._state_band_thresholds(templates)
+            state_cache: dict = {}
             energy_cur: list[float] = [float("inf")] * n_states
             policy_cur: list[float] = [float("inf")] * n_states
             reachable_cur: list[bool] = [False] * n_states
@@ -504,7 +510,9 @@ class DpPlanner:
                 best_energy = float("inf")
                 best_template = None
                 best_next = None
-                for template in self._templates_for_state(templates, state):
+                for template in self._templates_for_state_cached(
+                    templates, state, lower, upper, state_cache
+                ):
                     next_state = self._feasible_next_state(
                         state, template
                     )
@@ -541,7 +549,9 @@ class DpPlanner:
 
         cells: list[tuple[PolicyCell, ...]] = []
         for index in range(n_slots):
-            templates = self._action_templates(horizon[index])
+            templates = self._plan_templates(horizon[index])
+            lower, upper = self._state_band_thresholds(templates)
+            state_cache: dict = {}
             choice_cur = choices[index] or []
             row = []
             for state in range(n_states):
@@ -583,8 +593,8 @@ class DpPlanner:
                 )
 
                 mode_best: dict[str, float] = {}
-                for candidate in self._templates_for_state(
-                    templates, state
+                for candidate in self._templates_for_state_cached(
+                    templates, state, lower, upper, state_cache
                 ):
                     candidate_next = self._feasible_next_state(
                         state, candidate
@@ -896,6 +906,98 @@ class DpPlanner:
             templates.append(solar)
         return templates
 
+    def _plan_templates(self, slot: PlannerSlot) -> list[_ActionTemplate]:
+        """Templates used by the DP passes, with dominated fixed currents gone."""
+        return self._dedupe_fixed_templates(self._action_templates(slot))
+
+    @staticmethod
+    def _dedupe_fixed_templates(
+        templates: list[_ActionTemplate],
+    ) -> list[_ActionTemplate]:
+        """Keep only the cheapest fixed current for each SoC step.
+
+        Two integer currents can round to the same state-grid step.  Their
+        future value is identical, so the higher-cost one can never be part of
+        an optimal plan.  Follow arcs are left alone: their kind and floor are
+        part of the action, not just the resulting SoC.
+        """
+        seen: dict[tuple[str, int], int] = {}
+        result: list[_ActionTemplate] = []
+        for template in templates:
+            if template.kind not in ("charge", "discharge"):
+                result.append(template)
+                continue
+            key = (template.kind, template.delta_steps)
+            index = seen.get(key)
+            if index is None:
+                seen[key] = len(result)
+                result.append(template)
+            elif template.cost_p < result[index].cost_p - 1e-12:
+                result[index] = template
+        return result
+
+    def _state_band_thresholds(
+        self, templates: list[_ActionTemplate]
+    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Thresholds where the state-dependent template mask can change.
+
+        The filtered list only changes when the state crosses a charge cap,
+        a discharge floor, or the next-state bound of a bidirectional arc.
+        Splitting on those points lets the caller cache the list per band
+        instead of re-filtering all templates for every SoC.
+        """
+        lower = {
+            float(self.discharge_floor_percent),
+            float(self.protection_floor_percent),
+        }
+        upper = {float(self.charge_cap_percent)}
+        for template in templates:
+            if template.floor_percent is not None:
+                lower.add(float(template.floor_percent))
+            if template.kind.startswith("follow_bidirectional"):
+                action_floor = float(self.discharge_floor_percent)
+                if template.floor_percent is not None:
+                    action_floor = max(
+                        action_floor, float(template.floor_percent)
+                    )
+                lower.add(action_floor - template.delta_soc)
+                upper.add(
+                    float(self.charge_cap_percent) - template.delta_soc
+                )
+        return tuple(sorted(lower)), tuple(sorted(upper))
+
+    @staticmethod
+    def _state_band_key(
+        soc_percent: float,
+        lower: tuple[float, ...],
+        upper: tuple[float, ...],
+    ) -> tuple[tuple[bool, ...], tuple[bool, ...]]:
+        return (
+            tuple(
+                soc_percent <= threshold + 1e-9 for threshold in lower
+            ),
+            tuple(
+                soc_percent >= threshold - 1e-9 for threshold in upper
+            ),
+        )
+
+    def _templates_for_state_cached(
+        self,
+        templates: list[_ActionTemplate],
+        state: int,
+        lower: tuple[float, ...],
+        upper: tuple[float, ...],
+        cache: dict,
+    ) -> list[_ActionTemplate]:
+        key = self._state_band_key(
+            state * self.soc_step_percent, lower, upper
+        )
+        cached = cache.get(key)
+        if cached is None:
+            cached = self._templates_for_state(templates, state)
+            cache[key] = cached
+        return cached
+
     def _templates_for_state(
         self,
         templates: list[_ActionTemplate],
@@ -908,7 +1010,46 @@ class DpPlanner:
         directions occur in the slot.  The one-direction arcs are fallbacks
         for SoCs where the bidirectional arc cannot reach its floor or charge
         cap.
+
+        Arcs that cannot move in their own direction at this SoC are removed
+        before the feasibility check: charging at the cap and discharging at
+        or below the floor are impossible by construction.
         """
+        soc = state * self.soc_step_percent
+        charge_blocked = soc >= self.charge_cap_percent - 1e-9
+        masked: list[_ActionTemplate] = []
+        for template in templates:
+            kind = template.kind
+            if charge_blocked:
+                if kind in ("charge", "follow_solar"):
+                    continue
+                if (
+                    kind.startswith("follow_bidirectional")
+                    and template.delta_steps > 0
+                ):
+                    continue
+            if template.delta_steps <= 0:
+                if kind == "discharge":
+                    action_floor = (
+                        self.discharge_floor_percent
+                        if template.floor_percent is None
+                        else float(template.floor_percent)
+                    )
+                elif kind.startswith(
+                    ("follow_house", "follow_bidirectional")
+                ):
+                    action_floor = self.discharge_floor_percent
+                    if template.floor_percent is not None:
+                        action_floor = max(
+                            action_floor, float(template.floor_percent)
+                        )
+                else:
+                    action_floor = None
+                if action_floor is not None and soc <= action_floor + 1e-9:
+                    continue
+            masked.append(template)
+        templates = masked
+
         feasible_bidirectional = {
             template.kind
             for template in templates

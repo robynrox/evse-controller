@@ -292,6 +292,98 @@ def test_follow_solar_charges_only_from_negative_load():
     assert solar.current_max_a == pytest.approx(3.0)
 
 
+def test_fixed_templates_are_unique_per_soc_step():
+    templates = planner()._plan_templates(slot(0))
+    keys = [
+        (template.kind, template.delta_steps)
+        for template in templates
+        if template.kind in ("charge", "discharge")
+    ]
+
+    assert len(keys) == len(set(keys))
+
+
+class _UnprunedPlanner(DpPlanner):
+    """The pre-prune bidirectional filter, for an equivalence check."""
+
+    def _templates_for_state(self, templates, state):
+        feasible_bidirectional = {
+            template.kind
+            for template in templates
+            if template.kind.startswith("follow_bidirectional")
+            and self._feasible_next_state(state, template) is not None
+        }
+        if not feasible_bidirectional:
+            return templates
+        filtered = []
+        for template in templates:
+            if template.kind == "follow_solar" and feasible_bidirectional:
+                continue
+            if (
+                template.kind == "follow_house_conservative"
+                and "follow_bidirectional_conservative"
+                in feasible_bidirectional
+            ):
+                continue
+            if (
+                template.kind == "follow_house_aggressive"
+                and "follow_bidirectional_aggressive"
+                in feasible_bidirectional
+            ):
+                continue
+            filtered.append(template)
+        return filtered
+
+
+@pytest.mark.parametrize("initial_soc", [26.0, 50.0, 96.0])
+def test_safe_prunes_do_not_change_the_optimum(initial_soc):
+    slots = [
+        replace(
+            slot(
+                index,
+                import_p=10.0 + 4.0 * (index % 5),
+                export_p=5.0 + 3.0 * (index % 3),
+                load_kw=0.4 + 0.2 * (index % 4),
+            ),
+            load_samples=((0.2, 0.5), (0.9, 0.5)),
+            follow_conservative_gate_w=720.0,
+            follow_aggressive_gate_w=241.0,
+            follow_conservative_floor_percent=40.0,
+            follow_aggressive_floor_percent=50.0,
+        )
+        for index in range(12)
+    ]
+    params = dict(
+        efficiency_model=LinearModel(),
+        capacity_kwh=36.0,
+        soc_step_percent=0.5,
+        min_current_a=3.0,
+        charge_cap_percent=97.0,
+        protection_floor_percent=25.0,
+        target_soc_percent=50.0,
+    )
+    pruned = DpPlanner(**params)
+    unpruned = _UnprunedPlanner(**params)
+
+    pruned_plan = pruned.plan(slots, initial_soc)
+    unpruned_plan = unpruned.plan(slots, initial_soc)
+    assert pruned_plan.total_cost_p == pytest.approx(
+        unpruned_plan.total_cost_p
+    )
+    assert pruned_plan.final_soc == pytest.approx(unpruned_plan.final_soc)
+
+    pruned_policy = pruned.policy(slots, initial_soc)
+    unpruned_policy = unpruned.policy(slots, initial_soc)
+    for pruned_row, unpruned_row in zip(
+        pruned_policy.energy_values, unpruned_policy.energy_values
+    ):
+        assert pruned_row == pytest.approx(unpruned_row)
+    for pruned_row, unpruned_row in zip(
+        pruned_policy.policy_values, unpruned_policy.policy_values
+    ):
+        assert pruned_row == pytest.approx(unpruned_row)
+
+
 def test_flat_prices_leave_the_pack_alone():
     result = planner().plan(
         [slot(0), slot(1)],

@@ -582,7 +582,11 @@ completed fixes.
   `load_source="profile"` or `"fallback"`; historical runs with `"blended"` or
   `"prior"` remain labelled as such. The DP-control switch must stay disabled
   until at least one measured day exists, with a warning that very short
-  history may make decisions unreasonable.
+  history may make decisions unreasonable. The DP prunes only arcs that cannot
+  be feasible or are dominated: unidirectional follows when a bidirectional
+  arc is feasible, direction arcs at the cap/floor, and fixed currents that
+  round to the same SoC step. The filtered list is cached per SoC band; the
+  plan and policy costs are unchanged against the unpruned filter.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and
