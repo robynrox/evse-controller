@@ -146,6 +146,7 @@ def _with_hybrid_floors(
     slots: Iterable[PlannerSlot],
     floors: Iterable[float],
     variants: tuple[str, ...] = ("conservative", "aggressive"),
+    aggressive_export_above_import: bool = False,
 ) -> list[PlannerSlot]:
     result = []
     for slot in slots:
@@ -156,7 +157,13 @@ def _with_hybrid_floors(
             )
             if "conservative" not in variants:
                 cons_gate = None
-            if "aggressive" not in variants:
+            if (
+                "aggressive" not in variants
+                or (
+                    aggressive_export_above_import
+                    and slot.export_p <= slot.import_p
+                )
+            ):
                 aggr_gate = None
             entries.append((float(floor_a), cons_gate, aggr_gate))
         result.append(
@@ -368,6 +375,7 @@ def _run_case(
     realised_day=None,
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
+    aggressive_export_above_import: bool = False,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
@@ -382,7 +390,10 @@ def _run_case(
     elif not any(floor < 16.0 for floor in candidate):
         candidate = sorted(set(candidate) | set(default_floors))
     hybrid_slots = _with_hybrid_floors(
-        slots, candidate, variants=variants
+        slots,
+        candidate,
+        variants=variants,
+        aggressive_export_above_import=aggressive_export_above_import,
     )
     hybrid = _planner(penalty_p=penalty_p).plan(
         hybrid_slots, initial_soc
@@ -452,6 +463,7 @@ def _synthetic_cases(
     quiet: bool = False,
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
+    aggressive_export_above_import: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
 
@@ -465,6 +477,9 @@ def _synthetic_cases(
                 quiet=quiet,
                 variants=variants,
                 penalty_p=penalty_p,
+                aggressive_export_above_import=(
+                    aggressive_export_above_import
+                ),
             )
         )
 
@@ -548,6 +563,7 @@ def _historical_cases(
     realised: bool = False,
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
+    aggressive_export_above_import: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -627,6 +643,9 @@ def _historical_cases(
                     realised_day=realised_day if realised else None,
                     variants=variants,
                     penalty_p=penalty_p,
+                    aggressive_export_above_import=(
+                        aggressive_export_above_import
+                    ),
                 )
             )
     return results
@@ -773,6 +792,14 @@ def main() -> None:
             "it only when the expected advantage is robust."
         ),
     )
+    parser.add_argument(
+        "--aggressive-export-above-import",
+        action="store_true",
+        help=(
+            "Only add aggressive hybrid arcs when the slot export price is "
+            "above its import price."
+        ),
+    )
     args = parser.parse_args()
     if args.conservative_only and args.aggressive_only:
         parser.error(
@@ -800,16 +827,27 @@ def main() -> None:
     synthetic = (
         []
         if args.recorded_only
-        else _synthetic_cases(args.quiet, variants, args.penalty)
+        else _synthetic_cases(
+            args.quiet,
+            variants,
+            args.penalty,
+            args.aggressive_export_above_import,
+        )
     )
     recorded = (
         []
         if args.synthetic_only
         else _historical_cases(
-            args.quiet, args.realised, variants, args.penalty
+            args.quiet,
+            args.realised,
+            variants,
+            args.penalty,
+            args.aggressive_export_above_import,
         )
     )
     label = f"{variant_text}, penalty {args.penalty:.2f}p"
+    if args.aggressive_export_above_import:
+        label += ", aggr export>import"
     _summary(f"Synthetic cases [{label}]", synthetic)
     _summary(f"Recorded runs [{label}]", recorded)
 

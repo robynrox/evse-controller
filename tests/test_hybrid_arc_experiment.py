@@ -64,6 +64,35 @@ def test_with_hybrid_floors_can_restrict_to_conservative():
     assert aggressive_gate is None
 
 
+def test_with_hybrid_floors_can_filter_aggressive_by_price():
+    slots = [
+        experiment._slot(
+            0,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        ),
+        experiment._slot(
+            1,
+            import_p=10.0,
+            export_p=30.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        ),
+    ]
+
+    hybrid = experiment._with_hybrid_floors(
+        slots,
+        [11.0],
+        variants=("aggressive",),
+        aggressive_export_above_import=True,
+    )
+
+    assert hybrid[0].follow_hybrid_floors[0][2] is None
+    assert hybrid[1].follow_hybrid_floors[0][2] is not None
+
+
 def test_run_case_realised_uses_hybrid_slots(monkeypatch):
     slots = [
         experiment._slot(
