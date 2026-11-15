@@ -7,11 +7,17 @@ the DP optimum with and without the experimental ``follow_hybrid_floors`` arcs.
 Run with::
 
     PYTHONPATH=src poetry run python -m evse_controller.tools.hybrid_arc_experiment
+
+The final summary reports the number of cases, how many used a hybrid arc,
+improved/unchanged/worse counts, total baseline/hybrid/saving and the best
+case.  ``--quiet`` prints only the summaries, ``--recorded-only`` skips the
+synthetic cases and ``--synthetic-only`` skips the recorded runs.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+import argparse
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -26,6 +32,18 @@ from evse_controller.utils.config import config
 VOLTAGE_V = 240.0
 MAX_DISCHARGE_A = 16.0
 STORED_HURDLE_P = 12.0
+
+
+@dataclass(frozen=True)
+class CaseResult:
+    name: str
+    baseline_p: float
+    hybrid_p: float
+    saving_p: float
+    floors: tuple[float, ...]
+    baseline_actions: str
+    hybrid_actions: str
+    hybrid_used: bool
 
 
 def _planner() -> DpPlanner:
@@ -178,7 +196,8 @@ def _run_case(
     *,
     initial_soc: float,
     floors: Optional[Iterable[float]] = None,
-) -> None:
+    quiet: bool = False,
+) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
     candidate = (
@@ -186,19 +205,56 @@ def _run_case(
         if floors is not None
         else _candidate_floors(baseline.actions)
     )
+    default_floors = [5.0, 8.0, 11.0, 14.0]
     if not candidate:
-        candidate = [11.0]
+        candidate = default_floors
+    elif not any(floor < 16.0 for floor in candidate):
+        candidate = sorted(set(candidate) | set(default_floors))
     hybrid_slots = _with_hybrid_floors(slots, candidate)
     hybrid = _planner().plan(hybrid_slots, initial_soc)
     delta = baseline.total_cost_p - hybrid.total_cost_p
-    print(f"\n{name}")
-    print(f"  floors: {', '.join(f'{f:.0f}A' for f in candidate)}")
-    print(f"  baseline: {baseline.total_cost_p:8.3f}p  {_describe(baseline.actions)}")
-    print(f"  hybrid:   {hybrid.total_cost_p:8.3f}p  {_describe(hybrid.actions)}")
-    print(f"  saving:   {delta:8.3f}p")
+    result = CaseResult(
+        name=name,
+        baseline_p=baseline.total_cost_p,
+        hybrid_p=hybrid.total_cost_p,
+        saving_p=delta,
+        floors=tuple(float(floor) for floor in candidate),
+        baseline_actions=_describe(baseline.actions),
+        hybrid_actions=_describe(hybrid.actions),
+        hybrid_used=any(
+            action.kind.startswith("follow_house_floor")
+            for action in hybrid.actions
+        ),
+    )
+    if not quiet:
+        print(f"\n{name}")
+        print(f"  floors: {', '.join(f'{f:.0f}A' for f in result.floors)}")
+        print(
+            f"  baseline: {result.baseline_p:8.3f}p  "
+            f"{result.baseline_actions}"
+        )
+        print(
+            f"  hybrid:   {result.hybrid_p:8.3f}p  "
+            f"{result.hybrid_actions}"
+        )
+        print(f"  saving:   {result.saving_p:8.3f}p")
+    return result
 
 
-def _synthetic_cases() -> None:
+def _synthetic_cases(quiet: bool = False) -> list[CaseResult]:
+    results: list[CaseResult] = []
+
+    def run(name, slots, *, initial_soc, floors=None):
+        results.append(
+            _run_case(
+                name,
+                slots,
+                initial_soc=initial_soc,
+                floors=floors,
+                quiet=quiet,
+            )
+        )
+
     constant = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((2.64, 1.0),)) for i in range(6)]
     spike = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((1.2, 0.5), (3.84, 0.5))) for i in range(6)]
     mixed = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((0.96, 0.25), (1.92, 0.25), (2.88, 0.25), (3.84, 0.25))) for i in range(6)]
@@ -208,11 +264,11 @@ def _synthetic_cases() -> None:
         for i in range(12)
     ]
 
-    _run_case("constant 11 A house load", constant, initial_soc=60.0, floors=[11.0])
-    _run_case("spike 5 A / 16 A", spike, initial_soc=60.0, floors=[11.0])
-    _run_case("mixed 4 / 8 / 12 / 16 A", mixed, initial_soc=60.0, floors=[11.0])
-    _run_case("low load, high export", low_high_export, initial_soc=60.0, floors=[11.0])
-    _run_case("variable day", variable, initial_soc=60.0)
+    run("constant 11 A house load", constant, initial_soc=60.0, floors=[11.0])
+    run("spike 5 A / 16 A", spike, initial_soc=60.0, floors=[11.0])
+    run("mixed 4 / 8 / 12 / 16 A", mixed, initial_soc=60.0, floors=[11.0])
+    run("low load, high export", low_high_export, initial_soc=60.0, floors=[11.0])
+    run("variable day", variable, initial_soc=60.0)
 
     fixed_spike = [
         _slot(
@@ -244,41 +300,43 @@ def _synthetic_cases() -> None:
         )
         for i in range(6)
     ]
-    _run_case("fixed-only spike 5 A / 16 A", fixed_spike, initial_soc=60.0, floors=[11.0])
-    _run_case("fixed-only mixed 4 / 8 / 12 / 16 A", fixed_mixed, initial_soc=60.0, floors=[11.0])
-    _run_case("fixed-only low / medium / high", fixed_variable, initial_soc=60.0, floors=[11.0])
-    _run_case(
+    run("fixed-only spike 5 A / 16 A", fixed_spike, initial_soc=60.0, floors=[11.0])
+    run("fixed-only mixed 4 / 8 / 12 / 16 A", fixed_mixed, initial_soc=60.0, floors=[11.0])
+    run("fixed-only low / medium / high", fixed_variable, initial_soc=60.0, floors=[11.0])
+    run(
         "fixed-only mixed, floor sweep 6-16 A",
         fixed_mixed,
         initial_soc=60.0,
         floors=range(6, 17),
     )
-    _run_case(
+    run(
         "fixed-only mixed, near floor (45%)",
         fixed_mixed,
         initial_soc=45.0,
         floors=[11.0],
     )
-    _run_case(
+    run(
         "fixed-only mixed, near cap (90%)",
         fixed_mixed,
         initial_soc=90.0,
         floors=[11.0],
     )
-    _run_case(
+    run(
         "fixed-only mixed, below floor (30%)",
         fixed_mixed,
         initial_soc=30.0,
         floors=[11.0],
     )
+    return results
 
 
-def _historical_cases() -> None:
+def _historical_cases(quiet: bool = False) -> list[CaseResult]:
+    results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
     paths = sorted(history_dir.glob("*.runs.jsonl"))
     if not paths:
         print("\nNo recorded planner runs found.")
-        return
+        return results
     for path in paths:
         for line in path.read_text().splitlines():
             if not line.strip():
@@ -335,21 +393,81 @@ def _historical_cases() -> None:
             initial_soc = float(
                 run.get("estimate_soc") or run.get("reported_soc") or 50.0
             )
-            _run_case(
-                f"recorded {path.stem} slot {run.get('slot')}",
-                slots,
-                initial_soc=initial_soc,
+            results.append(
+                _run_case(
+                    f"recorded {path.stem} slot {run.get('slot')}",
+                    slots,
+                    initial_soc=initial_soc,
+                    quiet=quiet,
+                )
             )
+    return results
+
+
+def _summary(label: str, results: list[CaseResult]) -> None:
+    if not results:
+        return
+    improved = [result for result in results if result.saving_p > 1e-9]
+    unchanged = [
+        result for result in results if abs(result.saving_p) <= 1e-9
+    ]
+    worse = [result for result in results if result.saving_p < -1e-9]
+    total_baseline = sum(result.baseline_p for result in results)
+    total_hybrid = sum(result.hybrid_p for result in results)
+    total_saving = total_baseline - total_hybrid
+    print(f"\n{label}: {len(results)} cases")
+    print(f"  hybrid used: {sum(1 for r in results if r.hybrid_used)}")
+    print(
+        f"  improved: {len(improved)}  unchanged: {len(unchanged)}  "
+        f"worse: {len(worse)}"
+    )
+    print(f"  total baseline: {total_baseline:.3f}p")
+    print(f"  total hybrid:   {total_hybrid:.3f}p")
+    print(f"  total saving:   {total_saving:.3f}p")
+    if improved:
+        best = max(improved, key=lambda result: result.saving_p)
+        print(
+            f"  best: {best.name} ({best.saving_p:.3f}p), "
+            f"average improved {total_saving / len(improved):.3f}p"
+        )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compare fixed, pure-follow and floor-plus-follow discharge arcs."
+        )
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only print the final summaries, not every case.",
+    )
+    parser.add_argument(
+        "--recorded-only",
+        action="store_true",
+        help="Skip the synthetic cases.",
+    )
+    parser.add_argument(
+        "--synthetic-only",
+        action="store_true",
+        help="Skip the recorded planner runs.",
+    )
+    args = parser.parse_args()
+
     print("Hybrid floor-plus-follow discharge experiment")
     print(
         f"stored hurdle {STORED_HURDLE_P:.1f}p/kWh, "
         f"max discharge {MAX_DISCHARGE_A:.0f}A"
     )
-    _synthetic_cases()
-    _historical_cases()
+    synthetic = (
+        [] if args.recorded_only else _synthetic_cases(args.quiet)
+    )
+    recorded = (
+        [] if args.synthetic_only else _historical_cases(args.quiet)
+    )
+    _summary("Synthetic cases", synthetic)
+    _summary("Recorded runs", recorded)
 
 
 if __name__ == "__main__":
