@@ -666,14 +666,38 @@ def _summary(label: str, results: list[CaseResult]) -> None:
     print(f"  realised baseline: {total_baseline:.3f}p")
     print(f"  realised hybrid:   {total_hybrid:.3f}p")
     print(f"  realised saving:   {total_saving:.3f}p")
+    gains = [
+        result.realised_saving_p or 0.0 for result in improved
+    ]
+    losses = [
+        result.realised_saving_p or 0.0 for result in worse
+    ]
+    gain_total = sum(gains)
+    loss_total = abs(sum(losses))
+    if improved:
+        print(
+            f"  realised gain: {gain_total:.3f}p  "
+            f"average gain {gain_total / len(improved):.3f}p"
+        )
+    if worse:
+        worst = min(
+            worse, key=lambda result: result.realised_saving_p or 0.0
+        )
+        print(
+            f"  realised loss: {loss_total:.3f}p  "
+            f"average loss {loss_total / len(worse):.3f}p"
+        )
+        print(
+            f"  realised worst: {worst.name} "
+            f"({worst.realised_saving_p:.3f}p)"
+        )
     if improved:
         best = max(
             improved, key=lambda result: result.realised_saving_p or 0.0
         )
         print(
             f"  realised best: {best.name} "
-            f"({best.realised_saving_p:.3f}p), average improved "
-            f"{total_saving / len(improved):.3f}p"
+            f"({best.realised_saving_p:.3f}p)"
         )
 
 
