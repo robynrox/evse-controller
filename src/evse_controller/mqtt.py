@@ -10,6 +10,7 @@ import logging
 import datetime
 import time
 from evse_controller.event_bus import EventBus, EventType
+from evse_controller.local_weather import local_weather_store
 
 logger = logging.getLogger('mqtt')
 
@@ -60,6 +61,7 @@ class MQTTManager:
         if rc == 0:
             logger.info("Connected to MQTT Broker")
             client.subscribe(f"{config.MQTT_CLIENT_ID}/request")
+            client.subscribe(f"{config.MQTT_CLIENT_ID}/local_weather")
         else:
             logger.error(f"Failed to connect, return code {rc}")
 
@@ -109,8 +111,33 @@ class MQTTManager:
         self._cached_system_data = {}
 
 
+    def _handle_local_weather(self, payload) -> int:
+        """Store an MQTT local-weather observation or list."""
+        if not config.LOCAL_WEATHER_ENABLED:
+            logger.debug(
+                "Local weather MQTT ignored: ingest is disabled"
+            )
+            return 0
+        try:
+            data = json.loads(payload)
+            count = local_weather_store.append_payload(
+                data, default_source="mqtt"
+            )
+            logger.info(
+                f"Local weather: accepted {count} MQTT observation(s)"
+            )
+            return count
+        except Exception as exc:
+            logger.warning(
+                f"Local weather MQTT payload rejected: {exc}"
+            )
+            return 0
+
     def _on_message(self, client, userdata, msg):
         """Handle incoming messages on command topics."""
+        if msg.topic == f"{config.MQTT_CLIENT_ID}/local_weather":
+            self._handle_local_weather(msg.payload)
+            return
         # Log the command rather than printing it
         logger.debug(f"{msg.topic} >- " + msg.payload.decode('utf-8'))
         # Parse it

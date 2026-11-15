@@ -214,6 +214,22 @@ class TestConfig:
         assert config.HEATPUMP_MONITOR_CHANNEL == 1
         assert config.HEATPUMP_MONITORED is True
 
+    def test_local_weather_configuration(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        assert config.LOCAL_WEATHER_ENABLED is False
+        assert config.LOCAL_WEATHER_INGEST_TOKEN == ""
+        assert config.LOCAL_WEATHER_TIMEZONE == "Europe/London"
+
+        config.LOCAL_WEATHER_ENABLED = True
+        config.LOCAL_WEATHER_INGEST_TOKEN = "secret"
+        config.LOCAL_WEATHER_TIMEZONE = "Europe/London"
+
+        assert config.LOCAL_WEATHER_ENABLED is True
+        assert config.LOCAL_WEATHER_INGEST_TOKEN == "secret"
+        assert config.LOCAL_WEATHER_TIMEZONE == "Europe/London"
+
     def test_charging_property_getters_and_setters(self):
         """Test charging property getters and setters"""
         config = Config()

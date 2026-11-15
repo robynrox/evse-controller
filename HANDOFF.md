@@ -249,6 +249,15 @@ completed fixes.
   net-grid forecast beat slot persistence in all four seasonal holdouts using
   the historical forecast weather; the winter gain was modest and the
   spring/summer gains were large.
+- Local weather observations are an optional, vendor-neutral evaluation and
+  fitting input, never a control dependency.  `local_weather.py` stores
+  append-only daily JSONL under `data/state/local_weather/`; the HTTP route
+  `POST /api/local-weather` and the MQTT topic
+  `<MQTT_CLIENT_ID>/local_weather` accept one object or a list with
+  `timestamp`, `temperature_c`, `gti_wm2`, `cloud_cover_pct` and `source`.
+  With no ingest token configured, only loopback HTTP requests are accepted.
+  The forecast remains the control input; local observations are for the
+  future forecast-skill overlay and optional model refits.
 - `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
   forecast-versus-actual fan chart with a rounded min-to-max axis that includes
   negative solar/export values, a 14-day heatmap with blue positive and green

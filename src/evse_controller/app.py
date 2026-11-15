@@ -37,6 +37,9 @@ from evse_controller.web.daily_report_routes import (
 from evse_controller.web.load_profile_routes import (
     register_load_profile_routes,
 )
+from evse_controller.web.local_weather_routes import (
+    register_local_weather_routes,
+)
 from evse_controller.web.plan_report_routes import (
     register_plan_report_routes,
 )
@@ -1179,6 +1182,17 @@ def config_page():
                 if key in request.form:
                     setattr(config, attribute, request.form.get(key))
 
+            # Optional local weather observations for evaluation and fitting.
+            config.LOCAL_WEATHER_ENABLED = (
+                request.form.get('local_weather[enabled]') == 'on'
+            )
+            config.LOCAL_WEATHER_INGEST_TOKEN = request.form.get(
+                'local_weather[ingest_token]', ''
+            )
+            config.LOCAL_WEATHER_TIMEZONE = request.form.get(
+                'local_weather[timezone]', 'Europe/London'
+            ) or 'Europe/London'
+
             # Save the updated configuration
             config.save()
 
@@ -1515,6 +1529,7 @@ def get_tariff_dashboard_html():
 
 register_daily_report_routes(app)
 register_load_profile_routes(app)
+register_local_weather_routes(app)
 register_plan_report_routes(app)
 register_value_report_routes(app)
 register_component_report_routes(app)

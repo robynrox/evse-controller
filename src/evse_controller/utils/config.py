@@ -217,6 +217,39 @@ class Config:
         self._ensure_initialized()
         return get_data_dir() / "state" / "live_model_fit"
 
+    @property
+    def LOCAL_WEATHER_DIR(self):
+        """Append-only local weather observations, one JSONL per day."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "local_weather"
+
+    LOCAL_WEATHER_ENABLED = property(
+        lambda self: bool(
+            self._get_config_value("local_weather", "enabled", False)
+        ),
+        lambda self, value: self._set_config_value(
+            "local_weather", "enabled", bool(value)
+        ),
+    )
+
+    LOCAL_WEATHER_INGEST_TOKEN = property(
+        lambda self: self._get_config_value(
+            "local_weather", "ingest_token", ""
+        ),
+        lambda self, value: self._set_config_value(
+            "local_weather", "ingest_token", value
+        ),
+    )
+
+    LOCAL_WEATHER_TIMEZONE = property(
+        lambda self: self._get_config_value(
+            "local_weather", "timezone", "Europe/London"
+        ),
+        lambda self, value: self._set_config_value(
+            "local_weather", "timezone", value
+        ),
+    )
+
     @staticmethod
     def _bool_setting(value, default: bool) -> bool:
         if isinstance(value, bool):
@@ -1409,6 +1442,11 @@ class Config:
                 'fit_hour': self.LIVE_MODEL_FIT_HOUR,
                 'min_days': self.LIVE_MODEL_MIN_DAYS,
                 'history_days': self.LIVE_MODEL_HISTORY_DAYS,
+            },
+            'local_weather': {
+                'enabled': self.LOCAL_WEATHER_ENABLED,
+                'ingest_token': self.LOCAL_WEATHER_INGEST_TOKEN,
+                'timezone': self.LOCAL_WEATHER_TIMEZONE,
             },
             'logging': {
                 'file_level': self.FILE_LOGGING,

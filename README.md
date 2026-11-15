@@ -218,6 +218,10 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       fit_hour: 3                       # earliest local hour
       min_days: 14                      # do not fit until this many measured days
       history_days: 400                 # refresh/fit window
+    local_weather:                      # Optional on-site observations
+      enabled: false
+      ingest_token: ""                  # required for non-loopback HTTP ingest
+      timezone: "Europe/London"
     ```
 
   B. Web Interface:
@@ -345,6 +349,34 @@ Its per-day cache lives under `data/state/weather_forecast_history/`.
 The fetch tool also accepts `--latitude`, `--longitude`, `--panel-azimuth`
 and `--panel-tilt` when running against a copied dataset without the
 production weather configuration.
+
+#### Local weather observations
+Local sensors are optional and are used only for forecast evaluation and model
+fitting, never as a control input. Enable ingest in the config page, then POST
+one observation or a list:
+
+```bash
+curl -X POST http://localhost:8080/api/local-weather \
+  -H 'Content-Type: application/json' \
+  -H 'X-Ingest-Token: secret' \
+  -d '{"timestamp":"2026-11-15T08:00:00Z","temperature_c":9.2,"gti_wm2":120,"source":"home-assistant"}'
+```
+
+Or publish the same JSON to the MQTT topic:
+
+```text
+<MQTT_CLIENT_ID>/local_weather
+```
+
+Fields are `timestamp` (required), `temperature_c`, `gti_wm2`,
+`cloud_cover_pct` and `source`; at least one measurement is required. Naive
+timestamps use the configured observation timezone. Observations are stored
+append-only as `data/state/local_weather/YYYY-MM-DD.jsonl`, deduplicated by
+timestamp and source.
+
+If an ingest token is configured, send `X-Ingest-Token` or
+`Authorization: Bearer`. With no token, only loopback requests are accepted;
+a reverse proxy should set a token rather than exposing the write route.
 
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
