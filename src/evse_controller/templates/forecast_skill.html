@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block head %}
+<style>
+    :root { color-scheme: light; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .page { max-width: 1320px; margin: 0 auto; padding: 20px; }
+    .page-header h1 { margin: 0 0 6px; font-size: 26px; }
+    .page-header p { margin: 0 0 14px; color: #555; max-width: 900px; }
+    .nav-links { margin: 14px 0 18px; display: flex; flex-wrap: wrap; gap: 14px; }
+    .nav-links a { color: #0b5cad; font-weight: 600; text-decoration: none; }
+    .panel { background: #fff; border: 1px solid #d9dde2; border-radius: 8px; padding: 16px; margin: 14px 0; }
+    .panel h2 { margin: 0 0 10px; font-size: 19px; }
+    .panel h3 { margin: 16px 0 6px; font-size: 15px; }
+    .picker { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+    .picker input[type="date"] { padding: 5px 7px; border: 1px solid #b8c0c8; border-radius: 4px; }
+    .picker button { padding: 6px 12px; border: 1px solid #b8c0c8; border-radius: 4px; background: #fff; font-weight: 600; cursor: pointer; }
+    .meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: #555; }
+    .meta strong { color: #222; }
+    .warning { background: #fff7e6; border: 1px solid #f0c36d; color: #6b4b00; padding: 10px 12px; border-radius: 6px; margin: 10px 0; }
+    .cards { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .card { background: #fafbfc; border: 1px solid #e1e5e9; border-radius: 7px; padding: 10px 12px; min-width: 160px; }
+    .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #666; }
+    .card .value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+    .card .note { font-size: 11px; color: #777; margin-top: 2px; }
+    .chart { width: 100%; height: auto; display: block; }
+    .chart .grid { stroke: #e6e9ed; stroke-width: 1; }
+    .chart .axis { font-size: 10px; fill: #666; }
+    .chart .legend { font-size: 11px; fill: #444; }
+    .table-wrap { overflow-x: auto; }
+    table.detail { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.detail th, table.detail td { border-bottom: 1px solid #e3e6e9; padding: 6px 8px; text-align: right; }
+    table.detail th:first-child, table.detail td:first-child { text-align: left; }
+    table.detail th { color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .note { color: #666; font-size: 12px; line-height: 1.5; }
+    .error { background: #fff1f1; border: 1px solid #e3b4b4; color: #7a1f1f; padding: 12px; border-radius: 6px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div class="nav-links">
+        <a href="/">← Dashboard</a>
+        <a href="/reports/daily">Daily energy report</a>
+        <a href="/reports/plan">Plan vs actual</a>
+        <a href="/reports/backtest">DP backtest</a>
+        <a href="/reports/component">Components</a>
+        <a href="/reports/data-quality">Data quality</a>
+    </div>
+
+    <div class="page-header">
+        <h1>Forecast skill</h1>
+        <p>
+            Compares the weather-driven component forecast with the measured
+            solar and heat-pump power. The background heatmap is the historic
+            per-slot distribution; the lines are the forecast, the actual
+            power, and the historic median. The error panels separate weather
+            forecast error from model error.
+        </p>
+    </div>
+
+    <form class="picker" method="get" action="/reports/forecast-skill">
+        <label for="forecast-skill-date">Day</label>
+        <input type="date" id="forecast-skill-date" name="date"
+               value="{{ day.isoformat() }}">
+        <button type="submit">Show</button>
+        <span class="note">Forecast weather is the recorded historical forecast archive; it approximates the day-ahead forecast but is not a fixed lead time.</span>
+    </form>
+
+    {% if error %}
+    <div class="error">
+        <strong>Could not build the forecast-skill view.</strong>
+        <p>{{ error }}</p>
+        <p class="note">
+            The report needs the component model, the historical forecast
+            weather CSV and at least one daily energy report for the day.
+        </p>
+    </div>
+    {% else %}
+
+    <div class="panel">
+        <div class="meta">
+            <span>Model: <strong>{{ model_path }}</strong></span>
+            <span>Training end: <strong>{{ skill.model_training_end or "unknown" }}</strong></span>
+            <span>Actual weather: <strong>{{ skill.actual_weather_source }}</strong>
+                ({{ skill.local_weather_slots }}/48 slots local,
+                {{ actual_weather_slots }}/48 slots with actual weather)</span>
+        </div>
+        {% if actual_weather_slots == 0 %}
+        <div class="warning">
+            No actual weather is available for this day, so the
+            actual-weather model comparison is unavailable. Add local
+            observations or use a day covered by the archive CSV.
+        </div>
+        {% endif %}
+        {% if skill.in_sample %}
+        <div class="warning">
+            This day is at or before the model's training cutoff. The forecast
+            may be in-sample; use a later day or a walk-forward model for an
+            honest skill estimate.
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <h2>Weather forecast vs actual</h2>
+        {{ weather_temperature_svg|safe }}
+        {{ weather_gti_svg|safe }}
+        <p class="note">
+            Actual weather uses local observations where available, otherwise
+            archive/reanalysis. Reanalysis is not on-site truth, so part of the
+            model-error component can still be weather-data error.
+        </p>
+    </div>
+
+    {% macro metric_table(component) %}
+    <div class="table-wrap">
+        <table class="detail">
+            <thead>
+                <tr>
+                    <th>Comparison</th>
+                    <th>Slots</th>
+                    <th>MAE</th>
+                    <th>Bias</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set metrics = component.metrics %}
+                {% for label, key in (
+                    ("Forecast vs actual", "forecast"),
+                    ("Model with actual weather vs actual", "actual_weather"),
+                    ("Historic P50 vs actual", "baseline"),
+                    ("Forecast vs actual-weather model", "weather_induced")
+                ) %}
+                {% set row = metrics.get(key, {}) %}
+                <tr>
+                    <td>{{ label }}</td>
+                    <td>{{ row.get('n', 0) }}</td>
+                    <td>{{ fmt(row.get('mae_kw'), 3, ' kW') }}</td>
+                    <td>{{ fmt(row.get('bias_kw'), 3, ' kW') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endmacro %}
+
+    <div class="panel">
+        <h2>Solar</h2>
+        {{ solar_svg|safe }}
+        {% if solar_histogram_empty %}
+        <p class="note">
+            No historic daily reports were found in the lookback window, so
+            the background distribution is empty. The forecast and actual
+            lines are still shown where data exists.
+        </p>
+        {% endif %}
+        <div class="cards">
+            <div class="card">
+                <div class="label">Forecast MAE</div>
+                <div class="value">{{ fmt(skill.solar.metrics.get('forecast', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">{{ skill.solar.metrics.get('forecast', {}).get('n', 0) }} paired slots</div>
+            </div>
+            <div class="card">
+                <div class="label">Actual-weather model MAE</div>
+                <div class="value">{{ fmt(skill.solar.metrics.get('actual_weather', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">model error with observed weather</div>
+            </div>
+            <div class="card">
+                <div class="label">Historic P50 MAE</div>
+                <div class="value">{{ fmt(skill.solar.metrics.get('baseline', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">per-slot persistence baseline</div>
+            </div>
+            <div class="card">
+                <div class="label">Weather-induced MAE</div>
+                <div class="value">{{ fmt(skill.solar.metrics.get('weather_induced', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">forecast vs actual-weather model</div>
+            </div>
+        </div>
+        {{ metric_table(skill.solar) }}
+        <h3>Error decomposition</h3>
+        {{ solar_error_svg|safe }}
+    </div>
+
+    <div class="panel">
+        <h2>Heat pump</h2>
+        {{ heatpump_svg|safe }}
+        {% if heatpump_histogram_empty %}
+        <p class="note">
+            No historic daily reports were found in the lookback window, so
+            the background distribution is empty. The forecast and actual
+            lines are still shown where data exists.
+        </p>
+        {% endif %}
+        <div class="cards">
+            <div class="card">
+                <div class="label">Forecast MAE</div>
+                <div class="value">{{ fmt(skill.heatpump.metrics.get('forecast', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">{{ skill.heatpump.metrics.get('forecast', {}).get('n', 0) }} paired slots</div>
+            </div>
+            <div class="card">
+                <div class="label">Actual-weather model MAE</div>
+                <div class="value">{{ fmt(skill.heatpump.metrics.get('actual_weather', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">model error with observed weather</div>
+            </div>
+            <div class="card">
+                <div class="label">Historic P50 MAE</div>
+                <div class="value">{{ fmt(skill.heatpump.metrics.get('baseline', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">per-slot persistence baseline</div>
+            </div>
+            <div class="card">
+                <div class="label">Weather-induced MAE</div>
+                <div class="value">{{ fmt(skill.heatpump.metrics.get('weather_induced', {}).get('mae_kw'), 3, ' kW') }}</div>
+                <div class="note">forecast vs actual-weather model</div>
+            </div>
+            <div class="card">
+                <div class="label">P90 coverage</div>
+                {% set p90 = skill.heatpump.metrics.get('p90_coverage') %}
+                <div class="value">{{ fmt((p90 * 100) if p90 is not none else none, 1, '%') }}</div>
+                <div class="note">actual at or below P90</div>
+            </div>
+        </div>
+        {{ metric_table(skill.heatpump) }}
+        <h3>Error decomposition</h3>
+        {{ heatpump_error_svg|safe }}
+    </div>
+
+    <div class="panel">
+        <h2>How to read this</h2>
+        <p class="note">
+            <strong>Forecast vs actual</strong> is the total error we
+            experience. <strong>Model with actual weather</strong> reruns the
+            same model with observed temperature/GTI; the difference between
+            the forecast and that line is the weather-input error. The
+            difference between that line and measured power is the model
+            error. A total error dominated by the weather component points at
+            the forecast; a total error dominated by the model component points
+            at the model or the measurement.
+        </p>
+        <p class="note">
+            Solar has no P90 band yet; its model is a point forecast plus the
+            historic distribution. Heat-pump P90 comes from the fitted
+            temperature/slot model. The historic heatmap is the per-slot
+            distribution over the lookback window, not a single persistence
+            line.
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

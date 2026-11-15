@@ -40,6 +40,9 @@ from evse_controller.web.load_profile_routes import (
 from evse_controller.web.local_weather_routes import (
     register_local_weather_routes,
 )
+from evse_controller.web.forecast_skill_routes import (
+    register_forecast_skill_routes,
+)
 from evse_controller.web.plan_report_routes import (
     register_plan_report_routes,
 )
@@ -1530,6 +1533,7 @@ def get_tariff_dashboard_html():
 register_daily_report_routes(app)
 register_load_profile_routes(app)
 register_local_weather_routes(app)
+register_forecast_skill_routes(app)
 register_plan_report_routes(app)
 register_value_report_routes(app)
 register_component_report_routes(app)

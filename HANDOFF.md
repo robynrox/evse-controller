@@ -258,6 +258,14 @@ completed fixes.
   With no ingest token configured, only loopback HTTP requests are accepted.
   The forecast remains the control input; local observations are for the
   future forecast-skill overlay and optional model refits.
+- `forecast_skill.py` and `web/forecast_skill_routes.py` serve
+  `/reports/forecast-skill`.  The page shows weather forecast vs actual/local,
+  the historic per-slot solar/heat-pump distribution, the weather-driven
+  forecast (P50 and heat-pump P90), actual power, and an error decomposition.
+  The decomposition reruns the model with observed weather: forecast vs
+  actual is total, forecast vs actual-weather model is weather input error,
+  and actual-weather model vs actual is model error.  It uses the holdout
+  `model.json` and flags days at or before its training cutoff as in-sample.
 - `web/load_profile_routes.py` serves `/reports/load-profile`: a p10/p50/p90
   forecast-versus-actual fan chart with a rounded min-to-max axis that includes
   negative solar/export values, a 14-day heatmap with blue positive and green

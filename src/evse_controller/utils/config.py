@@ -206,6 +206,12 @@ class Config:
         )
 
     @property
+    def WEATHER_ARCHIVE_FILE(self):
+        """Tidy archive/reanalysis weather CSV for actual-weather comparisons."""
+        self._ensure_initialized()
+        return get_data_dir() / "analysis" / "weather_history.csv.gz"
+
+    @property
     def INFLUX_ANALYSIS_FILE(self):
         """Stable tidy Influx range export for the automatic live model fit."""
         self._ensure_initialized()

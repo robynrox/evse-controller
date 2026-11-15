@@ -378,6 +378,25 @@ If an ingest token is configured, send `X-Ingest-Token` or
 `Authorization: Bearer`. With no token, only loopback requests are accepted;
 a reverse proxy should set a token rather than exposing the write route.
 
+#### Forecast skill report (`/reports/forecast-skill`)
+Shows one selected day with a shared time axis:
+
+- weather forecast vs actual/local observations;
+- the historic per-slot solar and heat-pump power distribution as a
+  background heatmap;
+- the weather-driven forecast (P50, plus P90 for the heat pump), the historic
+  P50 and the actual power;
+- an error decomposition that reruns the same model with observed weather:
+  forecast vs actual is the total, forecast vs actual-weather model is the
+  weather-input error, and actual-weather model vs actual is the model error.
+
+The historic distribution uses the daily energy reports over a 60-day
+lookback. The model is the holdout `model.json`; a day at or before its
+`training_end` is flagged as in-sample. Actual weather uses local observations
+where available, otherwise archive/reanalysis. The historical forecast
+archive is not a fixed lead time; use the Previous Runs API for a strict
+day-ahead comparison.
+
 #### Intelligent Octopus Go Tariff Section
 The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
 
