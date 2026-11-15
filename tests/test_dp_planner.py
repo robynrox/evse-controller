@@ -384,6 +384,55 @@ def test_safe_prunes_do_not_change_the_optimum(initial_soc):
         assert pruned_row == pytest.approx(unpruned_row)
 
 
+def test_hybrid_floor_arc_follows_above_the_floor():
+    sample_slot = replace(
+        slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),
+        load_samples=((0.5, 0.5), (3.8, 0.5)),
+        follow_hybrid_floors=((5.0, 0.0, None),),
+    )
+
+    templates = planner()._action_templates(sample_slot)
+    hybrid = next(
+        template
+        for template in templates
+        if template.kind == "follow_house_floor_conservative"
+    )
+
+    assert hybrid.floor_current_a == 5.0
+    assert hybrid.current_min_a == 5.0
+    assert hybrid.current_max_a == 10.0
+    assert hybrid.follow
+
+
+def test_hybrid_floor_can_beat_a_fixed_only_plan():
+    slots = [
+        replace(
+            slot(
+                index,
+                import_p=25.0,
+                export_p=10.0,
+                load_kw=0.5,
+            ),
+            load_samples=((0.5, 0.8), (3.8, 0.2)),
+            follow_conservative_floor_percent=40.0,
+            follow_aggressive_floor_percent=50.0,
+        )
+        for index in range(6)
+    ]
+    baseline = planner().plan(slots, 60.0)
+    hybrid_slots = [
+        replace(sample, follow_hybrid_floors=((5.0, 0.0, None),))
+        for sample in slots
+    ]
+    hybrid = planner().plan(hybrid_slots, 60.0)
+
+    assert hybrid.total_cost_p < baseline.total_cost_p
+    assert any(
+        action.kind.startswith("follow_house_floor")
+        for action in hybrid.actions
+    )
+
+
 def test_flat_prices_leave_the_pack_alone():
     result = planner().plan(
         [slot(0), slot(1)],

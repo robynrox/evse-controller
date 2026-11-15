@@ -77,6 +77,8 @@ def _fmt_action_current(kind, value, minimum=None, maximum=None) -> str:
     if kind in (
         "follow_house_conservative",
         "follow_house_aggressive",
+        "follow_house_floor_conservative",
+        "follow_house_floor_aggressive",
         "follow_solar",
     ):
         start = _min_current_magnitude(minimum, maximum, value)
@@ -92,6 +94,12 @@ def _mode_label(kind: Optional[str]) -> str:
     return {
         "follow_house_conservative": "follow house (conservative)",
         "follow_house_aggressive": "follow house (aggressive)",
+        "follow_house_floor_conservative": (
+            "follow house floor (conservative)"
+        ),
+        "follow_house_floor_aggressive": (
+            "follow house floor (aggressive)"
+        ),
         "follow_bidirectional_conservative": (
             "follow bidirectional (conservative)"
         ),
@@ -276,6 +284,15 @@ def _build_context(run: dict) -> RunContext:
                 ),
                 follow_aggressive_floor_percent=_number(
                     item.get("follow_aggressive_floor_percent")
+                ),
+                follow_hybrid_floors=tuple(
+                    (
+                        float(entry[0]),
+                        _number(entry[1]),
+                        _number(entry[2]),
+                    )
+                    for entry in (item.get("follow_hybrid_floors") or [])
+                    if entry
                 ),
                 horizon_index=int(
                     item.get("horizon_index", len(slots))

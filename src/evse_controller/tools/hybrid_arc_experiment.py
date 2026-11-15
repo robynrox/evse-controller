@@ -1,0 +1,356 @@
+"""Compare fixed, pure-follow and floor-plus-follow discharge arcs.
+
+This is an offline experiment, not part of the live control path.  It builds
+synthetic days (and replays any recorded planner runs it can find) and compares
+the DP optimum with and without the experimental ``follow_hybrid_floors`` arcs.
+
+Run with::
+
+    PYTHONPATH=src poetry run python -m evse_controller.tools.hybrid_arc_experiment
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timedelta
+import json
+from pathlib import Path
+from typing import Iterable, Optional
+
+from evse_controller.planner.dp import DpPlanner, PlannerSlot
+from evse_controller.tariffs.octopus.battery_efficiency import (
+    BatteryEfficiencyModel,
+)
+from evse_controller.utils.config import config
+
+VOLTAGE_V = 240.0
+MAX_DISCHARGE_A = 16.0
+STORED_HURDLE_P = 12.0
+
+
+def _planner() -> DpPlanner:
+    return DpPlanner(
+        efficiency_model=BatteryEfficiencyModel(),
+        capacity_kwh=48.3,
+        soc_step_percent=0.1,
+        min_current_a=3.0,
+        charge_cap_percent=97.0,
+        protection_floor_percent=25.0,
+        discharge_floor_percent=40.0,
+        target_soc_percent=None,
+    )
+
+
+def _conservative_gate(
+    import_p: float, export_p: float, floor_a: float
+) -> Optional[float]:
+    """Closed-form break-even for a discharge floor, without the 3 A floor."""
+    if STORED_HURDLE_P >= import_p:
+        return None
+    if export_p >= STORED_HURDLE_P:
+        return 0.0
+    floor_w = floor_a * VOLTAGE_V
+    return max(
+        0.0,
+        floor_w * (STORED_HURDLE_P - export_p) / (import_p - export_p),
+    )
+
+
+def _aggressive_gate(
+    import_p: float, export_p: float, floor_a: float
+) -> Optional[float]:
+    """Scan the house load for the first economic floor-plus-follow start."""
+    model = BatteryEfficiencyModel()
+    for load_w in range(0, int(MAX_DISCHARGE_A * VOLTAGE_V) + 1):
+        current = max(
+            floor_a,
+            round(load_w / VOLTAGE_V + 0.5),
+        )
+        current = max(floor_a, min(current, MAX_DISCHARGE_A))
+        output_w = current * VOLTAGE_V
+        efficiency = model.discharge_efficiency(current)
+        revenue_p = (
+            min(load_w, output_w) * import_p
+            + max(0.0, output_w - load_w) * export_p
+        ) / 1000.0
+        cost_p = (
+            output_w / 1000.0
+        ) * (STORED_HURDLE_P / max(efficiency, 1e-9))
+        if revenue_p >= cost_p:
+            return float(load_w)
+    return None
+
+
+def _gates_for(
+    import_p: float, export_p: float, floor_a: float
+) -> tuple[Optional[float], Optional[float]]:
+    return (
+        _conservative_gate(import_p, export_p, floor_a),
+        _aggressive_gate(import_p, export_p, floor_a),
+    )
+
+
+def _slot(
+    index: int,
+    *,
+    import_p: float,
+    export_p: float,
+    load_samples: tuple[tuple[float, float], ...],
+    pure_follow: bool = True,
+) -> PlannerSlot:
+    cons_gate, aggr_gate = _gates_for(import_p, export_p, 3.0)
+    return PlannerSlot(
+        start=datetime(2026, 11, 15) + timedelta(minutes=30 * index),
+        slot=index,
+        import_p=import_p,
+        export_p=export_p,
+        load_kw=sum(kw * weight for kw, weight in load_samples),
+        load_samples=load_samples,
+        load_source="synthetic",
+        max_charge_current_a=16.0,
+        max_discharge_current_a=MAX_DISCHARGE_A,
+        follow_conservative_gate_w=cons_gate if pure_follow else None,
+        follow_aggressive_gate_w=aggr_gate if pure_follow else None,
+        follow_conservative_floor_percent=40.0,
+        follow_aggressive_floor_percent=50.0,
+    )
+
+
+def _with_hybrid_floors(
+    slots: Iterable[PlannerSlot], floors: Iterable[float]
+) -> list[PlannerSlot]:
+    result = []
+    for slot in slots:
+        entries = []
+        for floor_a in floors:
+            cons_gate, aggr_gate = _gates_for(
+                slot.import_p, slot.export_p, floor_a
+            )
+            entries.append((float(floor_a), cons_gate, aggr_gate))
+        result.append(
+            replace(slot, follow_hybrid_floors=tuple(entries))
+        )
+    return result
+
+
+def _candidate_floors(actions) -> list[float]:
+    """The fixed discharge currents the baseline actually chose."""
+    floors = {
+        float(round(action.current_a))
+        for action in actions
+        if action.kind == "discharge"
+        and not action.follow
+        and action.current_a >= 3.0
+    }
+    expanded = set(floors)
+    for floor_a in floors:
+        for neighbour in (floor_a - 1.0, floor_a + 1.0):
+            if 3.0 <= neighbour <= MAX_DISCHARGE_A:
+                expanded.add(neighbour)
+    return sorted(expanded)
+
+
+def _describe(actions) -> str:
+    parts = []
+    for action in actions:
+        if action.kind == "idle":
+            parts.append("idle")
+        elif action.kind == "discharge":
+            parts.append(f"discharge {action.current_a:.0f}A")
+        elif action.kind.startswith("follow_house_floor"):
+            parts.append(
+                f"{action.kind} floor {action.floor_current_a:.0f}A "
+                f"{action.current_min_a:.0f}-{action.current_max_a:.0f}A"
+            )
+        elif action.kind.startswith("follow_house"):
+            parts.append(
+                f"{action.kind} "
+                f"{action.current_min_a:.0f}-{action.current_max_a:.0f}A"
+            )
+        else:
+            parts.append(f"{action.kind} {action.current_a:.0f}A")
+    return ", ".join(parts)
+
+
+def _run_case(
+    name: str,
+    slots: list[PlannerSlot],
+    *,
+    initial_soc: float,
+    floors: Optional[Iterable[float]] = None,
+) -> None:
+    planner = _planner()
+    baseline = planner.plan(slots, initial_soc)
+    candidate = (
+        list(floors)
+        if floors is not None
+        else _candidate_floors(baseline.actions)
+    )
+    if not candidate:
+        candidate = [11.0]
+    hybrid_slots = _with_hybrid_floors(slots, candidate)
+    hybrid = _planner().plan(hybrid_slots, initial_soc)
+    delta = baseline.total_cost_p - hybrid.total_cost_p
+    print(f"\n{name}")
+    print(f"  floors: {', '.join(f'{f:.0f}A' for f in candidate)}")
+    print(f"  baseline: {baseline.total_cost_p:8.3f}p  {_describe(baseline.actions)}")
+    print(f"  hybrid:   {hybrid.total_cost_p:8.3f}p  {_describe(hybrid.actions)}")
+    print(f"  saving:   {delta:8.3f}p")
+
+
+def _synthetic_cases() -> None:
+    constant = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((2.64, 1.0),)) for i in range(6)]
+    spike = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((1.2, 0.5), (3.84, 0.5))) for i in range(6)]
+    mixed = [_slot(i, import_p=25.0, export_p=10.0, load_samples=((0.96, 0.25), (1.92, 0.25), (2.88, 0.25), (3.84, 0.25))) for i in range(6)]
+    low_high_export = [_slot(i, import_p=10.0, export_p=30.0, load_samples=((0.48, 1.0),)) for i in range(6)]
+    variable = [
+        _slot(i, import_p=20.0 + 3.0 * (i % 3), export_p=8.0 + 4.0 * (i % 4), load_samples=((0.96 + 0.48 * (i % 4), 1.0),))
+        for i in range(12)
+    ]
+
+    _run_case("constant 11 A house load", constant, initial_soc=60.0, floors=[11.0])
+    _run_case("spike 5 A / 16 A", spike, initial_soc=60.0, floors=[11.0])
+    _run_case("mixed 4 / 8 / 12 / 16 A", mixed, initial_soc=60.0, floors=[11.0])
+    _run_case("low load, high export", low_high_export, initial_soc=60.0, floors=[11.0])
+    _run_case("variable day", variable, initial_soc=60.0)
+
+    fixed_spike = [
+        _slot(
+            i,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((1.2, 0.5), (3.84, 0.5)),
+            pure_follow=False,
+        )
+        for i in range(6)
+    ]
+    fixed_mixed = [
+        _slot(
+            i,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.96, 0.25), (1.92, 0.25), (2.88, 0.25), (3.84, 0.25)),
+            pure_follow=False,
+        )
+        for i in range(6)
+    ]
+    fixed_variable = [
+        _slot(
+            i,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.48, 0.4), (1.92, 0.3), (3.84, 0.3)),
+            pure_follow=False,
+        )
+        for i in range(6)
+    ]
+    _run_case("fixed-only spike 5 A / 16 A", fixed_spike, initial_soc=60.0, floors=[11.0])
+    _run_case("fixed-only mixed 4 / 8 / 12 / 16 A", fixed_mixed, initial_soc=60.0, floors=[11.0])
+    _run_case("fixed-only low / medium / high", fixed_variable, initial_soc=60.0, floors=[11.0])
+    _run_case(
+        "fixed-only mixed, floor sweep 6-16 A",
+        fixed_mixed,
+        initial_soc=60.0,
+        floors=range(6, 17),
+    )
+    _run_case(
+        "fixed-only mixed, near floor (45%)",
+        fixed_mixed,
+        initial_soc=45.0,
+        floors=[11.0],
+    )
+    _run_case(
+        "fixed-only mixed, near cap (90%)",
+        fixed_mixed,
+        initial_soc=90.0,
+        floors=[11.0],
+    )
+    _run_case(
+        "fixed-only mixed, below floor (30%)",
+        fixed_mixed,
+        initial_soc=30.0,
+        floors=[11.0],
+    )
+
+
+def _historical_cases() -> None:
+    history_dir = Path(config.PLANNER_HISTORY_DIR)
+    paths = sorted(history_dir.glob("*.runs.jsonl"))
+    if not paths:
+        print("\nNo recorded planner runs found.")
+        return
+    for path in paths:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            run = json.loads(line)
+            rows = run.get("inputs") or []
+            if not rows:
+                continue
+            slots = []
+            for item in rows:
+                try:
+                    start = datetime.fromisoformat(item["start"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                load_samples = tuple(
+                    (float(kw), float(weight))
+                    for kw, weight in (item.get("load_samples") or [])
+                )
+                if not load_samples:
+                    load_samples = ((float(item.get("load_kw") or 0.0), 1.0),)
+                slots.append(
+                    PlannerSlot(
+                        start=start,
+                        slot=int(item.get("slot", -1)),
+                        import_p=float(item.get("import_p") or 0.0),
+                        export_p=float(item.get("export_p") or 0.0),
+                        load_kw=float(item.get("load_kw") or 0.0),
+                        load_samples=load_samples,
+                        load_source=str(item.get("load_source") or ""),
+                        max_charge_current_a=float(
+                            config.WALLBOX_MAX_CHARGE_CURRENT
+                        ),
+                        max_discharge_current_a=float(
+                            config.WALLBOX_MAX_DISCHARGE_CURRENT
+                        ),
+                        forced=item.get("forced"),
+                        session=item.get("session"),
+                        follow_conservative_gate_w=item.get(
+                            "follow_conservative_gate_w"
+                        ),
+                        follow_aggressive_gate_w=item.get(
+                            "follow_aggressive_gate_w"
+                        ),
+                        follow_conservative_floor_percent=item.get(
+                            "follow_conservative_floor_percent"
+                        ),
+                        follow_aggressive_floor_percent=item.get(
+                            "follow_aggressive_floor_percent"
+                        ),
+                    )
+                )
+            if not slots:
+                continue
+            initial_soc = float(
+                run.get("estimate_soc") or run.get("reported_soc") or 50.0
+            )
+            _run_case(
+                f"recorded {path.stem} slot {run.get('slot')}",
+                slots,
+                initial_soc=initial_soc,
+            )
+
+
+def main() -> None:
+    print("Hybrid floor-plus-follow discharge experiment")
+    print(
+        f"stored hurdle {STORED_HURDLE_P:.1f}p/kWh, "
+        f"max discharge {MAX_DISCHARGE_A:.0f}A"
+    )
+    _synthetic_cases()
+    _historical_cases()
+
+
+if __name__ == "__main__":
+    main()

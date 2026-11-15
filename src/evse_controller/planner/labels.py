@@ -105,6 +105,25 @@ def action_label(
         )
 
     if kind in (
+        "follow_house_floor_conservative",
+        "follow_house_floor_aggressive",
+    ):
+        aggressive = kind.endswith("aggressive")
+        variant = "aggr" if aggressive else "cons"
+        floor = _number(action.get("floor_current_a"))
+        gate = _gate_text(
+            slot_input,
+            (
+                "follow_aggressive_gate_w"
+                if aggressive
+                else "follow_conservative_gate_w"
+            ),
+        )
+        if floor is not None:
+            return f"Cover house {variant} {floor:.0f}A+{gate}"
+        return f"Cover house {variant}"
+
+    if kind in (
         "follow_bidirectional_conservative",
         "follow_bidirectional_aggressive",
     ):

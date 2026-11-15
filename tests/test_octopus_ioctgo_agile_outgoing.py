@@ -1326,6 +1326,41 @@ class TestDischargeActivation:
             45.0, import_rate_p=30.0
         ) == agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
 
+    def test_hybrid_floor_gate_uses_the_floor_output_without_a_power_floor(
+        self, agile_tariff
+    ):
+        self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)
+        hurdle_p = (
+            agile_tariff._delivered_cost_per_kwh_p(11.0)
+            + agile_tariff.MIN_PROFIT_MARGIN_P_PER_KWH
+        )
+        expected = round(11.0 * 240.0 * (hurdle_p - 5.0) / (30.0 - 5.0))
+
+        gate = agile_tariff.discharge_activation_threshold_w(
+            5.0,
+            import_rate_p=30.0,
+            aggressive=False,
+            floor_current_a=11.0,
+        )
+
+        assert gate == pytest.approx(expected, abs=1)
+        assert gate < 11.0 * 240.0
+
+    def test_aggressive_hybrid_scan_starts_at_the_floor_current(
+        self, agile_tariff
+    ):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.0)
+        threshold, _, current = agile_tariff._aggressive_activation_scan(
+            5.0,
+            import_rate_p=30.0,
+            alternative_rate_p=0.0,
+            voltage=240.0,
+            floor_current_a=11.0,
+        )
+
+        assert threshold < agile_tariff.NEVER_DISCHARGE_ACTIVATION_W
+        assert current >= 11.0
+
     def test_conservative_mode_never_starts_below_the_minimum(
         self, agile_tariff
     ):

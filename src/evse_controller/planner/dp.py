@@ -81,6 +81,12 @@ class PlannerSlot:
     follow_aggressive_gate_w: Optional[float] = None
     follow_conservative_floor_percent: Optional[float] = None
     follow_aggressive_floor_percent: Optional[float] = None
+    #: Experimental floor-plus-follow arcs: (floor current, conservative
+    #: gate, aggressive gate).  Empty keeps the normal fixed and pure-follow
+    #: arcs only.  Each gate may be None to disable that variant.
+    follow_hybrid_floors: tuple[
+        tuple[float, Optional[float], Optional[float]], ...
+    ] = ()
     #: Unique position in the planning horizon.  Day slots repeat across a
     #: midnight crossing, so reports use this key for multi-day runs.
     horizon_index: int = -1
@@ -103,6 +109,7 @@ class PlannerAction:
     current_min_a: Optional[float] = None
     current_max_a: Optional[float] = None
     follow: bool = False
+    floor_current_a: Optional[float] = None
     horizon_index: int = -1
 
     @property
@@ -148,6 +155,7 @@ class PolicyOption:
     current_min_a: Optional[float] = None
     current_max_a: Optional[float] = None
     follow: bool = False
+    floor_current_a: Optional[float] = None
     feasible: bool = True
     reason: str = ""
 
@@ -206,6 +214,7 @@ class _ActionTemplate:
     current_max_a: Optional[float] = None
     floor_percent: Optional[float] = None
     follow: bool = False
+    floor_current_a: Optional[float] = None
 
 
 class DpPlanner:
@@ -590,6 +599,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    floor_current_a=template.floor_current_a,
                 )
 
                 mode_best: dict[str, float] = {}
@@ -663,6 +673,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    floor_current_a=template.floor_current_a,
                     horizon_index=slot.horizon_index,
                 )
             )
@@ -732,6 +743,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    floor_current_a=template.floor_current_a,
                 )
             )
         options.sort(key=lambda option: option.policy_cost_p)
@@ -799,6 +811,8 @@ class DpPlanner:
         elif template.kind in (
             "follow_house_conservative",
             "follow_house_aggressive",
+            "follow_house_floor_conservative",
+            "follow_house_floor_aggressive",
             "follow_bidirectional_conservative",
             "follow_bidirectional_aggressive",
         ):
@@ -890,6 +904,29 @@ class DpPlanner:
             )
             if template is not None:
                 templates.append(template)
+        for floor_a, cons_gate, aggr_gate in slot.follow_hybrid_floors:
+            if cons_gate is not None:
+                template = self._follow_house_template(
+                    slot,
+                    gate_w=cons_gate,
+                    aggressive=False,
+                    floor_percent=slot.follow_conservative_floor_percent,
+                    kind="follow_house_floor_conservative",
+                    floor_current_a=floor_a,
+                )
+                if template is not None:
+                    templates.append(template)
+            if aggr_gate is not None:
+                template = self._follow_house_template(
+                    slot,
+                    gate_w=aggr_gate,
+                    aggressive=True,
+                    floor_percent=slot.follow_aggressive_floor_percent,
+                    kind="follow_house_floor_aggressive",
+                    floor_current_a=floor_a,
+                )
+                if template is not None:
+                    templates.append(template)
         for kind, aggressive in (
             ("follow_bidirectional_conservative", False),
             ("follow_bidirectional_aggressive", True),
@@ -1089,11 +1126,19 @@ class DpPlanner:
         aggressive: bool,
         floor_percent: Optional[float],
         kind: str,
+        floor_current_a: Optional[float] = None,
     ) -> Optional[_ActionTemplate]:
         samples = slot.load_samples or ((slot.load_kw, 1.0),)
         if gate_w is None or gate_w >= 1e8:
             return None
-        minimum = int(math.ceil(self.min_current_a - 1e-9))
+        floor_a = (
+            self.min_current_a
+            if floor_current_a is None
+            else float(floor_current_a)
+        )
+        minimum = int(
+            math.ceil(max(self.min_current_a, floor_a) - 1e-9)
+        )
         maximum = int(math.floor(slot.max_discharge_current_a + 1e-9))
         if maximum < minimum:
             return None
@@ -1152,6 +1197,7 @@ class DpPlanner:
             current_max_a=float(max(currents)),
             floor_percent=floor_percent,
             follow=True,
+            floor_current_a=floor_current_a,
         )
 
     def _follow_bidirectional_template(
@@ -1514,6 +1560,7 @@ class DpPlanner:
                     current_min_a=template.current_min_a,
                     current_max_a=template.current_max_a,
                     follow=template.follow,
+                    floor_current_a=template.floor_current_a,
                     horizon_index=slots[index].horizon_index,
                 )
             )

@@ -1845,6 +1845,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "current_min_a": action.current_min_a,
                     "current_max_a": action.current_max_a,
                     "follow": action.follow,
+                    "floor_current_a": action.floor_current_a,
                     "horizon_index": action.horizon_index,
                 }
                 for action in result.actions
@@ -1889,6 +1890,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "follow_aggressive_floor_percent": (
                         slot.follow_aggressive_floor_percent
                     ),
+                    "follow_hybrid_floors": slot.follow_hybrid_floors,
                 }
                 for index, slot in enumerate(planner_input.slots)
             ],
@@ -3614,6 +3616,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         import_rate_p: float,
         alternative_rate_p: float,
         voltage: float | None,
+        floor_current_a: float | None = None,
     ) -> tuple[float, float, float]:
         """Scan house load for the first economic aggressive discharge.
 
@@ -3633,9 +3636,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         volts = 240.0 if voltage is None or voltage <= 0 else float(voltage)
         min_current = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
-        max_current = max(
-            min_current, float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
-        )
+        if floor_current_a is not None:
+            min_current = max(min_current, float(floor_current_a))
+        max_current = float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        if min_current > max_current:
+            return (
+                float(self.NEVER_DISCHARGE_ACTIVATION_W),
+                0.0,
+                min_current,
+            )
         energy_dc_p = self._aggressive_energy_dc_cost_p(alternative_rate_p)
         margin_p = self.MIN_PROFIT_MARGIN_P_PER_KWH
         min_hurdle_p = 0.0
@@ -3683,6 +3692,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         aggressive: bool = True,
         voltage: float | None = None,
         alternative_rate_p: float | None = None,
+        floor_current_a: float | None = None,
     ) -> float:
         """Smallest house import at which discharging still makes money.
 
@@ -3713,6 +3723,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         * ``P_export >= H``: the forced export alone clears the hurdle, so
           any import justifies a start (0 W).
 
+        **Hybrid floor** (``floor_current_a``) uses the floor output instead
+        of the 3 A minimum.  The conservative form is deliberately *not*
+        floored at the floor power: the controller may start the floor even
+        when the house load is below it if the export price covers the stored
+        energy.  That is the intended "stay at the floor" behaviour.
+
         Args:
             export_rate_p: Export price that the forced excess would earn.
             import_rate_p: Import price the discharge avoids.  Defaults to
@@ -3724,6 +3740,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             alternative_rate_p: Best alternative export price for the stored
                 energy in an uncommitted slot.  Defaults to 0p, meaning the
                 marginal energy has no better sale than the ledger value.
+            floor_current_a: Optional discharge floor for a hybrid follow
+                arc.  ``None`` keeps the normal minimum-current behaviour.
         """
         import_p = (
             self._import_standard_p() if import_rate_p is None else import_rate_p
@@ -3740,13 +3758,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     else alternative_rate_p
                 ),
                 voltage=volts,
+                floor_current_a=floor_current_a,
             )
             return threshold_w
 
-        # Conservative mode: never intentionally export at activation.
+        # Conservative mode: the closed form uses the floor output.  Without
+        # a hybrid floor it is floored at the minimum output so activation
+        # never forces an export; with a hybrid floor it may start below the
+        # floor power when the export price covers the stored energy.
         p_min_w = max(0.0, self.MIN_DISCHARGE_CURRENT) * volts
+        if floor_current_a is not None:
+            p_min_w = max(p_min_w, float(floor_current_a) * volts)
         hurdle_p = (
-            self._delivered_cost_per_kwh_p()
+            self._delivered_cost_per_kwh_p(
+                None if floor_current_a is None else float(floor_current_a)
+            )
             + self.MIN_PROFIT_MARGIN_P_PER_KWH
         )
 
@@ -3760,7 +3786,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return self.NEVER_DISCHARGE_ACTIVATION_W
 
         clamped_break_even_w = p_min_w * (hurdle_p - export_rate_p) / spread_p
-        return round(max(clamped_break_even_w, p_min_w))
+        if floor_current_a is None:
+            return round(max(clamped_break_even_w, p_min_w))
+        return round(max(clamped_break_even_w, 0.0))
 
     def _slot_start_datetime(self, day_minute: int) -> datetime:
         """Start of the half-hour slot containing *day_minute* today."""
