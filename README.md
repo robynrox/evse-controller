@@ -129,6 +129,7 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       serial: 12345                    # Optional, for auto-restart
       max_charge_current: 32           # Maximum charging current, integer between 3-32 (amperes)
       max_discharge_current: 32        # Maximum discharging current, integer between 3-32 (amperes)
+      nominal_voltage: 240             # Nominal grid voltage for planning (200-260V)
     shelly:
       primary_url: "shellyem-123456ABCDEF.ultrahub"  # Shelly 1 (internal key: primary)
       secondary_url: null              # Shelly 2 (internal key: secondary)
@@ -253,6 +254,7 @@ Detailed explanation of each configuration option:
 - `serial`: Your Wallbox serial number (optional, for auto-restart feature)
 - `max_charge_current`: Maximum charging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
 - `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
+- `nominal_voltage`: Nominal grid voltage used by the planner's load-to-current model and as the fallback when no live sample is available, 200-260V. Default 240V; set 220V or 230V where that is the served nominal. Live activation thresholds still use the measured voltage.
 
 #### Shelly Section
 - `primary_url`: IP address or hostname of Shelly 1 (the internal key stays `primary` for history compatibility)
@@ -1046,9 +1048,11 @@ measured grid voltage: about 720W at 240V and 690W at 230V. Aggressive
 load-following is an economic power break-even, also evaluated at the measured
 voltage. Solar charge activation follows the same rule: the charge-floor
 current times the measured voltage, so a 3A floor starts at about 690W at
-230V rather than a fixed 720W. A DP action that would discharge past the
-absolute floor or charge past the cap falls back to the heuristic for that
-slot.
+230V rather than a fixed 720W. The planner's internal load-to-current model
+uses `wallbox.nominal_voltage` (default 240V; set 220V or 230V where that is
+the served nominal), while live activation always uses the measured voltage.
+A DP action that would discharge past the absolute floor or charge past the
+cap falls back to the heuristic for that slot.
 
 While the Heuristic mode is active, the dashboard also shows the action the
 current plan would take, such as `Would: Charge 11A`,

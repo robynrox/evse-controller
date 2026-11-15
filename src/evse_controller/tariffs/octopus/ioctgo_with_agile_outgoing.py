@@ -1284,7 +1284,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         the house and exports the small surplus.  The current is quantised to
         whole amps, so the measured 4 A/5 A efficiency steps are included.
         """
-        volts = 240.0
+        volts = float(config.WALLBOX_NOMINAL_VOLTAGE)
         min_current = max(1.0, float(self.MIN_DISCHARGE_CURRENT))
         max_current = max(
             min_current, float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
@@ -1339,7 +1339,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # higher-value use of the stored energy.
             return True
         return max(0.0, stats.p90_w) >= (
-            float(self.MIN_DISCHARGE_CURRENT) * 240.0
+            float(self.MIN_DISCHARGE_CURRENT)
+            * float(config.WALLBOX_NOMINAL_VOLTAGE)
         )
 
     def _update_soc_estimator(self, state, now):
@@ -1692,6 +1693,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 terminal_energy_value_p_per_kwh=(
                     self.dp_terminal_energy_value_p_per_kwh()
                 ),
+                voltage_v=float(config.WALLBOX_NOMINAL_VOLTAGE),
             )
             result = planner.plan(
                 planner_input.slots, planner_input.initial_soc
@@ -1789,6 +1791,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "max_discharge_current_a": float(
                 config.WALLBOX_MAX_DISCHARGE_CURRENT
             ),
+            "voltage_v": float(config.WALLBOX_NOMINAL_VOLTAGE),
             "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
         }
 
@@ -1857,7 +1860,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "export_p": slot.export_p,
                     "load_kw": slot.load_kw,
                     "voltage": round(
-                        float(getattr(self, "_follow_gate_voltage", 240.0)),
+                        float(
+                            getattr(
+                                self,
+                                "_follow_gate_voltage",
+                                config.WALLBOX_NOMINAL_VOLTAGE,
+                            )
+                        ),
                         3,
                     ),
                     "load_samples": [
@@ -3007,15 +3016,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return float(floor_a), self._charge_activation_w_for_current(floor_a)
 
     def _live_voltage(self) -> float:
-        """Measured grid voltage, or 240 V when there is no sample."""
+        """Measured grid voltage, or the configured nominal when unavailable."""
         power = self._read_power_snapshot()
         if not power:
-            return 240.0
+            return float(config.WALLBOX_NOMINAL_VOLTAGE)
         try:
-            voltage = float(power.get("voltage") or 240.0)
+            voltage = float(
+                power.get("voltage") or config.WALLBOX_NOMINAL_VOLTAGE
+            )
         except (TypeError, ValueError):
-            return 240.0
-        return voltage if voltage > 0 else 240.0
+            return float(config.WALLBOX_NOMINAL_VOLTAGE)
+        return (
+            voltage
+            if voltage > 0
+            else float(config.WALLBOX_NOMINAL_VOLTAGE)
+        )
 
     def _charge_activation_w_for_current(self, current_a: float) -> float:
         """Surplus power at which charging at ``current_a`` should start.
@@ -3097,7 +3112,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             grid_w = float(power.ch1Watts)
             evse_w = float(power.ch2Watts)
             baseline_w = grid_w - evse_w
-            voltage = float(power.voltage) if power.voltage and power.voltage > 0 else 240.0
+            voltage = float(power.voltage) if power.voltage and power.voltage > 0 else float(config.WALLBOX_NOMINAL_VOLTAGE)
             soc = int(getattr(power, "soc", -1))
         except (AttributeError, TypeError, ValueError):
             return None

@@ -688,6 +688,15 @@ class Config:
         lambda self, value: self._set_config_value("wallbox", "min_discharge_current", value)
     )
 
+    #: Nominal grid voltage used by the planner's load-to-current model and
+    #: as the fallback when no live voltage sample is available.  Live
+    #: activation thresholds still use the measured voltage.  240 V is the
+    #: historical default; set 220 or 230 V for other European supplies.
+    WALLBOX_NOMINAL_VOLTAGE = property(
+        lambda self: self._get_config_value("wallbox", "nominal_voltage", 240),
+        lambda self, value: self._set_config_value("wallbox", "nominal_voltage", value)
+    )
+
     # Intelligent Octopus Go tariff parameters
     IOCTGO_BATTERY_CAPACITY_KWH = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "battery_capacity_kwh", 59),
@@ -1357,7 +1366,8 @@ class Config:
                 'max_charge_current': self.WALLBOX_MAX_CHARGE_CURRENT,
                 'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT,
                 'min_charge_current': self.WALLBOX_MIN_CHARGE_CURRENT,
-                'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT
+                'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT,
+                'nominal_voltage': self.WALLBOX_NOMINAL_VOLTAGE
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,

@@ -225,6 +225,7 @@ class DpPlanner:
         degradation_p_per_kwh: float = 0.0,
         terminal_energy_value_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
+        voltage_v: float = VOLTAGE_V,
     ):
         if capacity_kwh is None:
             # Imported lazily: the octopus package imports the planner, so a
@@ -241,6 +242,8 @@ class DpPlanner:
             raise ValueError("soc_step_percent must be in (0, 100]")
         if min_current_a <= 0:
             raise ValueError("min_current_a must be positive")
+        if voltage_v <= 0:
+            raise ValueError("voltage_v must be positive")
         if target_soc_percent is not None and not (
             0.0 <= float(target_soc_percent) <= 100.0
         ):
@@ -258,6 +261,7 @@ class DpPlanner:
         self.capacity_kwh = float(capacity_kwh)
         self.soc_step_percent = float(soc_step_percent)
         self.min_current_a = float(min_current_a)
+        self.voltage_v = float(voltage_v)
         self.charge_cap_percent = float(charge_cap_percent)
         self.protection_floor_percent = float(protection_floor_percent)
         self.discharge_floor_percent = max(
@@ -965,7 +969,7 @@ class DpPlanner:
                     slot, load_kw, 0.0
                 )
                 continue
-            raw = load_w / VOLTAGE_V
+            raw = load_w / self.voltage_v
             if aggressive:
                 raw += AGGRESSIVE_DISCHARGE_BIAS_A
                 current = int(round(raw))
@@ -1051,7 +1055,7 @@ class DpPlanner:
             load_kw = float(load_kw)
             if load_kw < 0:
                 surplus_w = -load_kw * 1000.0
-                current = int(math.floor(surplus_w / VOLTAGE_V))
+                current = int(math.floor(surplus_w / self.voltage_v))
                 if current < minimum or max_charge < minimum:
                     expected_cost += weight * self._grid_energy_cost_at(
                         slot, load_kw, 0.0
@@ -1087,7 +1091,7 @@ class DpPlanner:
                 )
                 continue
 
-            raw = load_w / VOLTAGE_V
+            raw = load_w / self.voltage_v
             if aggressive:
                 raw += AGGRESSIVE_DISCHARGE_BIAS_A
                 current = int(round(raw))
@@ -1154,7 +1158,7 @@ class DpPlanner:
                 )
                 continue
             surplus_w = -float(load_kw) * 1000.0
-            current = int(math.floor(surplus_w / VOLTAGE_V))
+            current = int(math.floor(surplus_w / self.voltage_v))
             if current < minimum:
                 expected_cost += weight * self._grid_energy_cost_at(
                     slot, load_kw, 0.0

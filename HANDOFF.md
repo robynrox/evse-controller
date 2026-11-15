@@ -556,7 +556,9 @@ completed fixes.
   230V. Aggressive load-following is an economic power break-even, also
   evaluated at the measured voltage. Solar charge activation follows the same
   rule: the charge-floor current times the measured voltage, so a 3A floor
-  starts at about 690W at 230V rather than a fixed 720W. A DP action that
+  starts at about 690W at 230V rather than a fixed 720W. The planner's
+  internal load-to-current model uses `wallbox.nominal_voltage` (default
+  240V), while live activation uses the measured voltage. A DP action that
   would discharge past the absolute floor or charge past the cap falls back to
   the heuristic for that slot.
   Each run stores `solver_version`, `solver_mode` and `load_source`

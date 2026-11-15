@@ -112,6 +112,7 @@ def _build_planner(params: dict) -> DpPlanner:
         terminal_energy_value_p_per_kwh=float(
             params.get("terminal_energy_value_p_per_kwh", 0.0)
         ),
+        voltage_v=float(params.get("voltage_v", 240.0)),
     )
 
 

@@ -296,6 +296,7 @@ def _build_context(run: dict) -> RunContext:
         target_soc_percent=target,
         degradation_p_per_kwh=degradation,
         terminal_energy_value_p_per_kwh=terminal_value,
+        voltage_v=_number(params.get("voltage_v"), 240.0),
     )
     initial_soc = _number(
         run.get("estimate_soc"),

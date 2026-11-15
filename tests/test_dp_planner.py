@@ -253,6 +253,28 @@ def test_follow_house_arcs_use_gates_and_load_samples():
     assert conservative.follow and aggressive.follow
 
 
+def test_planner_voltage_scales_the_follow_current():
+    sample_slot = replace(
+        slot(0, import_p=20.0, export_p=5.0, load_kw=0.95),
+        load_samples=((0.95, 1.0),),
+        follow_conservative_gate_w=0.0,
+        follow_conservative_floor_percent=45.0,
+    )
+
+    def conservative_max(voltage_v):
+        p = planner(voltage_v=voltage_v)
+        policy = p.policy([sample_slot], 60.0)
+        options = p.options(policy, 0, 120)
+        return next(
+            option.current_max_a
+            for option in options
+            if option.kind == "follow_house_conservative"
+        )
+
+    assert conservative_max(240.0) == pytest.approx(3.0)
+    assert conservative_max(230.0) == pytest.approx(4.0)
+
+
 def test_follow_solar_charges_only_from_negative_load():
     p = planner()
     sample_slot = replace(

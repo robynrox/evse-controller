@@ -646,6 +646,16 @@ def config_page():
                 else:
                     raise ValueError("Minimum discharging current must be between 3 and 32A")
 
+            nominal_voltage = request.form.get('wallbox[nominal_voltage]')
+            if nominal_voltage:
+                voltage = int(nominal_voltage)
+                if 200 <= voltage <= 260:
+                    config.WALLBOX_NOMINAL_VOLTAGE = voltage
+                else:
+                    raise ValueError(
+                        "Nominal grid voltage must be between 200 and 260V"
+                    )
+
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
             config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')

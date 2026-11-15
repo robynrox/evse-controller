@@ -94,6 +94,7 @@ class TestConfig:
         assert config.IOCTGO_ENABLE_BULK_DISCHARGE is True
         assert config.WALLBOX_MIN_CHARGE_CURRENT == 3
         assert config.WALLBOX_MIN_DISCHARGE_CURRENT == 3
+        assert config.WALLBOX_NOMINAL_VOLTAGE == 240
         assert config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 50
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 0
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 720
@@ -535,6 +536,7 @@ class TestConfig:
         config.IOCTGO_ENABLE_BULK_DISCHARGE = False
         config.WALLBOX_MIN_CHARGE_CURRENT = 6
         config.WALLBOX_MIN_DISCHARGE_CURRENT = 6
+        config.WALLBOX_NOMINAL_VOLTAGE = 230
         config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = 55
         config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = 200
         config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = 850
@@ -601,6 +603,7 @@ class TestConfig:
                     assert config2.IOCTGO_ENABLE_BULK_DISCHARGE is False
                     assert config2.WALLBOX_MIN_CHARGE_CURRENT == 6
                     assert config2.WALLBOX_MIN_DISCHARGE_CURRENT == 6
+                    assert config2.WALLBOX_NOMINAL_VOLTAGE == 230
                     assert config2.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 55
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 200
                     assert config2.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 850
