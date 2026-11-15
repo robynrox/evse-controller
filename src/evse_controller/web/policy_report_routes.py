@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from datetime import date, datetime
-from typing import Optional
+from typing import Iterable, Optional
 
 from flask import abort, render_template, request
 
@@ -698,15 +698,10 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
         )
 
     # Estimated SoC samples.
-    samples = {}
-    for sample in _samples_for_context(ctx):
-        slot = sample.get("slot")
-        estimate = _number(sample.get("estimate"))
-        if isinstance(slot, int) and estimate is not None:
-            samples[slot] = estimate
+    samples = _sample_lookup(_samples_for_context(ctx))
     sample_points = []
     for index, slot in enumerate(ctx.slots):
-        value = samples.get(slot.slot)
+        value = samples.get((slot.start.date(), slot.slot))
         if value is None:
             continue
         # A sample is recorded at the start of its slot.
@@ -779,6 +774,29 @@ def _soc_y(ctx, states, soc, top, cell_h) -> float:
     ratio = (soc - low) / (high - low)
     ratio = max(0.0, min(1.0, ratio))
     return top + (len(values) - 1 - ratio * (len(values) - 1)) * cell_h + cell_h / 2
+
+
+def _sample_lookup(samples: Iterable[dict]) -> dict:
+    """Map SoC samples by ``(day, absolute slot)``.
+
+    A policy run can cross midnight, so the absolute slot index alone is not
+    unique.  Keying by the sample timestamp's date stops a today-only session
+    from drawing its charge on tomorrow's slots.
+    """
+    lookup = {}
+    for sample in samples:
+        slot = sample.get("slot")
+        estimate = _number(sample.get("estimate"))
+        if not isinstance(slot, int) or estimate is None:
+            continue
+        try:
+            sample_day = datetime.fromisoformat(
+                str(sample.get("ts"))
+            ).date()
+        except (TypeError, ValueError):
+            continue
+        lookup[(sample_day, slot)] = estimate
+    return lookup
 
 
 def _samples_for_context(ctx: RunContext) -> tuple[dict, ...]:

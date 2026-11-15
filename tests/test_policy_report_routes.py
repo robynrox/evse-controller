@@ -12,6 +12,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
 )
 from evse_controller.web.policy_report_routes import (
     _fmt_action_current,
+    _sample_lookup,
     register_policy_report_routes,
 )
 
@@ -23,6 +24,26 @@ TEMPLATES = (
     / "evse_controller"
     / "templates"
 )
+
+
+def test_sample_lookup_does_not_collide_across_midnight():
+    lookup = _sample_lookup(
+        [
+            {
+                "ts": "2026-11-15T07:00:00",
+                "slot": 14,
+                "estimate": 80.0,
+            },
+            {
+                "ts": "2026-11-16T07:00:00",
+                "slot": 14,
+                "estimate": 20.0,
+            },
+        ]
+    )
+
+    assert lookup[(date(2026, 11, 15), 14)] == 80.0
+    assert lookup[(date(2026, 11, 16), 14)] == 20.0
 
 
 def _inputs(count=4):
