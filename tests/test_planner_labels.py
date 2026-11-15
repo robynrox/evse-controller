@@ -63,7 +63,7 @@ def test_gate_text_uses_the_recorded_voltage():
         },
     )
 
-    assert label == "Cover house cons >=4A from 690W (~3A)"
+    assert label == "Cover house cons >=4A from 690W"
 
 
 def test_bidirectional_follow_shows_both_directions():
@@ -91,8 +91,44 @@ def test_bidirectional_conservative_does_not_claim_a_discharge_floor():
         {"follow_conservative_gate_w": 720.0},
     )
 
-    assert label == "Bidir solar up to +5A house cons from 720W (~3A)"
+    assert label == "Bidir solar up to +5A house cons from 720W"
     assert ">=5A" not in label
+
+
+def test_bidirectional_follow_at_zero_gate_shows_the_minimum_current():
+    label = action_label(
+        {
+            "kind": "follow_bidirectional_conservative",
+            "current_a": 0.0,
+            "current_min_a": -5.0,
+            "current_max_a": 5.0,
+        },
+        {
+            "follow_conservative_gate_w": 0.0,
+            "min_discharge_a": 3.0,
+        },
+    )
+
+    assert label == "Bidir solar up to +5A house cons ≥3A"
+    assert "0W" not in label
+
+
+def test_bidirectional_follow_below_minimum_shows_the_discharge_floor():
+    label = action_label(
+        {
+            "kind": "follow_bidirectional_aggressive",
+            "current_a": 0.0,
+            "current_min_a": -5.0,
+            "current_max_a": 4.0,
+        },
+        {
+            "follow_aggressive_gate_w": 241.0,
+            "voltage": 240.0,
+            "min_discharge_a": 3.0,
+        },
+    )
+
+    assert label == "Bidir solar up to +4A house aggr from 241W"
 
 
 def test_missing_action_is_reported_clearly():

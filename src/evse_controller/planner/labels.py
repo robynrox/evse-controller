@@ -35,9 +35,12 @@ def _gate_text(
     if not slot_input:
         return ""
     gate = _number(slot_input.get(key))
-    if gate is None or gate >= 1e8:
+    if gate is None or gate >= 1e8 or gate <= 0:
         return ""
     voltage = _number(slot_input.get("voltage")) or 240.0
+    min_current = _number(slot_input.get("min_discharge_a")) or 3.0
+    if gate <= min_current * voltage:
+        return f" from {gate:.0f}W"
     amps = gate / voltage
     if abs(amps - round(amps)) < 0.05:
         amps_text = f"{amps:.0f}A"
@@ -125,7 +128,13 @@ def action_label(
         if charge is not None and charge > 0:
             parts.append(f"solar up to +{charge:.0f}A")
         if discharge is not None and discharge < 0:
-            parts.append(f"house {variant}{gate}")
+            if gate:
+                parts.append(f"house {variant}{gate}")
+            else:
+                min_current = (
+                    _number((slot_input or {}).get("min_discharge_a")) or 3.0
+                )
+                parts.append(f"house {variant} ≥{min_current:.0f}A")
         return " ".join(parts) if len(parts) > 1 else "Bidir follow"
 
     if kind:

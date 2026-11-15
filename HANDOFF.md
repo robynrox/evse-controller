@@ -551,7 +551,9 @@ completed fixes.
   Bidirectional actions use the Wallbox minimum in both directions and the
   DP's gate; the dashboard label says `solar up to +XA house cons from YW
   (~ZA)`, not `>=XA`, because the DP's discharge current is a modelled maximum
-  rather than a floor. The conservative gate is the minimum discharge current
+  rather than a floor. When the gate is at or below the minimum output, the
+  label shows the discharge floor instead — `house cons ≥3A` — rather than a
+  misleading `0W (~0A)`. The conservative gate is the minimum discharge current
   (3A) converted at the measured grid voltage: about 720W at 240V and 690W at
   230V. Aggressive load-following is an economic power break-even, also
   evaluated at the measured voltage. Solar charge activation follows the same

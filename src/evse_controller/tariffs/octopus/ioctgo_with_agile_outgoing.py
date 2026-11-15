@@ -1869,6 +1869,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         ),
                         3,
                     ),
+                    "min_discharge_a": float(self.MIN_DISCHARGE_CURRENT),
                     "load_samples": [
                         [round(kw, 6), round(weight, 6)]
                         for kw, weight in slot.load_samples
