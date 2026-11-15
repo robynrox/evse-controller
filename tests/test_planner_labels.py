@@ -45,8 +45,8 @@ def test_house_follow_includes_its_activation_gate():
         {"follow_aggressive_gate_w": 830.0},
     )
 
-    assert conservative == "Cover house cons >=4A from 800W"
-    assert aggressive == "Cover house aggr >=4A from 830W"
+    assert conservative == "Cover house cons >=4A from 800W (~3.3A)"
+    assert aggressive == "Cover house aggr >=4A from 830W (~3.5A)"
 
 
 def test_bidirectional_follow_shows_both_directions():
@@ -60,7 +60,7 @@ def test_bidirectional_follow_shows_both_directions():
         {"follow_aggressive_gate_w": 830.0},
     )
 
-    assert label == "Bidir solar up to +4A house aggr from 830W"
+    assert label == "Bidir solar up to +4A house aggr from 830W (~3.5A)"
 
 
 def test_bidirectional_conservative_does_not_claim_a_discharge_floor():
@@ -71,10 +71,10 @@ def test_bidirectional_conservative_does_not_claim_a_discharge_floor():
             "current_min_a": -5.0,
             "current_max_a": 5.0,
         },
-        {"follow_conservative_gate_w": 830.0},
+        {"follow_conservative_gate_w": 720.0},
     )
 
-    assert label == "Bidir solar up to +5A house cons from 830W"
+    assert label == "Bidir solar up to +5A house cons from 720W (~3A)"
     assert ">=5A" not in label
 
 

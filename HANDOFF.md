@@ -549,10 +549,13 @@ completed fixes.
   Wallbox maximum as the ceiling: the modelled maximum is not an actuator cap,
   so a higher actual house load or solar surplus is still followed.
   Bidirectional actions use the Wallbox minimum in both directions and the
-  DP's gate; the dashboard label says `solar up to +XA house cons from YW`,
-  not `>=XA`, because the DP's discharge current is a modelled maximum rather
-  than a floor. A DP action that would discharge past the absolute floor or
-  charge past the cap falls back to the heuristic for that slot.
+  DP's gate; the dashboard label says `solar up to +XA house cons from YW
+  (~ZA)`, not `>=XA`, because the DP's discharge current is a modelled maximum
+  rather than a floor. The conservative gate is the minimum discharge current
+  (3A, about 720W at 240V), not a higher wattage; aggressive load-following
+  can use a higher break-even. A DP action that would discharge past the
+  absolute floor or charge past the cap falls back to the heuristic for that
+  slot.
   Each run stores `solver_version`, `solver_mode` and `load_source`
   (`recorded` or `component`). `control_comp` records the component run as
   well as the recorded baseline; the policy map shows the latest run, so it

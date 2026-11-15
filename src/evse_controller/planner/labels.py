@@ -37,7 +37,12 @@ def _gate_text(
     gate = _number(slot_input.get(key))
     if gate is None or gate >= 1e8:
         return ""
-    return f" from {gate:.0f}W"
+    amps = gate / 240.0
+    if abs(amps - round(amps)) < 0.05:
+        amps_text = f"{amps:.0f}A"
+    else:
+        amps_text = f"{amps:.1f}A"
+    return f" from {gate:.0f}W (~{amps_text})"
 
 
 def _follow_min_current(
