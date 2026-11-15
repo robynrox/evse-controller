@@ -53,7 +53,7 @@ class CaseResult:
     realised_slots: int = 0
 
 
-def _planner() -> DpPlanner:
+def _planner(penalty_p: float = 0.0) -> DpPlanner:
     return DpPlanner(
         efficiency_model=BatteryEfficiencyModel(),
         capacity_kwh=48.3,
@@ -63,6 +63,7 @@ def _planner() -> DpPlanner:
         protection_floor_percent=25.0,
         discharge_floor_percent=40.0,
         target_soc_percent=None,
+        hybrid_penalty_p=penalty_p,
     )
 
 
@@ -142,7 +143,9 @@ def _slot(
 
 
 def _with_hybrid_floors(
-    slots: Iterable[PlannerSlot], floors: Iterable[float]
+    slots: Iterable[PlannerSlot],
+    floors: Iterable[float],
+    variants: tuple[str, ...] = ("conservative", "aggressive"),
 ) -> list[PlannerSlot]:
     result = []
     for slot in slots:
@@ -151,6 +154,10 @@ def _with_hybrid_floors(
             cons_gate, aggr_gate = _gates_for(
                 slot.import_p, slot.export_p, floor_a
             )
+            if "conservative" not in variants:
+                cons_gate = None
+            if "aggressive" not in variants:
+                aggr_gate = None
             entries.append((float(floor_a), cons_gate, aggr_gate))
         result.append(
             replace(slot, follow_hybrid_floors=tuple(entries))
@@ -359,6 +366,8 @@ def _run_case(
     floors: Optional[Iterable[float]] = None,
     quiet: bool = False,
     realised_day=None,
+    variants: tuple[str, ...] = ("conservative", "aggressive"),
+    penalty_p: float = 0.0,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
@@ -372,8 +381,12 @@ def _run_case(
         candidate = default_floors
     elif not any(floor < 16.0 for floor in candidate):
         candidate = sorted(set(candidate) | set(default_floors))
-    hybrid_slots = _with_hybrid_floors(slots, candidate)
-    hybrid = _planner().plan(hybrid_slots, initial_soc)
+    hybrid_slots = _with_hybrid_floors(
+        slots, candidate, variants=variants
+    )
+    hybrid = _planner(penalty_p=penalty_p).plan(
+        hybrid_slots, initial_soc
+    )
     delta = baseline.total_cost_p - hybrid.total_cost_p
     realised_baseline = None
     realised_hybrid = None
@@ -435,7 +448,11 @@ def _run_case(
     return result
 
 
-def _synthetic_cases(quiet: bool = False) -> list[CaseResult]:
+def _synthetic_cases(
+    quiet: bool = False,
+    variants: tuple[str, ...] = ("conservative", "aggressive"),
+    penalty_p: float = 0.0,
+) -> list[CaseResult]:
     results: list[CaseResult] = []
 
     def run(name, slots, *, initial_soc, floors=None):
@@ -446,6 +463,8 @@ def _synthetic_cases(quiet: bool = False) -> list[CaseResult]:
                 initial_soc=initial_soc,
                 floors=floors,
                 quiet=quiet,
+                variants=variants,
+                penalty_p=penalty_p,
             )
         )
 
@@ -525,7 +544,10 @@ def _synthetic_cases(quiet: bool = False) -> list[CaseResult]:
 
 
 def _historical_cases(
-    quiet: bool = False, realised: bool = False
+    quiet: bool = False,
+    realised: bool = False,
+    variants: tuple[str, ...] = ("conservative", "aggressive"),
+    penalty_p: float = 0.0,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -603,6 +625,8 @@ def _historical_cases(
                     initial_soc=initial_soc,
                     quiet=quiet,
                     realised_day=realised_day if realised else None,
+                    variants=variants,
+                    penalty_p=penalty_p,
                 )
             )
     return results
@@ -730,23 +754,64 @@ def main() -> None:
             "This is a load-only simulation, not a full battery model."
         ),
     )
+    parser.add_argument(
+        "--conservative-only",
+        action="store_true",
+        help="Only add the conservative hybrid variant.",
+    )
+    parser.add_argument(
+        "--aggressive-only",
+        action="store_true",
+        help="Only add the aggressive hybrid variant.",
+    )
+    parser.add_argument(
+        "--penalty",
+        type=float,
+        default=0.0,
+        help=(
+            "Per-slot pence penalty on a hybrid arc, to make the DP choose "
+            "it only when the expected advantage is robust."
+        ),
+    )
     args = parser.parse_args()
+    if args.conservative_only and args.aggressive_only:
+        parser.error(
+            "choose --conservative-only or --aggressive-only, not both"
+        )
+    if args.penalty < 0:
+        parser.error("--penalty cannot be negative")
+    if args.conservative_only:
+        variants = ("conservative",)
+    elif args.aggressive_only:
+        variants = ("aggressive",)
+    else:
+        variants = ("conservative", "aggressive")
+    variant_text = " + ".join(variants)
 
     print("Hybrid floor-plus-follow discharge experiment")
     print(
         f"stored hurdle {STORED_HURDLE_P:.1f}p/kWh, "
         f"max discharge {MAX_DISCHARGE_A:.0f}A"
     )
+    print(
+        f"hybrid variants: {variant_text}; "
+        f"penalty {args.penalty:.2f}p/slot"
+    )
     synthetic = (
-        [] if args.recorded_only else _synthetic_cases(args.quiet)
+        []
+        if args.recorded_only
+        else _synthetic_cases(args.quiet, variants, args.penalty)
     )
     recorded = (
         []
         if args.synthetic_only
-        else _historical_cases(args.quiet, args.realised)
+        else _historical_cases(
+            args.quiet, args.realised, variants, args.penalty
+        )
     )
-    _summary("Synthetic cases", synthetic)
-    _summary("Recorded runs", recorded)
+    label = f"{variant_text}, penalty {args.penalty:.2f}p"
+    _summary(f"Synthetic cases [{label}]", synthetic)
+    _summary(f"Recorded runs [{label}]", recorded)
 
 
 if __name__ == "__main__":

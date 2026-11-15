@@ -44,6 +44,26 @@ def test_hybrid_floor_actuator_stays_at_the_floor():
     ) == pytest.approx(-12 * 240 / 1000)
 
 
+def test_with_hybrid_floors_can_restrict_to_conservative():
+    slots = [
+        experiment._slot(
+            0,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        )
+    ]
+
+    hybrid = experiment._with_hybrid_floors(
+        slots, [11.0], variants=("conservative",)
+    )
+
+    _, conservative_gate, aggressive_gate = hybrid[0].follow_hybrid_floors[0]
+    assert conservative_gate is not None
+    assert aggressive_gate is None
+
+
 def test_run_case_realised_uses_hybrid_slots(monkeypatch):
     slots = [
         experiment._slot(

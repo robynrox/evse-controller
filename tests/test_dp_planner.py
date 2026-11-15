@@ -404,6 +404,29 @@ def test_hybrid_floor_arc_follows_above_the_floor():
     assert hybrid.follow
 
 
+def test_hybrid_penalty_raises_the_hybrid_cost():
+    sample_slot = replace(
+        slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),
+        load_samples=((0.5, 0.5), (3.8, 0.5)),
+        follow_hybrid_floors=((5.0, 0.0, None),),
+    )
+
+    free = next(
+        template
+        for template in planner()._action_templates(sample_slot)
+        if template.kind == "follow_house_floor_conservative"
+    )
+    penalised = next(
+        template
+        for template in planner(hybrid_penalty_p=1.0)._action_templates(
+            sample_slot
+        )
+        if template.kind == "follow_house_floor_conservative"
+    )
+
+    assert penalised.cost_p == pytest.approx(free.cost_p + 1.0)
+
+
 def test_hybrid_floor_can_beat_a_fixed_only_plan():
     slots = [
         replace(

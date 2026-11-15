@@ -235,6 +235,7 @@ class DpPlanner:
         terminal_energy_value_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
         voltage_v: float = VOLTAGE_V,
+        hybrid_penalty_p: float = 0.0,
     ):
         if capacity_kwh is None:
             # Imported lazily: the octopus package imports the planner, so a
@@ -292,6 +293,9 @@ class DpPlanner:
         self.terminal_energy_value_p_per_kwh = float(
             terminal_energy_value_p_per_kwh
         )
+        if hybrid_penalty_p < 0:
+            raise ValueError("hybrid_penalty_p cannot be negative")
+        self.hybrid_penalty_p = float(hybrid_penalty_p)
         self.horizon_slots = (
             None if horizon_slots is None else max(0, int(horizon_slots))
         )
@@ -1191,6 +1195,11 @@ class DpPlanner:
             cost_p=(
                 expected_cost
                 + self.degradation_p_per_kwh * gross_stored
+                + (
+                    self.hybrid_penalty_p
+                    if floor_current_a is not None
+                    else 0.0
+                )
             ),
             session=slot.session,
             current_min_a=float(min(currents)),
