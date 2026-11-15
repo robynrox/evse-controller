@@ -1229,9 +1229,9 @@ def config_page():
 
 def _learning_mode_label(mode: str) -> str:
     return {
-        "preview": "Smart",
-        "control_hist": "Learn hist",
-        "control_comp": "Learn comp",
+        "preview": "Heuristic",
+        "control_hist": "Learn history",
+        "control_comp": "Learn forecast",
         "off": "Off",
     }.get(
         str(mode).lower(),

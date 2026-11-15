@@ -325,15 +325,15 @@
             <button type="button"
                     class="mode-button{% if learning_mode == 'preview' %} active{% endif %}"
                     data-mode="preview"
-                    title="Heuristic in control; Learning mode observes and records.">SMART</button>
+                    title="Heuristic in control; Learning mode observes and records.">HEURISTIC</button>
             <button type="button"
                     class="mode-button{% if learning_mode == 'control_hist' %} active{% endif %}"
                     data-mode="control_hist"
-                    title="Learning mode in control using the recorded load profile.">LEARN HIST</button>
+                    title="DP control using the recorded grid-load profile.">LEARN HISTORY</button>
             <button type="button"
                     class="mode-button{% if learning_mode == 'control_comp' %} active{% endif %}"
                     data-mode="control_comp"
-                    title="Learning mode in control using the weather-driven component forecast.">LEARN COMP</button>
+                    title="DP control using the weather-driven component forecast.">LEARN FORECAST</button>
             <span id="mode-status" class="mode-status"></span>
         </div>
         <div id="link-health" class="link-health" hidden></div>
@@ -1127,9 +1127,9 @@
             ? Array.from(modeSelector.querySelectorAll('button[data-mode]'))
             : [];
         const modeLabels = {
-            preview: 'Smart',
-            control_hist: 'Learn hist',
-            control_comp: 'Learn comp',
+            preview: 'Heuristic',
+            control_hist: 'Learn history',
+            control_comp: 'Learn forecast',
             off: 'Off'
         };
 

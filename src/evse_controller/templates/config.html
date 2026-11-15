@@ -748,12 +748,13 @@
         <h2>Learning mode</h2>
         <p>
             Learning mode uses dynamic programming (DP) to plan from measured
-            grid load and prices. <strong>Smart</strong> keeps the heuristic
-            in control and lets Learning mode observe. <strong>Learn hist</strong>
-            hands control to the DP using the recorded load profile.
-            <strong>Learn comp</strong> hands control to the DP using the
-            weather-driven component forecast. <strong>Off</strong> is
-            heuristic-only and stops the observer history.
+            grid load and prices. <strong>Heuristic</strong> leaves the
+            rule-based controller in control and lets Learning mode observe.
+            <strong>Learn history</strong> is DP (recorded), using the
+            recorded grid-load profile. <strong>Learn forecast</strong> is DP
+            (using forecast), using the weather-driven component forecast.
+            <strong>Off</strong> is heuristic-only and stops the observer
+            history.
         </p>
         <div class="form-group">
             <label for="learning_mode">Mode</label>
@@ -764,20 +765,24 @@
                 </option>
                 <option value="preview"
                     {% if config.learning.get('mode', 'preview') == 'preview' %}selected{% endif %}>
-                    Smart — heuristic controls, Learning mode observes
+                    Heuristic — heuristic controls, Learning mode observes
                 </option>
                 <option value="control_hist"
                     {% if config.learning.get('mode', 'preview') == 'control_hist' %}selected{% endif %}>
-                    Learn hist — DP controls using recorded load
+                    Learn history — DP (recorded)
                 </option>
                 <option value="control_comp"
                     {% if config.learning.get('mode', 'preview') == 'control_comp' %}selected{% endif %}>
-                    Learn comp — DP controls using component forecast
+                    Learn forecast — DP (using forecast)
                 </option>
             </select>
             <small>
-                Solver version {{ solver_version }}. A bump in this version
-                marks a planner change in future runs.
+                Learn history runs the DP on the recorded grid-load profile.
+                Learn forecast runs the DP on the weather-driven component
+                forecast; if the model or a recent weather snapshot is
+                unavailable, that slot falls back to the heuristic. Solver
+                version {{ solver_version }}. A bump in this version marks a
+                planner change in future runs.
             </small>
         </div>
     </div>

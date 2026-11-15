@@ -13,7 +13,7 @@ TEMPLATES = (
 )
 
 
-def _render(learning_mode="preview", label="Smart"):
+def _render(learning_mode="preview", label="Heuristic"):
     app = Flask(__name__, template_folder=str(TEMPLATES))
     app.config.update(SERVER_NAME="localhost", PREFERRED_URL_SCHEME="http")
     for name in (
@@ -51,15 +51,15 @@ def test_dashboard_shows_the_three_control_modes():
     assert 'data-mode="preview"' in body
     assert 'data-mode="control_hist"' in body
     assert 'data-mode="control_comp"' in body
-    assert "SMART" in body
-    assert "LEARN HIST" in body
-    assert "LEARN COMP" in body
-    assert "Smart" in body
+    assert "HEURISTIC" in body
+    assert "LEARN HISTORY" in body
+    assert "LEARN FORECAST" in body
+    assert "Heuristic" in body
 
 
 def test_control_comp_is_the_active_button():
-    body = _render("control_comp", "Learn comp")
+    body = _render("control_comp", "Learn forecast")
 
     assert 'class="mode-button active"' in body
     assert 'data-mode="control_comp"' in body
-    assert "Learn comp" in body
+    assert "Learn forecast" in body

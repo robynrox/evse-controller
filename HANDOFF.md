@@ -527,24 +527,24 @@ completed fixes.
   no-load warning.
 - **Learning mode** is the user-facing name for the DP planner.
   `learning.mode` accepts `preview` (default), `control_hist`, `control_comp`
-  or `off`; `control` is an alias for `control_hist`. Preview is **Smart**:
-  the heuristic stays in control while Learning mode records plans, SoC
-  estimates and decisions. `control_hist` (**Learn hist**) hands the actuator
-  to the DP using the recorded load profile; `control_comp` (**Learn comp**)
-  uses the weather-driven component forecast. Off is the heuristic-only mode
-  and stops the observer history.
-  The dashboard has a persistent three-button selector — **SMART**,
-  **LEARN HIST**, **LEARN COMP** — backed by `POST /api/learning-mode`; the
-  config page offers the same modes plus Off. The choice is saved in
-  `learning.mode`. The heuristic always runs first in a control mode so its
-  observer history, SoC samples and export plan stay warm, then the DP action
-  replaces the actuator tuple. If the selected run is missing, stale for the
-  slot, or the solver fails, that slot falls back to the heuristic and the
-  dashboard says `heuristic fallback`. The heuristic's priority branches
-  (off-peak, free energy, unknown SoC, protection) are still evaluated and
-  recorded first. A valid DP action replaces the actuator tuple, except when
-  SoC is unknown or the solver fails, where the heuristic result stands; the
-  DP has its own protection and discharge floors.
+  or `off`; `control` is an alias for `control_hist`. Preview is
+  **Heuristic**: the heuristic stays in control while Learning mode records
+  plans, SoC estimates and decisions. `control_hist` (**Learn history**) hands
+  the actuator to the DP using the recorded load profile; `control_comp`
+  (**Learn forecast**) uses the weather-driven component forecast. Off is the
+  heuristic-only mode and stops the observer history.
+  The dashboard has a persistent three-button selector — **HEURISTIC**,
+  **LEARN HISTORY**, **LEARN FORECAST** — backed by
+  `POST /api/learning-mode`; the config page offers the same modes plus Off.
+  The choice is saved in `learning.mode`. The heuristic always runs first in
+  a control mode so its observer history, SoC samples and export plan stay
+  warm, then the DP action replaces the actuator tuple. If the selected run is
+  missing, stale for the slot, or the solver fails, that slot falls back to
+  the heuristic and the dashboard says `heuristic fallback`. The heuristic's
+  priority branches (off-peak, free energy, unknown SoC, protection) are still
+  evaluated and recorded first. A valid DP action replaces the actuator tuple,
+  except when SoC is unknown or the solver fails, where the heuristic result
+  stands; the DP has its own protection and discharge floors.
   Each run stores `solver_version`, `solver_mode` and `load_source`
   (`recorded` or `component`). `control_comp` records the component run as
   well as the recorded baseline; the policy map shows the latest run, so it

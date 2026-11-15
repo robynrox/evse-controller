@@ -1020,28 +1020,28 @@ learning:
   mode: preview
 ```
 
-- `preview` (default) — **Smart**: the heuristic stays in control while
+- `preview` (default) — **Heuristic**: the heuristic stays in control while
   Learning mode records plans, SoC estimates and decisions;
-- `control_hist` — **Learn hist**: Learning mode controls using the recorded
-  load profile;
-- `control_comp` — **Learn comp**: Learning mode controls using the
-  weather-driven component forecast;
+- `control_hist` — **Learn history**: DP control using the recorded grid-load
+  profile;
+- `control_comp` — **Learn forecast**: DP control using the weather-driven
+  component forecast;
 - `off` — heuristic-only use: stop the planner and its observer history.
 
-The dashboard has a three-button selector — **SMART**, **LEARN HIST** and
-**LEARN COMP** — and persists the choice in `learning.mode`. `control` is
-accepted as an alias for `control_hist`. If a control mode cannot build a
-fresh plan, for example because the model or weather is missing or the plan is
-stale, that slot falls back to the heuristic and the dashboard says
+The dashboard has a three-button selector — **HEURISTIC**, **LEARN HISTORY**
+and **LEARN FORECAST** — and persists the choice in `learning.mode`.
+`control` is accepted as an alias for `control_hist`. If a control mode cannot
+build a fresh plan, for example because the model or weather is missing or the
+plan is stale, that slot falls back to the heuristic and the dashboard says
 `heuristic fallback`.
 
-While Smart is active, the dashboard also shows the action the current plan
-would take, such as `Would: Charge 11A`, `Would: Harvest solar >=4A` or
-`Would: Cover house aggr >=4A from 830W`. In a control mode the same line
-starts with `DP:` instead. Smart is safe to leave on, but it does not actuate.
-In a control mode the heuristic still runs as the observer, so the Explanation
-page describes its decision; the dashboard line and the actuator follow the
-DP action.
+While the Heuristic mode is active, the dashboard also shows the action the
+current plan would take, such as `Would: Charge 11A`,
+`Would: Harvest solar >=4A` or `Would: Cover house aggr >=4A from 830W`. In a
+control mode the same line starts with `DP:` instead. Heuristic is safe to
+leave on, but it does not actuate. In a control mode the heuristic still runs
+as the observer, so the Explanation page describes its decision; the dashboard
+line and the actuator follow the DP action.
 
 When the component model and a recent live weather snapshot are available,
 the dashboard also shows a second preview action, for example:
@@ -1603,8 +1603,8 @@ the shading mask is learned from the installation's own measurements by sun
 position. The last `--test-days` are held out for evaluation. Outputs are
 written under `data/analysis/solar_model/`: `model.json`, `evaluation.csv` and
 `summary.json`. The standalone model is the forecast-quality stage; its solar
-component is embedded in the combined net-grid model below, which Learn comp
-uses for DP control.
+component is embedded in the combined net-grid model below, which Learn
+forecast uses for DP control.
 
 To fit and evaluate the heat-pump model:
 
@@ -1659,10 +1659,10 @@ gain: temperature MAE about 0.98°C, tilted-irradiance MAE about 45 W/m².
 
 These are still holdout backtests with a stitched historical forecast series,
 not a live control result. The combined component forecast is now available to
-the shadow DP as **Learn comp**, where it controls using the component load
-instead of the recorded profile. The backtest pages still score the recorded
-baseline; the A/B component comparison and the forecast-skill report remain the
-evidence to check before trusting it in control.
+the shadow DP as **Learn forecast**, where it controls using the component
+load instead of the recorded profile. The backtest pages still score the
+recorded baseline; the A/B component comparison and the forecast-skill report
+remain the evidence to check before trusting it in control.
 
 ## API Documentation
 
