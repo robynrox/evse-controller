@@ -12,6 +12,8 @@ The final summary reports the number of cases, how many used a hybrid arc,
 improved/unchanged/worse counts, total baseline/hybrid/saving and the best
 case.  ``--quiet`` prints only the summaries, ``--recorded-only`` skips the
 synthetic cases and ``--synthetic-only`` skips the recorded runs.
+``--realised`` also compares recorded plans against the measured daily house
+load; that is a load-only simulation, not a full battery/SoC model.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from evse_controller.planner.dp import DpPlanner, PlannerSlot
+from evse_controller.daily_report import daily_log
 from evse_controller.tariffs.octopus.battery_efficiency import (
     BatteryEfficiencyModel,
 )
@@ -44,6 +47,10 @@ class CaseResult:
     baseline_actions: str
     hybrid_actions: str
     hybrid_used: bool
+    realised_baseline_p: Optional[float] = None
+    realised_hybrid_p: Optional[float] = None
+    realised_saving_p: Optional[float] = None
+    realised_slots: int = 0
 
 
 def _planner() -> DpPlanner:
@@ -190,6 +197,160 @@ def _describe(actions) -> str:
     return ", ".join(parts)
 
 
+def _number(value) -> Optional[float]:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result == result else None
+
+
+def _signed_kw(energy: dict) -> Optional[float]:
+    in_kwh = _number(energy.get("in"))
+    out_kwh = _number(energy.get("out"))
+    if in_kwh is None and out_kwh is None:
+        return None
+    return ((in_kwh or 0.0) - (out_kwh or 0.0)) / 0.5
+
+
+def _house_kw(slot: dict) -> Optional[float]:
+    energy = slot.get("energy") or {}
+    grid = _signed_kw(energy.get("grid") or {})
+    if grid is None:
+        return None
+    evse = _signed_kw(energy.get("evse") or {}) or 0.0
+    return grid - evse
+
+
+def _actual_wallbox_kw(
+    slot: PlannerSlot, action, house_kw: float
+) -> float:
+    """Approximate the live actuator for one plan action.
+
+    This is deliberately a simple load-follow simulation: it uses the actual
+    house load, the recorded gate and the Wallbox current limits.  It does not
+    model voltage-dependent efficiency or SoC limits, so it is a realised
+    *load* comparison, not a full battery simulation.
+    """
+    kind = action.kind
+    if kind == "idle":
+        return 0.0
+    if kind in ("charge", "discharge"):
+        return float(action.ac_power_kw or 0.0)
+    if kind.startswith("follow_house"):
+        aggressive = kind.endswith("aggressive")
+        if "floor" in kind:
+            floor = action.floor_current_a
+            gate = None
+            if floor is not None:
+                for floor_a, cons, aggr in slot.follow_hybrid_floors:
+                    if abs(float(floor_a) - float(floor)) < 1e-9:
+                        gate = aggr if aggressive else cons
+                        break
+        else:
+            floor = action.current_min_a or 3.0
+            gate = (
+                slot.follow_aggressive_gate_w
+                if aggressive
+                else slot.follow_conservative_gate_w
+            )
+        if floor is None or gate is None:
+            return 0.0
+        house_w = max(0.0, house_kw * 1000.0)
+        if house_w < float(gate):
+            return 0.0
+        bias = 0.5 if aggressive else -0.5
+        current = round(house_w / VOLTAGE_V + bias)
+        current = max(
+            float(floor),
+            min(current, float(slot.max_discharge_current_a)),
+        )
+        return -current * VOLTAGE_V / 1000.0
+    if kind == "follow_solar":
+        if house_kw >= 0:
+            return 0.0
+        floor = float(action.current_min_a or 3.0)
+        surplus_w = -house_kw * 1000.0
+        if surplus_w < floor * VOLTAGE_V:
+            return 0.0
+        current = round(surplus_w / VOLTAGE_V - 0.5)
+        current = max(
+            floor, min(current, float(slot.max_charge_current_a))
+        )
+        return current * VOLTAGE_V / 1000.0
+    if kind.startswith("follow_bidirectional"):
+        aggressive = kind.endswith("aggressive")
+        if house_kw < 0:
+            floor = 3.0
+            surplus_w = -house_kw * 1000.0
+            if surplus_w < floor * VOLTAGE_V:
+                return 0.0
+            current = round(surplus_w / VOLTAGE_V - 0.5)
+            current = max(
+                floor, min(current, float(slot.max_charge_current_a))
+            )
+            return current * VOLTAGE_V / 1000.0
+        gate = (
+            slot.follow_aggressive_gate_w
+            if aggressive
+            else slot.follow_conservative_gate_w
+        )
+        if gate is None:
+            return 0.0
+        house_w = max(0.0, house_kw * 1000.0)
+        if house_w < float(gate):
+            return 0.0
+        bias = 0.5 if aggressive else -0.5
+        current = round(house_w / VOLTAGE_V + bias)
+        current = max(
+            3.0, min(current, float(slot.max_discharge_current_a))
+        )
+        return -current * VOLTAGE_V / 1000.0
+    return float(action.ac_power_kw or 0.0)
+
+
+def _realised_cost(
+    day, slots: list[PlannerSlot], actions
+) -> tuple[Optional[float], int]:
+    snapshot = daily_log.snapshot_for(day)
+    daily_slots = snapshot.get("slots") or []
+    if not daily_slots:
+        return None, 0
+    actions_by_key = {
+        (action.start.date(), action.slot): action
+        for action in actions
+    }
+    total_p = 0.0
+    used = 0
+    for slot in slots:
+        if slot.start.date() != day:
+            continue
+        action = actions_by_key.get((slot.start.date(), slot.slot))
+        if action is None:
+            continue
+        daily = (
+            daily_slots[slot.slot]
+            if 0 <= slot.slot < len(daily_slots)
+            else {}
+        )
+        house_kw = _house_kw(daily)
+        prices = daily.get("prices") or {}
+        import_p = _number(prices.get("import_p"))
+        export_p = _number(prices.get("export_p"))
+        if house_kw is None or import_p is None or export_p is None:
+            continue
+        wallbox_kw = _actual_wallbox_kw(slot, action, house_kw)
+        net_kw = house_kw + wallbox_kw
+        total_p += (
+            max(net_kw, 0.0) * import_p
+            - max(-net_kw, 0.0) * export_p
+        ) * 0.5
+        used += 1
+    if used == 0:
+        return None, 0
+    return total_p, used
+
+
 def _run_case(
     name: str,
     slots: list[PlannerSlot],
@@ -197,6 +358,7 @@ def _run_case(
     initial_soc: float,
     floors: Optional[Iterable[float]] = None,
     quiet: bool = False,
+    realised_day=None,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
@@ -213,6 +375,27 @@ def _run_case(
     hybrid_slots = _with_hybrid_floors(slots, candidate)
     hybrid = _planner().plan(hybrid_slots, initial_soc)
     delta = baseline.total_cost_p - hybrid.total_cost_p
+    realised_baseline = None
+    realised_hybrid = None
+    realised_saving = None
+    realised_slots = 0
+    if realised_day is not None:
+        realised_baseline, baseline_slots = _realised_cost(
+            realised_day, slots, baseline.actions
+        )
+        realised_hybrid, hybrid_slots_used = _realised_cost(
+            realised_day, slots, hybrid.actions
+        )
+        if (
+            realised_baseline is not None
+            and realised_hybrid is not None
+            and baseline_slots == hybrid_slots_used
+        ):
+            realised_saving = realised_baseline - realised_hybrid
+            realised_slots = baseline_slots
+        else:
+            realised_baseline = None
+            realised_hybrid = None
     result = CaseResult(
         name=name,
         baseline_p=baseline.total_cost_p,
@@ -225,6 +408,10 @@ def _run_case(
             action.kind.startswith("follow_house_floor")
             for action in hybrid.actions
         ),
+        realised_baseline_p=realised_baseline,
+        realised_hybrid_p=realised_hybrid,
+        realised_saving_p=realised_saving,
+        realised_slots=realised_slots,
     )
     if not quiet:
         print(f"\n{name}")
@@ -238,6 +425,13 @@ def _run_case(
             f"{result.hybrid_actions}"
         )
         print(f"  saving:   {result.saving_p:8.3f}p")
+        if result.realised_saving_p is not None:
+            print(
+                f"  realised: {result.realised_baseline_p:8.3f}p -> "
+                f"{result.realised_hybrid_p:8.3f}p, saving "
+                f"{result.realised_saving_p:8.3f}p "
+                f"({result.realised_slots} slots)"
+            )
     return result
 
 
@@ -330,7 +524,9 @@ def _synthetic_cases(quiet: bool = False) -> list[CaseResult]:
     return results
 
 
-def _historical_cases(quiet: bool = False) -> list[CaseResult]:
+def _historical_cases(
+    quiet: bool = False, realised: bool = False
+) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
     paths = sorted(history_dir.glob("*.runs.jsonl"))
@@ -393,12 +589,20 @@ def _historical_cases(quiet: bool = False) -> list[CaseResult]:
             initial_soc = float(
                 run.get("estimate_soc") or run.get("reported_soc") or 50.0
             )
+            day_value = run.get("day") or path.stem
+            try:
+                realised_day = datetime.fromisoformat(
+                    str(day_value)
+                ).date()
+            except (TypeError, ValueError):
+                realised_day = None
             results.append(
                 _run_case(
                     f"recorded {path.stem} slot {run.get('slot')}",
                     slots,
                     initial_soc=initial_soc,
                     quiet=quiet,
+                    realised_day=realised_day if realised else None,
                 )
             )
     return results
@@ -431,6 +635,47 @@ def _summary(label: str, results: list[CaseResult]) -> None:
             f"average improved {total_saving / len(improved):.3f}p"
         )
 
+    realised = [
+        result
+        for result in results
+        if result.realised_saving_p is not None
+    ]
+    if not realised:
+        return
+    improved = [
+        result for result in realised if result.realised_saving_p > 1e-9
+    ]
+    unchanged = [
+        result for result in realised if abs(result.realised_saving_p) <= 1e-9
+    ]
+    worse = [
+        result for result in realised if result.realised_saving_p < -1e-9
+    ]
+    total_baseline = sum(
+        result.realised_baseline_p or 0.0 for result in realised
+    )
+    total_hybrid = sum(
+        result.realised_hybrid_p or 0.0 for result in realised
+    )
+    total_saving = total_baseline - total_hybrid
+    print(f"  realised cases: {len(realised)}")
+    print(
+        f"  realised improved: {len(improved)}  unchanged: {len(unchanged)}  "
+        f"worse: {len(worse)}"
+    )
+    print(f"  realised baseline: {total_baseline:.3f}p")
+    print(f"  realised hybrid:   {total_hybrid:.3f}p")
+    print(f"  realised saving:   {total_saving:.3f}p")
+    if improved:
+        best = max(
+            improved, key=lambda result: result.realised_saving_p or 0.0
+        )
+        print(
+            f"  realised best: {best.name} "
+            f"({best.realised_saving_p:.3f}p), average improved "
+            f"{total_saving / len(improved):.3f}p"
+        )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -453,6 +698,14 @@ def main() -> None:
         action="store_true",
         help="Skip the recorded planner runs.",
     )
+    parser.add_argument(
+        "--realised",
+        action="store_true",
+        help=(
+            "Also compare the plans against the measured daily house load. "
+            "This is a load-only simulation, not a full battery model."
+        ),
+    )
     args = parser.parse_args()
 
     print("Hybrid floor-plus-follow discharge experiment")
@@ -464,7 +717,9 @@ def main() -> None:
         [] if args.recorded_only else _synthetic_cases(args.quiet)
     )
     recorded = (
-        [] if args.synthetic_only else _historical_cases(args.quiet)
+        []
+        if args.synthetic_only
+        else _historical_cases(args.quiet, args.realised)
     )
     _summary("Synthetic cases", synthetic)
     _summary("Recorded runs", recorded)
