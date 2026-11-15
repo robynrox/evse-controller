@@ -150,6 +150,7 @@ def test_page_renders_policy_map_and_tables(client):
     assert "data-chart-zoom" in body
     assert "soc-grid-line" in body
     assert "policy-marginal" in body
+    assert "max-width: none" in body
     assert "predates planner-parameter capture" not in body
 
 

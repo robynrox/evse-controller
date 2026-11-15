@@ -127,6 +127,7 @@ def test_page_renders_cards_chart_and_table():
     assert "What do these settings mean?" in body
     assert "Rolling SoC" in body
     assert "Load input" in body
+    assert "max-width: none" in body
     assert body.count("data-chart-zoom") == 1
     assert "£" in body
 

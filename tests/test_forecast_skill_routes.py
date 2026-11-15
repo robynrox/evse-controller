@@ -106,6 +106,7 @@ def test_page_renders_the_charts_and_metrics(monkeypatch):
     assert "Model with actual weather vs actual" in body
     assert "Historic P50 vs actual" in body
     assert "<svg" in body
+    assert "max-width: none" in body
 
 
 def test_page_shows_a_clear_error_when_the_data_is_missing(monkeypatch):
