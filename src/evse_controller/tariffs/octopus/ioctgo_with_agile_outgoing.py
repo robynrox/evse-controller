@@ -609,6 +609,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._shadow_force_replan = False
         self._last_component_shadow_run = None
         self._last_dp_action = None
+        self._follow_gate_voltage = 240.0
         self._component_model = None
         self._component_model_path = None
         self._component_model_mtime = None
@@ -1433,6 +1434,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         and profit margin.
         """
         slots = list(planner_input.slots)
+        voltage = self._live_voltage()
+        self._follow_gate_voltage = voltage
         conservative_floor = max(
             float(config.CONSERVATIVE_SOC_LOWER_LIMIT),
             self.absolute_min_soc_percent(),
@@ -1456,11 +1459,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 slot.export_p,
                 import_rate_p=slot.import_p,
                 aggressive=False,
+                voltage=voltage,
             )
             aggressive_gate = self.discharge_activation_threshold_w(
                 slot.export_p,
                 import_rate_p=slot.import_p,
                 aggressive=True,
+                voltage=voltage,
                 alternative_rate_p=alternative_rate_p,
             )
             if conservative_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
@@ -1851,6 +1856,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "import_p": slot.import_p,
                     "export_p": slot.export_p,
                     "load_kw": slot.load_kw,
+                    "voltage": round(
+                        float(getattr(self, "_follow_gate_voltage", 240.0)),
+                        3,
+                    ),
                     "load_samples": [
                         [round(kw, 6), round(weight, 6)]
                         for kw, weight in slot.load_samples
@@ -2997,8 +3006,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return 0.0, 0.0
         return float(floor_a), self._charge_activation_w_for_current(floor_a)
 
-    @staticmethod
-    def _charge_activation_w_for_current(current_a: float) -> float:
+    def _live_voltage(self) -> float:
+        """Measured grid voltage, or 240 V when there is no sample."""
+        power = self._read_power_snapshot()
+        if not power:
+            return 240.0
+        try:
+            voltage = float(power.get("voltage") or 240.0)
+        except (TypeError, ValueError):
+            return 240.0
+        return voltage if voltage > 0 else 240.0
+
+    def _charge_activation_w_for_current(self, current_a: float) -> float:
         """Surplus power at which charging at ``current_a`` should start.
 
         ``LOAD_FOLLOW_BIDIRECTIONAL`` treats the charge range minimum as a
@@ -3010,11 +3029,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         prices the input at the export value it displaces.
 
         Gate on the floor's AC power instead, so the surplus must support the
-        floor before charging starts.  The only import left is the half-amp
-        bias rounding at the boundary, matching the existing 3 A/720 W
-        behaviour.  A floor of zero disables charging entirely.
+        floor before charging starts.  The threshold is a current first:
+        ``current_a × measured voltage``, so it stays at the intended current
+        when the grid voltage moves.  The only import left is the half-amp
+        bias rounding at the boundary.  A floor of zero disables charging.
         """
-        return 0.0 if current_a <= 0 else float(current_a) * 240.0
+        return (
+            0.0
+            if current_a <= 0
+            else float(current_a) * self._live_voltage()
+        )
 
     def _solar_charge_floor_text(
         self,
@@ -9026,7 +9050,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
                 charge_min_a=0 if charge_at_cap else 3,
                 charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
-                charge_activation_w=720,
+                charge_activation_w=self._charge_activation_w_for_current(
+                    config.WALLBOX_MIN_CHARGE_CURRENT
+                ),
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,
@@ -9554,7 +9580,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 self.AGGRESSIVE_DISCHARGE_BIAS_A
             )
             evseController.setDischargeCurrentRange(3, self.MAX_DISCHARGE_CURRENT)
-            evseController.setChargeActivationPower(720)
+            evseController.setChargeActivationPower(
+                self._charge_activation_w_for_current(
+                    config.WALLBOX_MIN_CHARGE_CURRENT
+                )
+            )
             evseController.setChargeCurrentBias(-0.5)
             if charge_at_cap:
                 evseController.setChargeCurrentRange(0, 0)
@@ -9563,7 +9593,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._update_snapshot_ranges(
                 charge_min_a=0 if charge_at_cap else 3,
                 charge_max_a=0 if charge_at_cap else self.MAX_CHARGE_CURRENT,
-                charge_activation_w=720,
+                charge_activation_w=self._charge_activation_w_for_current(
+                    config.WALLBOX_MIN_CHARGE_CURRENT
+                ),
                 discharge_min_a=3,
                 discharge_max_a=self.MAX_DISCHARGE_CURRENT,
                 discharge_aggressive=True,

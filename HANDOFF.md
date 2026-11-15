@@ -552,10 +552,13 @@ completed fixes.
   DP's gate; the dashboard label says `solar up to +XA house cons from YW
   (~ZA)`, not `>=XA`, because the DP's discharge current is a modelled maximum
   rather than a floor. The conservative gate is the minimum discharge current
-  (3A, about 720W at 240V), not a higher wattage; aggressive load-following
-  can use a higher break-even. A DP action that would discharge past the
-  absolute floor or charge past the cap falls back to the heuristic for that
-  slot.
+  (3A) converted at the measured grid voltage: about 720W at 240V and 690W at
+  230V. Aggressive load-following is an economic power break-even, also
+  evaluated at the measured voltage. Solar charge activation follows the same
+  rule: the charge-floor current times the measured voltage, so a 3A floor
+  starts at about 690W at 230V rather than a fixed 720W. A DP action that
+  would discharge past the absolute floor or charge past the cap falls back to
+  the heuristic for that slot.
   Each run stores `solver_version`, `solver_mode` and `load_source`
   (`recorded` or `component`). `control_comp` records the component run as
   well as the recorded baseline; the policy map shows the latest run, so it

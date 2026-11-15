@@ -37,7 +37,8 @@ def _gate_text(
     gate = _number(slot_input.get(key))
     if gate is None or gate >= 1e8:
         return ""
-    amps = gate / 240.0
+    voltage = _number(slot_input.get("voltage")) or 240.0
+    amps = gate / voltage
     if abs(amps - round(amps)) < 0.05:
         amps_text = f"{amps:.0f}A"
     else:

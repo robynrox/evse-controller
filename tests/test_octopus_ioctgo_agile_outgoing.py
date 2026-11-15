@@ -1812,7 +1812,7 @@ class TestDecisionSnapshot:
             "Do not charge yet — will charge from ≥5 A surplus"
         )
         assert snapshot.charge_min_a == pytest.approx(5.0)
-        assert snapshot.charge_activation_w == pytest.approx(5 * 240)
+        assert snapshot.charge_activation_w == pytest.approx(5 * 243)
         assert "Below 5 A the surplus is worth more exported" in snapshot.detail
         # The components are still reported/derivable independently.
         assert agile_tariff._minimum_harvest_charge_current_a(19.8) == pytest.approx(9.0)
@@ -1829,13 +1829,13 @@ class TestDecisionSnapshot:
                 charge_current_max=16,
                 minimum_charge_activation_power=snapshot.charge_activation_w,
                 charge_current_bias=-0.5,
-                grid_voltage=240,
+                grid_voltage=243,
             )
 
         # A 3 A surplus is below the floor, so charging stays off.
         assert charge_at(-750) == 0
         # A surplus at the floor charges at it without importing.
-        assert charge_at(-1200) == pytest.approx(5.0)
+        assert charge_at(-1250) == pytest.approx(5.0)
 
     def test_armed_floor_says_not_yet_when_the_surplus_is_below_it(
         self, agile_tariff, monkeypatch
@@ -1871,7 +1871,7 @@ class TestDecisionSnapshot:
             "Do not charge yet — will charge from ≥8 A surplus"
         )
         assert snapshot.charge_min_a == pytest.approx(8.0)
-        assert snapshot.charge_activation_w == pytest.approx(8 * 240)
+        assert snapshot.charge_activation_w == pytest.approx(8 * 243)
         # The tooltip explains both sides of the 8 A threshold in plain words.
         assert "Below 8 A the surplus is worth more exported" in snapshot.detail
         assert "19.5p" in snapshot.detail
@@ -5406,6 +5406,27 @@ class TestShadowPlannerAndEstimator:
         controller.setChargeCurrentBias.assert_called_once_with(-0.5)
         controller.setChargeActivationPower.assert_called_once_with(
             pytest.approx(960.0)
+        )
+
+    def test_charge_activation_uses_the_measured_voltage(self):
+        tariff = _build_tariff()
+        power = Mock()
+        power.ch1Watts = 0.0
+        power.ch2Watts = 0.0
+        power.voltage = 230.0
+        power.soc = 60
+        tariff.evseController = Mock()
+        tariff.evseController.current_grid_power = power
+
+        assert tariff._charge_activation_w_for_current(3) == pytest.approx(
+            690.0
+        )
+
+    def test_charge_activation_defaults_to_240_without_a_sample(self):
+        tariff = _build_tariff()
+
+        assert tariff._charge_activation_w_for_current(3) == pytest.approx(
+            720.0
         )
 
     def test_dp_bidirectional_follow_is_not_capped_by_the_modelled_current(

@@ -1041,18 +1041,22 @@ so a higher actual house load or solar surplus is still followed. Bidirectional
 actions use the Wallbox minimum in both directions and the DP's gate; the
 dashboard label reads `solar up to +XA house cons from YW (~ZA)` rather than
 `>=XA`, because the DP's discharge current is a modelled maximum, not a floor.
-The conservative gate is the minimum discharge current — 3A, about 720W at
-240V — not a higher wattage; aggressive load-following can use a higher
-break-even. A DP action that would discharge past the absolute floor or charge
-past the cap falls back to the heuristic for that slot.
+The conservative gate is the minimum discharge current (3A) converted at the
+measured grid voltage: about 720W at 240V and 690W at 230V. Aggressive
+load-following is an economic power break-even, also evaluated at the measured
+voltage. Solar charge activation follows the same rule: the charge-floor
+current times the measured voltage, so a 3A floor starts at about 690W at
+230V rather than a fixed 720W. A DP action that would discharge past the
+absolute floor or charge past the cap falls back to the heuristic for that
+slot.
 
 While the Heuristic mode is active, the dashboard also shows the action the
 current plan would take, such as `Would: Charge 11A`,
-`Would: Harvest solar >=4A` or `Would: Cover house aggr >=4A from 830W`. In a
-control mode the same line starts with `DP:` instead. Heuristic is safe to
-leave on, but it does not actuate. In a control mode the heuristic still runs
-as the observer, so the Explanation page describes its decision; the dashboard
-line and the actuator follow the DP action.
+`Would: Harvest solar >=4A` or `Would: Cover house aggr >=4A from 830W
+(~3.5A)`. In a control mode the same line starts with `DP:` instead.
+Heuristic is safe to leave on, but it does not actuate. In a control mode the
+heuristic still runs as the observer, so the Explanation page describes its
+decision; the dashboard line and the actuator follow the DP action.
 
 When the component model and a recent live weather snapshot are available,
 the dashboard also shows a second preview action, for example:

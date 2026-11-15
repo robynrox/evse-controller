@@ -49,6 +49,23 @@ def test_house_follow_includes_its_activation_gate():
     assert aggressive == "Cover house aggr >=4A from 830W (~3.5A)"
 
 
+def test_gate_text_uses_the_recorded_voltage():
+    label = action_label(
+        {
+            "kind": "follow_house_conservative",
+            "current_a": -5.0,
+            "current_min_a": -6.0,
+            "current_max_a": -4.0,
+        },
+        {
+            "follow_conservative_gate_w": 690.0,
+            "voltage": 230.0,
+        },
+    )
+
+    assert label == "Cover house cons >=4A from 690W (~3A)"
+
+
 def test_bidirectional_follow_shows_both_directions():
     label = action_label(
         {

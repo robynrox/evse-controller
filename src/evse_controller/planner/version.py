@@ -7,4 +7,4 @@ produced it and the first run of a new generation is easy to find.
 """
 
 #: Date-based identifier for the current planner generation.
-SOLVER_VERSION = "dp-2026.11.12"
+SOLVER_VERSION = "dp-2026.11.15"
