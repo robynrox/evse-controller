@@ -64,6 +64,27 @@ def test_with_hybrid_floors_can_restrict_to_conservative():
     assert aggressive_gate is None
 
 
+def test_with_hybrid_floors_can_add_balanced():
+    slots = [
+        experiment._slot(
+            0,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        )
+    ]
+
+    hybrid = experiment._with_hybrid_floors(
+        slots, [11.0], variants=("balanced",)
+    )
+
+    assert hybrid[0].follow_hybrid_balanced_floors
+    _, conservative_gate, aggressive_gate = hybrid[0].follow_hybrid_floors[0]
+    assert conservative_gate is None
+    assert aggressive_gate is None
+
+
 def test_with_hybrid_floors_can_filter_aggressive_by_price():
     slots = [
         experiment._slot(
@@ -123,6 +144,28 @@ def test_run_case_realised_uses_hybrid_slots(monkeypatch):
 
     assert calls[0] is slots
     assert any(slot.follow_hybrid_floors for slot in calls[1])
+
+
+def test_balanced_actuator_uses_zero_bias():
+    slot = _slot()
+    slot = slot.__class__(
+        **{
+            **slot.__dict__,
+            "follow_hybrid_balanced_floors": ((5.0, 720.0),),
+            "max_discharge_current_a": 16.0,
+        }
+    )
+    action = SimpleNamespace(
+        kind="follow_house_floor_balanced",
+        floor_current_a=5.0,
+        current_min_a=5.0,
+        current_max_a=16.0,
+        ac_power_kw=-2.4,
+    )
+
+    assert experiment._actual_wallbox_kw(
+        slot, action, 2.5
+    ) == pytest.approx(-10 * 240 / 1000)
 
 
 def test_realised_cost_uses_the_actual_house_load(monkeypatch):

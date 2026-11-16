@@ -404,6 +404,24 @@ def test_hybrid_floor_arc_follows_above_the_floor():
     assert hybrid.follow
 
 
+def test_balanced_hybrid_floor_uses_zero_bias():
+    sample_slot = replace(
+        slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),
+        load_samples=((0.5, 0.5), (3.8, 0.5)),
+        follow_hybrid_balanced_floors=((5.0, 0.0),),
+    )
+
+    template = next(
+        template
+        for template in planner()._action_templates(sample_slot)
+        if template.kind == "follow_house_floor_balanced"
+    )
+
+    assert template.floor_current_a == 5.0
+    assert template.current_min_a == 5.0
+    assert template.current_max_a == 10.0
+
+
 def test_hybrid_penalty_raises_the_hybrid_cost():
     sample_slot = replace(
         slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),

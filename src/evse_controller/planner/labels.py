@@ -107,10 +107,18 @@ def action_label(
     if kind in (
         "follow_house_floor_conservative",
         "follow_house_floor_aggressive",
+        "follow_house_floor_balanced",
     ):
         aggressive = kind.endswith("aggressive")
-        variant = "aggr" if aggressive else "cons"
+        balanced = kind.endswith("balanced")
+        variant = "bal" if balanced else ("aggr" if aggressive else "cons")
         floor = _number(action.get("floor_current_a"))
+        if balanced:
+            return (
+                f"Cover house bal {floor:.0f}A+"
+                if floor is not None
+                else "Cover house bal"
+            )
         gate = _gate_text(
             slot_input,
             (

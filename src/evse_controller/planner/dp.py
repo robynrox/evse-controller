@@ -87,6 +87,11 @@ class PlannerSlot:
     follow_hybrid_floors: tuple[
         tuple[float, Optional[float], Optional[float]], ...
     ] = ()
+    #: Balanced floor-plus-follow arcs: (floor current, gate).  Empty keeps
+    #: the normal fixed, pure-follow and conservative/aggressive hybrid arcs.
+    follow_hybrid_balanced_floors: tuple[
+        tuple[float, Optional[float]], ...
+    ] = ()
     #: Unique position in the planning horizon.  Day slots repeat across a
     #: midnight crossing, so reports use this key for multi-day runs.
     horizon_index: int = -1
@@ -817,6 +822,7 @@ class DpPlanner:
             "follow_house_aggressive",
             "follow_house_floor_conservative",
             "follow_house_floor_aggressive",
+            "follow_house_floor_balanced",
             "follow_bidirectional_conservative",
             "follow_bidirectional_aggressive",
         ):
@@ -928,6 +934,19 @@ class DpPlanner:
                     floor_percent=slot.follow_aggressive_floor_percent,
                     kind="follow_house_floor_aggressive",
                     floor_current_a=floor_a,
+                )
+                if template is not None:
+                    templates.append(template)
+        for floor_a, balanced_gate in slot.follow_hybrid_balanced_floors:
+            if balanced_gate is not None:
+                template = self._follow_house_template(
+                    slot,
+                    gate_w=balanced_gate,
+                    aggressive=False,
+                    floor_percent=slot.follow_conservative_floor_percent,
+                    kind="follow_house_floor_balanced",
+                    floor_current_a=floor_a,
+                    bias_a=0.0,
                 )
                 if template is not None:
                     templates.append(template)
@@ -1131,6 +1150,7 @@ class DpPlanner:
         floor_percent: Optional[float],
         kind: str,
         floor_current_a: Optional[float] = None,
+        bias_a: Optional[float] = None,
     ) -> Optional[_ActionTemplate]:
         samples = slot.load_samples or ((slot.load_kw, 1.0),)
         if gate_w is None or gate_w >= 1e8:
@@ -1160,7 +1180,9 @@ class DpPlanner:
                 )
                 continue
             raw = load_w / self.voltage_v
-            if aggressive:
+            if bias_a is not None and abs(float(bias_a)) < 1e-9:
+                current = int(round(raw))
+            elif aggressive:
                 raw += AGGRESSIVE_DISCHARGE_BIAS_A
                 current = int(round(raw))
             else:

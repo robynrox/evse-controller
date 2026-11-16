@@ -79,6 +79,7 @@ def _fmt_action_current(kind, value, minimum=None, maximum=None) -> str:
         "follow_house_aggressive",
         "follow_house_floor_conservative",
         "follow_house_floor_aggressive",
+        "follow_house_floor_balanced",
         "follow_solar",
     ):
         start = _min_current_magnitude(minimum, maximum, value)
@@ -99,6 +100,9 @@ def _mode_label(kind: Optional[str]) -> str:
         ),
         "follow_house_floor_aggressive": (
             "follow house floor (aggressive)"
+        ),
+        "follow_house_floor_balanced": (
+            "follow house floor (balanced)"
         ),
         "follow_bidirectional_conservative": (
             "follow bidirectional (conservative)"
@@ -292,6 +296,13 @@ def _build_context(run: dict) -> RunContext:
                         _number(entry[2]),
                     )
                     for entry in (item.get("follow_hybrid_floors") or [])
+                    if entry
+                ),
+                follow_hybrid_balanced_floors=tuple(
+                    (float(entry[0]), _number(entry[1]))
+                    for entry in (
+                        item.get("follow_hybrid_balanced_floors") or []
+                    )
                     if entry
                 ),
                 horizon_index=int(

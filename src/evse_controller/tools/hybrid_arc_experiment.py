@@ -83,14 +83,17 @@ def _conservative_gate(
 
 
 def _aggressive_gate(
-    import_p: float, export_p: float, floor_a: float
+    import_p: float,
+    export_p: float,
+    floor_a: float,
+    bias_a: float = 0.5,
 ) -> Optional[float]:
     """Scan the house load for the first economic floor-plus-follow start."""
     model = BatteryEfficiencyModel()
     for load_w in range(0, int(MAX_DISCHARGE_A * VOLTAGE_V) + 1):
         current = max(
             floor_a,
-            round(load_w / VOLTAGE_V + 0.5),
+            round(load_w / VOLTAGE_V + bias_a),
         )
         current = max(floor_a, min(current, MAX_DISCHARGE_A))
         output_w = current * VOLTAGE_V
@@ -151,6 +154,7 @@ def _with_hybrid_floors(
     result = []
     for slot in slots:
         entries = []
+        balanced_entries = []
         for floor_a in floors:
             cons_gate, aggr_gate = _gates_for(
                 slot.import_p, slot.export_p, floor_a
@@ -166,8 +170,23 @@ def _with_hybrid_floors(
             ):
                 aggr_gate = None
             entries.append((float(floor_a), cons_gate, aggr_gate))
+            if "balanced" in variants:
+                balanced_gate = _aggressive_gate(
+                    slot.import_p,
+                    slot.export_p,
+                    floor_a,
+                    bias_a=0.0,
+                )
+                if balanced_gate is not None:
+                    balanced_entries.append(
+                        (float(floor_a), balanced_gate)
+                    )
         result.append(
-            replace(slot, follow_hybrid_floors=tuple(entries))
+            replace(
+                slot,
+                follow_hybrid_floors=tuple(entries),
+                follow_hybrid_balanced_floors=tuple(balanced_entries),
+            )
         )
     return result
 
@@ -253,7 +272,18 @@ def _actual_wallbox_kw(
         return float(action.ac_power_kw or 0.0)
     if kind.startswith("follow_house"):
         aggressive = kind.endswith("aggressive")
-        if "floor" in kind:
+        balanced = kind.endswith("balanced")
+        if balanced:
+            floor = action.floor_current_a
+            gate = None
+            if floor is not None:
+                for floor_a, gate_a in (
+                    slot.follow_hybrid_balanced_floors
+                ):
+                    if abs(float(floor_a) - float(floor)) < 1e-9:
+                        gate = gate_a
+                        break
+        elif "floor" in kind:
             floor = action.floor_current_a
             gate = None
             if floor is not None:
@@ -273,7 +303,7 @@ def _actual_wallbox_kw(
         house_w = max(0.0, house_kw * 1000.0)
         if house_w < float(gate):
             return 0.0
-        bias = 0.5 if aggressive else -0.5
+        bias = 0.0 if balanced else (0.5 if aggressive else -0.5)
         current = round(house_w / VOLTAGE_V + bias)
         current = max(
             float(floor),
@@ -784,6 +814,11 @@ def main() -> None:
         help="Only add the aggressive hybrid variant.",
     )
     parser.add_argument(
+        "--balanced-only",
+        action="store_true",
+        help="Only add the zero-bias balanced hybrid variant.",
+    )
+    parser.add_argument(
         "--penalty",
         type=float,
         default=0.0,
@@ -801,18 +836,27 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    if args.conservative_only and args.aggressive_only:
+    selected = [
+        name
+        for name, flag in (
+            ("conservative", args.conservative_only),
+            ("aggressive", args.aggressive_only),
+            ("balanced", args.balanced_only),
+        )
+        if flag
+    ]
+    if len(selected) > 1:
         parser.error(
-            "choose --conservative-only or --aggressive-only, not both"
+            "choose only one of --conservative-only, --aggressive-only "
+            "and --balanced-only"
         )
     if args.penalty < 0:
         parser.error("--penalty cannot be negative")
-    if args.conservative_only:
-        variants = ("conservative",)
-    elif args.aggressive_only:
-        variants = ("aggressive",)
-    else:
-        variants = ("conservative", "aggressive")
+    variants = (
+        tuple(selected)
+        if selected
+        else ("conservative", "aggressive")
+    )
     variant_text = " + ".join(variants)
 
     print("Hybrid floor-plus-follow discharge experiment")

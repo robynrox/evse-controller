@@ -1891,6 +1891,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         slot.follow_aggressive_floor_percent
                     ),
                     "follow_hybrid_floors": slot.follow_hybrid_floors,
+                    "follow_hybrid_balanced_floors": (
+                        slot.follow_hybrid_balanced_floors
+                    ),
                 }
                 for index, slot in enumerate(planner_input.slots)
             ],
