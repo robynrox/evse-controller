@@ -15,7 +15,14 @@ from evse_controller.energy_sessions import (
 )
 from evse_controller.drivers.EvseController import ControlState, EvseController
 from evse_controller.drivers.Power import Power
-from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.drivers.evse.async_interface import (
+    EvseAsyncState,
+    EvseState,
+)
+from evse_controller.ev_readiness import (
+    EvReadinessTarget,
+    ev_readiness_store,
+)
 from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.utils.config import config, Config
 
@@ -5056,6 +5063,193 @@ class TestShadowPlannerAndEstimator:
         assert tariff._learning_mode == "control_hist"
         assert tariff._shadow_enabled is True
         assert tariff._dp_control_enabled is True
+
+    def test_readiness_charge_override_after_ready_by(self, monkeypatch):
+        tariff = _build_tariff()
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            97, now - timedelta(hours=1)
+        )
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+
+        result = tariff._readiness_charge_override(
+            create_test_state(50), now
+        )
+
+        assert result[0] == ControlState.CHARGE
+        assert result[1] == tariff.MAX_CHARGE_CURRENT
+        assert "EV readiness" in result[3]
+
+    def test_readiness_charge_override_when_at_risk(self, monkeypatch):
+        tariff = _build_tariff()
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            97, now + timedelta(hours=1)
+        )
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+
+        result = tariff._readiness_charge_override(
+            create_test_state(20), now
+        )
+
+        assert result is not None
+        assert result[0] == ControlState.CHARGE
+
+    def test_readiness_floor_blocks_discharge_at_target(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            80, now - timedelta(hours=1)
+        )
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+
+        assert tariff._readiness_floor_blocks(
+            create_test_state(80),
+            now,
+            (ControlState.DISCHARGE, 5, 5, "test"),
+        )
+        assert not tariff._readiness_floor_blocks(
+            create_test_state(80),
+            now,
+            (ControlState.CHARGE, 5, 5, "test"),
+        )
+
+    def test_readiness_target_plan_records_target(
+        self, tmp_path, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        profile_dir = tmp_path / "profiles"
+        for offset in range(14):
+            self._write_profile_day(
+                profile_dir, today - timedelta(days=offset)
+            )
+        tariff._load_profile.set_directory(profile_dir)
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            97, now + timedelta(hours=6)
+        )
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        runs = tariff._history.runs_for_day(today)
+        assert runs
+        run = runs[0]
+        expected = min(97.0, tariff.charge_cap_percent())
+        assert run["readiness"]["target_soc"] == pytest.approx(expected)
+        assert run["target_soc"] is None
+        assert len(run["actions"]) == 24
+
+    def test_readiness_plan_splits_at_ready_by(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        now = datetime(2026, 11, 16, 12, 0)
+        slots = tuple(
+            PlannerSlot(
+                start=now + timedelta(minutes=30 * index),
+                slot=24 + index,
+                import_p=20.0,
+                export_p=5.0,
+                load_kw=0.5,
+                load_samples=((0.5, 1.0),),
+                load_source="profile",
+                max_discharge_current_a=16.0,
+            )
+            for index in range(4)
+        )
+        planner_input = PlannerInput(
+            day=now.date(),
+            slots=slots,
+            initial_soc=50.0,
+            target_soc=None,
+            source_name="test",
+        )
+        target = EvReadinessTarget(
+            80, now + timedelta(hours=1)
+        )
+
+        planned, result, info = tariff._readiness_plan(
+            planner_input, target
+        )
+
+        assert result is not None
+        assert len(result.actions) == 4
+        assert info["target_soc"] == pytest.approx(80.0)
+        assert info["floor"] >= 80.0
+        assert planned.target_soc is None
+
+    def test_readiness_plan_ignores_a_target_beyond_the_horizon(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        now = datetime(2026, 11, 16, 12, 0)
+        planner_input = PlannerInput(
+            day=now.date(),
+            slots=(
+                PlannerSlot(
+                    start=now,
+                    slot=24,
+                    import_p=20.0,
+                    export_p=5.0,
+                    load_kw=0.5,
+                    load_samples=((0.5, 1.0),),
+                ),
+            ),
+            initial_soc=50.0,
+            target_soc=None,
+            source_name="test",
+        )
+        target = EvReadinessTarget(
+            80, now + timedelta(days=2)
+        )
+
+        _, result, info = tariff._readiness_plan(
+            planner_input, target
+        )
+
+        assert result is None
+        assert info["target_soc"] == pytest.approx(80.0)
+
+    def test_auto_completes_readiness_target_on_unplug(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            80, now - timedelta(hours=1)
+        )
+        completed = []
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+        monkeypatch.setattr(
+            ev_readiness_store,
+            "complete",
+            lambda target_id=None: completed.append(target_id) or True,
+        )
+        state = create_test_state(90)
+        state.evse_state = EvseState.DISCONNECTED
+
+        tariff.get_control_state(state, 12 * 60)
+
+        assert completed == [target.id]
 
     def test_hybrid_discharge_mode_is_off_by_default(self):
         tariff = _build_tariff()

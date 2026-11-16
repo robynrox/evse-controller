@@ -7,9 +7,15 @@ from evse_controller.energy_sessions import (
     FREE_IMPORT,
     GRID_SUPPORT,
     SLOT_MINUTES,
+    floor_to_slot,
     session_store,
 )
-from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.ev_readiness import ev_readiness_store
+from evse_controller.drivers.evse.async_interface import (
+    DISCONNECTED_STATES,
+    EvseAsyncState,
+    EvseState,
+)
 from evse_controller.forecasting.component import (
     ComponentLoadModel,
     MissingForecastWeather,
@@ -17,7 +23,7 @@ from evse_controller.forecasting.component import (
     weather_from_snapshot,
 )
 from evse_controller.load_profile import LoadProfile, SlotLoad
-from evse_controller.planner.dp import DpPlanner
+from evse_controller.planner.dp import DpPlanner, PlanResult
 from evse_controller.planner.history import PlannerHistory
 from evse_controller.planner.labels import action_label
 from evse_controller.planner.inputs import (
@@ -1795,6 +1801,221 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
         return action_label(action, slot_input)
 
+    def _normal_discharge_floor(self) -> float:
+        return max(
+            self.absolute_min_soc_percent(),
+            float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
+        )
+
+    def _make_shadow_planner(
+        self,
+        *,
+        target_soc_percent: Optional[float] = None,
+        discharge_floor_percent: Optional[float] = None,
+    ) -> DpPlanner:
+        floor = self._normal_discharge_floor()
+        if discharge_floor_percent is not None:
+            floor = max(floor, float(discharge_floor_percent))
+        return DpPlanner(
+            efficiency_model=self.EFFICIENCY_MODEL,
+            capacity_kwh=self.SOC_CAPACITY_KWH,
+            soc_step_percent=self.SHADOW_SOC_STEP_PERCENT,
+            min_current_a=float(self.MIN_DISCHARGE_CURRENT),
+            charge_cap_percent=self.charge_cap_percent(),
+            protection_floor_percent=self.absolute_min_soc_percent(),
+            discharge_floor_percent=floor,
+            target_soc_percent=target_soc_percent,
+            degradation_p_per_kwh=0.0,
+            terminal_energy_value_p_per_kwh=(
+                self.dp_terminal_energy_value_p_per_kwh()
+            ),
+            voltage_v=float(config.WALLBOX_NOMINAL_VOLTAGE),
+        )
+
+    def _readiness_plan(self, planner_input, target):
+        """Plan to a ready-by target, then keep it as a floor.
+
+        Returns ``(planner_input, result, info)``.  ``result`` is ``None``
+        when the target is beyond the planning horizon; the caller should use
+        the normal plan.
+        """
+        target_soc = min(
+            float(target.target_soc_percent),
+            float(self.charge_cap_percent()),
+        )
+        deadline = floor_to_slot(target.ready_by)
+        slots = tuple(planner_input.slots)
+        info = {
+            "target_soc": target_soc,
+            "ready_by": target.ready_by.isoformat(),
+            "status": target.status,
+        }
+        if not slots:
+            return planner_input, None, info
+        horizon_end = slots[-1].start + timedelta(minutes=SLOT_MINUTES)
+        if deadline > horizon_end:
+            return planner_input, None, info
+        phase_one = tuple(slot for slot in slots if slot.start < deadline)
+        phase_two = tuple(slot for slot in slots if slot.start >= deadline)
+        if not phase_one:
+            floor = max(self._normal_discharge_floor(), target_soc)
+            planner = self._make_shadow_planner(
+                discharge_floor_percent=floor
+            )
+            result = planner.plan(phase_two, planner_input.initial_soc)
+            info["floor"] = floor
+            info["relaxed"] = bool(
+                result.relaxed
+                or planner_input.initial_soc < target_soc
+            )
+            return (
+                replace(
+                    planner_input,
+                    slots=phase_two,
+                    target_soc=None,
+                ),
+                result,
+                info,
+            )
+        planner_one = self._make_shadow_planner(
+            target_soc_percent=target_soc
+        )
+        result_one = planner_one.plan(
+            phase_one, planner_input.initial_soc
+        )
+        if not phase_two:
+            info["relaxed"] = bool(result_one.relaxed)
+            return (
+                replace(
+                    planner_input,
+                    slots=phase_one,
+                    target_soc=None,
+                ),
+                result_one,
+                info,
+            )
+        floor = max(self._normal_discharge_floor(), target_soc)
+        planner_two = self._make_shadow_planner(
+            discharge_floor_percent=floor
+        )
+        result_two = planner_two.plan(
+            phase_two, result_one.final_soc
+        )
+        info["floor"] = floor
+        info["relaxed"] = bool(
+            result_one.relaxed or result_two.relaxed
+        )
+        message = "Optimal plan"
+        if result_one.relaxed:
+            message = (
+                f"Target {target_soc:.1f}% by "
+                f"{target.ready_by:%a %H:%M} was not reachable; "
+                "kept the highest reachable SoC"
+            )
+        combined = PlanResult(
+            actions=result_one.actions + result_two.actions,
+            final_soc=result_two.final_soc,
+            total_cost_p=(
+                result_one.total_cost_p + result_two.total_cost_p
+            ),
+            success=result_one.success and result_two.success,
+            relaxed=result_one.relaxed or result_two.relaxed,
+            message=message,
+        )
+        return (
+            replace(
+                planner_input,
+                slots=phase_one + phase_two,
+                target_soc=None,
+            ),
+            combined,
+            info,
+        )
+
+    def _plan_input(self, planner_input, target):
+        """Plan an input, applying an active readiness target when present."""
+        if target is not None:
+            planned_input, result, info = self._readiness_plan(
+                planner_input, target
+            )
+            if result is not None:
+                return planned_input, result, info
+        result = self._make_shadow_planner().plan(
+            planner_input.slots, planner_input.initial_soc
+        )
+        return planner_input, result, {}
+
+    def _readiness_target_soc(self, target) -> float:
+        return min(
+            float(target.target_soc_percent),
+            float(self.charge_cap_percent()),
+        )
+
+    def _readiness_charge_override(self, state, now):
+        """Force charge when the readiness target is due or at risk."""
+        target = ev_readiness_store.active()
+        if target is None:
+            return None
+        battery = getattr(state, "battery_level", -1)
+        if battery is None or battery < 0:
+            return None
+        target_soc = self._readiness_target_soc(target)
+        if now >= target.ready_by:
+            if battery < target_soc:
+                return (
+                    ControlState.CHARGE,
+                    self.MAX_CHARGE_CURRENT,
+                    self.MAX_CHARGE_CURRENT,
+                    f"EV readiness: charge to {target_soc:.0f}%",
+                )
+            return None
+        remaining_slots = max(
+            0,
+            int(
+                (target.ready_by - now).total_seconds()
+                // (SLOT_MINUTES * 60)
+            ),
+        )
+        max_ac_kw = self.EFFICIENCY_MODEL.charge_ac_power_kw(
+            self.MAX_CHARGE_CURRENT
+        )
+        efficiency = self.EFFICIENCY_MODEL.charge_efficiency(
+            self.MAX_CHARGE_CURRENT
+        )
+        max_gain = (
+            remaining_slots
+            * max_ac_kw
+            * 0.5
+            * efficiency
+            / self.SOC_CAPACITY_KWH
+            * 100.0
+        )
+        if battery + max_gain < target_soc:
+            return (
+                ControlState.CHARGE,
+                self.MAX_CHARGE_CURRENT,
+                self.MAX_CHARGE_CURRENT,
+                f"EV readiness: charge to {target_soc:.0f}%",
+            )
+        return None
+
+    def _readiness_floor_blocks(self, state, now, result) -> bool:
+        """True when a discharge would cross the post-ready floor."""
+        target = ev_readiness_store.active()
+        if target is None or now < target.ready_by:
+            return False
+        battery = getattr(state, "battery_level", -1)
+        if battery is None or battery < 0:
+            return False
+        target_soc = self._readiness_target_soc(target)
+        if battery > target_soc + 0.5:
+            return False
+        control_state = result[0] if result else None
+        return control_state in (
+            ControlState.DISCHARGE,
+            ControlState.LOAD_FOLLOW_DISCHARGE,
+        )
+
     def _shadow_plan(self, state, current_slot: int, now) -> None:
         """Run the DP as an observer and record its plan.  Never actuate it."""
         if not self._shadow_enabled:
@@ -1840,46 +2061,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 unknown_export_p=0.0,
             )
             planner_input = self._with_follow_gates(planner_input)
-            baseline_input = planner_input
-            planner = DpPlanner(
-                efficiency_model=self.EFFICIENCY_MODEL,
-                capacity_kwh=self.SOC_CAPACITY_KWH,
-                soc_step_percent=self.SHADOW_SOC_STEP_PERCENT,
-                min_current_a=float(self.MIN_DISCHARGE_CURRENT),
-                charge_cap_percent=self.charge_cap_percent(),
-                protection_floor_percent=self.absolute_min_soc_percent(),
-                discharge_floor_percent=max(
-                    self.absolute_min_soc_percent(),
-                    float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT),
-                ),
-                target_soc_percent=None,
-                degradation_p_per_kwh=0.0,
-                terminal_energy_value_p_per_kwh=(
-                    self.dp_terminal_energy_value_p_per_kwh()
-                ),
-                voltage_v=float(config.WALLBOX_NOMINAL_VOLTAGE),
-            )
-            result = planner.plan(
-                planner_input.slots, planner_input.initial_soc
-            )
+            target = ev_readiness_store.active()
             if self._hybrid_discharge_mode == "aggressive":
-                baseline_result = result
+                baseline_result = self._make_shadow_planner().plan(
+                    planner_input.slots, planner_input.initial_soc
+                )
                 hybrid_floors = self._hybrid_candidate_floors(
                     baseline_result.actions
                 )
                 if hybrid_floors:
-                    hybrid_input = self._with_follow_gates(
+                    planner_input = self._with_follow_gates(
                         planner_input, hybrid_floors=hybrid_floors
                     )
-                    hybrid_result = planner.plan(
-                        hybrid_input.slots, hybrid_input.initial_soc
-                    )
-                    if hybrid_result.actions:
-                        planner_input = hybrid_input
-                        result = hybrid_result
-                    else:
-                        planner_input = baseline_input
-                        result = baseline_result
+            planner_input, result, readiness_info = self._plan_input(
+                planner_input, target
+            )
             component_input = self._component_planner_input(planner_input)
             run = self._shadow_run_dict(
                 now,
@@ -1898,16 +2094,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
             )
             run["load_source"] = "recorded"
+            if readiness_info:
+                run["readiness"] = readiness_info
             self._history.record_run(now.date(), run)
             self._last_shadow_run = run
             self._last_shadow_slot = current_slot
             self._last_shadow_soc = battery
             if component_input is not None:
                 try:
-                    component_result = planner.plan(
-                        component_input.slots,
-                        component_input.initial_soc,
-                    )
+                    (
+                        component_input,
+                        component_result,
+                        component_readiness,
+                    ) = self._plan_input(component_input, target)
                     component_run = self._shadow_run_dict(
                         now,
                         current_slot,
@@ -1921,6 +2120,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         else "preview-component"
                     )
                     component_run["load_source"] = "component"
+                    if component_readiness:
+                        component_run["readiness"] = component_readiness
                     self._last_component_shadow_run = component_run
                     if self._learning_mode == "control_comp":
                         self._history.record_run(now.date(), component_run)
@@ -8205,13 +8406,32 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         result = self._decide_control_state(state, dayMinute)
         if self._decision_snapshot is not previous:
             self._record_decision_history(self._decision_snapshot, result)
+        now = self.get_current_datetime()
+        target = ev_readiness_store.active()
+        if (
+            target is not None
+            and now >= target.ready_by
+            and getattr(state, "evse_state", None) in DISCONNECTED_STATES
+        ):
+            ev_readiness_store.complete(target.id)
+        override = self._readiness_charge_override(state, now)
+        if override is not None:
+            self._last_dp_action = None
+            return override
+        if self._readiness_floor_blocks(state, now, result):
+            self._last_dp_action = None
+            return (
+                ControlState.DORMANT,
+                None,
+                None,
+                "EV readiness floor",
+            )
         if not self._dp_control_enabled:
             return result
         # A missing or failed DP plan must leave no stale action behind for
         # set_home_demand_levels(); the heuristic result is the fallback.
         self._last_dp_action = None
         try:
-            now = self.get_current_datetime()
             current_slot = int(dayMinute) // 30
             self._shadow_plan(state, current_slot, now)
             dp_result = self._dp_control_result(state, dayMinute)
@@ -8234,6 +8454,14 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             self._last_dp_action = None
             return result
+        if self._readiness_floor_blocks(state, now, dp_result):
+            self._last_dp_action = None
+            return (
+                ControlState.DORMANT,
+                None,
+                None,
+                "EV readiness floor",
+            )
         return dp_result
 
     def _decide_control_state(

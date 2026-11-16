@@ -122,6 +122,12 @@ class Config:
         return get_data_dir() / "state" / "sessions.json"
 
     @property
+    def EV_READINESS_FILE(self):
+        """Path to the one-off EV readiness target store."""
+        self._ensure_initialized()
+        return get_data_dir() / "state" / "ev_readiness.json"
+
+    @property
     def IOCTGO_AGILE_STATE_FILE(self):
         """Path to the IOCTGO + Agile Outgoing tariff's saved state.
 

@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>EV Readiness</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+        color: #222;
+    }
+    .page {
+        max-width: 860px;
+        margin: 0 auto;
+    }
+    h1 {
+        margin-bottom: 6px;
+    }
+    .intro {
+        color: #444;
+        line-height: 1.5;
+        margin-bottom: 18px;
+    }
+    .flash-message {
+        padding: 10px 12px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+    }
+    .flash-success { background: #e6f4ea; color: #1e5b2a; }
+    .flash-error { background: #fdecea; color: #8a1c1c; }
+    .flash-warning { background: #fff4e5; color: #7a4b00; }
+    .flash-info { background: #e8f0fe; color: #1a3d7c; }
+    .card {
+        border: 1px solid #d8dde3;
+        border-radius: 6px;
+        padding: 16px;
+        margin-bottom: 18px;
+        background: #fff;
+    }
+    .card h2 {
+        margin-top: 0;
+        font-size: 18px;
+    }
+    .target-value {
+        font-size: 26px;
+        font-weight: 700;
+    }
+    .muted {
+        color: #666;
+        font-size: 13px;
+    }
+    .status-pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: #e6f4ea;
+        color: #1e5b2a;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .form-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-end;
+        margin-top: 10px;
+    }
+    .form-row label {
+        display: block;
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+    }
+    .form-row input {
+        padding: 7px 8px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+    }
+    button {
+        padding: 8px 12px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    button.primary {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+    }
+    button.danger {
+        border-color: #b3261e;
+        color: #b3261e;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    th, td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid #e5e8ec;
+    }
+    th {
+        color: #555;
+        font-weight: 600;
+    }
+    .back {
+        margin-top: 20px;
+    }
+    .back a {
+        color: #0b5cad;
+        text-decoration: none;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <h1>EV Readiness</h1>
+    <p class="intro">
+        Set a one-off state-of-charge target and the time it is needed. Before
+        that time the planner works out the cheapest path to reach it. After
+        that time the target becomes a floor: the car may keep charging, or
+        discharge, but not below the target until you mark the trip complete
+        or remove the plug. If the target cannot be reached, the controller
+        charges as much as it can and reports the shortfall.
+    </p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="flash-message flash-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <div class="card">
+        <h2>Active target</h2>
+        {% if active %}
+        <div class="target-value">{{ active.target_soc_percent|round(0)|int }}%</div>
+        <div>
+            Ready by {{ active.ready_by.strftime("%A %d %B %Y at %H:%M") }}
+            <span class="status-pill">{{ active.status }}</span>
+        </div>
+        <div class="muted">
+            {% if current_soc is not none %}
+            Current SoC: {{ current_soc }}%.
+            {% endif %}
+            {% if now >= active.ready_by %}
+            The ready-by time has passed; the target is now a discharge floor
+            until the trip is complete.
+            {% else %}
+            The planner is working towards this target.
+            {% endif %}
+        </div>
+        {% if current_soc is not none and current_soc < active.target_soc_percent and now >= active.ready_by %}
+        <div class="flash-message flash-warning">
+            The ready-by time has passed and the SoC is below the target.
+            The controller is charging as much as it can; the target may not
+            be reachable.
+        </div>
+        {% endif %}
+        <div class="actions">
+            <form method="post" onsubmit="return confirm('Mark this trip complete and pause the Wallbox until the plug is removed?');">
+                <input type="hidden" name="action" value="complete">
+                <button type="submit" class="primary">Trip complete / UNPLUG</button>
+            </form>
+            <form method="post" onsubmit="return confirm('Cancel this EV readiness target?');">
+                <input type="hidden" name="action" value="cancel">
+                <button type="submit" class="danger">Cancel target</button>
+            </form>
+        </div>
+        {% else %}
+        <p>No active target. Set one below when a journey needs a specific charge.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>{% if active %}Replace target{% else %}Set a target{% endif %}</h2>
+        <form method="post">
+            <input type="hidden" name="action" value="set">
+            <div class="form-row">
+                <div>
+                    <label for="target_soc">Target SoC (%)</label>
+                    <input type="number" id="target_soc" name="target_soc"
+                           min="1" max="{{ charge_cap|round(0)|int }}"
+                           step="1" value="{{ default_soc|round(0)|int }}"
+                           required>
+                </div>
+                <div>
+                    <label for="ready_date">Ready by date</label>
+                    <input type="date" id="ready_date" name="ready_date"
+                           value="{{ default_ready_by.strftime('%Y-%m-%d') }}"
+                           required>
+                </div>
+                <div>
+                    <label for="ready_time">Ready by time</label>
+                    <input type="time" id="ready_time" name="ready_time"
+                           value="{{ default_ready_by.strftime('%H:%M') }}"
+                           required>
+                </div>
+                <div>
+                    <button type="submit" class="primary">Save target</button>
+                </div>
+            </div>
+            <p class="muted">
+                The target is clamped to the configured {{ charge_cap|round(0)|int }}% charge cap.
+                Setting a new target cancels the current one.
+            </p>
+        </form>
+    </div>
+
+    {% if recent %}
+    <div class="card">
+        <h2>Recent targets</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Target</th>
+                    <th>Ready by</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for target in recent %}
+                <tr>
+                    <td>{{ target.target_soc_percent|round(0)|int }}%</td>
+                    <td>{{ target.ready_by.strftime("%d %b %Y %H:%M") }}</td>
+                    <td>{{ target.status }}</td>
+                    <td>{{ target.created_at.strftime("%d %b %Y %H:%M") }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="back">
+        <a href="{{ url_for('index') }}">← Back to dashboard</a>
+    </div>
+</div>
+{% endblock %}

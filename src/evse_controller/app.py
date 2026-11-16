@@ -40,6 +40,9 @@ from evse_controller.web.load_profile_routes import (
 from evse_controller.web.local_weather_routes import (
     register_local_weather_routes,
 )
+from evse_controller.web.ev_readiness_routes import (
+    register_ev_readiness_routes,
+)
 from evse_controller.web.forecast_skill_routes import (
     register_forecast_skill_routes,
 )
@@ -80,6 +83,7 @@ from evse_controller.energy_sessions import (
     session_from_slots,
     session_store,
 )
+from evse_controller.ev_readiness import ev_readiness_store
 from evse_controller.price_tiers import PRESETS
 from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.poll_health import poll_health_payload
@@ -1280,6 +1284,27 @@ def _learning_status() -> tuple[str, str]:
     return str(mode).lower(), preview
 
 
+def _ev_readiness_status() -> str:
+    target = ev_readiness_store.active()
+    if target is None:
+        return "No target"
+    when = target.ready_by
+    tariff = tariffManager.get_tariff()
+    run = getattr(tariff, "_last_shadow_run", None) or {}
+    readiness = run.get("readiness") or {}
+    at_risk = bool(readiness.get("relaxed"))
+    suffix = " · target at risk" if at_risk else ""
+    if datetime.now() >= when:
+        return (
+            f"{target.target_soc_percent:.0f}% floor "
+            f"(ready {when:%a %d %b %H:%M}){suffix}"
+        )
+    return (
+        f"{target.target_soc_percent:.0f}% by "
+        f"{when:%a %d %b %H:%M}{suffix}"
+    )
+
+
 @app.route('/')
 def index():
     """Render the main dashboard page"""
@@ -1301,6 +1326,7 @@ def index():
                              learning_mode
                          ),
                          learning_preview=learning_preview,
+                         ev_target=_ev_readiness_status(),
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 
 @app.route('/api/learning-mode', methods=['POST'])
@@ -1582,6 +1608,7 @@ def get_extended_status():
         'learning_mode': learning_mode,
         'learning_mode_label': _learning_mode_label(learning_mode),
         'learning_preview': learning_preview,
+        'ev_target': _ev_readiness_status(),
         'next_event': {
             'timestamp': next_event.timestamp.isoformat(),
             'state': next_event.state,
@@ -1621,6 +1648,7 @@ def get_tariff_dashboard_html():
 register_daily_report_routes(app)
 register_load_profile_routes(app)
 register_local_weather_routes(app)
+register_ev_readiness_routes(app)
 register_forecast_skill_routes(app)
 register_plan_report_routes(app)
 register_value_report_routes(app)

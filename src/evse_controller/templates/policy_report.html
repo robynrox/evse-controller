@@ -356,6 +356,16 @@
                 grid-load or self-consumption policy.
             </div>
         {% endif %}
+        {% if run.get('readiness') %}
+            <div class="banner">
+                This run planned to an <strong>EV readiness target</strong> of
+                {{ run.readiness.target_soc|round(0)|int }}% by
+                {{ run.readiness.ready_by }}. Before that time the plan targets
+                it; afterwards it is a discharge floor. The policy surface is
+                replayed without the two-phase split, so use the run's action
+                path for the plan that was actually recorded.
+            </div>
+        {% endif %}
 
         <div class="cards">
             <div class="card">

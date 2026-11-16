@@ -314,6 +314,12 @@
                         class="learning-preview">{% if learning_preview %} · {{ learning_preview }}{% endif %}</span>
                 </span>
                 <span class="separator">|</span>
+                <span class="status-info">
+                    <strong>EV target:</strong>
+                    <span id="ev-target">{{ ev_target }}</span>
+                    <a href="{{ url_for('ev_readiness_page') }}">Manage →</a>
+                </span>
+                <span class="separator">|</span>
             </div>
             <div class="status-item">
                 <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
@@ -348,6 +354,7 @@
             <a href="{{ url_for('backtest_report_page') }}">DP Backtest →</a>
             <a href="{{ url_for('policy_report_page') }}">DP Policy →</a>
             <a href="{{ url_for('sessions_page') }}">Energy Sessions →</a>
+            <a href="{{ url_for('ev_readiness_page') }}">EV Readiness →</a>
             <a href="{{ url_for('schedule_page') }}">Schedule Events →</a>
             <a href="{{ url_for('config_page') }}">Configuration →</a>
         </div>
@@ -1203,6 +1210,10 @@
                     learningPreviewElement.textContent = data.learning_preview
                         ? ` · ${data.learning_preview}`
                         : '';
+                }
+                const evTargetElement = document.getElementById('ev-target');
+                if (evTargetElement && data.ev_target !== undefined) {
+                    evTargetElement.textContent = data.ev_target;
                 }
 
                 // Update battery SOC if available

@@ -913,6 +913,21 @@ amber bar (grid support) or a grey bar (EV away); control sessions carry a
 purple bar. All appear in a legend below the strip, in addition to the mode and
 reason in the decision line.
 
+##### EV readiness targets (`/ev-readiness`)
+
+A one-off readiness target requests a state of charge by a ready-by date and
+time. The page is linked from the dashboard; the dashboard reports the active
+target but does not set it. Before the ready-by time the planner works towards
+the target. After that time the target becomes a discharge floor until the trip
+is marked complete or the car is unplugged, so the car may keep charging or
+discharge but not below the target. **Trip complete / UNPLUG** removes the
+target and pauses the Wallbox until the plug is removed; a physical unplug
+after the ready-by time also completes it. A target above the configured charge
+cap is clamped and a warning is shown. If the target is unreachable, the
+controller charges as much as it can and reports the shortfall. Targets persist
+in `data/state/ev_readiness.json`. Recurring schedules are a later extension;
+this page handles one-off targets.
+
 ##### Daily energy report (`/reports/daily`)
 
 The **Energy Report →** link in the dashboard navigation opens one persistent

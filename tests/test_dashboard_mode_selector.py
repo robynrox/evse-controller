@@ -24,6 +24,7 @@ def _render(learning_mode="preview", label="Heuristic"):
         "data_quality_page",
         "decision_page",
         "export_report_page",
+        "ev_readiness_page",
         "plan_report_today",
         "policy_report_page",
         "schedule_page",
@@ -40,6 +41,7 @@ def _render(learning_mode="preview", label="Heuristic"):
             learning_mode=learning_mode,
             learning_mode_label=label,
             learning_preview="Would: Charge 11A",
+            ev_target="No target",
             use_icon_buttons=True,
         )
 

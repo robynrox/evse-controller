@@ -601,6 +601,18 @@ completed fixes.
   neighbours and a 5/8/11/14A fallback). The actuator keeps the floor and
   follows above it with the +0.5A bias. Default off means existing control is
   unchanged.
+- **EV readiness targets.** `ev_readiness.py` stores one-off targets
+  (`target_soc_percent`, `ready_by`, status) in
+  `data/state/ev_readiness.json`. `/ev-readiness` sets, cancels and completes
+  them; the dashboard only reports the active target and links to the page.
+  The shadow planner splits at the ready-by slot: the first phase plans to the
+  target, the second keeps it as a discharge floor until the trip is complete.
+  The heuristic fallback forces charge when the target is due or at risk and
+  blocks discharge at the floor. An explicit **Trip complete / UNPLUG** action
+  completes the target and pauses until disconnect; a physical unplug after
+  ready-by also completes it. Targets above the charge cap are clamped;
+  unreachable targets are best effort with a warning. Recurring schedules are
+  deferred.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and
