@@ -168,6 +168,53 @@ def test_balanced_actuator_uses_zero_bias():
     ) == pytest.approx(-10 * 240 / 1000)
 
 
+def test_soc_aware_replay_curtails_at_the_floor(monkeypatch):
+    slot = _slot()
+    day = slot.start.date()
+    snapshot = {
+        "slots": [
+            {
+                "prices": {"import_p": 20.0, "export_p": 5.0},
+                "energy": {
+                    "grid": {"in": 1.0, "out": 0.0},
+                    "evse": {"in": 0.0, "out": 0.0},
+                },
+            }
+        ]
+        * 48
+    }
+    monkeypatch.setattr(
+        experiment.daily_log, "snapshot_for", lambda when: snapshot
+    )
+    action = SimpleNamespace(
+        start=slot.start,
+        slot=slot.slot,
+        kind="discharge",
+        ac_power_kw=-3.84,
+        floor_current_a=None,
+        current_min_a=None,
+        current_max_a=None,
+    )
+
+    total, used, diagnostics = experiment._soc_aware_cost(
+        day,
+        [slot],
+        [action],
+        initial_soc=41.0,
+        planner_params={
+            "capacity_kwh": 48.3,
+            "charge_cap_percent": 97.0,
+            "discharge_floor_percent": 40.0,
+            "terminal_energy_value_p_per_kwh": 12.0,
+        },
+    )
+
+    assert used == 1
+    assert diagnostics["end_soc"] == pytest.approx(40.0)
+    assert diagnostics["curtailed"] == 1
+    assert total > 0
+
+
 def test_realised_cost_uses_the_actual_house_load(monkeypatch):
     slot = _slot()
     day = slot.start.date()

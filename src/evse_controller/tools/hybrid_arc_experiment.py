@@ -51,6 +51,10 @@ class CaseResult:
     realised_hybrid_p: Optional[float] = None
     realised_saving_p: Optional[float] = None
     realised_slots: int = 0
+    soc_aware_baseline_p: Optional[float] = None
+    soc_aware_hybrid_p: Optional[float] = None
+    soc_aware_saving_p: Optional[float] = None
+    soc_aware_slots: int = 0
 
 
 def _planner(penalty_p: float = 0.0) -> DpPlanner:
@@ -395,6 +399,145 @@ def _realised_cost(
     return total_p, used
 
 
+def _soc_aware_cost(
+    day,
+    slots: list[PlannerSlot],
+    actions,
+    *,
+    initial_soc: float,
+    planner_params: Optional[dict],
+) -> tuple[Optional[float], int, dict]:
+    """Replay a plan against actual load with a simple battery/SoC model.
+
+    The AC power comes from the same load-follow simulation as the load-only
+    comparison.  AC energy is converted to DC with the measured efficiency at
+    the commanded current, the SoC is clamped to the plan's cap and discharge
+    floor, and the ending SoC is credited at the planner's terminal value.
+    This is still not a full electrochemical model, but it can show whether a
+    plan spends energy early and then has to curtail later discharge.
+    """
+    snapshot = daily_log.snapshot_for(day)
+    daily_slots = snapshot.get("slots") or []
+    if not daily_slots:
+        return None, 0, {}
+    params = planner_params or {}
+    capacity_kwh = float(params.get("capacity_kwh") or 48.3)
+    efficiency_payload = params.get("efficiency_model")
+    if isinstance(efficiency_payload, dict):
+        efficiency_model = BatteryEfficiencyModel.from_dict(
+            efficiency_payload
+        )
+    else:
+        efficiency_model = BatteryEfficiencyModel()
+    charge_cap = float(params.get("charge_cap_percent") or 97.0)
+    discharge_floor = float(
+        params.get("discharge_floor_percent")
+        or params.get("protection_floor_percent")
+        or 25.0
+    )
+    terminal_value_p = params.get("terminal_energy_value_p_per_kwh")
+    if terminal_value_p is None or float(terminal_value_p) <= 0:
+        terminal_value_p = STORED_HURDLE_P
+    else:
+        terminal_value_p = float(terminal_value_p)
+    soc = float(initial_soc)
+    actions_by_key = {
+        (action.start.date(), action.slot): action
+        for action in actions
+    }
+    total_p = 0.0
+    used = 0
+    curtailed = 0
+    for slot in slots:
+        if slot.start.date() != day:
+            continue
+        action = actions_by_key.get((slot.start.date(), slot.slot))
+        if action is None:
+            continue
+        daily = (
+            daily_slots[slot.slot]
+            if 0 <= slot.slot < len(daily_slots)
+            else {}
+        )
+        house_kw = _house_kw(daily)
+        prices = daily.get("prices") or {}
+        import_p = _number(prices.get("import_p"))
+        export_p = _number(prices.get("export_p"))
+        if house_kw is None or import_p is None or export_p is None:
+            continue
+        ac_kw = _actual_wallbox_kw(slot, action, house_kw)
+        ac_kwh = ac_kw * 0.5
+        if ac_kwh > 0:
+            if soc >= charge_cap - 1e-9:
+                ac_kw = 0.0
+                delta_soc = 0.0
+                curtailed += 1
+            else:
+                current = max(3.0, abs(ac_kw) * 1000.0 / VOLTAGE_V)
+                efficiency = efficiency_model.charge_efficiency(current)
+                delta_soc = (
+                    ac_kwh * efficiency / capacity_kwh * 100.0
+                )
+                if soc + delta_soc > charge_cap:
+                    delta_soc = charge_cap - soc
+                    ac_kwh = (
+                        delta_soc
+                        / 100.0
+                        * capacity_kwh
+                        / max(efficiency, 1e-9)
+                    )
+                    ac_kw = ac_kwh / 0.5
+                    curtailed += 1
+        elif ac_kwh < 0:
+            if soc <= discharge_floor + 1e-9:
+                ac_kw = 0.0
+                delta_soc = 0.0
+                curtailed += 1
+            else:
+                current = max(3.0, abs(ac_kw) * 1000.0 / VOLTAGE_V)
+                efficiency = efficiency_model.discharge_efficiency(
+                    current
+                )
+                delta_soc = (
+                    ac_kwh
+                    / max(efficiency, 1e-9)
+                    / capacity_kwh
+                    * 100.0
+                )
+                if soc + delta_soc < discharge_floor:
+                    delta_soc = discharge_floor - soc
+                    ac_kwh = (
+                        delta_soc
+                        / 100.0
+                        * capacity_kwh
+                        * efficiency
+                    )
+                    ac_kw = ac_kwh / 0.5
+                    curtailed += 1
+        else:
+            delta_soc = 0.0
+        soc += delta_soc
+        net_kw = house_kw + ac_kw
+        total_p += (
+            max(net_kw, 0.0) * import_p
+            - max(-net_kw, 0.0) * export_p
+        ) * 0.5
+        used += 1
+    if used == 0:
+        return None, 0, {}
+    terminal_credit_p = (
+        (soc - initial_soc)
+        / 100.0
+        * capacity_kwh
+        * terminal_value_p
+    )
+    return (
+        total_p - terminal_credit_p,
+        used,
+        {"end_soc": soc, "curtailed": curtailed},
+    )
+
+
 def _run_case(
     name: str,
     slots: list[PlannerSlot],
@@ -406,6 +549,8 @@ def _run_case(
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
     aggressive_export_above_import: bool = False,
+    soc_aware: bool = False,
+    planner_params: Optional[dict] = None,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
@@ -450,6 +595,37 @@ def _run_case(
         else:
             realised_baseline = None
             realised_hybrid = None
+    soc_aware_baseline = None
+    soc_aware_hybrid = None
+    soc_aware_saving = None
+    soc_aware_slots = 0
+    if soc_aware and realised_day is not None:
+        soc_aware_baseline, baseline_slots, _ = _soc_aware_cost(
+            realised_day,
+            slots,
+            baseline.actions,
+            initial_soc=initial_soc,
+            planner_params=planner_params,
+        )
+        soc_aware_hybrid, hybrid_slots_used, _ = _soc_aware_cost(
+            realised_day,
+            hybrid_slots,
+            hybrid.actions,
+            initial_soc=initial_soc,
+            planner_params=planner_params,
+        )
+        if (
+            soc_aware_baseline is not None
+            and soc_aware_hybrid is not None
+            and baseline_slots == hybrid_slots_used
+        ):
+            soc_aware_saving = (
+                soc_aware_baseline - soc_aware_hybrid
+            )
+            soc_aware_slots = baseline_slots
+        else:
+            soc_aware_baseline = None
+            soc_aware_hybrid = None
     result = CaseResult(
         name=name,
         baseline_p=baseline.total_cost_p,
@@ -466,6 +642,10 @@ def _run_case(
         realised_hybrid_p=realised_hybrid,
         realised_saving_p=realised_saving,
         realised_slots=realised_slots,
+        soc_aware_baseline_p=soc_aware_baseline,
+        soc_aware_hybrid_p=soc_aware_hybrid,
+        soc_aware_saving_p=soc_aware_saving,
+        soc_aware_slots=soc_aware_slots,
     )
     if not quiet:
         print(f"\n{name}")
@@ -485,6 +665,13 @@ def _run_case(
                 f"{result.realised_hybrid_p:8.3f}p, saving "
                 f"{result.realised_saving_p:8.3f}p "
                 f"({result.realised_slots} slots)"
+            )
+        if result.soc_aware_saving_p is not None:
+            print(
+                f"  SoC-aware: {result.soc_aware_baseline_p:8.3f}p -> "
+                f"{result.soc_aware_hybrid_p:8.3f}p, saving "
+                f"{result.soc_aware_saving_p:8.3f}p "
+                f"({result.soc_aware_slots} slots)"
             )
     return result
 
@@ -594,6 +781,7 @@ def _historical_cases(
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
     aggressive_export_above_import: bool = False,
+    soc_aware: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -670,12 +858,18 @@ def _historical_cases(
                     slots,
                     initial_soc=initial_soc,
                     quiet=quiet,
-                    realised_day=realised_day if realised else None,
+                    realised_day=(
+                        realised_day
+                        if (realised or soc_aware)
+                        else None
+                    ),
                     variants=variants,
                     penalty_p=penalty_p,
                     aggressive_export_above_import=(
                         aggressive_export_above_import
                     ),
+                    soc_aware=soc_aware,
+                    planner_params=run.get("planner"),
                 )
             )
     return results
@@ -707,6 +901,79 @@ def _summary(label: str, results: list[CaseResult]) -> None:
             f"  best: {best.name} ({best.saving_p:.3f}p), "
             f"average improved {total_saving / len(improved):.3f}p"
         )
+
+    soc_aware = [
+        result
+        for result in results
+        if result.soc_aware_saving_p is not None
+    ]
+    if soc_aware:
+        improved = [
+            result
+            for result in soc_aware
+            if result.soc_aware_saving_p > 1e-9
+        ]
+        unchanged = [
+            result
+            for result in soc_aware
+            if abs(result.soc_aware_saving_p) <= 1e-9
+        ]
+        worse = [
+            result
+            for result in soc_aware
+            if result.soc_aware_saving_p < -1e-9
+        ]
+        total_baseline = sum(
+            result.soc_aware_baseline_p or 0.0
+            for result in soc_aware
+        )
+        total_hybrid = sum(
+            result.soc_aware_hybrid_p or 0.0 for result in soc_aware
+        )
+        total_saving = total_baseline - total_hybrid
+        print(f"  SoC-aware cases: {len(soc_aware)}")
+        print(
+            f"  SoC-aware improved: {len(improved)}  "
+            f"unchanged: {len(unchanged)}  worse: {len(worse)}"
+        )
+        print(f"  SoC-aware baseline: {total_baseline:.3f}p")
+        print(f"  SoC-aware hybrid:   {total_hybrid:.3f}p")
+        print(f"  SoC-aware saving:   {total_saving:.3f}p")
+        gains = [
+            result.soc_aware_saving_p or 0.0 for result in improved
+        ]
+        losses = [
+            result.soc_aware_saving_p or 0.0 for result in worse
+        ]
+        gain_total = sum(gains)
+        loss_total = abs(sum(losses))
+        if improved:
+            print(
+                f"  SoC-aware gain: {gain_total:.3f}p  "
+                f"average gain {gain_total / len(improved):.3f}p"
+            )
+        if worse:
+            worst = min(
+                worse,
+                key=lambda result: result.soc_aware_saving_p or 0.0,
+            )
+            print(
+                f"  SoC-aware loss: {loss_total:.3f}p  "
+                f"average loss {loss_total / len(worse):.3f}p"
+            )
+            print(
+                f"  SoC-aware worst: {worst.name} "
+                f"({worst.soc_aware_saving_p:.3f}p)"
+            )
+        if improved:
+            best = max(
+                improved,
+                key=lambda result: result.soc_aware_saving_p or 0.0,
+            )
+            print(
+                f"  SoC-aware best: {best.name} "
+                f"({best.soc_aware_saving_p:.3f}p)"
+            )
 
     realised = [
         result
@@ -804,6 +1071,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--soc-aware",
+        action="store_true",
+        help=(
+            "Replay the measured load with a simple battery/SoC model, "
+            "including charge/discharge efficiency, cap/floor limits and a "
+            "terminal SoC credit."
+        ),
+    )
+    parser.add_argument(
         "--conservative-only",
         action="store_true",
         help="Only add the conservative hybrid variant.",
@@ -887,9 +1163,12 @@ def main() -> None:
             variants,
             args.penalty,
             args.aggressive_export_above_import,
+            args.soc_aware,
         )
     )
     label = f"{variant_text}, penalty {args.penalty:.2f}p"
+    if args.soc_aware:
+        label += ", SoC-aware"
     if args.aggressive_export_above_import:
         label += ", aggr export>import"
     _summary(f"Synthetic cases [{label}]", synthetic)
