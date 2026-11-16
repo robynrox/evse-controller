@@ -35,7 +35,7 @@ import queue
 import math
 import copy
 from collections import deque
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 import json
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
@@ -614,6 +614,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._component_model_path = None
         self._component_model_mtime = None
         self._learning_mode = self._resolve_learning_mode()
+        self._hybrid_discharge_mode = (
+            self._resolve_hybrid_discharge_mode()
+        )
         self._shadow_enabled = (
             self.ENABLE_SHADOW_PLANNER
             and self._learning_mode
@@ -711,6 +714,36 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return "preview"
         return mode
 
+    @staticmethod
+    def _resolve_hybrid_discharge_mode() -> str:
+        """Return the configured hybrid discharge mode.
+
+        ``off`` keeps the normal fixed and pure-follow arcs.  ``aggressive``
+        adds floor-plus-follow discharge arcs with the +0.5 A aggressive bias.
+        """
+        mode = str(
+            config.LEARNING_HYBRID_DISCHARGE or "off"
+        ).strip().lower()
+        if mode not in ("off", "aggressive"):
+            warning(
+                f"IOCTGO_AGILEOUT: Unknown hybrid discharge mode '{mode}'; "
+                "using off."
+            )
+            return "off"
+        return mode
+
+    def set_hybrid_discharge_mode(self, mode: str) -> str:
+        """Change the hybrid discharge mode and reset the next plan."""
+        value = str(mode or "").strip().lower()
+        if value not in ("off", "aggressive"):
+            raise ValueError(f"Unknown hybrid discharge mode: {mode!r}")
+        self._hybrid_discharge_mode = value
+        self._last_shadow_slot = -1
+        self._last_shadow_soc = None
+        self._shadow_force_replan = True
+        info(f"IOCTGO_AGILEOUT: Hybrid discharge mode set to {value}")
+        return value
+
     @property
     def _dp_control_enabled(self) -> bool:
         return self._learning_mode in ("control_hist", "control_comp")
@@ -795,6 +828,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 high,
                 f"DP: Cover house {low}-{high}A",
             )
+        if kind.startswith("follow_house_floor"):
+            floor = int(round(float(action.get("floor_current_a") or 0)))
+            floor = max(
+                int(math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9)),
+                floor,
+            )
+            high = int(round(float(action.get("current_max_a") or 0)))
+            high = max(floor, high)
+            return (
+                ControlState.LOAD_FOLLOW_DISCHARGE,
+                floor,
+                high,
+                f"DP: Cover house {floor}A+",
+            )
         if kind in (
             "follow_bidirectional_conservative",
             "follow_bidirectional_aggressive",
@@ -851,6 +898,37 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if not input_row:
             return None
         kind = str(action.get("kind") or "")
+        if kind.startswith("follow_house_floor"):
+            floor = action.get("floor_current_a")
+            if floor is None:
+                return None
+            try:
+                floor = float(floor)
+            except (TypeError, ValueError):
+                return None
+            if kind.endswith("balanced"):
+                entries = input_row.get(
+                    "follow_hybrid_balanced_floors"
+                ) or []
+                for entry in entries:
+                    if not entry or len(entry) < 2:
+                        continue
+                    if abs(float(entry[0]) - floor) < 1e-9:
+                        gate = entry[1]
+                        return None if gate is None else float(gate)
+                return None
+            entries = input_row.get("follow_hybrid_floors") or []
+            for entry in entries:
+                if not entry or len(entry) < 3:
+                    continue
+                if abs(float(entry[0]) - floor) < 1e-9:
+                    gate = (
+                        entry[2]
+                        if kind.endswith("aggressive")
+                        else entry[1]
+                    )
+                    return None if gate is None else float(gate)
+            return None
         if kind == "follow_house_conservative":
             key = "follow_conservative_gate_w"
         elif kind == "follow_house_aggressive":
@@ -878,7 +956,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "discharge",
             "follow_house_conservative",
             "follow_house_aggressive",
-        ):
+        ) or kind.startswith("follow_house_floor"):
             return discharge_blocked
         if kind.startswith("follow_bidirectional"):
             return charge_blocked or discharge_blocked
@@ -941,6 +1019,33 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             evseController.setDischargeCurrentBias(bias)
             evseController.setDischargeCurrentRange(
                 low, self.MAX_DISCHARGE_CURRENT
+            )
+            evseController.setDischargeActivationPower(gate)
+        elif kind.startswith("follow_house_floor"):
+            if discharge_blocked:
+                return False
+            gate = self._dp_follow_gate(action)
+            if gate is None:
+                return False
+            floor = action.get("floor_current_a")
+            if floor is None:
+                return False
+            floor = max(
+                minimum,
+                min(
+                    int(round(float(floor))),
+                    int(self.MAX_DISCHARGE_CURRENT),
+                ),
+            )
+            if kind.endswith("balanced"):
+                bias = 0.0
+            elif kind.endswith("conservative"):
+                bias = self.CONSERVATIVE_DISCHARGE_BIAS_A
+            else:
+                bias = self.AGGRESSIVE_DISCHARGE_BIAS_A
+            evseController.setDischargeCurrentBias(bias)
+            evseController.setDischargeCurrentRange(
+                floor, self.MAX_DISCHARGE_CURRENT
             )
             evseController.setDischargeActivationPower(gate)
         elif kind in (
@@ -1425,7 +1530,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
 
-    def _with_follow_gates(self, planner_input):
+    def _with_follow_gates(
+        self, planner_input, hybrid_floors: Optional[Iterable[float]] = None
+    ):
         """Attach the heuristic's conservative/aggressive follow gates.
 
         The gate is the smallest house import at which a minimum-output
@@ -1433,10 +1540,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         planner and the live heuristic share the same economic threshold,
         including the integer-current efficiency steps, stored-energy cost
         and profit margin.
+
+        ``hybrid_floors`` adds aggressive floor-plus-follow arcs for the
+        supplied discharge currents, each with its own floor-specific gate.
         """
         slots = list(planner_input.slots)
         voltage = self._live_voltage()
         self._follow_gate_voltage = voltage
+        hybrid_floors = tuple(
+            float(floor)
+            for floor in (hybrid_floors or ())
+            if floor is not None
+        )
         conservative_floor = max(
             float(config.CONSERVATIVE_SOC_LOWER_LIMIT),
             self.absolute_min_soc_percent(),
@@ -1473,6 +1588,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 conservative_gate = None
             if aggressive_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
                 aggressive_gate = None
+            hybrid_entries = []
+            for floor_a in hybrid_floors:
+                floor_gate = self.discharge_activation_threshold_w(
+                    slot.export_p,
+                    import_rate_p=slot.import_p,
+                    aggressive=True,
+                    voltage=voltage,
+                    alternative_rate_p=alternative_rate_p,
+                    floor_current_a=floor_a,
+                )
+                if floor_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                    continue
+                hybrid_entries.append(
+                    (float(floor_a), None, float(floor_gate))
+                )
             slots[index] = replace(
                 slot,
                 follow_conservative_gate_w=(
@@ -1483,8 +1613,42 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
                 follow_conservative_floor_percent=conservative_floor,
                 follow_aggressive_floor_percent=aggressive_floor,
+                follow_hybrid_floors=tuple(hybrid_entries),
             )
         return replace(planner_input, slots=tuple(slots))
+
+    def _hybrid_candidate_floors(self, actions) -> list[float]:
+        """Fixed discharge currents worth a floor-plus-follow hybrid arc.
+
+        The baseline plan is the guide: a fixed current it actually chose is
+        a sensible floor.  Add the neighbours and, when the baseline only
+        chose high currents, a small fallback set so the hybrid has something
+        to work with.
+        """
+        minimum = float(self.MIN_DISCHARGE_CURRENT)
+        maximum = float(config.WALLBOX_MAX_DISCHARGE_CURRENT)
+        floors = {
+            float(round(action.current_a))
+            for action in actions
+            if action.kind == "discharge"
+            and not action.follow
+            and action.current_a >= minimum
+        }
+        expanded = set(floors)
+        for floor in floors:
+            for neighbour in (floor - 1.0, floor + 1.0):
+                if minimum <= neighbour <= maximum:
+                    expanded.add(neighbour)
+        fallback = (5.0, 8.0, 11.0, 14.0)
+        if not any(floor <= maximum - 2.0 for floor in expanded):
+            expanded.update(
+                floor
+                for floor in fallback
+                if minimum <= floor <= maximum
+            )
+        return sorted(
+            floor for floor in expanded if minimum <= floor <= maximum
+        )
 
     def _record_decision_history(self, snapshot, result=None) -> None:
         """Record the heuristic's mode once per slot, or when it changes.
@@ -1676,7 +1840,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 unknown_export_p=0.0,
             )
             planner_input = self._with_follow_gates(planner_input)
-            component_input = self._component_planner_input(planner_input)
+            baseline_input = planner_input
             planner = DpPlanner(
                 efficiency_model=self.EFFICIENCY_MODEL,
                 capacity_kwh=self.SOC_CAPACITY_KWH,
@@ -1698,6 +1862,25 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             result = planner.plan(
                 planner_input.slots, planner_input.initial_soc
             )
+            if self._hybrid_discharge_mode == "aggressive":
+                baseline_result = result
+                hybrid_floors = self._hybrid_candidate_floors(
+                    baseline_result.actions
+                )
+                if hybrid_floors:
+                    hybrid_input = self._with_follow_gates(
+                        planner_input, hybrid_floors=hybrid_floors
+                    )
+                    hybrid_result = planner.plan(
+                        hybrid_input.slots, hybrid_input.initial_soc
+                    )
+                    if hybrid_result.actions:
+                        planner_input = hybrid_input
+                        result = hybrid_result
+                    else:
+                        planner_input = baseline_input
+                        result = baseline_result
+            component_input = self._component_planner_input(planner_input)
             run = self._shadow_run_dict(
                 now,
                 current_slot,
@@ -1792,6 +1975,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 config.WALLBOX_MAX_DISCHARGE_CURRENT
             ),
             "voltage_v": float(config.WALLBOX_NOMINAL_VOLTAGE),
+            "hybrid_discharge": self._hybrid_discharge_mode,
             "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
         }
 
@@ -1809,6 +1993,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "slot": current_slot,
             "solver_version": SOLVER_VERSION,
             "solver_mode": self._learning_mode,
+            "hybrid_discharge": self._hybrid_discharge_mode,
             "reported_soc": reported_soc,
             "estimate_soc": planner_input.initial_soc,
             "target_soc": planner_input.target_soc,

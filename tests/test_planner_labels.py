@@ -134,19 +134,19 @@ def test_bidirectional_follow_below_minimum_shows_the_discharge_floor():
 def test_hybrid_floor_label_shows_the_floor():
     label = action_label(
         {
-            "kind": "follow_house_floor_conservative",
+            "kind": "follow_house_floor_aggressive",
             "floor_current_a": 11.0,
             "current_min_a": 11.0,
             "current_max_a": 16.0,
         },
         {
-            "follow_conservative_gate_w": 352.0,
+            "follow_hybrid_floors": [[11.0, None, 352.0]],
             "voltage": 240.0,
             "min_discharge_a": 3.0,
         },
     )
 
-    assert label == "Cover house cons 11A+ from 352W"
+    assert label == "Cover house aggr 11A+ from 352W"
 
 
 def test_missing_action_is_reported_clearly():

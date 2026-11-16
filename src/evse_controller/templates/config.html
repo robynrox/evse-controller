@@ -797,6 +797,25 @@
                 planner change in future runs.
             </small>
         </div>
+        <div class="form-group">
+            <label for="hybrid_discharge">Hybrid discharge arcs</label>
+            <select id="hybrid_discharge" name="learning[hybrid_discharge]">
+                <option value="off"
+                    {% if config.learning.get('hybrid_discharge', 'off') == 'off' %}selected{% endif %}>
+                    Off — normal fixed and pure-follow arcs only
+                </option>
+                <option value="aggressive"
+                    {% if config.learning.get('hybrid_discharge', 'off') == 'aggressive' %}selected{% endif %}>
+                    Aggressive — floor-plus-follow above a selected fixed floor
+                </option>
+            </select>
+            <small>
+                The aggressive hybrid keeps a fixed discharge floor and follows
+                the house load above it, using the +0.5A aggressive bias. It is
+                planned only when the DP's expected cost improves. Default is
+                off.
+            </small>
+        </div>
     </div>
 
     <div class="config-section">

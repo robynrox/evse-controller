@@ -1020,6 +1020,7 @@ planner. The DP policy and DP backtest reports are its technical views.
 ```yaml
 learning:
   mode: preview
+  hybrid_discharge: off
 ```
 
 - `preview` (default) — **Heuristic**: the heuristic stays in control while
@@ -1036,6 +1037,16 @@ and **LEARN FORECAST** — and persists the choice in `learning.mode`.
 build a fresh plan, for example because the model or weather is missing or the
 plan is stale, that slot falls back to the heuristic and the dashboard says
 `heuristic fallback`.
+
+`learning.hybrid_discharge` is an opt-in experimental feature, default
+`off`. `aggressive` adds floor-plus-follow discharge arcs for the fixed
+currents selected by the baseline plan, plus neighbours and a small fallback
+set. The planner first plans normally, then re-plans with those floors; each
+floor carries its own aggressive activation gate. The actuator keeps the floor
+and follows the house load above it with the +0.5A aggressive bias. The
+SoC-aware production experiment found this the best variant: it had the
+highest net saving and the best worst case of the conservative, balanced and
+aggressive variants.
 
 Follow actions use the DP's modelled minimum current as the floor but the
 Wallbox maximum as the ceiling. The modelled maximum is not an actuator cap,

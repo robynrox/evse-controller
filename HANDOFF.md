@@ -589,14 +589,18 @@ completed fixes.
   plan and policy costs are unchanged against the unpruned filter.
 - **Experimental hybrid discharge arcs.** `PlannerSlot.follow_hybrid_floors`
   holds `(floor current, conservative gate, aggressive gate)` entries and adds
-  floor-plus-follow arcs alongside the normal fixed and pure-follow arcs. It
-  is empty by default, so live control is unchanged. The offline harness
-  `tools/hybrid_arc_experiment.py` compares the three arc classes on synthetic
-  and recorded days. Early synthetic results: no change where fixed or pure
-  follow already covers the load; about 5–7p per six slots where the baseline
-  is fixed-only with mixed or spiky loads; about 1.3p where pure follow is
-  also available. A floor sweep over 6–16A improved the fixed-only mixed case
-  further. Production history is still needed before enabling it.
+  floor-plus-follow arcs alongside the normal fixed and pure-follow arcs. The
+  offline harness `tools/hybrid_arc_experiment.py` compares the three arc
+  classes on synthetic and recorded days. Production results: on the load-only
+  replay aggressive had the highest net saving; on the SoC-aware replay
+  aggressive was also the best variant (207 improved, 48 worse, net 759p,
+  average gain 4.47p, average loss 3.45p, worst −11.99p, gain/loss 5.58).
+  Conservative and balanced had worse tails and lower net. The live feature is
+  `learning.hybrid_discharge`, default `off`; `aggressive` runs a two-pass
+  plan (normal plan, then a re-plan with the selected fixed currents plus
+  neighbours and a 5/8/11/14A fallback). The actuator keeps the floor and
+  follows above it with the +0.5A bias. Default off means existing control is
+  unchanged.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

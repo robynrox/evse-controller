@@ -1177,6 +1177,22 @@ def config_page():
                 ):
                     tariff.set_learning_mode(learning_mode)
 
+            hybrid_discharge = request.form.get(
+                'learning[hybrid_discharge]'
+            )
+            if hybrid_discharge is not None:
+                hybrid_discharge = hybrid_discharge.strip().lower()
+                if hybrid_discharge not in ('off', 'aggressive'):
+                    raise ValueError(
+                        "Hybrid discharge must be 'off' or 'aggressive'"
+                    )
+                config.LEARNING_HYBRID_DISCHARGE = hybrid_discharge
+                tariff = tariffManager.get_tariff()
+                if tariff is not None and hasattr(
+                    tariff, 'set_hybrid_discharge_mode'
+                ):
+                    tariff.set_hybrid_discharge_mode(hybrid_discharge)
+
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
                 ("latitude", "WEATHER_LATITUDE"),

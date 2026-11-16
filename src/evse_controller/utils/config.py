@@ -603,15 +603,27 @@ class Config:
         )
     )
 
-    #: Learning mode: ``off`` disables the planner preview, ``preview``
-    #: records the dynamic-programming plan without changing control.
-    #: ``control`` is reserved for a later release.
+    #: Learning mode: ``off`` disables the planner, ``preview`` records the
+    #: dynamic-programming plan without changing control, and
+    #: ``control_hist``/``control_comp`` put the DP in control.
     LEARNING_MODE = property(
         lambda self: self._get_config_value(
             "learning", "mode", "preview"
         ),
         lambda self, value: self._set_config_value(
             "learning", "mode", value
+        )
+    )
+
+    #: Experimental hybrid discharge arcs.  ``off`` keeps the normal fixed
+    #: and pure-follow arcs; ``aggressive`` adds floor-plus-follow arcs that
+    #: use the +0.5 A aggressive bias above the selected floor.
+    LEARNING_HYBRID_DISCHARGE = property(
+        lambda self: self._get_config_value(
+            "learning", "hybrid_discharge", "off"
+        ),
+        lambda self, value: self._set_config_value(
+            "learning", "hybrid_discharge", value
         )
     )
 
@@ -1503,6 +1515,7 @@ class Config:
             },
             'learning': {
                 'mode': self.LEARNING_MODE,
+                'hybrid_discharge': self.LEARNING_HYBRID_DISCHARGE,
             },
             'ui': {
                 'use_icon_buttons': self.UI_USE_ICON_BUTTONS,

@@ -29,16 +29,15 @@ def _min_magnitude(*values: Any) -> Optional[float]:
     return min(numbers) if numbers else None
 
 
-def _gate_text(
-    slot_input: Optional[Mapping[str, Any]], key: str
+def _gate_value_text(
+    gate: Optional[float], slot_input: Optional[Mapping[str, Any]]
 ) -> str:
-    if not slot_input:
-        return ""
-    gate = _number(slot_input.get(key))
     if gate is None or gate >= 1e8 or gate <= 0:
         return ""
-    voltage = _number(slot_input.get("voltage")) or 240.0
-    min_current = _number(slot_input.get("min_discharge_a")) or 3.0
+    voltage = _number((slot_input or {}).get("voltage")) or 240.0
+    min_current = (
+        _number((slot_input or {}).get("min_discharge_a")) or 3.0
+    )
     if gate <= min_current * voltage:
         return f" from {gate:.0f}W"
     amps = gate / voltage
@@ -47,6 +46,38 @@ def _gate_text(
     else:
         amps_text = f"{amps:.1f}A"
     return f" from {gate:.0f}W (~{amps_text})"
+
+
+def _gate_text(
+    slot_input: Optional[Mapping[str, Any]], key: str
+) -> str:
+    if not slot_input:
+        return ""
+    return _gate_value_text(_number(slot_input.get(key)), slot_input)
+
+
+def _hybrid_gate(
+    slot_input: Optional[Mapping[str, Any]],
+    floor: Optional[float],
+    *,
+    aggressive: bool,
+    balanced: bool,
+) -> Optional[float]:
+    if not slot_input or floor is None:
+        return None
+    if balanced:
+        entries = slot_input.get("follow_hybrid_balanced_floors") or []
+        for entry in entries:
+            if entry and len(entry) >= 2:
+                if abs(float(entry[0]) - floor) < 1e-9:
+                    return _number(entry[1])
+        return None
+    entries = slot_input.get("follow_hybrid_floors") or []
+    for entry in entries:
+        if entry and len(entry) >= 3:
+            if abs(float(entry[0]) - floor) < 1e-9:
+                return _number(entry[2] if aggressive else entry[1])
+    return None
 
 
 def _follow_min_current(
@@ -113,19 +144,14 @@ def action_label(
         balanced = kind.endswith("balanced")
         variant = "bal" if balanced else ("aggr" if aggressive else "cons")
         floor = _number(action.get("floor_current_a"))
-        if balanced:
-            return (
-                f"Cover house bal {floor:.0f}A+"
-                if floor is not None
-                else "Cover house bal"
-            )
-        gate = _gate_text(
-            slot_input,
-            (
-                "follow_aggressive_gate_w"
-                if aggressive
-                else "follow_conservative_gate_w"
+        gate = _gate_value_text(
+            _hybrid_gate(
+                slot_input,
+                floor,
+                aggressive=aggressive,
+                balanced=balanced,
             ),
+            slot_input,
         )
         if floor is not None:
             return f"Cover house {variant} {floor:.0f}A+{gate}"

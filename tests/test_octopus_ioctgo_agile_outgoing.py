@@ -4963,6 +4963,32 @@ class TestShadowPlannerAndEstimator:
         assert decisions[0]["mode"]
         assert decisions[0]["control_state"]
 
+    def test_shadow_plan_records_hybrid_floors_when_enabled(self, tmp_path):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._hybrid_discharge_mode = "aggressive"
+        tariff._bank_dc_kwh = 1.0
+        tariff._bank_cost_gbp = 0.0
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        profile_dir = tmp_path / "profiles"
+        for offset in range(14):
+            self._write_profile_day(
+                profile_dir, today - timedelta(days=offset)
+            )
+        tariff._load_profile.set_directory(profile_dir)
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        runs = tariff._history.runs_for_day(today)
+        assert len(runs) == 1
+        run = runs[0]
+        assert run["hybrid_discharge"] == "aggressive"
+        assert any(
+            item["follow_hybrid_floors"] for item in run["inputs"]
+        )
+
     def test_shadow_plan_runs_once_per_slot_until_the_soc_moves(
         self, tmp_path
     ):
@@ -5030,6 +5056,14 @@ class TestShadowPlannerAndEstimator:
         assert tariff._learning_mode == "control_hist"
         assert tariff._shadow_enabled is True
         assert tariff._dp_control_enabled is True
+
+    def test_hybrid_discharge_mode_is_off_by_default(self):
+        tariff = _build_tariff()
+
+        assert tariff._hybrid_discharge_mode == "off"
+        assert tariff.set_hybrid_discharge_mode("aggressive") == "aggressive"
+        assert tariff._hybrid_discharge_mode == "aggressive"
+        assert tariff.set_hybrid_discharge_mode("off") == "off"
 
     def test_learning_preview_label_uses_the_current_slot_action(self):
         tariff = _build_tariff()
@@ -5139,6 +5173,41 @@ class TestShadowPlannerAndEstimator:
         assert updated.slots[0].load_kw == pytest.approx(0.75)
         assert len(updated.slots[0].load_samples) == 2
         assert planner_input.slots[0].load_source == "profile"
+
+    def test_with_follow_gates_adds_aggressive_hybrid_floors(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        tariff._bank_dc_kwh = 1.0
+        tariff._bank_cost_gbp = 0.0
+        planner_input = PlannerInput(
+            day=datetime(2026, 11, 16).date(),
+            slots=(
+                PlannerSlot(
+                    start=datetime(2026, 11, 16, 12, 0),
+                    slot=24,
+                    import_p=25.0,
+                    export_p=10.0,
+                    load_kw=1.0,
+                    load_samples=((1.0, 1.0),),
+                    load_source="profile",
+                    max_discharge_current_a=16.0,
+                ),
+            ),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        updated = tariff._with_follow_gates(
+            planner_input, hybrid_floors=[11.0]
+        )
+
+        entry = updated.slots[0].follow_hybrid_floors[0]
+        assert entry[0] == pytest.approx(11.0)
+        assert entry[1] is None
+        assert entry[2] is not None
 
     def test_live_component_model_prefers_the_live_file(
         self, tmp_path, monkeypatch
@@ -5508,6 +5577,57 @@ class TestShadowPlannerAndEstimator:
         controller.setDischargeActivationPower.assert_called_once_with(
             pytest.approx(830.0)
         )
+
+    def test_dp_hybrid_aggressive_sets_floor_and_gate(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            IOctGoWithAgileOutgoingTariff,
+            "ENABLE_SHADOW_PLANNER",
+            True,
+        )
+        tariff = _build_tariff()
+        tariff._history.set_directory(tmp_path / "history")
+        tariff.set_learning_mode("control_hist")
+        tariff.SMART_OCPP_OPERATION = False
+        action = {
+            "slot": 24,
+            "kind": "follow_house_floor_aggressive",
+            "floor_current_a": 11.0,
+            "current_min_a": 11.0,
+            "current_max_a": 16.0,
+        }
+        tariff._last_dp_action = dict(action)
+        tariff._last_shadow_run = {
+            "day": tariff.get_current_datetime().date().isoformat(),
+            "slot": 24,
+            "actions": [dict(action)],
+            "inputs": [
+                {
+                    "slot": 24,
+                    "follow_hybrid_floors": [[11.0, None, 720.0]],
+                }
+            ],
+        }
+        controller = Mock()
+
+        tariff.set_home_demand_levels(
+            controller, create_test_state(60), 12 * 60
+        )
+
+        controller.setDischargeCurrentRange.assert_called_once_with(
+            11, tariff.MAX_DISCHARGE_CURRENT
+        )
+        controller.setDischargeCurrentBias.assert_called_once_with(
+            tariff.AGGRESSIVE_DISCHARGE_BIAS_A
+        )
+        controller.setDischargeActivationPower.assert_called_once_with(
+            720.0
+        )
+        control = tariff._dp_action_control(action)
+        assert control[0] == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert control[1] == 11
+        assert control[2] == 16
 
     def test_learning_preview_label_shows_dp_action_in_control_mode(
         self,
