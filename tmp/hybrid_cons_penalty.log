@@ -1,0 +1,21 @@
+Debug: Loaded config from /home/robyn/dev/github/evse-controller/data/config/config.yaml
+Hybrid floor-plus-follow discharge experiment
+stored hurdle 12.0p/kWh, max discharge 16A
+hybrid variants: conservative; penalty 0.50p/slot
+
+Recorded runs [conservative, penalty 0.50p]: 507 cases
+  hybrid used: 83
+  improved: 83  unchanged: 424  worse: 0
+  total baseline: -97176.324p
+  total hybrid:   -97187.924p
+  total saving:   11.599p
+  best: recorded 2026-11-11.runs slot 7 (0.466p), average improved 0.140p
+  realised cases: 505
+  realised improved: 46  unchanged: 447  worse: 12
+  realised baseline: -34778.673p
+  realised hybrid:   -35085.080p
+  realised saving:   306.407p
+  realised gain: 366.307p  average gain 7.963p
+  realised loss: 59.900p  average loss 4.992p
+  realised worst: recorded 2026-11-15.runs slot 38 (-11.614p)
+  realised best: recorded 2026-11-13.runs slot 4 (37.263p)
