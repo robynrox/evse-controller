@@ -44,6 +44,48 @@ def test_hybrid_floor_actuator_stays_at_the_floor():
     ) == pytest.approx(-12 * 240 / 1000)
 
 
+def test_candidate_floors_for_action_uses_current_and_neighbours():
+    action = SimpleNamespace(
+        kind="discharge", follow=False, current_a=11.0
+    )
+
+    assert experiment._candidate_floors_for_action(action) == [
+        10.0,
+        11.0,
+        12.0,
+    ]
+    assert experiment._candidate_floors_for_action(
+        SimpleNamespace(kind="idle", follow=False, current_a=0.0)
+    ) == []
+
+
+def test_with_hybrid_floors_can_use_per_slot_candidates():
+    slots = [
+        experiment._slot(
+            index,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        )
+        for index in range(2)
+    ]
+
+    hybrid = experiment._with_hybrid_floors(
+        slots,
+        variants=("aggressive",),
+        unconditional=True,
+        floors_by_slot=[[11.0], [5.0]],
+    )
+
+    assert [
+        entry[0] for entry in hybrid[0].follow_hybrid_floors
+    ] == [11.0]
+    assert [
+        entry[0] for entry in hybrid[1].follow_hybrid_floors
+    ] == [5.0]
+
+
 def test_unconditional_hybrid_actuator_stays_at_floor_below_floor_output():
     slot = _slot()
     slot = slot.__class__(

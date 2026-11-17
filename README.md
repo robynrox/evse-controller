@@ -1406,10 +1406,13 @@ counterpart cannot be applied.
 A **discharge follow** (hybrid) arc is an unconditional floor plus follow: the
 floor always discharges, and the current follows the house load above it. It
 has no activation gate. Follow arcs are generated for the fixed discharge
-currents selected by the baseline plan, not for every integer current; the
-all-floors experiment was worse because the extra arcs added poor options. A
-floor at the slot's discharge limit has no follow headroom, so it is pruned:
-the fixed discharge arc already represents exactly the same action.
+currents selected by the baseline plan, plus neighbours and the fallback set;
+that candidate set is shared across the horizon. It is not generated for every
+integer current — the all-floors experiment was worse because the extra arcs
+added poor options, and a per-slot candidate set was much cheaper but gave up
+most of the saving. A floor at the slot's discharge limit has no follow
+headroom, so it is pruned: the fixed discharge arc already represents exactly
+the same action.
 
 The pure follow-house gates are the same `discharge_activation_threshold_w`
 calculation used by the live heuristic. The conservative mode uses the

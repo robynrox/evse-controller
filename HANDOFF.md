@@ -622,6 +622,14 @@ completed fixes.
   106.583p, worst −6.511p. Keep the baseline-selected candidate floors; the
   extra arcs add poor options. The fixed arcs remain available at every
   integer current.
+  A **per-slot** candidate set (each slot's baseline fixed current plus
+  neighbours) was much cheaper but gave up most of the saving: 88.516p net,
+  84/627/21, loss 35.414p, worst −6.676p. Adding the 5/8/11/14A fallback in
+  slots with no fixed candidate made little difference (88.473p net, 37
+  worse). The global candidate set shares floors across the horizon and is
+  retained: a floor that is good in one slot is often useful in similar
+  slots, and the per-slot set misses follow opportunities where the baseline
+  chose idle or a pure follow.
 - **EV readiness targets.** `ev_readiness.py` stores one-off targets
   (`target_soc_percent`, `ready_by`, status) in
   `data/state/ev_readiness.json`. `/ev-readiness` sets, cancels and completes

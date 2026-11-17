@@ -17,7 +17,9 @@ load; that is a load-only simulation, not a full battery/SoC model.
 ``--unconditional`` uses the unconditional floor-plus-follow variant: the
 floor always discharges and the current follows above it, with no activation
 gate. ``--all-floors`` tries a follow at every integer current below the
-maximum instead of the baseline-selected candidates.
+maximum instead of the baseline-selected candidates. ``--per-slot-floors``
+uses each slot's baseline fixed current and neighbours; ``--per-slot-fallback``
+adds the 5/8/11/14A fallback in slots with no fixed candidate.
 """
 
 from __future__ import annotations
@@ -158,16 +160,28 @@ def _slot(
 
 def _with_hybrid_floors(
     slots: Iterable[PlannerSlot],
-    floors: Iterable[float],
+    floors: Optional[Iterable[float]] = None,
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     aggressive_export_above_import: bool = False,
     unconditional: bool = False,
+    floors_by_slot: Optional[Iterable[Iterable[float]]] = None,
 ) -> list[PlannerSlot]:
+    slots = list(slots)
+    per_slot = (
+        list(floors_by_slot)
+        if floors_by_slot is not None
+        else None
+    )
     result = []
-    for slot in slots:
+    for index, slot in enumerate(slots):
+        slot_floors = (
+            per_slot[index]
+            if per_slot is not None
+            else (floors or ())
+        )
         entries = []
         balanced_entries = []
-        for floor_a in floors:
+        for floor_a in slot_floors:
             if float(floor_a) >= float(
                 slot.max_discharge_current_a
             ) - 1e-9:
@@ -228,6 +242,20 @@ def _candidate_floors(actions) -> list[float]:
             if 3.0 <= neighbour <= MAX_DISCHARGE_A:
                 expanded.add(neighbour)
     return sorted(expanded)
+
+
+def _candidate_floors_for_action(action) -> list[float]:
+    """Candidate follow floors for one slot from its baseline action."""
+    if action.kind != "discharge" or action.follow:
+        return []
+    current = float(round(float(action.current_a)))
+    if current < 3.0:
+        return []
+    floors = {current}
+    for neighbour in (current - 1.0, current + 1.0):
+        if 3.0 <= neighbour < MAX_DISCHARGE_A:
+            floors.add(neighbour)
+    return sorted(floors)
 
 
 def _describe(actions) -> str:
@@ -571,10 +599,26 @@ def _run_case(
     planner_params: Optional[dict] = None,
     unconditional: bool = False,
     all_floors: bool = False,
+    per_slot_floors: bool = False,
+    per_slot_fallback: bool = False,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
-    if all_floors:
+    default_floors = [5.0, 8.0, 11.0, 14.0]
+    floors_by_slot = None
+    if per_slot_floors:
+        floors_by_slot = []
+        for index in range(len(slots)):
+            floors = (
+                _candidate_floors_for_action(baseline.actions[index])
+                if index < len(baseline.actions)
+                else []
+            )
+            if per_slot_fallback and not floors:
+                floors = list(default_floors)
+            floors_by_slot.append(floors)
+        candidate = []
+    elif all_floors:
         candidate = [
             float(current)
             for current in range(3, int(MAX_DISCHARGE_A))
@@ -585,17 +629,20 @@ def _run_case(
             if floors is not None
             else _candidate_floors(baseline.actions)
         )
-    default_floors = [5.0, 8.0, 11.0, 14.0]
-    if not candidate:
-        candidate = default_floors
-    elif not all_floors and not any(floor < 16.0 for floor in candidate):
-        candidate = sorted(set(candidate) | set(default_floors))
+    if not per_slot_floors:
+        if not candidate:
+            candidate = default_floors
+        elif not all_floors and not any(
+            floor < 16.0 for floor in candidate
+        ):
+            candidate = sorted(set(candidate) | set(default_floors))
     hybrid_slots = _with_hybrid_floors(
         slots,
         candidate,
         variants=variants,
         aggressive_export_above_import=aggressive_export_above_import,
         unconditional=unconditional,
+        floors_by_slot=floors_by_slot,
     )
     hybrid = _planner(
         penalty_p=penalty_p, unconditional=unconditional
@@ -712,6 +759,8 @@ def _synthetic_cases(
     aggressive_export_above_import: bool = False,
     unconditional: bool = False,
     all_floors: bool = False,
+    per_slot_floors: bool = False,
+    per_slot_fallback: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
 
@@ -730,6 +779,8 @@ def _synthetic_cases(
                 ),
                 unconditional=unconditional,
                 all_floors=all_floors,
+                per_slot_floors=per_slot_floors,
+                per_slot_fallback=per_slot_fallback,
             )
         )
 
@@ -817,6 +868,8 @@ def _historical_cases(
     soc_aware: bool = False,
     unconditional: bool = False,
     all_floors: bool = False,
+    per_slot_floors: bool = False,
+    per_slot_fallback: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -914,6 +967,8 @@ def _historical_cases(
                     planner_params=run.get("planner"),
                     unconditional=unconditional,
                     all_floors=all_floors,
+                    per_slot_floors=per_slot_floors,
+                    per_slot_fallback=per_slot_fallback,
                 )
             )
     return results
@@ -1172,6 +1227,22 @@ def main() -> None:
             "follow floor, instead of the baseline-selected candidates."
         ),
     )
+    parser.add_argument(
+        "--per-slot-floors",
+        action="store_true",
+        help=(
+            "Use each slot's baseline fixed discharge current and its "
+            "neighbours as that slot's follow floors."
+        ),
+    )
+    parser.add_argument(
+        "--per-slot-fallback",
+        action="store_true",
+        help=(
+            "With --per-slot-floors, use the 5/8/11/14A fallback in slots "
+            "where the baseline chose no fixed discharge."
+        ),
+    )
     args = parser.parse_args()
     selected = [
         name
@@ -1189,6 +1260,12 @@ def main() -> None:
         )
     if args.penalty < 0:
         parser.error("--penalty cannot be negative")
+    if args.all_floors and args.per_slot_floors:
+        parser.error(
+            "choose only one of --all-floors and --per-slot-floors"
+        )
+    if args.per_slot_fallback and not args.per_slot_floors:
+        parser.error("--per-slot-fallback requires --per-slot-floors")
     variants = (
         tuple(selected)
         if selected
@@ -1206,6 +1283,12 @@ def main() -> None:
         f"penalty {args.penalty:.2f}p/slot"
         + ("; unconditional" if args.unconditional else "")
         + ("; all floors" if args.all_floors else "")
+        + ("; per-slot floors" if args.per_slot_floors else "")
+        + (
+            "; per-slot fallback"
+            if args.per_slot_fallback
+            else ""
+        )
     )
     synthetic = (
         []
@@ -1217,6 +1300,8 @@ def main() -> None:
             args.aggressive_export_above_import,
             args.unconditional,
             args.all_floors,
+            args.per_slot_floors,
+            args.per_slot_fallback,
         )
     )
     recorded = (
@@ -1231,6 +1316,8 @@ def main() -> None:
             args.soc_aware,
             args.unconditional,
             args.all_floors,
+            args.per_slot_floors,
+            args.per_slot_fallback,
         )
     )
     label = f"{variant_text}, penalty {args.penalty:.2f}p"
@@ -1242,6 +1329,10 @@ def main() -> None:
         label += ", unconditional"
     if args.all_floors:
         label += ", all floors"
+    if args.per_slot_floors:
+        label += ", per-slot floors"
+    if args.per_slot_fallback:
+        label += ", per-slot fallback"
     _summary(f"Synthetic cases [{label}]", synthetic)
     _summary(f"Recorded runs [{label}]", recorded)
 
