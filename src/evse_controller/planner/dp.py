@@ -250,6 +250,7 @@ class DpPlanner:
         horizon_slots: Optional[int] = None,
         voltage_v: float = VOLTAGE_V,
         hybrid_penalty_p: float = 0.0,
+        hybrid_unconditional: bool = False,
     ):
         if capacity_kwh is None:
             # Imported lazily: the octopus package imports the planner, so a
@@ -310,6 +311,7 @@ class DpPlanner:
         if hybrid_penalty_p < 0:
             raise ValueError("hybrid_penalty_p cannot be negative")
         self.hybrid_penalty_p = float(hybrid_penalty_p)
+        self.hybrid_unconditional = bool(hybrid_unconditional)
         self.horizon_slots = (
             None if horizon_slots is None else max(0, int(horizon_slots))
         )
@@ -1164,7 +1166,7 @@ class DpPlanner:
         self,
         slot: PlannerSlot,
         *,
-        gate_w: float,
+        gate_w: Optional[float],
         aggressive: bool,
         floor_percent: Optional[float],
         kind: str,
@@ -1172,7 +1174,14 @@ class DpPlanner:
         bias_a: Optional[float] = None,
     ) -> Optional[_ActionTemplate]:
         samples = slot.load_samples or ((slot.load_kw, 1.0),)
-        if gate_w is None or gate_w >= 1e8:
+        # A hybrid floor is unconditional when the caller asks for the
+        # fixed-floor-plus-follow variant: the floor always discharges, and
+        # the current only rises above it as the house load rises.  Pure
+        # follow arcs still need an activation gate.
+        unconditional = bool(
+            self.hybrid_unconditional and floor_current_a is not None
+        )
+        if not unconditional and (gate_w is None or gate_w >= 1e8):
             return None
         floor_a = (
             self.min_current_a
@@ -1192,12 +1201,14 @@ class DpPlanner:
         signed_ac = 0.0
         currents = []
         for load_kw, weight in samples:
-            load_w = max(0.0, float(load_kw) * 1000.0)
-            if load_w <= 0 or load_w + 1e-9 < gate_w:
-                expected_cost += weight * self._grid_energy_cost_at(
-                    slot, load_kw, 0.0
-                )
-                continue
+            load_w = float(load_kw) * 1000.0
+            if not unconditional:
+                load_w = max(0.0, load_w)
+                if load_w <= 0 or load_w + 1e-9 < gate_w:
+                    expected_cost += weight * self._grid_energy_cost_at(
+                        slot, load_kw, 0.0
+                    )
+                    continue
             raw = load_w / self.voltage_v
             if bias_a is not None and abs(float(bias_a)) < 1e-9:
                 current = int(round(raw))
@@ -1248,7 +1259,7 @@ class DpPlanner:
             floor_percent=floor_percent,
             follow=True,
             floor_current_a=floor_current_a,
-            gate_w=gate_w,
+            gate_w=None if unconditional else gate_w,
         )
 
     def _follow_bidirectional_template(

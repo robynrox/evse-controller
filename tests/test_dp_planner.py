@@ -451,6 +451,41 @@ def test_hybrid_floor_at_the_discharge_limit_is_not_offered():
     assert hybrid_floors == [15.0, 15.0]
 
 
+def test_unconditional_hybrid_floor_ignores_the_gate():
+    sample_slot = replace(
+        slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),
+        load_samples=((0.2, 0.5), (0.8, 0.5)),
+        follow_hybrid_floors=((5.0, None, 5000.0),),
+    )
+
+    conditional = planner()._action_templates(sample_slot)
+    assert not any(
+        template.kind == "follow_house_floor_aggressive"
+        for template in conditional
+    )
+
+    templates = planner(
+        hybrid_unconditional=True
+    )._action_templates(sample_slot)
+    hybrid = next(
+        template
+        for template in templates
+        if template.kind == "follow_house_floor_aggressive"
+    )
+    fixed = next(
+        template
+        for template in templates
+        if template.kind == "discharge"
+        and template.current_a == 5.0
+    )
+
+    assert hybrid.gate_w is None
+    assert hybrid.current_min_a == 5.0
+    assert hybrid.current_max_a == 5.0
+    assert hybrid.cost_p == pytest.approx(fixed.cost_p)
+    assert hybrid.delta_steps == fixed.delta_steps
+
+
 def test_balanced_hybrid_floor_uses_zero_bias():
     sample_slot = replace(
         slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),

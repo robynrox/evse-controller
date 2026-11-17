@@ -14,6 +14,9 @@ case.  ``--quiet`` prints only the summaries, ``--recorded-only`` skips the
 synthetic cases and ``--synthetic-only`` skips the recorded runs.
 ``--realised`` also compares recorded plans against the measured daily house
 load; that is a load-only simulation, not a full battery/SoC model.
+``--unconditional`` uses the unconditional floor-plus-follow variant: the
+floor always discharges and the current follows above it, with no activation
+gate.
 """
 
 from __future__ import annotations
@@ -57,7 +60,9 @@ class CaseResult:
     soc_aware_slots: int = 0
 
 
-def _planner(penalty_p: float = 0.0) -> DpPlanner:
+def _planner(
+    penalty_p: float = 0.0, *, unconditional: bool = False
+) -> DpPlanner:
     return DpPlanner(
         efficiency_model=BatteryEfficiencyModel(),
         capacity_kwh=48.3,
@@ -68,6 +73,7 @@ def _planner(penalty_p: float = 0.0) -> DpPlanner:
         discharge_floor_percent=40.0,
         target_soc_percent=None,
         hybrid_penalty_p=penalty_p,
+        hybrid_unconditional=unconditional,
     )
 
 
@@ -154,6 +160,7 @@ def _with_hybrid_floors(
     floors: Iterable[float],
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     aggressive_export_above_import: bool = False,
+    unconditional: bool = False,
 ) -> list[PlannerSlot]:
     result = []
     for slot in slots:
@@ -169,6 +176,8 @@ def _with_hybrid_floors(
             )
             if "conservative" not in variants:
                 cons_gate = None
+            elif unconditional:
+                cons_gate = 0.0
             if (
                 "aggressive" not in variants
                 or (
@@ -177,6 +186,8 @@ def _with_hybrid_floors(
                 )
             ):
                 aggr_gate = None
+            elif unconditional:
+                aggr_gate = 0.0
             entries.append((float(floor_a), cons_gate, aggr_gate))
             if "balanced" in variants:
                 balanced_gate = _aggressive_gate(
@@ -185,6 +196,8 @@ def _with_hybrid_floors(
                     floor_a,
                     bias_a=0.0,
                 )
+                if unconditional:
+                    balanced_gate = 0.0
                 if balanced_gate is not None:
                     balanced_entries.append(
                         (float(floor_a), balanced_gate)
@@ -555,6 +568,7 @@ def _run_case(
     aggressive_export_above_import: bool = False,
     soc_aware: bool = False,
     planner_params: Optional[dict] = None,
+    unconditional: bool = False,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
@@ -573,8 +587,11 @@ def _run_case(
         candidate,
         variants=variants,
         aggressive_export_above_import=aggressive_export_above_import,
+        unconditional=unconditional,
     )
-    hybrid = _planner(penalty_p=penalty_p).plan(
+    hybrid = _planner(
+        penalty_p=penalty_p, unconditional=unconditional
+    ).plan(
         hybrid_slots, initial_soc
     )
     delta = baseline.total_cost_p - hybrid.total_cost_p
@@ -685,6 +702,7 @@ def _synthetic_cases(
     variants: tuple[str, ...] = ("conservative", "aggressive"),
     penalty_p: float = 0.0,
     aggressive_export_above_import: bool = False,
+    unconditional: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
 
@@ -701,6 +719,7 @@ def _synthetic_cases(
                 aggressive_export_above_import=(
                     aggressive_export_above_import
                 ),
+                unconditional=unconditional,
             )
         )
 
@@ -786,6 +805,7 @@ def _historical_cases(
     penalty_p: float = 0.0,
     aggressive_export_above_import: bool = False,
     soc_aware: bool = False,
+    unconditional: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -881,6 +901,7 @@ def _historical_cases(
                     ),
                     soc_aware=soc_aware,
                     planner_params=run.get("planner"),
+                    unconditional=unconditional,
                 )
             )
     return results
@@ -1122,6 +1143,15 @@ def main() -> None:
             "above its import price."
         ),
     )
+    parser.add_argument(
+        "--unconditional",
+        action="store_true",
+        help=(
+            "Use the unconditional floor-plus-follow variant: the floor "
+            "always discharges and the current follows above it, with no "
+            "activation gate."
+        ),
+    )
     args = parser.parse_args()
     selected = [
         name
@@ -1154,6 +1184,7 @@ def main() -> None:
     print(
         f"hybrid variants: {variant_text}; "
         f"penalty {args.penalty:.2f}p/slot"
+        + ("; unconditional" if args.unconditional else "")
     )
     synthetic = (
         []
@@ -1163,6 +1194,7 @@ def main() -> None:
             variants,
             args.penalty,
             args.aggressive_export_above_import,
+            args.unconditional,
         )
     )
     recorded = (
@@ -1175,6 +1207,7 @@ def main() -> None:
             args.penalty,
             args.aggressive_export_above_import,
             args.soc_aware,
+            args.unconditional,
         )
     )
     label = f"{variant_text}, penalty {args.penalty:.2f}p"
@@ -1182,6 +1215,8 @@ def main() -> None:
         label += ", SoC-aware"
     if args.aggressive_export_above_import:
         label += ", aggr export>import"
+    if args.unconditional:
+        label += ", unconditional"
     _summary(f"Synthetic cases [{label}]", synthetic)
     _summary(f"Recorded runs [{label}]", recorded)
 

@@ -608,6 +608,13 @@ completed fixes.
   no follow headroom, so it is identical to the fixed discharge arc and its
   gate is meaningless. This is enforced both when recording hybrid entries and
   when building action templates, so old runs replay without the duplicate.
+  An **unconditional** variant is available in the offline harness with
+  `--unconditional`: the floor always discharges and the current follows above
+  it, with no activation gate. On the synthetic SoC-aware aggressive set it
+  improved 5/0 with 16.985p total saving, versus 15.434p for the conditional
+  gate (same 5/0). The local recorded history has only one run, so it shows no
+  recorded difference. Live control remains conditional until this is
+  reviewed.
 - **EV readiness targets.** `ev_readiness.py` stores one-off targets
   (`target_soc_percent`, `ready_by`, status) in
   `data/state/ev_readiness.json`. `/ev-readiness` sets, cancels and completes
