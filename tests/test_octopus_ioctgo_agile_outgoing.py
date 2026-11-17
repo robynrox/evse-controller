@@ -5368,6 +5368,69 @@ class TestShadowPlannerAndEstimator:
         assert hedged.load_hedge == ()
         assert hedged.load_samples == slot.load_samples
 
+    def test_unconditional_hybrid_uses_fixed_floor_below_its_output(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._hybrid_discharge_mode = "aggressive"
+        action = {
+            "kind": "follow_house_floor_aggressive",
+            "floor_current_a": 11.0,
+            "current_max_a": 16.0,
+        }
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {"baseline_w": 500.0, "voltage": 240.0},
+        )
+
+        result = tariff._dp_action_control(action)
+
+        assert result[0] == ControlState.DISCHARGE
+        assert result[1] == 11
+        assert result[2] == 11
+
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {"baseline_w": 3000.0, "voltage": 240.0},
+        )
+
+        result = tariff._dp_action_control(action)
+
+        assert result[0] == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert result[1] == 11
+        assert result[2] == 16
+
+    def test_unconditional_hybrid_applies_fixed_and_follow_ranges(self):
+        tariff = _build_tariff()
+        tariff._hybrid_discharge_mode = "aggressive"
+        tariff._last_dp_action = {
+            "slot": 24,
+            "kind": "follow_house_floor_aggressive",
+            "floor_current_a": 11.0,
+            "current_max_a": 16.0,
+        }
+        controller = Mock()
+        state = create_test_state(60)
+
+        tariff._last_dp_hybrid_fixed = True
+        assert tariff._apply_dp_home_demand_levels(
+            controller, state, 24 * 30
+        )
+        controller.setDischargeCurrentRange.assert_called_with(11, 11)
+        controller.setDischargeActivationPower.assert_called_with(0)
+
+        controller.reset_mock()
+        tariff._last_dp_hybrid_fixed = False
+        assert tariff._apply_dp_home_demand_levels(
+            controller, state, 24 * 30
+        )
+        controller.setDischargeCurrentRange.assert_called_with(
+            11, tariff.MAX_DISCHARGE_CURRENT
+        )
+        controller.setDischargeActivationPower.assert_called_with(0)
+
     def test_hybrid_discharge_mode_is_off_by_default(self):
         tariff = _build_tariff()
 

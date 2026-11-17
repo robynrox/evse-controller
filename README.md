@@ -1053,15 +1053,22 @@ build a fresh plan, for example because the model or weather is missing or the
 plan is stale, that slot falls back to the heuristic and the dashboard says
 `heuristic fallback`.
 
-`learning.hybrid_discharge` is an opt-in experimental feature, default
-`off`. `aggressive` adds floor-plus-follow discharge arcs for the fixed
+`learning.hybrid_discharge` is an opt-in feature, default `off`.
+`aggressive` adds unconditional floor-plus-follow discharge arcs for the fixed
 currents selected by the baseline plan, plus neighbours and a small fallback
-set. The planner first plans normally, then re-plans with those floors; each
-floor carries its own aggressive activation gate. The actuator keeps the floor
-and follows the house load above it with the +0.5A aggressive bias. The
-SoC-aware production experiment found this the best variant: it had the
-highest net saving and the best worst case of the conservative, balanced and
-aggressive variants.
+set. The planner first plans normally, then re-plans with those floors. The
+floor always discharges and the current follows the house load above it with
+the +0.5A aggressive bias; there is no activation gate. The actuator uses a
+fixed discharge at the floor when the live house load is below the floor
+output, and load-follows above it. A floor at the discharge limit is pruned
+because it has no follow headroom.
+
+A paired 732-case SoC-aware replay on production history found the
+unconditional variant clearly better than the old conditional gate: 283.5p net
+saving versus 157.5p, 43 losing cases versus 78, and a worst case of −4.3p
+versus −10.8p. An all-floors experiment, which added a follow arc at every
+integer current below the maximum, was worse (175.4p net, 73 losing cases), so
+the baseline-selected floor set is retained.
 
 Follow actions use the DP's modelled minimum current as the floor but the
 Wallbox maximum as the ceiling. The modelled maximum is not an actuator cap,
@@ -1396,15 +1403,15 @@ matching one-direction arc (solar, conservative house or aggressive house);
 that one-direction arc remains available at SoCs where its bidirectional
 counterpart cannot be applied.
 
-A **discharge follow** (hybrid) arc is a conditional floor plus follow: below
-its gate it idles; at or above the gate it discharges at least the floor
-current and follows the house load above it. The gate is the break-even
-house import for starting the floor, not for the increment above it. A floor
-at the slot's discharge limit has no follow headroom, so it is pruned: the
-fixed discharge arc already represents exactly the same action, and a hybrid
-duplicate would only add a meaningless gate.
+A **discharge follow** (hybrid) arc is an unconditional floor plus follow: the
+floor always discharges, and the current follows the house load above it. It
+has no activation gate. Follow arcs are generated for the fixed discharge
+currents selected by the baseline plan, not for every integer current; the
+all-floors experiment was worse because the extra arcs added poor options. A
+floor at the slot's discharge limit has no follow headroom, so it is pruned:
+the fixed discharge arc already represents exactly the same action.
 
-The follow-house gates are the same `discharge_activation_threshold_w`
+The pure follow-house gates are the same `discharge_activation_threshold_w`
 calculation used by the live heuristic. The conservative mode uses the
 conservative gate and floor; the aggressive mode uses the aggressive gate and
 floor, including the integer-current efficiency scan and the best remaining

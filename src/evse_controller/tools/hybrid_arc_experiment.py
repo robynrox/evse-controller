@@ -16,7 +16,8 @@ synthetic cases and ``--synthetic-only`` skips the recorded runs.
 load; that is a load-only simulation, not a full battery/SoC model.
 ``--unconditional`` uses the unconditional floor-plus-follow variant: the
 floor always discharges and the current follows above it, with no activation
-gate.
+gate. ``--all-floors`` tries a follow at every integer current below the
+maximum instead of the baseline-selected candidates.
 """
 
 from __future__ import annotations
@@ -569,18 +570,25 @@ def _run_case(
     soc_aware: bool = False,
     planner_params: Optional[dict] = None,
     unconditional: bool = False,
+    all_floors: bool = False,
 ) -> CaseResult:
     planner = _planner()
     baseline = planner.plan(slots, initial_soc)
-    candidate = (
-        list(floors)
-        if floors is not None
-        else _candidate_floors(baseline.actions)
-    )
+    if all_floors:
+        candidate = [
+            float(current)
+            for current in range(3, int(MAX_DISCHARGE_A))
+        ]
+    else:
+        candidate = (
+            list(floors)
+            if floors is not None
+            else _candidate_floors(baseline.actions)
+        )
     default_floors = [5.0, 8.0, 11.0, 14.0]
     if not candidate:
         candidate = default_floors
-    elif not any(floor < 16.0 for floor in candidate):
+    elif not all_floors and not any(floor < 16.0 for floor in candidate):
         candidate = sorted(set(candidate) | set(default_floors))
     hybrid_slots = _with_hybrid_floors(
         slots,
@@ -703,6 +711,7 @@ def _synthetic_cases(
     penalty_p: float = 0.0,
     aggressive_export_above_import: bool = False,
     unconditional: bool = False,
+    all_floors: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
 
@@ -720,6 +729,7 @@ def _synthetic_cases(
                     aggressive_export_above_import
                 ),
                 unconditional=unconditional,
+                all_floors=all_floors,
             )
         )
 
@@ -806,6 +816,7 @@ def _historical_cases(
     aggressive_export_above_import: bool = False,
     soc_aware: bool = False,
     unconditional: bool = False,
+    all_floors: bool = False,
 ) -> list[CaseResult]:
     results: list[CaseResult] = []
     history_dir = Path(config.PLANNER_HISTORY_DIR)
@@ -902,6 +913,7 @@ def _historical_cases(
                     soc_aware=soc_aware,
                     planner_params=run.get("planner"),
                     unconditional=unconditional,
+                    all_floors=all_floors,
                 )
             )
     return results
@@ -1152,6 +1164,14 @@ def main() -> None:
             "activation gate."
         ),
     )
+    parser.add_argument(
+        "--all-floors",
+        action="store_true",
+        help=(
+            "Use every integer discharge current below the maximum as a "
+            "follow floor, instead of the baseline-selected candidates."
+        ),
+    )
     args = parser.parse_args()
     selected = [
         name
@@ -1185,6 +1205,7 @@ def main() -> None:
         f"hybrid variants: {variant_text}; "
         f"penalty {args.penalty:.2f}p/slot"
         + ("; unconditional" if args.unconditional else "")
+        + ("; all floors" if args.all_floors else "")
     )
     synthetic = (
         []
@@ -1195,6 +1216,7 @@ def main() -> None:
             args.penalty,
             args.aggressive_export_above_import,
             args.unconditional,
+            args.all_floors,
         )
     )
     recorded = (
@@ -1208,6 +1230,7 @@ def main() -> None:
             args.aggressive_export_above_import,
             args.soc_aware,
             args.unconditional,
+            args.all_floors,
         )
     )
     label = f"{variant_text}, penalty {args.penalty:.2f}p"
@@ -1217,6 +1240,8 @@ def main() -> None:
         label += ", aggr export>import"
     if args.unconditional:
         label += ", unconditional"
+    if args.all_floors:
+        label += ", all floors"
     _summary(f"Synthetic cases [{label}]", synthetic)
     _summary(f"Recorded runs [{label}]", recorded)
 

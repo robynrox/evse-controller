@@ -796,6 +796,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         high = max(low, high)
         return low, high
 
+    def _hybrid_floor_is_fixed(self, floor: int) -> bool:
+        """True when the live house load is below the floor output.
+
+        An unconditional discharge-follow floor is a fixed discharge below
+        its own output and a load-follow above it.  Without a live power
+        snapshot, default to the load-follow form.
+        """
+        snapshot = self._read_power_snapshot()
+        if not snapshot:
+            return False
+        return snapshot["baseline_w"] < float(floor) * snapshot["voltage"]
+
     def _dp_action_control(self, action: Mapping[str, Any]):
         kind = str(action.get("kind") or "")
         if kind == "idle":
@@ -843,6 +855,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             high = int(round(float(action.get("current_max_a") or 0)))
             high = max(floor, high)
+            if self._hybrid_discharge_mode == "aggressive":
+                fixed = self._hybrid_floor_is_fixed(floor)
+                self._last_dp_hybrid_fixed = fixed
+                if fixed:
+                    return (
+                        ControlState.DISCHARGE,
+                        floor,
+                        floor,
+                        f"DP: Discharge floor {floor}A",
+                    )
+                return (
+                    ControlState.LOAD_FOLLOW_DISCHARGE,
+                    floor,
+                    high,
+                    f"DP: Discharge follow {floor}A+",
+                )
             return (
                 ControlState.LOAD_FOLLOW_DISCHARGE,
                 floor,
@@ -1031,9 +1059,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         elif kind.startswith("follow_house_floor"):
             if discharge_blocked:
                 return False
-            gate = self._dp_follow_gate(action)
-            if gate is None:
-                return False
             floor = action.get("floor_current_a")
             if floor is None:
                 return False
@@ -1044,6 +1069,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     int(self.MAX_DISCHARGE_CURRENT),
                 ),
             )
+            if self._hybrid_discharge_mode == "aggressive":
+                evseController.setDischargeCurrentBias(
+                    self.AGGRESSIVE_DISCHARGE_BIAS_A
+                )
+                if getattr(self, "_last_dp_hybrid_fixed", False):
+                    evseController.setDischargeCurrentRange(floor, floor)
+                else:
+                    evseController.setDischargeCurrentRange(
+                        floor, self.MAX_DISCHARGE_CURRENT
+                    )
+                evseController.setDischargeActivationPower(0)
+                return True
+            gate = self._dp_follow_gate(action)
+            if gate is None:
+                return False
             if kind.endswith("balanced"):
                 bias = 0.0
             elif kind.endswith("conservative"):
@@ -1603,16 +1643,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     slot.max_discharge_current_a
                 ) - 1e-9:
                     continue
-                floor_gate = self.discharge_activation_threshold_w(
-                    slot.export_p,
-                    import_rate_p=slot.import_p,
-                    aggressive=True,
-                    voltage=voltage,
-                    alternative_rate_p=alternative_rate_p,
-                    floor_current_a=floor_a,
-                )
-                if floor_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
-                    continue
+                if self._hybrid_discharge_mode == "aggressive":
+                    # Unconditional floor-plus-follow: the floor always
+                    # discharges, so there is no economic activation gate.
+                    floor_gate = 0.0
+                else:
+                    floor_gate = self.discharge_activation_threshold_w(
+                        slot.export_p,
+                        import_rate_p=slot.import_p,
+                        aggressive=True,
+                        voltage=voltage,
+                        alternative_rate_p=alternative_rate_p,
+                        floor_current_a=floor_a,
+                    )
+                    if floor_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
+                        continue
                 hybrid_entries.append(
                     (float(floor_a), None, float(floor_gate))
                 )
@@ -1919,6 +1964,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 self.dp_terminal_energy_value_p_per_kwh()
             ),
             voltage_v=float(config.WALLBOX_NOMINAL_VOLTAGE),
+            hybrid_unconditional=(
+                self._hybrid_discharge_mode == "aggressive"
+            ),
         )
 
     def _readiness_plan(self, planner_input, target):
@@ -2267,6 +2315,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ),
             "voltage_v": float(config.WALLBOX_NOMINAL_VOLTAGE),
             "hybrid_discharge": self._hybrid_discharge_mode,
+            "hybrid_unconditional": (
+                self._hybrid_discharge_mode == "aggressive"
+            ),
             "efficiency_model": self.EFFICIENCY_MODEL.as_dict(),
         }
 
@@ -2357,6 +2408,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         [round(kw, 6), round(weight, 6)]
                         for kw, weight in slot.load_hedge
                     ],
+                    "hybrid_unconditional": (
+                        self._hybrid_discharge_mode == "aggressive"
+                    ),
                     "session": slot.session,
                     "forced": slot.forced,
                     "follow_conservative_gate_w": (

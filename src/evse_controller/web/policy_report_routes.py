@@ -98,9 +98,7 @@ def _mode_label(kind: Optional[str]) -> str:
         "follow_house_floor_conservative": (
             "discharge follow (conservative)"
         ),
-        "follow_house_floor_aggressive": (
-            "discharge follow (aggressive)"
-        ),
+        "follow_house_floor_aggressive": "discharge follow",
         "follow_house_floor_balanced": (
             "discharge follow (balanced)"
         ),
@@ -341,6 +339,9 @@ def _build_context(run: dict) -> RunContext:
         degradation_p_per_kwh=degradation,
         terminal_energy_value_p_per_kwh=terminal_value,
         voltage_v=_number(params.get("voltage_v"), 240.0),
+        hybrid_unconditional=bool(
+            params.get("hybrid_unconditional", False)
+        ),
     )
     initial_soc = _number(
         run.get("estimate_soc"),

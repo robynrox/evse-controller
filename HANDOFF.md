@@ -602,19 +602,26 @@ completed fixes.
   Conservative and balanced had worse tails and lower net. The live feature is
   `learning.hybrid_discharge`, default `off`; `aggressive` runs a two-pass
   plan (normal plan, then a re-plan with the selected fixed currents plus
-  neighbours and a 5/8/11/14A fallback). The actuator keeps the floor and
-  follows above it with the +0.5A bias. Default off means existing control is
-  unchanged. A hybrid floor at the slot's discharge limit is pruned: there is
-  no follow headroom, so it is identical to the fixed discharge arc and its
-  gate is meaningless. This is enforced both when recording hybrid entries and
-  when building action templates, so old runs replay without the duplicate.
-  An **unconditional** variant is available in the offline harness with
-  `--unconditional`: the floor always discharges and the current follows above
-  it, with no activation gate. On the synthetic SoC-aware aggressive set it
-  improved 5/0 with 16.985p total saving, versus 15.434p for the conditional
-  gate (same 5/0). The local recorded history has only one run, so it shows no
-  recorded difference. Live control remains conditional until this is
-  reviewed.
+  neighbours and a 5/8/11/14A fallback). The aggressive variant is now
+  **unconditional**: the floor always discharges and the current follows above
+  it with the +0.5A bias, with no activation gate. The actuator uses a fixed
+  discharge at the floor when the live house load is below the floor output
+  and load-follows above it. Default off means existing control is unchanged.
+  A hybrid floor at the slot's discharge limit is pruned: there is no follow
+  headroom, so it is identical to the fixed discharge arc. This is enforced
+  both when recording hybrid entries and when building action templates, so
+  old runs replay without the duplicate. The conditional variant is retained
+  only for historical replay.
+  A paired 732-case SoC-aware replay on the copied prod history (conditional
+  vs unconditional, baseline-selected floors) gave 157.537p net for
+  conditional (102/552/78, loss 195.482p, worst −10.767p) and 283.507p net for
+  unconditional (96/593/43, loss 65.199p, worst −4.277p). Unconditional is
+  the live variant.
+  An **all-floors** unconditional experiment (a follow at every integer
+  current below the maximum) was worse: 175.358p net, 102/557/73, loss
+  106.583p, worst −6.511p. Keep the baseline-selected candidate floors; the
+  extra arcs add poor options. The fixed arcs remain available at every
+  integer current.
 - **EV readiness targets.** `ev_readiness.py` stores one-off targets
   (`target_soc_percent`, `ready_by`, status) in
   `data/state/ev_readiness.json`. `/ev-readiness` sets, cancels and completes

@@ -44,6 +44,57 @@ def test_hybrid_floor_actuator_stays_at_the_floor():
     ) == pytest.approx(-12 * 240 / 1000)
 
 
+def test_unconditional_hybrid_actuator_stays_at_floor_below_floor_output():
+    slot = _slot()
+    slot = slot.__class__(
+        **{
+            **slot.__dict__,
+            "follow_hybrid_floors": ((11.0, None, 0.0),),
+            "max_discharge_current_a": 16.0,
+        }
+    )
+    action = SimpleNamespace(
+        kind="follow_house_floor_aggressive",
+        floor_current_a=11.0,
+        current_min_a=11.0,
+        current_max_a=16.0,
+        ac_power_kw=-2.6,
+    )
+
+    assert experiment._actual_wallbox_kw(
+        slot, action, 0.5
+    ) == pytest.approx(-11 * 240 / 1000)
+    assert experiment._actual_wallbox_kw(
+        slot, action, 2.0
+    ) == pytest.approx(-11 * 240 / 1000)
+    assert experiment._actual_wallbox_kw(
+        slot, action, 3.0
+    ) == pytest.approx(-13 * 240 / 1000)
+
+
+def test_with_hybrid_floors_marks_unconditional_as_zero_gate():
+    slots = [
+        experiment._slot(
+            0,
+            import_p=25.0,
+            export_p=10.0,
+            load_samples=((0.5, 1.0),),
+            pure_follow=False,
+        )
+    ]
+
+    hybrid = experiment._with_hybrid_floors(
+        slots,
+        [11.0, 16.0],
+        variants=("aggressive",),
+        unconditional=True,
+    )
+
+    entries = hybrid[0].follow_hybrid_floors
+    assert [entry[0] for entry in entries] == [11.0]
+    assert entries[0][2] == 0.0
+
+
 def test_with_hybrid_floors_can_restrict_to_conservative():
     slots = [
         experiment._slot(

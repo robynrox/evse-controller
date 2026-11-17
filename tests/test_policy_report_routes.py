@@ -284,7 +284,7 @@ def test_options_table_labels_discharge_follow_and_shows_gate(tmp_path):
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert "<th>Gate</th>" in body
-    assert "discharge follow (aggressive)" in body
+    assert "discharge follow" in body
     assert "480 W" in body
     assert "follow house floor" not in body
 

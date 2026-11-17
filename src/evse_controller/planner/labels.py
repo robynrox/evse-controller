@@ -144,6 +144,10 @@ def action_label(
         balanced = kind.endswith("balanced")
         variant = "bal" if balanced else ("aggr" if aggressive else "cons")
         floor = _number(action.get("floor_current_a"))
+        if slot_input and slot_input.get("hybrid_unconditional"):
+            if floor is not None:
+                return f"Discharge follow {floor:.0f}A+"
+            return "Discharge follow"
         gate = _gate_value_text(
             _hybrid_gate(
                 slot_input,
@@ -154,8 +158,8 @@ def action_label(
             slot_input,
         )
         if floor is not None:
-            return f"Cover house {variant} {floor:.0f}A+{gate}"
-        return f"Cover house {variant}"
+            return f"Discharge follow {variant} {floor:.0f}A+{gate}"
+        return f"Discharge follow {variant}"
 
     if kind in (
         "follow_bidirectional_conservative",

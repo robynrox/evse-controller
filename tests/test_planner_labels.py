@@ -146,7 +146,26 @@ def test_hybrid_floor_label_shows_the_floor():
         },
     )
 
-    assert label == "Cover house aggr 11A+ from 352W"
+    assert label == "Discharge follow aggr 11A+ from 352W"
+
+
+def test_unconditional_hybrid_label_omits_the_gate():
+    label = action_label(
+        {
+            "kind": "follow_house_floor_aggressive",
+            "floor_current_a": 11.0,
+            "current_min_a": 11.0,
+            "current_max_a": 16.0,
+        },
+        {
+            "hybrid_unconditional": True,
+            "follow_hybrid_floors": [[11.0, None, 0.0]],
+            "voltage": 240.0,
+            "min_discharge_a": 3.0,
+        },
+    )
+
+    assert label == "Discharge follow 11A+"
 
 
 def test_missing_action_is_reported_clearly():
