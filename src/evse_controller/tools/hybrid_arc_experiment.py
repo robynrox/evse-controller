@@ -160,6 +160,10 @@ def _with_hybrid_floors(
         entries = []
         balanced_entries = []
         for floor_a in floors:
+            if float(floor_a) >= float(
+                slot.max_discharge_current_a
+            ) - 1e-9:
+                continue
             cons_gate, aggr_gate = _gates_for(
                 slot.import_p, slot.export_p, floor_a
             )

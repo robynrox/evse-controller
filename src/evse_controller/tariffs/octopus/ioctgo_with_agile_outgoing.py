@@ -1597,6 +1597,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 aggressive_gate = None
             hybrid_entries = []
             for floor_a in hybrid_floors:
+                # No follow headroom at the discharge limit: the fixed arc
+                # already covers it, so do not record a duplicate hybrid.
+                if float(floor_a) >= float(
+                    slot.max_discharge_current_a
+                ) - 1e-9:
+                    continue
                 floor_gate = self.discharge_activation_threshold_w(
                     slot.export_p,
                     import_rate_p=slot.import_p,

@@ -1396,6 +1396,14 @@ matching one-direction arc (solar, conservative house or aggressive house);
 that one-direction arc remains available at SoCs where its bidirectional
 counterpart cannot be applied.
 
+A **discharge follow** (hybrid) arc is a conditional floor plus follow: below
+its gate it idles; at or above the gate it discharges at least the floor
+current and follows the house load above it. The gate is the break-even
+house import for starting the floor, not for the increment above it. A floor
+at the slot's discharge limit has no follow headroom, so it is pruned: the
+fixed discharge arc already represents exactly the same action, and a hybrid
+duplicate would only add a meaningless gate.
+
 The follow-house gates are the same `discharge_activation_threshold_w`
 calculation used by the live heuristic. The conservative mode uses the
 conservative gate and floor; the aggressive mode uses the aggressive gate and

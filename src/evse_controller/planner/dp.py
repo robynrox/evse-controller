@@ -926,6 +926,12 @@ class DpPlanner:
             if template is not None:
                 templates.append(template)
         for floor_a, cons_gate, aggr_gate in slot.follow_hybrid_floors:
+            # A floor at the discharge limit has no follow headroom: it is
+            # just a fixed discharge, which the DP already has.  Generating
+            # the hybrid arc would add a conditional duplicate with a
+            # meaningless gate.
+            if float(floor_a) >= float(slot.max_discharge_current_a) - 1e-9:
+                continue
             if cons_gate is not None:
                 template = self._follow_house_template(
                     slot,
@@ -949,6 +955,8 @@ class DpPlanner:
                 if template is not None:
                     templates.append(template)
         for floor_a, balanced_gate in slot.follow_hybrid_balanced_floors:
+            if float(floor_a) >= float(slot.max_discharge_current_a) - 1e-9:
+                continue
             if balanced_gate is not None:
                 template = self._follow_house_template(
                     slot,

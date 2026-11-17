@@ -5520,6 +5520,37 @@ class TestShadowPlannerAndEstimator:
         assert entry[1] is None
         assert entry[2] is not None
 
+    def test_with_follow_gates_skips_hybrid_floor_at_the_limit(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        planner_input = PlannerInput(
+            day=datetime(2026, 11, 16).date(),
+            slots=(
+                PlannerSlot(
+                    start=datetime(2026, 11, 16, 12, 0),
+                    slot=24,
+                    import_p=25.0,
+                    export_p=10.0,
+                    load_kw=1.0,
+                    load_samples=((1.0, 1.0),),
+                    load_source="profile",
+                    max_discharge_current_a=16.0,
+                ),
+            ),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        updated = tariff._with_follow_gates(
+            planner_input, hybrid_floors=[16.0, 15.0]
+        )
+
+        entries = updated.slots[0].follow_hybrid_floors
+        assert [entry[0] for entry in entries] == [15.0]
+
     def test_live_component_model_prefers_the_live_file(
         self, tmp_path, monkeypatch
     ):

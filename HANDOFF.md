@@ -595,12 +595,19 @@ completed fixes.
   replay aggressive had the highest net saving; on the SoC-aware replay
   aggressive was also the best variant (207 improved, 48 worse, net 759p,
   average gain 4.47p, average loss 3.45p, worst −11.99p, gain/loss 5.58).
+  Those figures predate the limit-floor prune below. The local recorded
+  history is now too small to reproduce the full 207-case replay; the
+  synthetic SoC-aware aggressive case still improved 5/0 (15.4p) after the
+  prune.
   Conservative and balanced had worse tails and lower net. The live feature is
   `learning.hybrid_discharge`, default `off`; `aggressive` runs a two-pass
   plan (normal plan, then a re-plan with the selected fixed currents plus
   neighbours and a 5/8/11/14A fallback). The actuator keeps the floor and
   follows above it with the +0.5A bias. Default off means existing control is
-  unchanged.
+  unchanged. A hybrid floor at the slot's discharge limit is pruned: there is
+  no follow headroom, so it is identical to the fixed discharge arc and its
+  gate is meaningless. This is enforced both when recording hybrid entries and
+  when building action templates, so old runs replay without the duplicate.
 - **EV readiness targets.** `ev_readiness.py` stores one-off targets
   (`target_soc_percent`, `ready_by`, status) in
   `data/state/ev_readiness.json`. `/ev-readiness` sets, cancels and completes

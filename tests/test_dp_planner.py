@@ -424,6 +424,33 @@ def test_options_expose_follow_gates():
     assert options["idle"].gate_w is None
 
 
+def test_hybrid_floor_at_the_discharge_limit_is_not_offered():
+    sample_slot = replace(
+        slot(
+            0,
+            import_p=25.0,
+            export_p=10.0,
+            load_kw=0.5,
+            max_discharge=16.0,
+        ),
+        load_samples=((0.5, 0.5), (3.8, 0.5)),
+        follow_hybrid_floors=(
+            (16.0, 0.0, 480.0),
+            (15.0, 0.0, 480.0),
+        ),
+        follow_hybrid_balanced_floors=((16.0, 480.0),),
+    )
+
+    templates = planner()._action_templates(sample_slot)
+
+    hybrid_floors = [
+        template.floor_current_a
+        for template in templates
+        if template.kind.startswith("follow_house_floor")
+    ]
+    assert hybrid_floors == [15.0, 15.0]
+
+
 def test_balanced_hybrid_floor_uses_zero_bias():
     sample_slot = replace(
         slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),

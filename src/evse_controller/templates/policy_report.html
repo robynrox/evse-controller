@@ -643,7 +643,10 @@
             today's forecast. Follow arcs show the current at which support
             starts (≥N A); the live loop varies with the measured house load
             up to the Wallbox limit. <strong>Discharge follow</strong> is the
-            hybrid arc: a fixed discharge floor plus a follow above it.
+            hybrid arc: below its gate it idles; at or above the gate it
+            discharges at least the floor and follows the house load above it.
+            A floor at the discharge limit is not shown because it has no
+            follow headroom and is identical to the fixed arc.
             <strong>Gate</strong> is the house import at which a follow arc
             activates; it is shown as <em>—</em> for arcs where it does not
             apply. Where the measured history has never seen one direction, a
