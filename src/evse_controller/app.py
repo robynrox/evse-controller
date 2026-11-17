@@ -797,7 +797,17 @@ def config_page():
                 request.form.get('charging[solar_period_max_charge]'),
                 config.SOLAR_PERIOD_MAX_CHARGE,
             )
-            config.STARTUP_STATE = request.form.get('charging[startup_state]', 'FREERUN')
+            startup_mode = request.form.get('charging[startup_mode]')
+            if startup_mode is None:
+                legacy_state = request.form.get(
+                    'charging[startup_state]', 'FREERUN'
+                )
+                startup_mode = (
+                    'FREERUN'
+                    if str(legacy_state).upper() == 'FREERUN'
+                    else 'SMART'
+                )
+            config.STARTUP_MODE = startup_mode
 
             # Update logging settings
             config.FILE_LOGGING = request.form.get('logging[file_level]', 'INFO')

@@ -372,15 +372,15 @@
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" step="1" required>
         </div>
         <div class="form-group">
-            <label for="startup_state">Smart Tariff In Use:</label>
-            <select id="startup_state" name="charging[startup_state]" required>
-                <option value="FREERUN" {% if config.charging.startup_state=='FREERUN' %}selected{% endif %}>FREE RUN</option>
-                <option value="COSY" {% if config.charging.startup_state=='COSY' %}selected{% endif %}>COSY</option>
-                <option value="OCTGO" {% if config.charging.startup_state=='OCTGO' %}selected{% endif %}>OCTGO</option>
-                <option value="IOCTGO" {% if config.charging.startup_state=='IOCTGO' %}selected{% endif %}>IOCTGO</option>
-                <option value="IOCTGO_AGILEOUT" {% if config.charging.startup_state=='IOCTGO_AGILEOUT' %}selected{% endif %}>IOCTGO with Agile Outgoing</option>
-                <option value="FLUX" {% if config.charging.startup_state=='FLUX' %}selected{% endif %}>FLUX</option>
+            <label for="startup_mode">Startup mode:</label>
+            <select id="startup_mode" name="charging[startup_mode]" required>
+                <option value="SMART" {% if config.charging.startup_mode=='SMART' %}selected{% endif %}>SMART — use the tariff selected under Tariff prices</option>
+                <option value="FREERUN" {% if config.charging.startup_mode=='FREERUN' %}selected{% endif %}>FREE RUN</option>
             </select>
+            <small>
+                The tariff itself is selected in the Tariff prices section.
+                Startup mode only chooses whether to begin in SMART or FREE RUN.
+            </small>
         </div>
     </div>
 
@@ -614,11 +614,13 @@
                 {% endfor %}
             </select>
             <small>
-                Agile preset uses the fetched Agile Outgoing export series.
-                Outgoing and Prime use the export tiers below. The preset must
-                match the tariff selected under Charging; a mismatch leaves
-                that tariff on its built-in prices.
+                The preset selects the tariff controller, its time windows and
+                its export source. Agile preset uses the fetched Agile Outgoing
+                export series; Outgoing and Prime use the export tiers below.
+                Startup mode under Charging chooses whether to begin in SMART
+                or FREE RUN.
             </small>
+            <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
         <div class="form-group">
             <label for="export_source">Export price source</label>

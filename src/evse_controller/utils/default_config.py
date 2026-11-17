@@ -69,6 +69,7 @@ DEFAULT_CONFIG = {
     "charging": {
         "max_charge_percent": 90,
         "solar_period_max_charge": 80,
+        "startup_mode": "FREERUN",
         "startup_state": "FREERUN",
     },
     "logging": {

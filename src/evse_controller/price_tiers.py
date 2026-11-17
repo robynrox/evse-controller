@@ -27,6 +27,19 @@ IOG_PRESETS = frozenset(
     {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export"}
 )
 
+#: Tariff controller selected by each price preset.  The IOG presets all use
+#: the same controller; the preset's export source decides whether it follows
+#: Agile or fixed export tiers.
+PRESET_TARIFF = {
+    "iog_agile": "IOCTGO_AGILEOUT",
+    "iog_outgoing": "IOCTGO_AGILEOUT",
+    "iog_prime": "IOCTGO_AGILEOUT",
+    "iog_no_export": "IOCTGO_AGILEOUT",
+    "octopus_go": "OCTGO",
+    "cosy": "COSY",
+    "flux": "FLUX",
+}
+
 
 def parse_clock(text: str) -> int:
     """Parse ``HH:MM`` into minutes since midnight.

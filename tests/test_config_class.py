@@ -1076,6 +1076,49 @@ class TestPriceTiers:
 
         assert config.TARIFF_PRESET == "iog_prime"
 
+    def test_smart_tariff_comes_from_the_preset(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["preset"] = "iog_agile"
+
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+
+        config.TARIFF_PRESET = "iog_prime"
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+
+        config.TARIFF_PRESET = "octopus_go"
+        assert config.SMART_TARIFF == "OCTGO"
+
+        config.TARIFF_PRESET = "cosy"
+        assert config.SMART_TARIFF == "COSY"
+
+        config.TARIFF_PRESET = "flux"
+        assert config.SMART_TARIFF == "FLUX"
+
+    def test_legacy_startup_state_survives_without_a_preset(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {}).pop("preset", None)
+
+        config.STARTUP_STATE = "IOCTGO"
+        assert config.SMART_TARIFF == "IOCTGO"
+
+        config.STARTUP_STATE = "IOCTGO_AGILEOUT"
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+
+    def test_startup_mode_derives_from_the_legacy_state(self):
+        config = self._config()
+        config._config_data.setdefault("charging", {}).pop(
+            "startup_mode", None
+        )
+
+        config.STARTUP_STATE = "FREERUN"
+        assert config.STARTUP_MODE == "FREERUN"
+
+        config.STARTUP_STATE = "IOCTGO_AGILEOUT"
+        assert config.STARTUP_MODE == "SMART"
+
+        config.STARTUP_MODE = "freerun"
+        assert config.STARTUP_MODE == "FREERUN"
+
     def test_build_table_uses_prices_and_preset_windows(self):
         config = self._config()
         config.TARIFF_PRESET = "iog_prime"

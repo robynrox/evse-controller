@@ -182,8 +182,9 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
     charging:
       max_charge_percent: 90           # Maximum battery charge percentage
       solar_period_max_charge: 80      # Maximum charge during solar generation periods
-      startup_state: "FREERUN"         # FREERUN, COSY, OCTGO, IOCTGO or FLUX (previously the key had the name of default_tariff)
+      startup_mode: "SMART"            # SMART or FREERUN
     tariffs:
+      preset: "iog_agile"              # selects the tariff controller and prices
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
         aggressive_soc_lower_limit: 50    # Aggressive house discharge floor and 23:30 target
@@ -271,7 +272,7 @@ Detailed explanation of each configuration option:
 #### Charging Section
 - `max_charge_percent`: Maximum battery charge percentage (0-100). The IOCTGO_AGILEOUT tariff hard-limits the effective ceiling to **97%** even if this is set higher, leaving headroom at the top of the pack; set a lower value to stop earlier. The ceiling applies to solar charging too, not just off-peak grid charging — at or above it the charge range is set to zero and the dashboard says `Do not charge — SoC at N% cap`
 - `solar_period_max_charge`: Maximum charge during solar generation periods (0-100)
-- `startup_state`: Default startup state (FREERUN, COSY, OCTGO, IOCTGO, or FLUX)
+- `startup_mode`: Whether to start in `SMART` or `FREERUN`. The smart tariff itself is selected by `tariffs.preset`.
 
 #### Weather Section
 The optional `weather` section is used for reports, the live component forecast and forecast research. It has no defaults: the four location and panel values must be supplied before the controller will fetch weather, and leaving the section out disables it entirely.
@@ -432,10 +433,11 @@ plus **cheap** and **peak** prices. Cheap and peak may each have any number of
 half-hour windows; windows may cross midnight, and the end is exclusive.
 Standard has no windows. Cheap and peak windows may not overlap.
 
-A preset supplies the window structure; normally you edit only the six prices
-under `prices` in `config.yaml` or on the config page. The advanced window
-fields are hidden behind a disclosure and accept comma-separated
-`HH:MM-HH:MM` values.
+A preset selects the tariff controller and supplies its window structure;
+normally you edit only the six prices under `prices` in `config.yaml` or on
+the config page. The advanced window fields are hidden behind a disclosure and
+accept comma-separated `HH:MM-HH:MM` values. Startup mode under `charging`
+only chooses whether to begin in `SMART` or `FREERUN`.
 
 ```yaml
 tariffs:
@@ -468,10 +470,9 @@ separate controllers:
 `export_source` overrides the preset's export choice. The import side keeps the
 Intelligent Octopus Go cheap window. Octopus Go, Cosy and Flux also use the
 table when their own preset is selected, so their prices and cheap/peak
-decision windows are editable without changing their control strategies. A
-preset that does not match the running tariff leaves that tariff on its
-built-in bands, which keeps a tariff switch from silently applying another
-product's prices. Some controller-specific behaviour, such as Flux's 16:00
+decision windows are editable without changing their control strategies. The
+preset is the single tariff selector; there is no separate tariff dropdown
+under Charging. Some controller-specific behaviour, such as Flux's 16:00
 discharge ramp, still uses its built-in timing.
 
 

@@ -242,6 +242,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager passes queue to OctopusGoTariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'OCTGO'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'OCTGO'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             assert manager.current_tariff.command_queue is mock_command_queue
@@ -250,6 +252,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager passes queue to OctopusFluxTariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'FLUX'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'FLUX'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             assert manager.current_tariff.command_queue is mock_command_queue
@@ -258,6 +262,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager passes queue to CosyOctopusTariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'COSY'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'COSY'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             assert manager.current_tariff.command_queue is mock_command_queue
@@ -266,6 +272,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager passes queue to IntelligentOctopusGoTariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'IOCTGO'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'IOCTGO'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             assert manager.current_tariff.command_queue is mock_command_queue
@@ -274,6 +282,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager passes queue to IOctGoWithAgileOutgoingTariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'IOCTGO_AGILEOUT'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'IOCTGO_AGILEOUT'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             assert manager.current_tariff.command_queue is mock_command_queue
@@ -282,6 +292,8 @@ class TestTariffManagerCommandQueuePropagation:
         """Test TariffManager.set_tariff passes queue to new tariff."""
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'FLUX'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'FLUX'
             from evse_controller.tariffs.manager import TariffManager
             manager = TariffManager(mock_command_queue)
             
@@ -297,6 +309,8 @@ class TestTariffManagerCommandQueuePropagation:
 
         with patch('evse_controller.tariffs.manager.config') as mock_config:
             mock_config.STARTUP_STATE = 'OCTGO'
+            mock_config.STARTUP_MODE = 'SMART'
+            mock_config.SMART_TARIFF = 'OCTGO'
             from evse_controller.tariffs.manager import TariffManager
 
             manager = TariffManager(mock_command_queue)

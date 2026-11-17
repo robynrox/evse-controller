@@ -39,6 +39,8 @@ def mocked_wallbox():
 def _manager(tariff_name: str) -> TariffManager:
     with patch("evse_controller.tariffs.manager.config") as mock_config:
         mock_config.STARTUP_STATE = tariff_name
+        mock_config.STARTUP_MODE = "SMART"
+        mock_config.SMART_TARIFF = tariff_name
         return TariffManager(Mock())
 
 

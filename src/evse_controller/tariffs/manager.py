@@ -19,13 +19,18 @@ class TariffManager:
             "COSY": CosyOctopusTariff,
             "FLUX": OctopusFluxTariff
         }
-        # Check if startup state is a tariff that exists in our tariffs dictionary
-        if config.STARTUP_STATE in self.tariff_classes:
-            # Instantiate the tariff for the startup state
-            self.current_tariff = self.tariff_classes[config.STARTUP_STATE](command_queue=self._command_queue)
-            self.tariff_name = config.STARTUP_STATE
+        # The preset is the single tariff selector.  Startup mode only decides
+        # whether to begin in SMART or FREE RUN.
+        tariff_name = config.SMART_TARIFF
+        if (
+            config.STARTUP_MODE == "SMART"
+            and tariff_name in self.tariff_classes
+        ):
+            self.current_tariff = self.tariff_classes[tariff_name](
+                command_queue=self._command_queue
+            )
+            self.tariff_name = tariff_name
         else:
-            # For non-tariff startup states (like FREERUN), set to None
             self.current_tariff = None
             self.tariff_name = None
         self._sync_report_savings_provider()
@@ -73,11 +78,12 @@ class TariffManager:
         return False
     
     def start_tariff(self):
-        """Start the tariff configured in config.STARTUP_STATE."""
+        """Start the tariff selected by the price preset."""
         # Always use the current config value, not the cached tariff_name
         # This allows config changes to take effect when switching to SMART mode
-        if config.STARTUP_STATE in self.tariff_classes:
-            return self.set_tariff(config.STARTUP_STATE)
+        tariff_name = config.SMART_TARIFF
+        if tariff_name in self.tariff_classes:
+            return self.set_tariff(tariff_name)
         return False
 
     def get_tariff(self) -> Tariff:
@@ -122,9 +128,9 @@ class TariffManager:
             # Get the appropriate EVSE instance using the factory method
             evse = EvseThreadInterface.get_instance()
             evse_state = evse.get_state()
-            debug(f"TariffManager: Non-tariff state active ({config.STARTUP_STATE}), state={evse_state}")
+            debug(f"TariffManager: Non-tariff state active ({config.STARTUP_MODE}), state={evse_state}")
             # Return values that keep the system in its current state
-            return EvseState.FREERUN, 0, 0, f"{config.STARTUP_STATE} - Manual Control Mode"
+            return EvseState.FREERUN, 0, 0, f"{config.STARTUP_MODE} - Manual Control Mode"
         
         # Get the appropriate EVSE instance using the factory method
         evse = EvseThreadInterface.get_instance()

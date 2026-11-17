@@ -703,7 +703,13 @@ completed fixes.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
-- Local full test suite: **766 passed, 1 skipped, 24 subtests passed**.
+- Config cleanup: the **tariff preset is now the single tariff selector**.
+  `charging.startup_mode` is `SMART` or `FREERUN`, and `config.SMART_TARIFF`
+  derives the controller from the preset. The old `charging.startup_state`
+  tariff dropdown is gone from the config page; a legacy config with no
+  preset keeps its old tariff until it is saved. Splitting the preset into
+  separate import and export selectors is the next step.
+- Local full test suite: **1193 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 
 Production command that works (prod uses Poetry):

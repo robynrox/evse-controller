@@ -837,7 +837,7 @@ elif loaded_exec_state is not None:
     previous_state = loaded_previous_state
     _fixed_current_amps = loaded_fixed_current
     _apply_exec_state(execState, loaded_fixed_current)
-elif config.STARTUP_STATE == "FREERUN":
+elif config.STARTUP_MODE == "FREERUN":
     execState = ExecState.FREERUN
     previous_state = None
     _apply_exec_state(execState)

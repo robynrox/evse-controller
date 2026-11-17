@@ -58,6 +58,7 @@ class Config:
                         'charging': {
                             'max_charge_percent': 90,
                             'solar_period_max_charge': 80,
+                            'startup_mode': 'FREERUN',
                             'startup_state': 'FREERUN'
                         },
                         'logging': {
@@ -456,6 +457,18 @@ class Config:
                     # For example, remove 'tariffs.ioctgo' if 'tariffs' with 'ioctgo' subkey exists
                     self._cleanup_duplicate_config_keys(config)
 
+                    # Split the old startup tariff selector into a startup
+                    # mode (SMART/FREE RUN) plus the tariff preset.  Keep the
+                    # legacy key so an older binary can still read the file.
+                    charging = config.get("charging")
+                    if isinstance(charging, dict) and "startup_mode" not in charging:
+                        legacy = charging.get("startup_state", "FREERUN")
+                        charging["startup_mode"] = (
+                            "FREERUN"
+                            if str(legacy).upper() == "FREERUN"
+                            else "SMART"
+                        )
+
                     return config
             print(f"Error: Config file not found: {self.CONFIG_FILE}", file=sys.stderr)
             return {}
@@ -556,6 +569,63 @@ class Config:
         lambda self: self._get_config_value("charging", "startup_state", "FREERUN"),
         lambda self, value: self._set_config_value("charging", "startup_state", value)
     )
+
+    def _default_startup_mode(self) -> str:
+        """Derive the new startup mode from a legacy ``startup_state``."""
+        legacy = str(
+            self._get_config_value(
+                "charging", "startup_state", "FREERUN"
+            )
+        ).upper()
+        return "FREERUN" if legacy == "FREERUN" else "SMART"
+
+    def _get_startup_mode(self) -> str:
+        mode = str(
+            self._get_config_value(
+                "charging",
+                "startup_mode",
+                self._default_startup_mode(),
+            )
+        ).upper()
+        return mode if mode in ("SMART", "FREERUN") else "SMART"
+
+    def _set_startup_mode(self, value) -> str:
+        mode = str(value or "SMART").strip().upper()
+        if mode not in ("SMART", "FREERUN"):
+            mode = "SMART"
+        self._set_config_value("charging", "startup_mode", mode)
+        return mode
+
+    STARTUP_MODE = property(_get_startup_mode, _set_startup_mode)
+
+    def _smart_tariff(self) -> str:
+        """The tariff controller selected by the price preset.
+
+        New configs use the preset as the single tariff selector.  A legacy
+        config with no ``tariffs.preset`` keeps its old ``startup_state``
+        tariff so an upgrade does not silently change controller.
+        """
+        from evse_controller.price_tiers import PRESET_TARIFF
+
+        preset_key = self.get("tariffs.preset", None)
+        if preset_key:
+            return PRESET_TARIFF.get(
+                str(preset_key), "IOCTGO_AGILEOUT"
+            )
+        legacy = str(self.STARTUP_STATE or "").upper()
+        if legacy in {
+            "OCTGO",
+            "IOCTGO",
+            "IOCTGO_AGILEOUT",
+            "COSY",
+            "FLUX",
+        }:
+            return legacy
+        return PRESET_TARIFF.get(
+            self.TARIFF_PRESET, "IOCTGO_AGILEOUT"
+        )
+
+    SMART_TARIFF = property(_smart_tariff)
 
     # -- automatic OCPP handoff ------------------------------------------
     #
@@ -1264,6 +1334,8 @@ class Config:
         """The preset that matches the configured tariff, for old configs."""
         return {
             "OCTGO": "octopus_go",
+            "IOCTGO": "iog_outgoing",
+            "IOCTGO_AGILEOUT": "iog_agile",
             "COSY": "cosy",
             "FLUX": "flux",
         }.get(self.STARTUP_STATE, "iog_agile")
@@ -1428,11 +1500,12 @@ class Config:
             'charging': {
                 'max_charge_percent': self.MAX_CHARGE_PERCENT,
                 'solar_period_max_charge': self.SOLAR_PERIOD_MAX_CHARGE,
-                'startup_state': self.STARTUP_STATE
+                'startup_mode': self.STARTUP_MODE
             },
             'tariffs': {
                 'preset': self.TARIFF_PRESET,
                 'export_source': self.EXPORT_SOURCE,
+                'smart_tariff': self.SMART_TARIFF,
                 'ioctgo': {
                     'battery_capacity_kwh': self.IOCTGO_BATTERY_CAPACITY_KWH,
                     'target_soc_at_bulk_discharge_end': self.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
