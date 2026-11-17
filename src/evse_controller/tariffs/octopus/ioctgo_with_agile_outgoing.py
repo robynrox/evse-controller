@@ -33,6 +33,7 @@ from evse_controller.planner.inputs import (
 from evse_controller.planner.soc_estimator import SocEstimator
 from evse_controller.planner.version import SOLVER_VERSION
 from evse_controller.price_tiers import IOG_PRESETS
+from evse_controller.solar_position import solar_position
 from evse_controller.tariffs.source import TariffSourceAdapter
 from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.weather import weather_refresher
@@ -1623,6 +1624,86 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         return replace(planner_input, slots=tuple(slots))
 
+    def _with_direction_hedge(self, planner_input):
+        """Add a small prior for a direction the measured history never saw.
+
+        A persistence forecast with no surplus in the window is not evidence
+        that surplus is impossible, and the converse is equally true.  For
+        each slot with no sample in a physically possible direction, add one
+        synthetic sample at the smallest meaningful event and weight it as
+        half a pseudo-day (a Jeffreys prior).  The existing samples are scaled
+        down so the weights still sum to one.
+
+        The hedge is deliberately small: it gives the DP a priced option to
+        choose a bidirectional follow arc, rather than forcing one.  A slot
+        that has a real sample in both directions is left untouched.
+        """
+        voltage = float(
+            getattr(
+                self,
+                "_follow_gate_voltage",
+                config.WALLBOX_NOMINAL_VOLTAGE,
+            )
+        )
+        min_surplus_kw = (
+            float(self.MIN_DISCHARGE_CURRENT) * voltage / 1000.0
+        )
+        solar_possible = bool(
+            config.SOLAR_AVAILABLE or config.SOLAR_MODEL_CONFIGURED
+        )
+        latitude = config.WEATHER_LATITUDE
+        longitude = config.WEATHER_LONGITUDE
+        slots = []
+        for slot in planner_input.slots:
+            if slot.forced or not slot.load_samples or slot.load_days <= 0:
+                slots.append(slot)
+                continue
+            samples = tuple(slot.load_samples)
+            gate = (
+                slot.follow_aggressive_gate_w
+                if slot.follow_aggressive_gate_w is not None
+                else slot.follow_conservative_gate_w
+            )
+            missing = []
+            sun_up = bool(
+                latitude is not None
+                and longitude is not None
+                and solar_position(
+                    slot.start, latitude, longitude
+                )[0] > 0.0
+            )
+            if (
+                solar_possible
+                and sun_up
+                and not any(
+                    kw <= -min_surplus_kw + 1e-9 for kw, _ in samples
+                )
+            ):
+                missing.append(-min_surplus_kw)
+            if gate is not None:
+                gate_kw = float(gate) / 1000.0
+                if not any(kw >= gate_kw - 1e-9 for kw, _ in samples):
+                    missing.append(gate_kw)
+            if not missing:
+                slots.append(slot)
+                continue
+            prior_mass = 0.5 / (float(slot.load_days) + 1.0)
+            hedge_weight = prior_mass / len(missing)
+            scale = 1.0 - prior_mass
+            hedged = tuple(
+                (kw, weight * scale) for kw, weight in samples
+            ) + tuple((kw, hedge_weight) for kw in missing)
+            slots.append(
+                replace(
+                    slot,
+                    load_samples=hedged,
+                    load_hedge=tuple(
+                        (kw, hedge_weight) for kw in missing
+                    ),
+                )
+            )
+        return replace(planner_input, slots=tuple(slots))
+
     def _hybrid_candidate_floors(self, actions) -> list[float]:
         """Fixed discharge currents worth a floor-plus-follow hybrid arc.
 
@@ -1773,7 +1854,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:
             warning(f"IOCTGO_AGILEOUT: Component preview failed: {exc}")
             return None
-        return replace(planner_input, slots=slots)
+        return self._with_direction_hedge(
+            replace(planner_input, slots=slots)
+        )
 
     def _component_preview_label(self, now: datetime) -> Optional[str]:
         """The component-load action for the current slot, if one exists."""
@@ -2061,6 +2144,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 unknown_export_p=0.0,
             )
             planner_input = self._with_follow_gates(planner_input)
+            planner_input = self._with_direction_hedge(planner_input)
             target = ev_readiness_store.active()
             if self._hybrid_discharge_mode == "aggressive":
                 baseline_result = self._make_shadow_planner().plan(
@@ -2262,6 +2346,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         for kw, weight in slot.load_samples
                     ],
                     "load_source": slot.load_source,
+                    "load_days": slot.load_days,
+                    "load_hedge": [
+                        [round(kw, 6), round(weight, 6)]
+                        for kw, weight in slot.load_hedge
+                    ],
                     "session": slot.session,
                     "forced": slot.forced,
                     "follow_conservative_gate_w": (

@@ -74,6 +74,13 @@ def slots_from_run(
                 session=item.get("session"),
                 load_samples=load_samples,
                 load_source=item.get("load_source") or "",
+                load_days=int(item.get("load_days", 0) or 0),
+                load_hedge=tuple(
+                    (float(entry[0]), float(entry[1]))
+                    for entry in (item.get("load_hedge") or [])
+                    if isinstance(entry, (list, tuple))
+                    and len(entry) == 2
+                ),
                 follow_conservative_gate_w=_number(
                     item.get("follow_conservative_gate_w")
                 ),

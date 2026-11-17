@@ -647,6 +647,18 @@ completed fixes.
   the live heuristic and are stored per input row with their floors. Follow
   arcs use expected cost, expected net SoC change and gross throughput for
   degradation.
+- Net grid load keeps its sign: the `house` series is `grid − Wallbox`, so
+  negative values are export and are passed through to the DP instead of being
+  clipped. This makes observed solar surplus visible to the follow arcs.
+- A slot with no sample in a physically possible direction gets a small
+  synthetic hedge sample before planning: half a pseudo-day
+  (`0.5 / (measured_days + 1)`) split between the missing directions, at the
+  minimum viable surplus (`-min_current × voltage`) or the house-follow gate.
+  Existing sample weights are scaled down to keep the total at one. The hedge
+  is skipped for forced/session slots and for surplus outside daylight or
+  without configured solar. Runs store `load_days` and the hedge samples so
+  the policy page can show the assumed probability; the hedge is a priced
+  option, not a forced bidirectional arc.
 - The live heuristic now plans **import/charge** slots as well as exports:
   off-peak charge is included in the 23:30 projection, and high-value priority
   exports can trigger peak-rate recharge before their deadline. The recharge

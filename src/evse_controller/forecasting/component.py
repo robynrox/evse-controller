@@ -174,6 +174,7 @@ def apply_component_load_to_run(
             [round(kw, 6), weight] for kw, weight in samples
         ]
         updated["load_source"] = "component"
+        updated["load_hedge"] = []
         inputs.append(updated)
     result = dict(run)
     result["inputs"] = inputs
@@ -197,6 +198,7 @@ def apply_component_load_to_slots(
                     (round(kw, 6), weight) for kw, weight in samples
                 ),
                 load_source="component",
+                load_hedge=(),
             )
         )
     return tuple(updated)

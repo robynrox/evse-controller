@@ -13,6 +13,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
 from evse_controller.web.policy_report_routes import (
     _fmt_action_current,
     _fmt_gate,
+    _hedge_note,
     _sample_lookup,
     register_policy_report_routes,
 )
@@ -243,6 +244,23 @@ def test_fmt_gate_distinguishes_absent_and_zero_gates():
     assert _fmt_gate(None) == "—"
     assert _fmt_gate(0) == "any import"
     assert _fmt_gate(480) == "480 W"
+
+
+def test_hedge_note_reports_the_assumed_direction_probability():
+    from evse_controller.planner.dp import PlannerSlot
+
+    slot = PlannerSlot(
+        start=datetime(2026, 6, 21, 12, 0),
+        import_p=20.0,
+        export_p=5.0,
+        load_hedge=((-0.72, 0.0167), (0.5, 0.0167)),
+    )
+
+    note = _hedge_note(slot)
+
+    assert "no surplus or import sample" in note
+    assert "1.7% each" in note
+    assert _hedge_note(None) == ""
 
 
 def test_options_table_labels_discharge_follow_and_shows_gate(tmp_path):

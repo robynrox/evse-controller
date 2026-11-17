@@ -5251,6 +5251,123 @@ class TestShadowPlannerAndEstimator:
 
         assert completed == [target.id]
 
+    def test_direction_hedge_covers_unseen_surplus_and_import(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+        from evse_controller.tariffs.octopus import (
+            ioctgo_with_agile_outgoing as module,
+        )
+
+        tariff = _build_tariff()
+        monkeypatch.setattr(
+            module,
+            "config",
+            SimpleNamespace(
+                SOLAR_AVAILABLE=True,
+                SOLAR_MODEL_CONFIGURED=True,
+                WEATHER_LATITUDE=51.5,
+                WEATHER_LONGITUDE=-0.1,
+                WALLBOX_NOMINAL_VOLTAGE=240.0,
+            ),
+        )
+        tariff._follow_gate_voltage = 240.0
+        start = datetime(2026, 6, 21, 12, 0)
+        slot = PlannerSlot(
+            start=start,
+            slot=24,
+            import_p=20.0,
+            export_p=5.0,
+            load_kw=0.2,
+            load_samples=((0.2, 1.0),),
+            load_days=14,
+            follow_conservative_gate_w=500.0,
+            follow_aggressive_gate_w=500.0,
+            follow_conservative_floor_percent=40.0,
+            follow_aggressive_floor_percent=50.0,
+        )
+        planner_input = PlannerInput(
+            day=start.date(),
+            slots=(slot,),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        hedged = tariff._with_direction_hedge(planner_input).slots[0]
+
+        assert len(hedged.load_hedge) == 2
+        assert hedged.load_hedge[0][0] == pytest.approx(-0.72)
+        assert hedged.load_hedge[1][0] == pytest.approx(0.5)
+        expected = 0.5 / (14 + 1) / 2
+        assert hedged.load_hedge[0][1] == pytest.approx(expected)
+        assert sum(
+            weight for _, weight in hedged.load_samples
+        ) == pytest.approx(1.0)
+
+    def test_direction_hedge_leaves_a_two_sided_forecast_alone(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        start = datetime(2026, 6, 21, 12, 0)
+        slot = PlannerSlot(
+            start=start,
+            slot=24,
+            import_p=20.0,
+            export_p=5.0,
+            load_kw=0.2,
+            load_samples=((-0.8, 0.5), (0.6, 0.5)),
+            load_days=14,
+            follow_aggressive_gate_w=500.0,
+            follow_aggressive_floor_percent=50.0,
+        )
+        planner_input = PlannerInput(
+            day=start.date(),
+            slots=(slot,),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        hedged = tariff._with_direction_hedge(planner_input).slots[0]
+
+        assert hedged.load_hedge == ()
+        assert hedged.load_samples == slot.load_samples
+
+    def test_direction_hedge_skips_forced_slots(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        start = datetime(2026, 6, 21, 12, 0)
+        slot = PlannerSlot(
+            start=start,
+            slot=24,
+            import_p=20.0,
+            export_p=5.0,
+            load_kw=0.2,
+            load_samples=((0.2, 1.0),),
+            load_days=14,
+            forced="idle",
+            follow_aggressive_gate_w=500.0,
+        )
+        planner_input = PlannerInput(
+            day=start.date(),
+            slots=(slot,),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        hedged = tariff._with_direction_hedge(planner_input).slots[0]
+
+        assert hedged.load_hedge == ()
+        assert hedged.load_samples == slot.load_samples
+
     def test_hybrid_discharge_mode_is_off_by_default(self):
         tariff = _build_tariff()
 

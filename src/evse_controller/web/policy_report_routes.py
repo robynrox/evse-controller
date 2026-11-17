@@ -286,6 +286,13 @@ def _build_context(run: dict) -> RunContext:
                 session=item.get("session"),
                 load_samples=load_samples,
                 load_source=item.get("load_source") or "",
+                load_days=int(item.get("load_days", 0) or 0),
+                load_hedge=tuple(
+                    (float(entry[0]), float(entry[1]))
+                    for entry in (item.get("load_hedge") or [])
+                    if isinstance(entry, (list, tuple))
+                    and len(entry) == 2
+                ),
                 follow_conservative_gate_w=_number(
                     item.get("follow_conservative_gate_w")
                 ),
@@ -881,6 +888,26 @@ def _selected_state(ctx: RunContext, states, requested_soc) -> int:
     return min(available, key=lambda item: abs(item - state))
 
 
+def _hedge_note(slot) -> str:
+    """Explain the synthetic direction samples in a slot, if any."""
+    if slot is None or not slot.load_hedge:
+        return ""
+    labels = [
+        "surplus" if load_kw < 0 else "import"
+        for load_kw, _ in slot.load_hedge
+    ]
+    weights = {round(weight, 6) for _, weight in slot.load_hedge}
+    weight = max(weights)
+    each = " each" if len(labels) > 1 else ""
+    return (
+        "The forecast for this slot has no "
+        + " or ".join(labels)
+        + f" sample. A small hedge sample ({weight:.1%}{each}) is "
+        "included so a bidirectional arc remains available without "
+        "assuming the event is certain."
+    )
+
+
 def _follow_notes(slot, options) -> list[str]:
     """Explain follow arcs that are absent from this slot's option list."""
     if slot is None:
@@ -1042,6 +1069,8 @@ def _render(history: PlannerHistory):
             heatmap="",
             bands=[],
             options=[],
+            follow_notes=[],
+            hedge_note="",
             selected_slot=None,
             selected_state=None,
             why="",
@@ -1076,6 +1105,8 @@ def _render(history: PlannerHistory):
             heatmap="",
             bands=[],
             options=[],
+            follow_notes=[],
+            hedge_note="",
             selected_slot=None,
             selected_state=None,
             why="",
@@ -1129,6 +1160,7 @@ def _render(history: PlannerHistory):
         bands=bands,
         options=options,
         follow_notes=follow_notes,
+        hedge_note=_hedge_note(ctx.slots[slot_index]),
         selected_slot=ctx.slots[slot_index],
         selected_cell=cell,
         selected_state=state_index,

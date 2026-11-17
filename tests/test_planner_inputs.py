@@ -96,6 +96,37 @@ def _session(kind, start_slot, end_slot):
     return EnergySession(kind, start, end)
 
 
+def test_keeps_negative_net_load_for_solar_follow():
+    loads = [
+        SlotLoad(
+            median_w=-600.0,
+            p90_w=200.0,
+            days=14,
+            coverage_s=1800.0,
+            samples=((-800.0, 0.4), (300.0, 0.6)),
+        )
+    ] + [
+        SlotLoad(None, None, 0, 0.0)
+        for _ in range(47)
+    ]
+    result = build_planner_input(
+        FakeSource(dynamic_export=False),
+        FakeProfile(loads),
+        DAY,
+        current_slot=0,
+        current_soc=60,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    slot = result.slots[0]
+    assert slot.load_kw == pytest.approx(-0.6)
+    assert slot.load_samples[0][0] == pytest.approx(-0.8)
+    assert slot.load_samples[1][0] == pytest.approx(0.3)
+    assert slot.load_days == 14
+
+
 def test_builds_only_the_remaining_slots():
     loads = [
         SlotLoad(median_w=1200.0, p90_w=2400.0, days=14, coverage_s=1800)

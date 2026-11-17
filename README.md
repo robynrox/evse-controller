@@ -1328,8 +1328,17 @@ the optimal action for every half-hour slot and every SoC state:
   are not filled with zero or a base-load prior. A short window is shown as
   low confidence through its measured-day count, not as a lower or higher
   load. The DP plans from the net grid-load series (`grid − Wallbox`), whose
-  stored key remains `house` for compatibility. The policy page still labels
-  historical runs that used the old blended or prior input.
+  stored key remains `house` for compatibility. Negative values are kept as
+  export rather than clipped, so observed solar surplus is visible to the
+  follow arcs. The policy page still labels historical runs that used the old
+  blended or prior input.
+- **Direction uncertainty:** a slot that has never seen surplus (or never seen
+  house import above the follow gate) still gets a small synthetic hedge
+  sample, weighted as half a pseudo-day (`0.5 / (measured_days + 1)`) and
+  split between the missing directions. The hedge keeps a bidirectional arc
+  available without assuming the event is certain; the policy page shows the
+  assumed weight. It is only added in daylight when solar is configured, and
+  never in forced or supplier-session slots.
 - **Follow modes:** where the heuristic's economic gate is available, the map
   can choose *follow house conservative*, *follow house aggressive*, *follow
   bidirectional conservative/aggressive* or *follow solar*. Fixed
@@ -1377,12 +1386,14 @@ current-pair search, so the algorithm stays linear in the number of arcs and
 samples. The DP still keeps only the SoC state; load is exogenous, so these are
 additional arcs, not additional dimensions.
 
-A bidirectional arc is offered only when the slot has both a usable surplus
-and at least one sample that reaches the relevant house-follow gate. The
-conservative and aggressive variants use their own gate and floor. When a
-bidirectional arc is feasible from a given SoC it suppresses the matching
-one-direction arc (solar, conservative house or aggressive house); that
-one-direction arc remains available at SoCs where its bidirectional
+A bidirectional arc is offered when the slot has both a usable surplus and at
+least one sample that reaches the relevant house-follow gate. When one
+direction has never been observed, a small hedge sample supplies it (see
+**Direction uncertainty** above), so the arc can still be chosen as a priced
+hedge. The conservative and aggressive variants use their own gate and floor.
+When a bidirectional arc is feasible from a given SoC it suppresses the
+matching one-direction arc (solar, conservative house or aggressive house);
+that one-direction arc remains available at SoCs where its bidirectional
 counterpart cannot be applied.
 
 The follow-house gates are the same `discharge_activation_threshold_w`

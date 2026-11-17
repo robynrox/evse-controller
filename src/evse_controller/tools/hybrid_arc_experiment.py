@@ -818,6 +818,13 @@ def _historical_cases(
                         load_kw=float(item.get("load_kw") or 0.0),
                         load_samples=load_samples,
                         load_source=str(item.get("load_source") or ""),
+                        load_days=int(item.get("load_days", 0) or 0),
+                        load_hedge=tuple(
+                            (float(entry[0]), float(entry[1]))
+                            for entry in (item.get("load_hedge") or [])
+                            if isinstance(entry, (list, tuple))
+                            and len(entry) == 2
+                        ),
                         max_charge_current_a=float(
                             config.WALLBOX_MAX_CHARGE_CURRENT
                         ),

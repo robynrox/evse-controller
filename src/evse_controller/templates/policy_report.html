@@ -631,6 +631,11 @@
                 </tbody>
             </table>
         </div>
+        {% if hedge_note %}
+        <p class="hedge-note" style="font-size:12px;color:#444;background:#f4f7fa;border:1px solid #d8e0e8;border-radius:4px;padding:8px 10px;">
+            {{ hedge_note }}
+        </p>
+        {% endif %}
         <p style="font-size:12px;color:#777;">
             Score includes the target penalty used to rank paths; it is hidden
             when the target is already unreachable. Total is the real immediate
@@ -641,7 +646,9 @@
             hybrid arc: a fixed discharge floor plus a follow above it.
             <strong>Gate</strong> is the house import at which a follow arc
             activates; it is shown as <em>—</em> for arcs where it does not
-            apply.
+            apply. Where the measured history has never seen one direction, a
+            small hedge sample keeps the bidirectional arc available; its
+            weight is shown above the table.
         </p>
         {% endif %}
 

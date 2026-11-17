@@ -75,6 +75,13 @@ class PlannerSlot:
     #: means the planner uses ``load_kw`` alone.
     load_samples: tuple[tuple[float, float], ...] = ()
     load_source: str = ""
+    #: Number of measured days behind ``load_samples``.  Used to size the
+    #: direction-uncertainty hedge; 0 means no measured history.
+    load_days: int = 0
+    #: Synthetic hedge samples added to ``load_samples`` for a direction the
+    #: measured history has never seen, as ``(load_kw, weight)``.  Empty when
+    #: no hedge was needed.
+    load_hedge: tuple[tuple[float, float], ...] = ()
     #: House-import gates from the heuristic's conservative/aggressive
     #: discharge calculation.  ``None`` disables that follow arc.
     follow_conservative_gate_w: Optional[float] = None

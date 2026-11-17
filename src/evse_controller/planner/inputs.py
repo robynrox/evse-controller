@@ -187,14 +187,20 @@ def build_planner_input(
             load_kw = load_fallback_kw
             load_samples: tuple[tuple[float, float], ...] = ()
             load_source = "fallback"
+            load_days = 0
             if index < len(loads):
                 stats = loads[index]
                 if stats is not None and stats.median_w is not None:
-                    load_kw = max(0.0, float(stats.median_w) / 1000.0)
+                    # The profile's ``house`` series is net grid load with the
+                    # Wallbox removed, so a negative value is real export.
+                    # Keep the sign: follow-solar and bidirectional arcs need
+                    # it, and clipping would make observed surplus invisible.
+                    load_kw = float(stats.median_w) / 1000.0
                     load_source = "profile"
+                    load_days = max(0, int(stats.days))
                     if stats.samples:
                         load_samples = tuple(
-                            (max(0.0, watts) / 1000.0, weight)
+                            (watts / 1000.0, weight)
                             for watts, weight in stats.samples
                         )
                     else:
@@ -246,6 +252,7 @@ def build_planner_input(
                     session=session_name,
                     load_samples=load_samples,
                     load_source=load_source,
+                    load_days=load_days,
                     horizon_index=len(slots),
                 )
             )
