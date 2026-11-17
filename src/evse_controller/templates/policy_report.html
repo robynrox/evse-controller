@@ -595,6 +595,7 @@
                     <tr>
                         <th>Option</th>
                         <th>Current</th>
+                        <th>Gate</th>
                         <th>AC kW</th>
                         <th>Immediate</th>
                         <th>Future</th>
@@ -609,6 +610,7 @@
                         <tr>
                             <td class="action-{{ option.kind }}">{{ mode_label(option.kind) }}</td>
                             <td>{{ fmt_action_current(option.kind, option.current_a, option.current_min_a, option.current_max_a) }}</td>
+                            <td>{{ fmt_gate(option.gate_w) }}</td>
                             <td>{{ '%.2f'|format(option.ac_power_kw) }}</td>
                             <td>{{ fmt_pence(option.immediate_cost_p) }}</td>
                             <td>{{ fmt_pence(option.future_cost_p) }}</td>
@@ -635,7 +637,11 @@
             plus future energy cost. Future uses the recorded inputs, not
             today's forecast. Follow arcs show the current at which support
             starts (≥N A); the live loop varies with the measured house load
-            up to the Wallbox limit.
+            up to the Wallbox limit. <strong>Discharge follow</strong> is the
+            hybrid arc: a fixed discharge floor plus a follow above it.
+            <strong>Gate</strong> is the house import at which a follow arc
+            activates; it is shown as <em>—</em> for arcs where it does not
+            apply.
         </p>
         {% endif %}
 

@@ -404,6 +404,26 @@ def test_hybrid_floor_arc_follows_above_the_floor():
     assert hybrid.follow
 
 
+def test_options_expose_follow_gates():
+    sample_slot = replace(
+        slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),
+        load_samples=((0.5, 0.5), (3.8, 0.5)),
+        follow_aggressive_gate_w=240.0,
+        follow_aggressive_floor_percent=50.0,
+        follow_hybrid_floors=((5.0, None, 480.0),),
+    )
+    p = planner(target_soc_percent=None)
+    policy = p.policy([sample_slot], initial_soc_percent=60.0)
+
+    options = {
+        option.kind: option for option in p.options(policy, 0, 120)
+    }
+
+    assert options["follow_house_aggressive"].gate_w == 240.0
+    assert options["follow_house_floor_aggressive"].gate_w == 480.0
+    assert options["idle"].gate_w is None
+
+
 def test_balanced_hybrid_floor_uses_zero_bias():
     sample_slot = replace(
         slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),

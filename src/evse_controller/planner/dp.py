@@ -161,6 +161,7 @@ class PolicyOption:
     current_max_a: Optional[float] = None
     follow: bool = False
     floor_current_a: Optional[float] = None
+    gate_w: Optional[float] = None
     feasible: bool = True
     reason: str = ""
 
@@ -220,6 +221,7 @@ class _ActionTemplate:
     floor_percent: Optional[float] = None
     follow: bool = False
     floor_current_a: Optional[float] = None
+    gate_w: Optional[float] = None
 
 
 class DpPlanner:
@@ -609,6 +611,7 @@ class DpPlanner:
                     current_max_a=template.current_max_a,
                     follow=template.follow,
                     floor_current_a=template.floor_current_a,
+                    gate_w=template.gate_w,
                 )
 
                 mode_best: dict[str, float] = {}
@@ -753,6 +756,7 @@ class DpPlanner:
                     current_max_a=template.current_max_a,
                     follow=template.follow,
                     floor_current_a=template.floor_current_a,
+                    gate_w=template.gate_w,
                 )
             )
         options.sort(key=lambda option: option.policy_cost_p)
@@ -1229,6 +1233,7 @@ class DpPlanner:
             floor_percent=floor_percent,
             follow=True,
             floor_current_a=floor_current_a,
+            gate_w=gate_w,
         )
 
     def _follow_bidirectional_template(
@@ -1353,6 +1358,7 @@ class DpPlanner:
             current_max_a=float(max(currents)),
             floor_percent=floor_percent,
             follow=True,
+            gate_w=gate_w,
         )
 
     def _follow_solar_template(

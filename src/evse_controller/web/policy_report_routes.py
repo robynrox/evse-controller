@@ -96,13 +96,13 @@ def _mode_label(kind: Optional[str]) -> str:
         "follow_house_conservative": "follow house (conservative)",
         "follow_house_aggressive": "follow house (aggressive)",
         "follow_house_floor_conservative": (
-            "follow house floor (conservative)"
+            "discharge follow (conservative)"
         ),
         "follow_house_floor_aggressive": (
-            "follow house floor (aggressive)"
+            "discharge follow (aggressive)"
         ),
         "follow_house_floor_balanced": (
-            "follow house floor (balanced)"
+            "discharge follow (balanced)"
         ),
         "follow_bidirectional_conservative": (
             "follow bidirectional (conservative)"
@@ -119,6 +119,15 @@ def _fmt_pence(value) -> str:
         return "—"
     sign = "−" if value < 0 else ""
     return f"{sign}{abs(value):,.1f}p"
+
+
+def _fmt_gate(value) -> str:
+    """Format a follow arc's activation gate."""
+    if value is None or value >= 1e8:
+        return "—"
+    if value <= 0:
+        return "any import"
+    return f"{value:.0f} W"
 
 
 def _fmt_money_from_pence(value) -> str:
@@ -1045,6 +1054,7 @@ def _render(history: PlannerHistory):
             fmt_current=_fmt_current,
             fmt_action_current=_fmt_action_current,
             mode_label=_mode_label,
+            fmt_gate=_fmt_gate,
             fmt_pence=_fmt_pence,
             fmt_money=_fmt_money_from_pence,
         )
@@ -1078,6 +1088,7 @@ def _render(history: PlannerHistory):
             fmt_current=_fmt_current,
             fmt_action_current=_fmt_action_current,
             mode_label=_mode_label,
+            fmt_gate=_fmt_gate,
             fmt_pence=_fmt_pence,
             fmt_money=_fmt_money_from_pence,
         )
@@ -1131,6 +1142,7 @@ def _render(history: PlannerHistory):
         fmt_current=_fmt_current,
         fmt_action_current=_fmt_action_current,
         mode_label=_mode_label,
+        fmt_gate=_fmt_gate,
         fmt_pence=_fmt_pence,
         fmt_money=_fmt_money_from_pence,
     )

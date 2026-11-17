@@ -12,6 +12,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
 )
 from evse_controller.web.policy_report_routes import (
     _fmt_action_current,
+    _fmt_gate,
     _sample_lookup,
     register_policy_report_routes,
 )
@@ -236,6 +237,38 @@ def test_page_warns_when_planner_params_are_missing(tmp_path):
     assert "predates planner-parameter capture" in response.get_data(
         as_text=True
     )
+
+
+def test_fmt_gate_distinguishes_absent_and_zero_gates():
+    assert _fmt_gate(None) == "—"
+    assert _fmt_gate(0) == "any import"
+    assert _fmt_gate(480) == "480 W"
+
+
+def test_options_table_labels_discharge_follow_and_shows_gate(tmp_path):
+    run = _run(with_params=True)
+    for item in run["inputs"]:
+        item["load_samples"] = [[0.5, 1.0]]
+        item["load_source"] = "profile"
+        item["follow_aggressive_gate_w"] = 240.0
+        item["follow_aggressive_floor_percent"] = 50.0
+        item["follow_hybrid_floors"] = [[5.0, None, 480.0]]
+    store = PlannerHistory(tmp_path / "hybrid")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(
+        f"/reports/policy?date={DAY.isoformat()}&slot=0&soc=60"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "<th>Gate</th>" in body
+    assert "discharge follow (aggressive)" in body
+    assert "480 W" in body
+    assert "follow house floor" not in body
 
 
 def test_page_shows_follow_modes_and_their_gates(tmp_path):
