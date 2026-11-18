@@ -20,6 +20,10 @@ There's also a complete project that uses those libraries to provide V2X
 functions along with logging, scheduled events, and web or console control
 and its installation and basic use are detailed below.
 
+> **Tester preview:** if you are trying the shared smart-tariff controller,
+> start with [TESTERS.md](TESTERS.md). It covers the supported presets,
+> outgoing tariffs, Agile import, EV Readiness and what to report.
+
 This code may look more Javaesque than Pythonesque - I have more expertise in Java but I've chosen Python so that I can
 learn a little bit more.
 
