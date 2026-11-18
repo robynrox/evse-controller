@@ -23,22 +23,35 @@ EXPORT_SOURCES = ("agile", "tiers", "none")
 DAY_MINUTES = 24 * 60
 
 #: Presets that use the shared smart-tariff controller.  Standard Octopus Go
-#: is a simpler sibling of Intelligent Octopus Go: same heuristic and DP, but
-#: a 00:30-05:30 cheap window and no automatic OCPP handoff.
+#: and Cosy Octopus are time-of-use siblings of Intelligent Octopus Go: same
+#: heuristic and DP, with their own import windows and prices.
 IOG_PRESETS = frozenset(
-    {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export", "octopus_go"}
+    {
+        "iog_agile",
+        "iog_outgoing",
+        "iog_prime",
+        "iog_no_export",
+        "octopus_go",
+        "cosy",
+    }
 )
 
-#: Tariff controller selected by each price preset.  The IOG presets and
-#: standard Octopus Go share the same controller; the preset's export source
-#: decides whether it follows Agile or fixed export tiers.
+#: Presets that use supplier-scheduled OCPP charging.  Only Intelligent
+#: Octopus Go does; standard Go, Cosy and Flux must not auto-trigger OCPP.
+OCPP_PRESETS = frozenset(
+    {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export"}
+)
+
+#: Tariff controller selected by each price preset.  The IOG presets, standard
+#: Octopus Go and Cosy Octopus share the same controller; the preset's import
+#: windows and export source decide how it prices each slot.
 PRESET_TARIFF = {
     "iog_agile": "IOCTGO_AGILEOUT",
     "iog_outgoing": "IOCTGO_AGILEOUT",
     "iog_prime": "IOCTGO_AGILEOUT",
     "iog_no_export": "IOCTGO_AGILEOUT",
     "octopus_go": "IOCTGO_AGILEOUT",
-    "cosy": "COSY",
+    "cosy": "IOCTGO_AGILEOUT",
     "flux": "FLUX",
 }
 
@@ -299,7 +312,7 @@ PRESETS: dict[str, PricePreset] = {
             "peak": ("16:00-19:00",),
         },
         export_windows={"cheap": (), "peak": ()},
-        default_import_prices={"standard": 26.22, "cheap": 12.86, "peak": 39.32},
+        default_import_prices={"standard": 28.75, "cheap": 14.10, "peak": 43.13},
         default_export_prices={"standard": 15.0, "cheap": 15.0, "peak": 15.0},
         export_source="tiers",
     ),

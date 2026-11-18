@@ -2788,7 +2788,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         grid_support_slots: set[int],
         away_slots: set[int],
         planned_export_slots: set[int],
-        charge_cap: float,
         full_charge_gain: float,
         export_loss: float,
         non_export_loss: float,
@@ -2807,6 +2806,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         baseline.  When it is omitted, ordinary slots keep the historical
         load-follow loss and ``export_slots`` alone selects exports.
         """
+        charge_cap = self.charge_cap_percent(slot * 30)
         if slot in away_slots:
             return 0.0, "away"
         if slot in free_import_slots:
@@ -2869,7 +2869,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         export_loss = self._export_slot_soc_loss_percent()
         full_charge_gain = self._full_charge_slot_soc_gain_percent()
-        charge_cap = self.charge_cap_percent()
 
         projected = current_soc_percent
         path: list[tuple[int, float, str]] = []
@@ -2881,7 +2880,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 grid_support_slots=grid_support_slots,
                 away_slots=away_slots,
                 planned_export_slots=planned_export_slots,
-                charge_cap=charge_cap,
                 full_charge_gain=full_charge_gain,
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
@@ -3714,14 +3712,26 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self._import_cheap_p(), self.BATTERY_ROUND_TRIP_EFFICIENCY
         )
 
-    def charge_cap_percent(self) -> float:
+    def charge_cap_percent(self, day_minute: Optional[int] = None) -> float:
         """Effective charge ceiling: the configured cap, hard-limited to 97%.
 
         Charging to 100% is hard on the pack and leaves no room for
         regenerative energy.  The config can lower the ceiling (for example
         ``max_charge_percent: 90``), but it cannot raise it above 97%.
+
+        Cosy Octopus has an afternoon cheap window (13:00-16:00) that often
+        coincides with solar.  ``solar_period_max_charge`` lowers the ceiling
+        in that window only, so the afternoon grid charge leaves room for the
+        sun.  It is deliberately a Cosy-only setting.
         """
-        return min(config.MAX_CHARGE_PERCENT, 97)
+        cap = min(config.MAX_CHARGE_PERCENT, 97)
+        if (
+            config.TARIFF_PRESET == "cosy"
+            and day_minute is not None
+            and 13 * 60 <= day_minute < 16 * 60
+        ):
+            cap = min(cap, config.SOLAR_PERIOD_MAX_CHARGE)
+        return cap
 
     def solar_export_round_trip(self, harvest_current_a: float | None = None) -> float:
         """Round trip for solar harvest -> later export.
@@ -3739,6 +3749,30 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             current, self.EXPORT_REFERENCE_CURRENT
         )
 
+    def _best_remaining_import_p(self) -> float:
+        """Highest import price still ahead today, from the price table.
+
+        This is the value of stored energy used for self-consumption.  It is
+        not a forecast: it only reads the configured prices for the remaining
+        half-hours.  For Intelligent Octopus Go the highest remaining price is
+        the standard rate, so this is unchanged.  For Cosy Octopus it is the
+        peak rate while a peak window is still ahead, which is the load the
+        stored solar should be kept for.
+        """
+        now = self.get_current_datetime()
+        current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        table = self.resolved_price_table()
+        if table is not None:
+            prices = [
+                table.import_price_with(
+                    self._config_import_prices(), slot * 30
+                )
+                for slot in range(current_slot, 48)
+            ]
+            if prices:
+                return max(prices)
+        return self._import_standard_p()
+
     def self_use_value_threshold_p(
         self,
         harvest_current_a: float | None = None,
@@ -3746,9 +3780,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """Value of solar stored for self-consumption, in p/kWh.
 
         Charge at the harvest current and discharge at ~3 A to cover the house
-        base load, then compare the avoided peak import with the export rate
-        forgone now.  At a 3 A harvest this is (30p - 0.3p margin) x 0.580 x
-        0.734 = 12.6p; at 6 A it is (30p - 0.3p) x 0.778 x 0.734 = 17.0p.
+        base load, then compare the avoided import with the export rate forgone
+        now.  The avoided import is the highest configured import price still
+        ahead today, so a Cosy peak window is valued correctly without using a
+        forecast.  At a 3 A harvest with the default 30p standard rate this is
+        (30p - 0.3p margin) x 0.580 x 0.734 = 12.6p; at 6 A it is
+        (30p - 0.3p) x 0.778 x 0.734 = 17.0p.
         Using the export current here (0.943 instead of 0.734) would overstate
         the value by ~28%.
 
@@ -3765,7 +3802,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             current, self.SELF_USE_DISCHARGE_REFERENCE_CURRENT
         )
         return (
-            self._import_standard_p() - self.MIN_PROFIT_MARGIN_P_PER_KWH
+            self._best_remaining_import_p()
+            - self.MIN_PROFIT_MARGIN_P_PER_KWH
         ) * round_trip
 
     def _minimum_harvest_charge_current_a(
@@ -6544,7 +6582,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 grid_support_slots=grid_support_slots,
                 away_slots=away_slots,
                 planned_export_slots=planned_export_slots,
-                charge_cap=charge_cap,
                 full_charge_gain=full_charge_gain,
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
@@ -7565,7 +7602,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "What is the surplus worth if the house uses it later?",
                     "Storing the solar to cover the house avoids importing at "
                     "the peak rate.",
-                    f"(peak import {self._import_standard_p():.1f}p − {margin:.1f}p "
+                    f"(best remaining import {self._best_remaining_import_p():.1f}p − {margin:.1f}p "
                     f"margin) × {self_use_rt * 100:.0f}% round trip at "
                     f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
                     f"{self_use_value_p:.1f}p/kWh.",
@@ -7679,7 +7716,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "What is the surplus worth if the house uses it later?",
                     "Storing the solar to cover the house avoids importing at "
                     "the peak rate.",
-                    f"(peak import {self._import_standard_p():.1f}p − {margin:.1f}p "
+                    f"(best remaining import {self._best_remaining_import_p():.1f}p − {margin:.1f}p "
                     f"margin) × {self_use_rt * 100:.0f}% round trip at "
                     f"{harvest_a:.0f} A = {self_use_value_p:.1f}p/kWh.",
                     f"{self_use_value_p:.1f}p/kWh.",
@@ -9272,10 +9309,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 f"IOCTGO_AGILEOUT {session.label}: SoC at cap",
             )
 
-        # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (23:30-05:30)
+        # OFF-PEAK CHARGING HAS ABSOLUTE PRIORITY (the preset's cheap windows)
         # Charge at max rate regardless of SoC or other states
         if self.is_off_peak(dayMinute):
-            cap = self.charge_cap_percent()
+            cap = self.charge_cap_percent(dayMinute)
             charge_efficiency = (
                 self.EFFICIENCY_MODEL.charge_efficiency(
                     self.GRID_CHARGE_REFERENCE_CURRENT

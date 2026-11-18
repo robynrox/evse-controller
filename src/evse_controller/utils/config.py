@@ -624,11 +624,14 @@ class Config:
 
     SMART_TARIFF = property(_smart_tariff)
 
-    #: Standard Octopus Go has no supplier-scheduled OCPP charging, so the
-    #: controller and the automatic handoff must not trigger OCPP for it.
-    AUTO_OCPP_SUPPORTED = property(
-        lambda self: self.TARIFF_PRESET != "octopus_go"
-    )
+    #: Only Intelligent Octopus Go uses supplier-scheduled OCPP charging.
+    #: Standard Go, Cosy and Flux must not auto-trigger OCPP.
+    def _auto_ocpp_supported(self) -> bool:
+        from evse_controller.price_tiers import OCPP_PRESETS
+
+        return self.TARIFF_PRESET in OCPP_PRESETS
+
+    AUTO_OCPP_SUPPORTED = property(_auto_ocpp_supported)
 
     # -- automatic OCPP handoff ------------------------------------------
     #

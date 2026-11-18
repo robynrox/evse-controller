@@ -413,7 +413,7 @@ The `tariffs.ioctgo` section contains parameters shared by the Intelligent and s
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
 - `grid_import_threshold_high_soc`: When SoC >= threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover the house load completely
 - `grid_import_threshold_low_soc`: When SoC < threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover most of the house load with a small amount coming from the grid
-- `smart_ocpp_operation`: Flag to enable intelligent OCPP management based on SoC and time (true/false)
+- `smart_ocpp_operation`: Flag to enable intelligent OCPP management for Intelligent Octopus Go (true/false). Standard Go, Cosy and Flux never auto-trigger OCPP
 - `ocpp_enable_soc_threshold`: Enable OCPP when SoC drops below this level (0-100)
 - `ocpp_disable_soc_threshold`: Disable OCPP in the next half hour slot when SoC rises to this level (0-100)
 - `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")
@@ -456,8 +456,8 @@ prices:
     # peak_windows: ["16:00-19:00"]
 ```
 
-The outgoing products and standard Octopus Go are presets over the same
-smart controller, not separate controllers:
+The outgoing products, standard Octopus Go and Cosy Octopus are presets over
+the same smart controller, not separate controllers:
 
 - `iog_agile`: fetched Agile Outgoing half-hour export prices.
 - `iog_outgoing`: one flat export price for the whole day.
@@ -467,15 +467,21 @@ smart controller, not separate controllers:
 - `octopus_go`: standard Octopus Go. It uses the same heuristic and DP, with
   the 00:30–05:30 cheap import window instead of 23:30–05:30, and it does not
   automatically trigger OCPP. Its export side uses the fixed tiers.
+- `cosy`: Cosy Octopus. It uses the same heuristic and DP with cheap windows
+  04:00–07:00, 13:00–16:00 and 22:00–24:00, a peak window 16:00–19:00, and
+  standard at other times. The `solar_period_max_charge` setting caps the
+  13:00–16:00 charge so the afternoon grid charge leaves room for solar. It
+  does not auto-trigger OCPP. Starter prices are 14.10/28.75/43.13p for
+  cheap/standard/peak; edit them under `prices` for your area and season.
 
 `export_source` overrides the preset's export choice. Each preset supplies its
-own import cheap window: Intelligent Octopus Go uses 23:30–05:30 and standard
-Octopus Go uses 00:30–05:30. Cosy and Flux also use the table when their own
-preset is selected, so their prices and cheap/peak decision windows are
-editable without changing their control strategies. The preset is the single
-tariff selector; there is no separate tariff dropdown under Charging. Some
-controller-specific behaviour, such as Flux's 16:00 discharge ramp, still uses
-its built-in timing.
+own import cheap window: Intelligent Octopus Go uses 23:30–05:30, standard
+Octopus Go uses 00:30–05:30, and Cosy uses its three cheap windows. Flux also
+uses the table when its own preset is selected, so its prices and cheap/peak
+decision windows are editable without changing its control strategy. The
+preset is the single tariff selector; there is no separate tariff dropdown
+under Charging. Some controller-specific behaviour, such as Flux's 16:00
+discharge ramp, still uses its built-in timing.
 
 
 ##### Link health
@@ -877,7 +883,8 @@ other override also names itself in the dashboard state line.
 ##### Automatic OCPP handoff
 
 The `ocpp` section can schedule supplier handoffs without manual session
-creation:
+creation. Only Intelligent Octopus Go supports this; standard Go, Cosy and
+Flux skip the automatic handoff even when `auto_enabled` is true.
 
 ```yaml
 ocpp:

@@ -351,14 +351,19 @@ completed fixes.
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,
   `iog_outgoing`, `iog_prime`, `iog_no_export`, `octopus_go`, `cosy`,
   `flux`); the six `prices` values are what users normally edit. The IOctGo
-  variants and standard Octopus Go use the same controller, so they differ
-  only in import/export pricing and timing, not control logic. Standard Go
-  uses the 00:30–05:30 cheap window and does not auto-trigger OCPP; the
-  Intelligent variants use 23:30–05:30. Cosy and Flux opt in when their own
-  preset is selected: prices and cheap/peak decision windows come from the
-  table, but their control strategies are unchanged. A mismatched preset
-  leaves a tariff on its legacy bands rather than applying another product's
-  prices.
+  variants, standard Octopus Go and Cosy Octopus use the same controller, so
+  they differ only in import/export pricing and timing, not control logic.
+  Standard Go uses the 00:30–05:30 cheap window and does not auto-trigger
+  OCPP; the Intelligent variants use 23:30–05:30. Cosy uses three cheap
+  windows (04:00–07:00, 13:00–16:00, 22:00–24:00) and a 16:00–19:00 peak
+  window; its starter prices are the current South Wales values
+  (14.10/28.75/43.13p) and remain editable. `charging.solar_period_max_charge`
+  is Cosy-only: it caps the 13:00–16:00 charge so the afternoon grid charge
+  leaves room for solar. Only Intelligent Octopus Go uses OCPP; standard Go,
+  Cosy and Flux do not auto-trigger it. Flux still opts in when its own preset
+  is selected: prices and cheap/peak decision windows come from the table, but
+  its control strategy is unchanged. A mismatched preset leaves a tariff on
+  its legacy bands rather than applying another product's prices.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

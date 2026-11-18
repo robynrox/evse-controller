@@ -7095,6 +7095,122 @@ class TestStandardOctopusGo:
         assert "Agile Outgoing Export" not in html
 
 
+class TestCosyOctopusShared:
+    """Cosy Octopus is the same controller with three cheap bands and a peak."""
+
+    @pytest.fixture(autouse=True)
+    def _cosy(self, monkeypatch):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "cosy")
+        for side, tier, value in (
+            ("import", "standard", 28.75),
+            ("import", "cheap", 14.10),
+            ("import", "peak", 43.13),
+            ("export", "standard", 15.0),
+            ("export", "cheap", 15.0),
+            ("export", "peak", 15.0),
+        ):
+            prices = config._config_data.setdefault("prices", {}).setdefault(
+                side, {}
+            )
+            monkeypatch.setitem(prices, tier, value)
+        monkeypatch.setattr(config, "MAX_CHARGE_PERCENT", 90)
+        monkeypatch.setattr(config, "SOLAR_PERIOD_MAX_CHARGE", 80)
+
+    @staticmethod
+    def _at(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    def test_cheap_and_peak_windows(self):
+        tariff = _build_tariff()
+
+        for minute in (4 * 60 + 30, 13 * 60 + 30, 22 * 60 + 30):
+            assert tariff.is_off_peak(minute) is True
+        assert tariff.is_off_peak(12 * 60) is False
+        assert tariff.is_off_peak(16 * 60 + 30) is False
+        assert tariff.is_expensive_period(16 * 60 + 30) is True
+        assert tariff.is_expensive_period(12 * 60) is False
+
+    def test_afternoon_charge_cap_is_cosy_only(self):
+        tariff = _build_tariff()
+
+        assert tariff.charge_cap_percent(13 * 60 + 30) == 80
+        assert tariff.charge_cap_percent(22 * 60 + 30) == 90
+
+        config.TARIFF_PRESET = "iog_agile"
+        iog = _build_tariff()
+        assert iog.charge_cap_percent(13 * 60 + 30) == 90
+
+    def test_off_peak_charge_respects_the_afternoon_cap(self):
+        tariff = _build_tariff()
+
+        self._at(tariff, 13, 30)
+        afternoon, _, _, _ = tariff.get_control_state(
+            create_test_state(85), 13 * 60 + 30
+        )
+        assert afternoon == ControlState.DORMANT
+
+        self._at(tariff, 22, 30)
+        evening, _, _, _ = tariff.get_control_state(
+            create_test_state(85), 22 * 60 + 30
+        )
+        assert evening == ControlState.CHARGE
+
+    def test_self_use_value_uses_the_peak_ahead(self):
+        tariff = _build_tariff()
+        self._at(tariff, 10, 0)
+
+        assert tariff._best_remaining_import_p() == pytest.approx(43.13)
+        round_trip = tariff.EFFICIENCY_MODEL.round_trip_efficiency(
+            tariff.SOLAR_CHARGE_REFERENCE_CURRENT,
+            tariff.SELF_USE_DISCHARGE_REFERENCE_CURRENT,
+        )
+        assert tariff.self_use_value_threshold_p() == pytest.approx(
+            (43.13 - tariff.MIN_PROFIT_MARGIN_P_PER_KWH) * round_trip
+        )
+
+        self._at(tariff, 20, 0)
+        assert tariff._best_remaining_import_p() == pytest.approx(28.75)
+
+    def test_peak_slot_uses_the_peak_import_price(self):
+        tariff = _build_tariff()
+        self._at(tariff, 16, 30)
+
+        assert tariff._current_import_rate_p(16 * 60 + 30) == pytest.approx(
+            43.13
+        )
+        state = create_test_state(60)
+        control_state, _, _, _ = tariff.get_control_state(
+            state, 16 * 60 + 30
+        )
+        assert control_state != ControlState.DORMANT
+        assert tariff._decision_snapshot.import_rate_p == pytest.approx(43.13)
+
+    def test_ocpp_is_not_auto_triggered(self, monkeypatch):
+        monkeypatch.setattr(config, "IOCTGO_SMART_OCPP_OPERATION", True)
+        tariff = _build_tariff()
+        queue = Mock()
+        tariff.command_queue = queue
+
+        assert tariff.AUTO_OCPP_SUPPORTED is False
+        assert tariff.SMART_OCPP_OPERATION is False
+        assert tariff.should_enable_ocpp_due_to_soc(
+            create_test_state(10)
+        ) is False
+        assert tariff.should_enable_ocpp_due_to_time(16 * 60 + 30) is False
+
+        tariff._ocpp_check_turn_on(create_test_state(10), 16 * 60 + 30)
+        queue.put.assert_not_called()
+
+        # A manual OCPP slot is booked at its actual time-of-use price.
+        day = datetime.now().date()
+        assert tariff.ocpp_import_price_p(day, 33) == pytest.approx(43.13)
+
+
 class TestIntelligentOctopusGoStillUsesItsOwnWindow:
     def test_cheap_window_and_ocpp_are_unchanged(self, monkeypatch):
         tariffs = config._config_data.setdefault("tariffs", {})
@@ -7183,7 +7299,7 @@ class TestTieredExportVariants:
         self, monkeypatch
     ):
         tariffs = config._config_data.setdefault("tariffs", {})
-        monkeypatch.setitem(tariffs, "preset", "cosy")
+        monkeypatch.setitem(tariffs, "preset", "flux")
 
         tariff = _build_tariff()
 

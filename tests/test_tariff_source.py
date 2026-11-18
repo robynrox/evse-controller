@@ -128,10 +128,10 @@ def test_octgo_boundaries_are_pinned():
 def test_cosy_boundaries_are_pinned():
     rates = _prices(CosyOctopusTariff())
 
-    assert rates[0].import_p == pytest.approx(26.22)   # 00:00 medium
-    assert rates[8].import_p == pytest.approx(12.86)   # 04:00 cheap
-    assert rates[32].import_p == pytest.approx(39.32)  # 16:00 peak
-    assert rates[44].import_p == pytest.approx(12.86)  # 22:00 cheap
+    assert rates[0].import_p == pytest.approx(28.75)   # 00:00 standard
+    assert rates[8].import_p == pytest.approx(14.10)   # 04:00 cheap
+    assert rates[32].import_p == pytest.approx(43.13)  # 16:00 peak
+    assert rates[44].import_p == pytest.approx(14.10)  # 22:00 cheap
 
 
 def test_flux_boundaries_are_pinned():

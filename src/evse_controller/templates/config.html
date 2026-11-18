@@ -370,6 +370,7 @@
             <label for="solar_period_max_charge">Solar Period Maximum Charge:</label>
             <input type="number" id="solar_period_max_charge" name="charging[solar_period_max_charge]"
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" step="1" required>
+            <small>Cosy Octopus only: the charge ceiling during the 13:00–16:00 cheap window, so the afternoon grid charge leaves room for solar. Other tariffs use the normal maximum charge percentage.</small>
         </div>
         <div class="form-group">
             <label for="startup_mode">Startup mode:</label>
@@ -550,7 +551,7 @@
 
     <div class="config-section">
         <h2>Intelligent Octopus Go OCPP Configuration</h2>
-        <p>These settings apply to Intelligent Octopus Go. Standard Octopus Go uses the same controller and heuristic, but does not automatically trigger OCPP.</p>
+        <p>Only Intelligent Octopus Go uses OCPP mode. Standard Octopus Go, Cosy Octopus and Flux use the same controller family but never auto-trigger OCPP.</p>
         <div class="form-group">
             <label class="checkbox-label">
                 <input type="checkbox" id="ioctgo_smart_ocpp_operation" name="tariffs.ioctgo[smart_ocpp_operation]" 
@@ -610,11 +611,12 @@
             <small>
                 The preset selects the tariff controller, its time windows and
                 its export source. Agile preset uses the fetched Agile Outgoing
-                export series; Outgoing, Prime and standard Go use the export
-                tiers below. Intelligent and standard Octopus Go share the same
-                controller; standard Go uses the 00:30-05:30 cheap window and
-                does not auto-trigger OCPP. Startup mode under Charging chooses
-                whether to begin in SMART or FREE RUN.
+                export series; Outgoing, Prime and the fixed time-of-use
+                tariffs use the export tiers below. Intelligent Octopus Go,
+                standard Octopus Go and Cosy Octopus share the same controller;
+                standard Go uses the 00:30-05:30 cheap window and does not
+                auto-trigger OCPP. Startup mode under Charging chooses whether
+                to begin in SMART or FREE RUN.
             </small>
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
@@ -727,7 +729,7 @@
                     {% if config.ocpp.get('auto_enabled') %}checked{% endif %}>
                 Enable automatic OCPP handoff
             </label>
-            <small>Intelligent Octopus Go only. Standard Octopus Go does not auto-trigger OCPP.</small>
+            <small>Only Intelligent Octopus Go uses OCPP. Standard Go, Cosy and Flux do not auto-trigger it.</small>
         </div>
         <div class="form-group">
             <label for="ocpp_frequency_days">Interval in days (1 = daily, 7 = weekly, maximum 30):</label>

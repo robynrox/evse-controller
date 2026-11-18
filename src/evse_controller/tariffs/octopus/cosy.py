@@ -17,9 +17,9 @@ class CosyOctopusTariff(Tariff):
             command_queue: Queue for sending commands to the main loop
         """
         super().__init__(command_queue=command_queue)
-        low = 0.1286
-        med = 0.2622
-        high = 0.3932
+        low = 0.1410
+        med = 0.2875
+        high = 0.4313
         self.time_of_use = {
             "med 1": {"start": "00:00", "end": "04:00", "import_rate":  med, "export_rate": 0.15},
             "low 1": {"start": "04:00", "end": "07:00", "import_rate":  low, "export_rate": 0.15},
