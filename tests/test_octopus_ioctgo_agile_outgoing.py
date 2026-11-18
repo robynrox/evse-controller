@@ -4,7 +4,10 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 import json
-from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import IOctGoWithAgileOutgoingTariff
+from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
+    DecisionSnapshot,
+    IOctGoWithAgileOutgoingTariff,
+)
 from evse_controller.load_profile import SlotLoad
 from evse_controller.energy_sessions import (
     EV_AWAY,
@@ -1976,6 +1979,67 @@ class TestDecisionSnapshot:
         assert "cap" in snapshot.mode
         assert snapshot.charge_min_a == 0
         assert snapshot.charge_max_a == 0
+
+
+class TestStableDashboardMode:
+    """The dashboard line shows the armed policy, not the live crossing."""
+
+    @staticmethod
+    def _snapshot(**overrides):
+        values = dict(
+            updated_at=datetime.now(),
+            mode="Do not charge yet — will charge from ≥3 A surplus",
+            reason="holding for export",
+            soc_percent=60,
+            charge_min_a=3.0,
+            charge_activation_w=720.0,
+            discharge_activation_w=1076.0,
+            discharge_aggressive=True,
+            voltage_v=240.0,
+            charge_cap_percent=97.0,
+        )
+        values.update(overrides)
+        return DecisionSnapshot(**values)
+
+    def test_stable_mode_does_not_show_the_live_waiting_state(self):
+        tariff = _build_tariff()
+
+        assert tariff._stable_mode(self._snapshot()) == (
+            "Bidir solar from +3A · house aggr from 1076W (~4.5A)"
+        )
+
+    def test_stable_mode_reserve_for_export(self):
+        tariff = _build_tariff()
+        snapshot = self._snapshot(
+            mode="Do not charge — no solar current beats the export price",
+            shortfall=True,
+            charge_min_a=0.0,
+            discharge_activation_w=tariff.NEVER_DISCHARGE_ACTIVATION_W,
+        )
+
+        assert tariff._stable_mode(snapshot) == (
+            "Reserve for export · no solar charge"
+        )
+
+    def test_stable_mode_store_solar(self):
+        tariff = _build_tariff()
+        snapshot = self._snapshot(
+            mode="Store the solar for later",
+            store_decision=True,
+            charge_min_a=5.0,
+            discharge_activation_w=None,
+        )
+
+        assert tariff._stable_mode(snapshot) == "Store solar from +5A"
+
+    def test_dashboard_mode_line_uses_the_stable_mode(self):
+        tariff = _build_tariff()
+        tariff._decision_snapshot = self._snapshot()
+
+        html = tariff.get_dashboard_html()
+
+        assert "Bidir solar from +3A" in html
+        assert "Do not charge yet" not in html
 
 
 class TestDecisionExplanation:

@@ -5750,6 +5750,83 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_info_log_minute = minute_key
         info(f"IOCTGO_AGILEOUT: Decision: {self._decision_summary_text(snapshot)}")
 
+    def _stable_mode(self, snapshot: DecisionSnapshot) -> str:
+        """A slot-stable, DP-like summary of the heuristic's armed policy.
+
+        The detailed ``snapshot.mode`` follows the live decision and can flip
+        when the surplus crosses the charge floor.  The dashboard should not
+        flicker like that: it shows the armed floor and gate, which only
+        change when the plan or its triggers change.
+        """
+        cap = (
+            snapshot.charge_cap_percent
+            if snapshot.charge_cap_percent is not None
+            else self.charge_cap_percent()
+        )
+        if (
+            not snapshot.decision_tier
+            and snapshot.charge_min_a is None
+            and snapshot.discharge_activation_w is None
+            and not snapshot.store_decision
+            and not snapshot.shortfall
+        ):
+            # Synthetic/manual snapshots without armed ranges keep their
+            # detailed mode text.
+            return snapshot.mode
+        at_cap = snapshot.soc_percent >= cap
+        charge = snapshot.charge_min_a
+        if at_cap:
+            charge_text = "no solar charge (at cap)"
+        elif charge is not None and charge > 0:
+            charge_text = f"solar from +{charge:.0f}A"
+        else:
+            charge_text = "no solar charge"
+
+        discharge_w = snapshot.discharge_activation_w
+        if snapshot.shortfall:
+            prefix = "Reserve for export"
+            discharge_text = ""
+        elif snapshot.store_decision:
+            prefix = "Store solar"
+            discharge_text = ""
+        else:
+            prefix = "Bidir"
+            if (
+                discharge_w is not None
+                and discharge_w < self.NEVER_DISCHARGE_ACTIVATION_W
+            ):
+                voltage = float(
+                    snapshot.voltage_v or config.WALLBOX_NOMINAL_VOLTAGE
+                )
+                amps = discharge_w / voltage if voltage > 0 else 0.0
+                variant = (
+                    "aggr" if snapshot.discharge_aggressive else "cons"
+                )
+                discharge_text = (
+                    f"house {variant} from {discharge_w:.0f}W "
+                    f"(~{amps:.1f}A)"
+                )
+            else:
+                discharge_text = "no house discharge"
+
+        if prefix == "Store solar":
+            if charge is not None and charge > 0:
+                return f"Store solar from +{charge:.0f}A"
+            return "Store solar"
+        if prefix == "Bidir":
+            base = (
+                f"Bidir {charge_text}"
+                if charge_text.startswith("solar")
+                else f"Bidir · {charge_text}"
+            )
+            if discharge_text:
+                base += f" · {discharge_text}"
+            return base
+        parts = [prefix, charge_text]
+        if discharge_text:
+            parts.append(discharge_text)
+        return " · ".join(parts)
+
     def _mode_line_html(self) -> str:
         """One-line mode/reason summary, wrapping on narrow screens."""
         snapshot = self._decision_snapshot
@@ -5771,7 +5848,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
 
         parts = [
-            f'<span class="ioctgo-mode">{html_module.escape(snapshot.mode)}</span>'
+            f'<span class="ioctgo-mode">{html_module.escape(self._stable_mode(snapshot))}</span>'
         ]
         if snapshot.reason:
             parts.append(
@@ -8148,7 +8225,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "snapshot_at": snap.updated_at,
             "slot": slot,
             "slot_label": slot_label,
-            "mode": snap.mode,
+            "mode": self._stable_mode(snap),
             "reason": snap.reason,
             "detail": snap.detail,
             "state": state,

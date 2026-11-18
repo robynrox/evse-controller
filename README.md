@@ -1110,9 +1110,15 @@ While the Heuristic mode is active, the dashboard also shows the action the
 current plan would take, such as `Would: Charge 11A`,
 `Would: Harvest solar >=4A` or `Would: Cover house aggr >=4A from 830W
 (~3.5A)`. In a control mode the same line starts with `DP:` instead.
-Heuristic is safe to leave on, but it does not actuate. In a control mode the
-heuristic still runs as the observer, so the Explanation page describes its
-decision; the dashboard line and the actuator follow the DP action.
+The heuristic's own dashboard line shows the **armed policy** — the solar
+charge floor and the house gate — rather than the live “waiting for surplus”
+state. That keeps it stable within a half-hour slot; the detailed answer still
+says whether the live surplus has reached the floor. The line changes when the
+plan is recomputed: a new slot, a significant SoC change, an unplug/replug, or
+a new price/plan result. Heuristic is safe to leave on, but it does not
+actuate. In a control mode the heuristic still runs as the observer, so the
+Explanation page describes its decision; the dashboard line and the actuator
+follow the DP action.
 
 When the component model and a recent live weather snapshot are available,
 the dashboard also shows a second preview action, for example:

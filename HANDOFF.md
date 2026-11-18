@@ -190,7 +190,11 @@ completed fixes.
   90px. Planned slots are also named in words under the strip
   (`Export plan: 16:00–16:30 @ 30.5p …`, or `none planned`), because a
   48-cell strip is only ~7px per cell on a phone. Detailed SoC/slot analysis
-  stays in the text log. The off-peak charge
+  stays in the text log. The heuristic's mode line shows the **armed solar
+  floor and house gate**, not the live waiting state, so it stays stable
+  within a slot; the detailed answer still reports whether the live surplus
+  has reached the floor. The line changes when the plan is recomputed. The
+  off-peak charge
   ceiling is `min(config.MAX_CHARGE_PERCENT, 97)` and the same ceiling zeroes
   the charge range outside off-peak, so solar cannot overfill the pack.
 - Discharge activation is no longer the hard-coded 1 W (aggressive) or 720 W
