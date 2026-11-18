@@ -4994,6 +4994,100 @@ class TestFutureAwareGate:
         assert captured
         assert all(rate == 20.0 for rate in captured)
 
+    def test_planned_export_energy_prices_uses_the_reference_current(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._planned_export_slots = [25, 26]
+        tariff.EXPORT_REFERENCE_CURRENT = 11.0
+        monkeypatch.setattr(
+            tariff,
+            "_today_rates",
+            lambda: [
+                {
+                    "start": datetime(2026, 11, 18, 12, 30),
+                    "rate": 20.0,
+                },
+                {
+                    "start": datetime(2026, 11, 18, 13, 0),
+                    "rate": 27.4,
+                },
+            ],
+        )
+
+        planned = tariff._planned_export_energy_prices(24, 240.0)
+
+        assert [price for price, _ in planned] == [20.0, 27.4]
+        assert all(
+            energy == pytest.approx(1.32) for _, energy in planned
+        )
+
+    def test_current_discharge_gate_passes_planned_exports(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._aggressive_slot_gates = {}
+        monkeypatch.setattr(
+            tariff,
+            "_planned_export_energy_prices",
+            lambda slot, voltage: [(20.0, 1.0)],
+        )
+        captured = {}
+
+        def fake_threshold(export_rate_p, **kwargs):
+            captured.update(kwargs)
+            return 720.0
+
+        monkeypatch.setattr(
+            tariff, "discharge_activation_threshold_w", fake_threshold
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {"voltage": 240.0},
+        )
+        monkeypatch.setattr(
+            tariff, "_current_export_rate_p", lambda slot: 20.0
+        )
+        monkeypatch.setattr(
+            tariff, "_current_import_rate_p", lambda minute: 20.0
+        )
+
+        assert tariff._current_discharge_activation_w(
+            24, 24 * 30, aggressive=True
+        ) == 720.0
+        assert captured["planned_exports"] == [(20.0, 1.0)]
+
+    def test_aggressive_scan_uses_the_energy_weighted_marginal(
+        self, monkeypatch
+    ):
+        from evse_controller.tariffs.octopus import (
+            ioctgo_with_agile_outgoing as module,
+        )
+
+        tariff = self._tariff(monkeypatch, lambda current: 1.0)
+        calls = []
+
+        def fake_marginal(planned, energy_kwh):
+            calls.append((tuple(planned), energy_kwh))
+            return 20.0
+
+        monkeypatch.setattr(
+            module, "energy_weighted_export_price", fake_marginal
+        )
+
+        tariff._aggressive_activation_scan(
+            20.1,
+            import_rate_p=20.1,
+            alternative_rate_p=20.0,
+            voltage=240.0,
+            planned_exports=[(20.0, 1.0)],
+        )
+
+        assert calls
+        assert calls[0][0] == ((20.0, 1.0),)
+        assert calls[0][1] == pytest.approx(3 * 240 * 0.5 / 1000.0)
+
     def test_conservative_gate_uses_the_future_gain(self, monkeypatch):
         tariff = _build_tariff()
         tariff.MIN_DISCHARGE_CURRENT = 3

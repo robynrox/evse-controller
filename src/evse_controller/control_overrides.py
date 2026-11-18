@@ -46,6 +46,38 @@ def worst_planned_export_price(
     return min(prices) if prices else None
 
 
+def energy_weighted_export_price(
+    planned_exports: Iterable[tuple[float, float]],
+    energy_kwh: float,
+) -> Optional[float]:
+    """Marginal export price for an action that consumes *energy_kwh*.
+
+    Planned exports are consumed from the worst price upward.  A small action
+    displaces only the worst slot; a larger action reaches the next one.  The
+    returned price is the slot where the action's energy demand is met.  If
+    the demand exceeds every planned slot, the best planned price is returned
+    as a conservative fallback.
+    """
+    if float(energy_kwh) <= 0.0:
+        return None
+    ordered = sorted(
+        (
+            (float(price), float(slot_energy))
+            for price, slot_energy in planned_exports
+            if price is not None and float(slot_energy) > 0.0
+        ),
+        key=lambda item: item[0],
+    )
+    if not ordered:
+        return None
+    remaining = float(energy_kwh)
+    for price, slot_energy in ordered:
+        if remaining <= slot_energy + 1e-9:
+            return price
+        remaining -= slot_energy
+    return ordered[-1][0]
+
+
 def load_spike_override(
     *,
     dp_action_kind: str,

@@ -1,6 +1,7 @@
 """Pure decisions for unforecasted live load and solar spikes."""
 
 from evse_controller.control_overrides import (
+    energy_weighted_export_price,
     load_spike_override,
     solar_spike_override,
     worst_planned_export_price,
@@ -50,6 +51,16 @@ def test_worst_planned_export_ignores_slots_with_no_energy():
         [(27.4, 0.0), (20.0, 1.0)]
     ) == 20.0
     assert worst_planned_export_price([]) is None
+
+
+def test_energy_weighted_export_price_consumes_worst_slots_first():
+    planned = [(20.0, 1.0), (25.0, 1.0), (35.0, 1.0)]
+
+    assert energy_weighted_export_price(planned, 0.5) == 20.0
+    assert energy_weighted_export_price(planned, 1.5) == 25.0
+    assert energy_weighted_export_price(planned, 3.5) == 35.0
+    assert energy_weighted_export_price([], 1.0) is None
+    assert energy_weighted_export_price(planned, 0.0) is None
 
 
 def test_load_spike_is_covered_when_import_beats_the_worst_planned_export():

@@ -18,6 +18,7 @@ from evse_controller.drivers.evse.async_interface import (
 )
 from evse_controller.control_overrides import (
     LiveOverride,
+    energy_weighted_export_price,
     load_spike_override,
     solar_spike_override,
     worst_planned_export_price,
@@ -1791,6 +1792,45 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 prices.append(float(rate_data.get("rate") or 0.0))
         return min(prices) if prices else 0.0
 
+    def _planned_export_energy_prices(
+        self, current_slot: int, voltage: float
+    ) -> list[tuple[float, float]]:
+        """Planned export slots as ``(price_p, energy_kwh)``.
+
+        The heuristic's export plan does not store the per-slot current, so
+        the reference export current is used.  This is deliberately a simple
+        heuristic input, not a DP valuation.
+        """
+        planned = {
+            slot
+            for slot in self._planned_export_slots
+            if slot > current_slot
+        }
+        if not planned:
+            return []
+        energy_kwh = (
+            max(0.0, float(self.EXPORT_REFERENCE_CURRENT))
+            * max(0.0, float(voltage))
+            * 0.5
+            / 1000.0
+        )
+        if energy_kwh <= 0.0:
+            return []
+        result = []
+        for rate_data in self._today_rates():
+            start = rate_data.get("start")
+            if start is None:
+                continue
+            slot = start.hour * 2 + (1 if start.minute == 30 else 0)
+            if slot in planned:
+                result.append(
+                    (
+                        float(rate_data.get("rate") or 0.0),
+                        energy_kwh,
+                    )
+                )
+        return result
+
     def _with_follow_gates(
         self, planner_input, hybrid_floors: Optional[Iterable[float]] = None
     ):
@@ -1829,12 +1869,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if slot.start.date() == planner_input.day
                 else 0.0
             )
+            planned_exports = (
+                self._planned_export_energy_prices(slot.slot, voltage)
+                if slot.start.date() == planner_input.day
+                else []
+            )
             conservative_gate = self.discharge_activation_threshold_w(
                 slot.export_p,
                 import_rate_p=slot.import_p,
                 aggressive=False,
                 voltage=voltage,
                 alternative_rate_p=alternative_rate_p,
+                planned_exports=planned_exports,
             )
             aggressive_gate = self.discharge_activation_threshold_w(
                 slot.export_p,
@@ -1842,6 +1888,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 aggressive=True,
                 voltage=voltage,
                 alternative_rate_p=alternative_rate_p,
+                planned_exports=planned_exports,
             )
             if conservative_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
                 conservative_gate = None
@@ -1867,6 +1914,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         voltage=voltage,
                         alternative_rate_p=alternative_rate_p,
                         floor_current_a=floor_a,
+                        planned_exports=planned_exports,
                     )
                     if floor_gate >= self.NEVER_DISCHARGE_ACTIVATION_W:
                         continue
@@ -4367,6 +4415,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         alternative_rate_p: float,
         voltage: float | None,
         floor_current_a: float | None = None,
+        planned_exports: Optional[
+            Iterable[tuple[float, float]]
+        ] = None,
     ) -> tuple[float, float, float]:
         """Scan house load for the first economic aggressive discharge.
 
@@ -4396,6 +4447,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 min_current,
             )
         energy_dc_p = self._aggressive_energy_dc_cost_p(alternative_rate_p)
+        planned = list(planned_exports or ())
         margin_p = self.MIN_PROFIT_MARGIN_P_PER_KWH
         min_hurdle_p = 0.0
         max_load_w = int(math.floor(max_current * volts))
@@ -4417,7 +4469,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             efficiency = self.EFFICIENCY_MODEL.discharge_efficiency(
                 current_a
             )
-            hurdle_p = energy_dc_p / max(efficiency, 1e-6) + margin_p
+            current_energy_kwh = output_w * 0.5 / 1000.0
+            marginal_p = (
+                energy_weighted_export_price(
+                    planned, current_energy_kwh
+                )
+                if planned
+                else None
+            )
+            hurdle_energy_dc_p = (
+                self._aggressive_energy_dc_cost_p(marginal_p)
+                if marginal_p is not None
+                else energy_dc_p
+            )
+            hurdle_p = (
+                hurdle_energy_dc_p / max(efficiency, 1e-6) + margin_p
+            )
             if load_w == 0:
                 min_hurdle_p = hurdle_p
 
@@ -4443,6 +4510,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         voltage: float | None = None,
         alternative_rate_p: float | None = None,
         floor_current_a: float | None = None,
+        planned_exports: Optional[
+            Iterable[tuple[float, float]]
+        ] = None,
     ) -> float:
         """Smallest house import at which discharging still makes money.
 
@@ -4509,6 +4579,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 ),
                 voltage=volts,
                 floor_current_a=floor_current_a,
+                planned_exports=planned_exports,
             )
             return threshold_w
 
@@ -4519,8 +4590,20 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         p_min_w = max(0.0, self.MIN_DISCHARGE_CURRENT) * volts
         if floor_current_a is not None:
             p_min_w = max(p_min_w, float(floor_current_a) * volts)
+        marginal_p = (
+            energy_weighted_export_price(
+                planned_exports, p_min_w * 0.5 / 1000.0
+            )
+            if planned_exports
+            else None
+        )
+        future_rate_p = (
+            marginal_p
+            if marginal_p is not None
+            else alternative_rate_p
+        )
         future_p = (
-            max(0.0, float(alternative_rate_p or 0.0))
+            max(0.0, float(future_rate_p or 0.0))
             * self.export_discharge_efficiency()
         )
         hurdle_p = max(
@@ -4604,10 +4687,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     ) -> float:
         """Discharge activation for the live prices and stored-energy cost.
 
-        Aggressive load-following values the stored energy at its best
-        uncommitted alternative use, so a better unreserved export slot raises
-        the gate.  Conservative coverage keeps the ledger's delivered-cost
-        hurdle.
+        Aggressive load-following values the stored energy at its
+        energy-weighted marginal planned export, so a small action only has to
+        beat the worst planned slot while a larger action reaches the next
+        one.  Conservative coverage keeps the ledger's delivered-cost hurdle.
 
         A planned aggressive slot reuses the gate the planner recorded, so the
         threshold the plan explains and the threshold the Wallbox receives
@@ -4618,13 +4701,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if gate is not None:
                 return gate["activation_w"]
         power = self._read_power_snapshot()
+        voltage = (
+            float(power["voltage"])
+            if power and power.get("voltage")
+            else self._live_voltage()
+        )
         return self.discharge_activation_threshold_w(
             self._current_export_rate_p(current_slot),
             import_rate_p=self._current_import_rate_p(day_minute),
             aggressive=aggressive,
-            voltage=power["voltage"] if power else None,
+            voltage=voltage,
             alternative_rate_p=self._worst_planned_export_price(
                 current_slot
+            ),
+            planned_exports=self._planned_export_energy_prices(
+                current_slot, voltage
             ),
         )
 
