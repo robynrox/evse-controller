@@ -451,6 +451,63 @@ def test_hybrid_floor_at_the_discharge_limit_is_not_offered():
     assert hybrid_floors == [15.0, 15.0]
 
 
+def test_idle_beats_follow_when_the_future_export_is_more_valuable():
+    p = planner(
+        target_soc_percent=None,
+        discharge_floor_percent=40.0,
+    )
+    current = replace(
+        slot(0, import_p=15.0, export_p=15.0, load_kw=0.3),
+        load_samples=((0.3, 0.95), (3.5, 0.05)),
+        follow_aggressive_gate_w=720.0,
+        follow_aggressive_floor_percent=40.0,
+    )
+    future = replace(
+        slot(1, import_p=15.0, export_p=27.4, load_kw=0.3),
+        follow_aggressive_gate_w=720.0,
+        follow_aggressive_floor_percent=40.0,
+    )
+
+    result = p.plan([current, future], 41.0)
+
+    assert result.actions[0].kind in ("idle", "charge")
+    assert result.actions[1].kind == "discharge"
+
+
+def test_flat_price_seven_slot_plan_does_not_over_discharge():
+    p = planner(
+        target_soc_percent=None,
+        discharge_floor_percent=40.0,
+    )
+    slots = [
+        replace(
+            slot(index, import_p=20.0, export_p=20.0, load_kw=0.3),
+            load_samples=(
+                ((0.3, 0.95), (3.5, 0.05))
+                if index == 0
+                else ((0.3, 1.0),)
+            ),
+            follow_aggressive_gate_w=720.0,
+            follow_aggressive_floor_percent=40.0,
+        )
+        for index in range(8)
+    ]
+    without_follow = [
+        replace(
+            item,
+            follow_aggressive_gate_w=None,
+            follow_conservative_gate_w=None,
+        )
+        for item in slots
+    ]
+
+    with_follow = p.plan(slots, 45.0)
+    fixed_only = p.plan(without_follow, 45.0)
+
+    assert with_follow.final_soc >= 40.0
+    assert with_follow.total_cost_p <= fixed_only.total_cost_p + 1e-6
+
+
 def test_unlikely_load_spike_is_priced_in_the_follow_arc():
     sample_slot = replace(
         slot(
