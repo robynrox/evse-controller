@@ -20,6 +20,7 @@ from evse_controller.control_overrides import (
     LiveOverride,
     load_spike_override,
     solar_spike_override,
+    worst_planned_export_price,
 )
 from evse_controller.forecasting.component import (
     ComponentLoadModel,
@@ -1023,6 +1024,70 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     pass
         return float(self._import_standard_p())
 
+    def _worst_planned_export_rate(
+        self,
+        current_slot: int,
+        current_action: Optional[Mapping[str, Any]] = None,
+    ) -> float:
+        """Worst export price among the remaining planned export slots.
+
+        A load spike spends the marginal stored energy.  When several export
+        slots are planned, that energy comes first from the worst-priced one,
+        so the import avoided now only has to beat that price.  The plan's
+        actions already respect the SoC floor, so later priced slots that the
+        plan does not intend to reach are not counted.
+        """
+        run = self._selected_dp_run()
+        if not run:
+            return self._best_alternative_export_rate(current_slot)
+        actions = run.get("actions") or []
+        inputs = run.get("inputs") or []
+        current_horizon = None
+        if current_action:
+            current_horizon = current_action.get("horizon_index")
+        planned: list[tuple[float, float]] = []
+        for action in actions:
+            if current_horizon is not None:
+                if action.get("horizon_index", -1) <= current_horizon:
+                    continue
+            elif action.get("slot", -1) <= current_slot:
+                continue
+            ac_kw = action.get("ac_power_kw")
+            if ac_kw is None or float(ac_kw) >= 0:
+                continue
+            input_row = next(
+                (
+                    item
+                    for item in inputs
+                    if item.get("horizon_index")
+                    == action.get("horizon_index")
+                ),
+                None,
+            )
+            if input_row is None:
+                input_row = next(
+                    (
+                        item
+                        for item in inputs
+                        if item.get("slot") == action.get("slot")
+                    ),
+                    None,
+                )
+            if not input_row:
+                continue
+            export_p = input_row.get("export_p")
+            if export_p is None:
+                continue
+            load_kw = float(input_row.get("load_kw") or 0.0)
+            export_kw = max(0.0, -float(ac_kw) - load_kw)
+            if export_kw <= 0.0:
+                continue
+            planned.append((float(export_p), export_kw * 0.5))
+        worst = worst_planned_export_price(planned)
+        if worst is not None:
+            return worst
+        return self._best_alternative_export_rate(current_slot)
+
     def _live_spike_override(
         self,
         current_slot: int,
@@ -1070,8 +1135,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 dp_action_kind="idle",
                 baseline_w=float(snapshot.get("baseline_w") or 0.0),
                 import_p=self._current_import_price(current_slot),
-                best_export_p=self._best_alternative_export_rate(
-                    current_slot
+                export_opportunity_p=self._worst_planned_export_rate(
+                    current_slot, dp_action
                 ),
                 soc=soc,
                 discharge_floor=floor,

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Optional
+from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -29,12 +29,29 @@ class LiveOverride:
     reason: str
 
 
+def worst_planned_export_price(
+    planned_exports: Iterable[tuple[float, float]],
+) -> Optional[float]:
+    """Lowest price among planned export slots with energy to sell.
+
+    A load spike spends the marginal stored energy.  If the plan has several
+    export slots, that energy comes first from the worst-priced one, so the
+    import avoided now only has to beat that worst planned price.
+    """
+    prices = [
+        float(price)
+        for price, energy_kwh in planned_exports
+        if price is not None and float(energy_kwh) > 0.0
+    ]
+    return min(prices) if prices else None
+
+
 def load_spike_override(
     *,
     dp_action_kind: str,
     baseline_w: float,
     import_p: float,
-    best_export_p: float,
+    export_opportunity_p: float,
     soc: float,
     discharge_floor: float,
     min_current_a: int,
@@ -47,7 +64,7 @@ def load_spike_override(
     Only an ``idle`` DP action is overridden.  The load must be large enough
     for the Wallbox's minimum discharge current to be useful, the pack must be
     above the discharge floor, and the import avoided now must be worth more
-    than the best alternative export value of the stored energy.
+    than the marginal planned export value of the stored energy.
     """
     if dp_action_kind != "idle":
         return None
@@ -56,7 +73,9 @@ def load_spike_override(
     min_power_w = max(0.0, float(min_current_a) * float(voltage_v))
     if float(baseline_w) < min_power_w:
         return None
-    if float(import_p) <= float(best_export_p) + max(0.0, float(margin_p)):
+    if float(import_p) <= float(export_opportunity_p) + max(
+        0.0, float(margin_p)
+    ):
         return None
     return LiveOverride(
         kind="load",
@@ -65,8 +84,8 @@ def load_spike_override(
         activation_w=0.0,
         reason=(
             f"Unforecasted load {float(baseline_w):.0f}W: cover at "
-            f"{float(import_p):.1f}p instead of later export "
-            f"{float(best_export_p):.1f}p"
+            f"{float(import_p):.1f}p instead of worst planned export "
+            f"{float(export_opportunity_p):.1f}p"
         ),
     )
 

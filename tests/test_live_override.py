@@ -3,6 +3,7 @@
 from evse_controller.control_overrides import (
     load_spike_override,
     solar_spike_override,
+    worst_planned_export_price,
 )
 
 
@@ -11,7 +12,7 @@ def _load(**overrides):
         dp_action_kind="idle",
         baseline_w=4800.0,
         import_p=32.26,
-        best_export_p=27.4,
+        export_opportunity_p=27.4,
         soc=60.0,
         discharge_floor=40.0,
         min_current_a=3,
@@ -38,20 +39,33 @@ def _solar(**overrides):
     return solar_spike_override(**values)
 
 
-def test_load_spike_is_covered_when_import_beats_later_export():
-    decision = _load()
+def test_worst_planned_export_is_the_marginal_opportunity():
+    assert worst_planned_export_price(
+        [(27.4, 1.0), (20.0, 1.0), (25.0, 1.0)]
+    ) == 20.0
+
+
+def test_worst_planned_export_ignores_slots_with_no_energy():
+    assert worst_planned_export_price(
+        [(27.4, 0.0), (20.0, 1.0)]
+    ) == 20.0
+    assert worst_planned_export_price([]) is None
+
+
+def test_load_spike_is_covered_when_import_beats_the_worst_planned_export():
+    decision = _load(import_p=22.0, export_opportunity_p=20.0)
 
     assert decision is not None
     assert decision.kind == "load"
     assert decision.min_current_a == 3
     assert decision.max_current_a == 16
     assert decision.activation_w == 0.0
-    assert "32.3p" in decision.reason
-    assert "27.4p" in decision.reason
+    assert "22.0p" in decision.reason
+    assert "20.0p" in decision.reason
 
 
-def test_load_spike_is_not_covered_when_later_export_is_better():
-    assert _load(best_export_p=40.0) is None
+def test_load_spike_is_not_covered_when_the_worst_planned_export_is_better():
+    assert _load(import_p=22.0, export_opportunity_p=27.4) is None
 
 
 def test_load_spike_does_not_override_a_non_idle_dp_action():

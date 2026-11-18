@@ -5122,6 +5122,166 @@ class TestLiveSpikeOverride:
         controller.setDischargeCurrentRange.assert_called_with(3, 16)
         controller.setDischargeActivationPower.assert_called_with(0)
 
+    def test_worst_planned_export_rate_uses_the_lowest_planned_slot(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._learning_mode = "control_hist"
+        run = {
+            "actions": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "kind": "idle",
+                    "ac_power_kw": 0.0,
+                },
+                {
+                    "slot": 25,
+                    "horizon_index": 1,
+                    "kind": "discharge",
+                    "ac_power_kw": -3.0,
+                },
+                {
+                    "slot": 26,
+                    "horizon_index": 2,
+                    "kind": "discharge",
+                    "ac_power_kw": -3.0,
+                },
+            ],
+            "inputs": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "load_kw": 0.5,
+                    "export_p": 18.0,
+                },
+                {
+                    "slot": 25,
+                    "horizon_index": 1,
+                    "load_kw": 0.5,
+                    "export_p": 20.0,
+                },
+                {
+                    "slot": 26,
+                    "horizon_index": 2,
+                    "load_kw": 0.5,
+                    "export_p": 27.4,
+                },
+            ],
+        }
+        monkeypatch.setattr(tariff, "_selected_dp_run", lambda: run)
+
+        assert tariff._worst_planned_export_rate(
+            24, {"horizon_index": 0}
+        ) == 20.0
+        assert tariff._worst_planned_export_rate(
+            24, {"horizon_index": 1}
+        ) == 27.4
+
+    def test_worst_planned_export_ignores_slots_after_the_plan(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._learning_mode = "control_hist"
+        run = {
+            "actions": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "kind": "idle",
+                    "ac_power_kw": 0.0,
+                },
+                {
+                    "slot": 25,
+                    "horizon_index": 1,
+                    "kind": "discharge",
+                    "ac_power_kw": -3.0,
+                },
+            ],
+            "inputs": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "load_kw": 0.5,
+                    "export_p": 18.0,
+                },
+                {
+                    "slot": 25,
+                    "horizon_index": 1,
+                    "load_kw": 0.5,
+                    "export_p": 20.0,
+                },
+                {
+                    "slot": 26,
+                    "horizon_index": 2,
+                    "load_kw": 0.5,
+                    "export_p": 27.4,
+                },
+            ],
+        }
+        monkeypatch.setattr(tariff, "_selected_dp_run", lambda: run)
+
+        assert tariff._worst_planned_export_rate(
+            24, {"horizon_index": 0}
+        ) == 20.0
+
+    def test_worst_planned_export_falls_back_when_nothing_is_planned(
+        self, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._learning_mode = "control_hist"
+        run = {
+            "actions": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "kind": "idle",
+                    "ac_power_kw": 0.0,
+                }
+            ],
+            "inputs": [
+                {
+                    "slot": 24,
+                    "horizon_index": 0,
+                    "load_kw": 0.5,
+                    "export_p": 18.0,
+                }
+            ],
+        }
+        monkeypatch.setattr(tariff, "_selected_dp_run", lambda: run)
+        monkeypatch.setattr(
+            tariff, "_best_alternative_export_rate", lambda slot: 27.4
+        )
+
+        assert tariff._worst_planned_export_rate(
+            24, {"horizon_index": 0}
+        ) == 27.4
+
+    def test_live_load_override_uses_the_worst_planned_export(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch, import_p=22.0)
+        monkeypatch.setattr(
+            tariff,
+            "_worst_planned_export_rate",
+            lambda slot, action=None: 20.0,
+        )
+
+        override = tariff._live_spike_override(
+            24, {"kind": "idle"}, tariff.get_current_datetime()
+        )
+        assert override is not None
+        assert override.kind == "load"
+
+        monkeypatch.setattr(
+            tariff,
+            "_worst_planned_export_rate",
+            lambda slot, action=None: 27.4,
+        )
+        assert tariff._live_spike_override(
+            24, {"kind": "idle"}, tariff.get_current_datetime()
+        ) is None
+
     def test_learning_preview_label_shows_live_override(self):
         tariff = _build_tariff()
         tariff._learning_mode = "control_hist"

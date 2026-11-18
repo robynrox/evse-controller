@@ -1059,7 +1059,9 @@ shower or solar burst can be missing from it. When the plan says `idle` but the
 live measurement shows a spike, a temporary override can cover it:
 
 - a house-load spike above the Wallbox minimum is discharged when the import
-  avoided now is worth more than the best later export value;
+  avoided now is worth more than the **worst remaining planned export** value.
+  A load spike spends the marginal stored energy, which comes first from the
+  worst-priced planned export slot, not the best one;
 - a solar surplus above the solar charge floor is charged.
 
 The override is recomputed every control cycle, so the controller returns to
