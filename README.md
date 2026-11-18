@@ -711,7 +711,8 @@ does not grid-charge while that surplus is being exported.
   18p and 12 A at 19p; at 19.8p now and 30.4p later the self-use floor is 9 A
   but the store break-even is 5 A, so charging starts at 5 A. If neither floor
   exists, the charge range is explicitly set to 0 A and the mode reads
-  `Do not charge — surplus worth more exported · aggressive discharge ≥3 A`.
+  `Do not charge — no solar current beats the export price · aggressive
+  discharge ≥3 A`.
   When a floor is armed but the live surplus is below it, the mode reads
   `Do not charge yet — will charge from ≥N A surplus · aggressive discharge
   ≥3 A`: below the floor exporting pays more, and charging begins only when

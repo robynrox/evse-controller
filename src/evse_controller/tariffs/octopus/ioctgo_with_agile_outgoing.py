@@ -7495,8 +7495,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "headline": (
                         "No charging — at the cap"
                         if at_cap
-                        else f"Charge from surplus at "
-                        f"≥{charge_floor_a or 3:.0f} A "
+                        else f"Charge from surplus ≥"
+                        f"{charge_floor_a or 3:.0f} A "
                         f"(≈{charge_activation_w:.0f} W)"
                     ),
                     "because": (
@@ -7637,7 +7637,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     "battery covers the house."
                 )
             elif not charge_floor_a:
-                heading = "Sell the surplus; do not charge"
+                heading = (
+                    "Sell the surplus; no measured current beats the export "
+                    "price"
+                )
                 summary = (
                     f"This surplus is worth more exported at {export_p:.1f}p "
                     "than kept for the house or a later sale."
@@ -7749,7 +7752,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                         f"Charge from surplus solar at ≥{solar_floor_a:.0f} A "
                         f"(≈{solar_activation_w:.0f} W)"
                         if solar_floor_a > 0
-                        else "Do not charge — surplus worth more exported"
+                        else "Do not charge — no solar current beats the export price"
                     )
                 ),
                 "because": self._solar_charge_floor_text(
@@ -8221,7 +8224,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             }
         if not floor_a:
             return {
-                "headline": "Do not charge — sell the surplus",
+                "headline": (
+                    "Do not charge — no measured current beats the export "
+                    "price"
+                ),
                 "because": (
                     "No measured charge current makes the stored energy worth "
                     "more than exporting it now."
@@ -8235,7 +8241,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if waiting:
             return {
                 "headline": (
-                    f"Not yet — charging starts at ≥{floor_a:.0f} A "
+                    f"Not yet — will charge from ≥{floor_a:.0f} A "
                     f"(≈{activation_w:.0f} W) of surplus"
                 ),
                 "because": (
@@ -8247,7 +8253,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             }
         return {
             "headline": (
-                f"Charge from surplus at ≥{floor_a:.0f} A "
+                f"Charge from surplus ≥{floor_a:.0f} A "
                 f"(≈{activation_w:.0f} W)"
             ),
             "because": (
@@ -9641,8 +9647,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
                 if charge_min_a <= 0:
                     charge_mode = (
-                        "Do not charge — surplus worth more exported · "
+                        "Do not charge — no solar current beats the export price · "
                         "reserve for export"
+                    )
+                elif harvest_current_a < charge_min_a:
+                    charge_mode = (
+                        f"Do not charge yet — will charge from "
+                        f"≥{charge_min_a:.0f} A surplus · reserve for export"
                     )
                 else:
                     charge_mode = (
@@ -9722,7 +9733,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
                 if charge_min_a <= 0:
                     mode = (
-                        "Do not charge — surplus worth more exported · "
+                        "Do not charge — no solar current beats the export price · "
                         "house floor"
                     )
                 else:
@@ -9814,7 +9825,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 )
                 if charge_min_a <= 0:
                     mode = (
-                        "Do not charge — surplus worth more exported · "
+                        "Do not charge — no solar current beats the export price · "
                         "conservative discharge"
                     )
                 else:
@@ -10071,7 +10082,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 charge_min_a = 0.0
                 best_value_p, best_current_a = self._best_self_use_value_p()
                 mode = (
-                    "Do not charge — surplus worth more exported · "
+                    "Do not charge — no solar current beats the export price · "
                     f"aggressive discharge ≥{self.MIN_DISCHARGE_CURRENT:.0f} A"
                 )
                 charge_note = (

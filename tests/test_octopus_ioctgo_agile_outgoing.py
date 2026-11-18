@@ -901,7 +901,7 @@ class TestEnergyShortfall:
         snapshot = agile_tariff._decision_snapshot
 
         assert snapshot.mode.startswith(
-            "Do not charge — surplus worth more exported"
+            "Do not charge — no solar current beats the export price"
         )
         assert snapshot.charge_min_a == pytest.approx(0.0)
         agile_tariff.set_home_demand_levels(controller, state, 12 * 60)
@@ -1811,7 +1811,7 @@ class TestDecisionSnapshot:
 
         snapshot = agile_tariff._decision_snapshot
         assert control_state == ControlState.LOAD_FOLLOW_BIDIRECTIONAL
-        assert snapshot.mode.startswith("Do not charge — surplus worth more exported")
+        assert snapshot.mode.startswith("Do not charge — no solar current beats the export price")
         assert snapshot.charge_min_a == pytest.approx(0.0)
         assert snapshot.charge_max_a == pytest.approx(0.0)
         assert "30.5p" in snapshot.reason
@@ -2097,7 +2097,7 @@ class TestDecisionExplanation:
             "What is the surplus worth if the house uses it later?"
             in text
         )
-        assert "Charge from surplus at ≥3 A" in (
+        assert "Charge from surplus ≥3 A" in (
             explanation["answer"]["charge"]["headline"]
         )
         assert "Tier" not in text
@@ -2123,7 +2123,7 @@ class TestDecisionExplanation:
         )
         assert "Will the battery last until 23:30?" in text
         assert "55% house floor" in text
-        assert "Charge from surplus at ≥3 A" in (
+        assert "Charge from surplus ≥3 A" in (
             explanation["answer"]["charge"]["headline"]
         )
 
