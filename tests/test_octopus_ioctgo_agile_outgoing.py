@@ -24,6 +24,7 @@ from evse_controller.ev_readiness import (
     ev_readiness_store,
 )
 from evse_controller.planner.version import SOLVER_VERSION
+from evse_controller.control_overrides import LiveOverride
 from evse_controller.utils.config import config, Config
 
 
@@ -4853,6 +4854,314 @@ class TestExplicitSocLimitsInTheTariff:
         assert agile_tariff._apply_discharge_policy(50) == "conservative"
         assert agile_tariff._apply_discharge_policy(47) == "idle"
         assert agile_tariff._apply_discharge_policy(39) == "inhibited"
+
+
+class TestLiveSpikeOverride:
+    """Live load and solar spikes override only an idle DP action."""
+
+    def _tariff(
+        self,
+        monkeypatch,
+        *,
+        baseline_w=4800.0,
+        surplus_w=None,
+        import_p=32.26,
+        best_export_p=27.4,
+        solar_floor=(0.0, 0.0),
+    ):
+        tariff = _build_tariff()
+        tariff._learning_mode = "control_hist"
+        tariff._last_shadow_soc = 60.0
+        if surplus_w is None:
+            surplus_w = -baseline_w
+        snapshot = {
+            "baseline_w": baseline_w,
+            "surplus_w": surplus_w,
+            "voltage": 240.0,
+            "soc": 60,
+        }
+        monkeypatch.setattr(
+            tariff, "_read_power_snapshot", lambda: snapshot
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_current_import_price",
+            lambda slot: import_p,
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_best_alternative_export_rate",
+            lambda slot: best_export_p,
+        )
+        monkeypatch.setattr(
+            tariff, "_normal_discharge_floor", lambda: 40.0
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_solar_charge_floor_for_slot",
+            lambda slot: solar_floor,
+        )
+        monkeypatch.setattr(ev_readiness_store, "active", lambda: None)
+        return tariff
+
+    def test_live_load_spike_overrides_idle_then_returns_to_dp(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch)
+        action = {"kind": "idle"}
+
+        override = tariff._live_spike_override(
+            24, action, tariff.get_current_datetime()
+        )
+
+        assert override is not None
+        assert override.kind == "load"
+        assert override.min_current_a == 3
+        assert override.max_current_a == tariff.MAX_DISCHARGE_CURRENT
+        assert override.activation_w == 0.0
+
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {
+                "baseline_w": 300.0,
+                "surplus_w": -300.0,
+                "voltage": 240.0,
+                "soc": 60,
+            },
+        )
+        assert tariff._live_spike_override(
+            24, action, tariff.get_current_datetime()
+        ) is None
+
+    def test_live_load_spike_does_not_override_a_follow_action(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch)
+
+        assert tariff._live_spike_override(
+            24,
+            {"kind": "follow_house_aggressive"},
+            tariff.get_current_datetime(),
+        ) is None
+
+    def test_live_solar_spike_overrides_idle_then_returns_to_dp(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(
+            monkeypatch,
+            baseline_w=-3500.0,
+            surplus_w=3500.0,
+            solar_floor=(3.0, 720.0),
+        )
+        action = {"kind": "idle"}
+
+        override = tariff._live_spike_override(
+            24, action, tariff.get_current_datetime()
+        )
+
+        assert override is not None
+        assert override.kind == "solar"
+        assert override.min_current_a == 3
+        assert override.max_current_a == tariff.MAX_CHARGE_CURRENT
+        assert override.activation_w == 720.0
+
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {
+                "baseline_w": -100.0,
+                "surplus_w": 100.0,
+                "voltage": 240.0,
+                "soc": 60,
+            },
+        )
+        assert tariff._live_spike_override(
+            24, action, tariff.get_current_datetime()
+        ) is None
+
+    def test_get_control_state_uses_live_load_override_then_returns_to_dp(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch)
+        tariff._shadow_enabled = True
+        monkeypatch.setattr(
+            tariff,
+            "_decide_control_state",
+            lambda state, minute: (
+                ControlState.DORMANT,
+                None,
+                None,
+                "heuristic",
+            ),
+        )
+        monkeypatch.setattr(
+            tariff, "_shadow_plan", lambda state, slot, now: None
+        )
+
+        def dp_result(state, minute):
+            tariff._last_dp_action = {"kind": "idle", "slot": 24}
+            return ControlState.DORMANT, None, None, "DP: Idle"
+
+        monkeypatch.setattr(tariff, "_dp_control_result", dp_result)
+        monkeypatch.setattr(
+            tariff, "_dp_action_blocked", lambda state, action: False
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_readiness_floor_blocks",
+            lambda state, now, result: False,
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_readiness_charge_override",
+            lambda state, now: None,
+        )
+        state = create_test_state(60)
+
+        result = tariff.get_control_state(state, 24 * 30)
+
+        assert result[0] == ControlState.LOAD_FOLLOW_DISCHARGE
+        assert "Unforecasted load" in result[3]
+        assert tariff._last_live_override is not None
+
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {
+                "baseline_w": 300.0,
+                "surplus_w": -300.0,
+                "voltage": 240.0,
+                "soc": 60,
+            },
+        )
+
+        result = tariff.get_control_state(state, 24 * 30)
+
+        assert result[0] == ControlState.DORMANT
+        assert result[3] == "DP: Idle"
+        assert tariff._last_live_override is None
+
+    def test_get_control_state_uses_live_solar_override_then_returns_to_dp(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(
+            monkeypatch,
+            baseline_w=-3500.0,
+            surplus_w=3500.0,
+            solar_floor=(3.0, 720.0),
+        )
+        tariff._shadow_enabled = True
+        monkeypatch.setattr(
+            tariff,
+            "_decide_control_state",
+            lambda state, minute: (
+                ControlState.DORMANT,
+                None,
+                None,
+                "heuristic",
+            ),
+        )
+        monkeypatch.setattr(
+            tariff, "_shadow_plan", lambda state, slot, now: None
+        )
+
+        def dp_result(state, minute):
+            tariff._last_dp_action = {"kind": "idle", "slot": 24}
+            return ControlState.DORMANT, None, None, "DP: Idle"
+
+        monkeypatch.setattr(tariff, "_dp_control_result", dp_result)
+        monkeypatch.setattr(
+            tariff, "_dp_action_blocked", lambda state, action: False
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_readiness_floor_blocks",
+            lambda state, now, result: False,
+        )
+        monkeypatch.setattr(
+            tariff,
+            "_readiness_charge_override",
+            lambda state, now: None,
+        )
+        state = create_test_state(60)
+
+        result = tariff.get_control_state(state, 24 * 30)
+
+        assert result[0] == ControlState.LOAD_FOLLOW_CHARGE
+        assert "Unforecasted solar" in result[3]
+
+        monkeypatch.setattr(
+            tariff,
+            "_read_power_snapshot",
+            lambda: {
+                "baseline_w": -100.0,
+                "surplus_w": 100.0,
+                "voltage": 240.0,
+                "soc": 60,
+            },
+        )
+
+        result = tariff.get_control_state(state, 24 * 30)
+
+        assert result[0] == ControlState.DORMANT
+        assert result[3] == "DP: Idle"
+        assert tariff._last_live_override is None
+
+    def test_set_home_demand_levels_applies_live_override(self):
+        tariff = _build_tariff()
+        tariff.SMART_OCPP_OPERATION = False
+        tariff._last_live_override = LiveOverride(
+            "load", 3, 16, 0.0, "test"
+        )
+        controller = Mock()
+        state = create_test_state(60)
+
+        tariff.set_home_demand_levels(controller, state, 24 * 30)
+
+        controller.setDischargeCurrentRange.assert_called_with(3, 16)
+        controller.setDischargeActivationPower.assert_called_with(0)
+
+    def test_learning_preview_label_shows_live_override(self):
+        tariff = _build_tariff()
+        tariff._learning_mode = "control_hist"
+        tariff._shadow_enabled = True
+        tariff._last_live_override = LiveOverride(
+            "load", 3, 16, 0.0, "Unforecasted load 4800W"
+        )
+
+        assert (
+            tariff.learning_preview_label()
+            == "Live: Unforecasted load 4800W"
+        )
+
+    def test_apply_live_override_sets_load_ranges(self):
+        tariff = _build_tariff()
+        tariff._last_live_override = LiveOverride(
+            "load", 3, 16, 0.0, "test"
+        )
+        controller = Mock()
+
+        assert tariff._apply_live_override(controller)
+
+        controller.setDischargeCurrentBias.assert_called_with(
+            tariff.AGGRESSIVE_DISCHARGE_BIAS_A
+        )
+        controller.setDischargeCurrentRange.assert_called_with(3, 16)
+        controller.setDischargeActivationPower.assert_called_with(0)
+
+    def test_apply_live_override_sets_solar_ranges(self):
+        tariff = _build_tariff()
+        tariff._last_live_override = LiveOverride(
+            "solar", 3, 16, 720.0, "test"
+        )
+        controller = Mock()
+
+        assert tariff._apply_live_override(controller)
+
+        controller.setChargeCurrentBias.assert_called_with(-0.5)
+        controller.setChargeCurrentRange.assert_called_with(3, 16)
+        controller.setChargeActivationPower.assert_called_with(720.0)
 
 
 class TestShadowPlannerAndEstimator:

@@ -451,6 +451,39 @@ def test_hybrid_floor_at_the_discharge_limit_is_not_offered():
     assert hybrid_floors == [15.0, 15.0]
 
 
+def test_unlikely_load_spike_is_priced_in_the_follow_arc():
+    sample_slot = replace(
+        slot(
+            0,
+            import_p=32.26,
+            export_p=18.0,
+            load_kw=0.3,
+            max_discharge=16.0,
+        ),
+        load_samples=((0.3, 0.95), (3.5, 0.05)),
+        follow_aggressive_gate_w=720.0,
+        follow_aggressive_floor_percent=40.0,
+    )
+
+    templates = planner()._action_templates(sample_slot)
+    idle = next(t for t in templates if t.kind == "idle")
+    follow = next(
+        t for t in templates if t.kind == "follow_house_aggressive"
+    )
+
+    assert follow.cost_p < idle.cost_p
+    assert follow.current_max_a >= 14.0
+    assert follow.delta_steps < 0
+
+    without_spike = replace(
+        sample_slot, load_samples=((0.3, 1.0),)
+    )
+    kinds = {
+        t.kind for t in planner()._action_templates(without_spike)
+    }
+    assert "follow_house_aggressive" not in kinds
+
+
 def test_unconditional_hybrid_floor_ignores_the_gate():
     sample_slot = replace(
         slot(0, import_p=25.0, export_p=10.0, load_kw=0.5),

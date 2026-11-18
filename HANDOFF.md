@@ -703,6 +703,15 @@ completed fixes.
 - The live heuristic still executes every command. Do not switch it over
   until the shadow plans have been backtested against both the heuristic and
   the outcomes (sections 5–7).
+- Live spike override: when a control-mode DP action is `idle`, a live house
+  load above the Wallbox minimum triggers a temporary load-following
+  discharge if the import avoided now beats the best later export; a live
+  solar surplus above the solar charge floor triggers a temporary charge.
+  The decision is a pure helper (`control_overrides.py`), recomputed each
+  cycle, so the next cycle returns to the DP plan. The dashboard preview says
+  `Live: …`. Tests cover the load/solar decisions, the tariff wiring and the
+  return to DP. The arc-scoring test also shows a 5% high-load sample makes
+  the follow arc cheaper than idling.
 - Config cleanup: the **tariff preset is now the single tariff selector**.
   `charging.startup_mode` is `SMART` or `FREERUN`, and `config.SMART_TARIFF`
   derives the controller from the preset. The old `charging.startup_state`

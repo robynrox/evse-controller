@@ -16,6 +16,11 @@ from evse_controller.drivers.evse.async_interface import (
     EvseAsyncState,
     EvseState,
 )
+from evse_controller.control_overrides import (
+    LiveOverride,
+    load_spike_override,
+    solar_spike_override,
+)
 from evse_controller.forecasting.component import (
     ComponentLoadModel,
     MissingForecastWeather,
@@ -616,6 +621,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._shadow_force_replan = False
         self._last_component_shadow_run = None
         self._last_dp_action = None
+        self._last_live_override = None
         self._follow_gate_voltage = 240.0
         self._component_model = None
         self._component_model_path = None
@@ -771,6 +777,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._last_shadow_soc = None
         self._shadow_force_replan = True
         self._last_dp_action = None
+        self._last_live_override = None
         info(f"IOCTGO_AGILEOUT: Learning mode set to {value}")
         return value
 
@@ -997,6 +1004,121 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return charge_blocked or discharge_blocked
         return False
 
+    def _current_import_price(self, current_slot: int) -> float:
+        """Import price for the current slot from the recorded DP input."""
+        run = self._selected_dp_run()
+        if run:
+            row = next(
+                (
+                    item
+                    for item in run.get("inputs") or []
+                    if item.get("slot") == current_slot
+                ),
+                None,
+            )
+            if row and row.get("import_p") is not None:
+                try:
+                    return float(row["import_p"])
+                except (TypeError, ValueError):
+                    pass
+        return float(self._import_standard_p())
+
+    def _live_spike_override(
+        self,
+        current_slot: int,
+        dp_action: Optional[Mapping[str, Any]],
+        now,
+    ) -> Optional[LiveOverride]:
+        """A live load/solar override for an idle DP action, or ``None``.
+
+        The override is deliberately transient: it is recomputed from the
+        live measurement on every control cycle, so the next cycle returns to
+        the DP plan when the spike has gone.
+        """
+        if not self._dp_control_enabled or not dp_action:
+            return None
+        if str(dp_action.get("kind") or "") != "idle":
+            return None
+        snapshot = self._read_power_snapshot()
+        if not snapshot:
+            return None
+        try:
+            soc = float(snapshot.get("soc", -1))
+        except (TypeError, ValueError):
+            soc = -1.0
+        if soc < 0:
+            soc = (
+                float(self._last_shadow_soc)
+                if self._last_shadow_soc is not None
+                else -1.0
+            )
+        if soc < 0:
+            return None
+        floor = self._normal_discharge_floor()
+        target = ev_readiness_store.active()
+        if target is not None and now >= target.ready_by:
+            floor = max(floor, self._readiness_target_soc(target))
+        voltage = float(
+            snapshot.get("voltage") or config.WALLBOX_NOMINAL_VOLTAGE
+        )
+        min_discharge = int(
+            math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9)
+        )
+        max_discharge = int(self.MAX_DISCHARGE_CURRENT)
+        if not self._discharge_inhibited:
+            load = load_spike_override(
+                dp_action_kind="idle",
+                baseline_w=float(snapshot.get("baseline_w") or 0.0),
+                import_p=self._current_import_price(current_slot),
+                best_export_p=self._best_alternative_export_rate(
+                    current_slot
+                ),
+                soc=soc,
+                discharge_floor=floor,
+                min_current_a=min_discharge,
+                max_current_a=max_discharge,
+                voltage_v=voltage,
+                margin_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
+            )
+            if load is not None:
+                return load
+        floor_a, activation_w = self._solar_charge_floor_for_slot(
+            current_slot
+        )
+        return solar_spike_override(
+            dp_action_kind="idle",
+            surplus_w=float(snapshot.get("surplus_w") or 0.0),
+            charge_floor_a=floor_a,
+            activation_w=activation_w,
+            soc=soc,
+            charge_cap=self.charge_cap_percent(),
+            min_current_a=min_discharge,
+            max_current_a=int(self.MAX_CHARGE_CURRENT),
+        )
+
+    def _apply_live_override(self, evseController) -> bool:
+        """Apply the current live override's ranges, if any."""
+        override = self._last_live_override
+        if override is None:
+            return False
+        if override.kind == "load":
+            evseController.setDischargeCurrentBias(
+                self.AGGRESSIVE_DISCHARGE_BIAS_A
+            )
+            evseController.setDischargeCurrentRange(
+                override.min_current_a, override.max_current_a
+            )
+            evseController.setDischargeActivationPower(0)
+            return True
+        if override.kind == "solar":
+            evseController.setChargeCurrentBias(-0.5)
+            evseController.setChargeCurrentRange(
+                override.min_current_a, override.max_current_a
+            )
+            evseController.setChargeActivationPower(override.activation_w)
+            return True
+        return False
+
     def _apply_dp_home_demand_levels(
         self, evseController, state, dayMinute: int
     ) -> bool:
@@ -1154,6 +1276,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         now = self.get_current_datetime()
         slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
         if self._dp_control_enabled:
+            if self._last_live_override is not None:
+                return f"Live: {self._last_live_override.reason}"
             if self._last_dp_action is None:
                 return "Heuristic fallback for this slot"
             run = self._selected_dp_run()
@@ -8553,6 +8677,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         previous = self._decision_snapshot
         result = self._decide_control_state(state, dayMinute)
+        self._last_live_override = None
         if self._decision_snapshot is not previous:
             self._record_decision_history(self._decision_snapshot, result)
         now = self.get_current_datetime()
@@ -8611,6 +8736,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 None,
                 "EV readiness floor",
             )
+        if getattr(state, "evse_state", None) not in DISCONNECTED_STATES:
+            try:
+                live_override = self._live_spike_override(
+                    current_slot, action, now
+                )
+            except Exception as exc:
+                debug(
+                    "IOCTGO_AGILEOUT: Live spike override skipped: "
+                    f"{exc}"
+                )
+                live_override = None
+            if live_override is not None:
+                self._last_live_override = live_override
+                return (
+                    (
+                        ControlState.LOAD_FOLLOW_DISCHARGE
+                        if live_override.kind == "load"
+                        else ControlState.LOAD_FOLLOW_CHARGE
+                    ),
+                    live_override.min_current_a,
+                    live_override.max_current_a,
+                    live_override.reason,
+                )
         return dp_result
 
     def _decide_control_state(
@@ -9911,6 +10059,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.original_calculation_method = evseController.use_new_current_calculation
             evseController.use_new_current_calculation = True
 
+        if self._last_live_override is not None:
+            if self._apply_live_override(evseController):
+                return
+
         if self._dp_control_enabled:
             if self._apply_dp_home_demand_levels(
                 evseController, state, dayMinute
@@ -10268,6 +10420,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     def cleanup(self):
         """Persist the ledger, then restore the original calculation mode."""
+        self._last_live_override = None
         self.save_state()
         if hasattr(self, 'original_calculation_method') and hasattr(self, 'evseController'):
             self.evseController.use_new_current_calculation = self.original_calculation_method

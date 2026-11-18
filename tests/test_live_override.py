@@ -1,0 +1,107 @@
+"""Pure decisions for unforecasted live load and solar spikes."""
+
+from evse_controller.control_overrides import (
+    load_spike_override,
+    solar_spike_override,
+)
+
+
+def _load(**overrides):
+    values = dict(
+        dp_action_kind="idle",
+        baseline_w=4800.0,
+        import_p=32.26,
+        best_export_p=27.4,
+        soc=60.0,
+        discharge_floor=40.0,
+        min_current_a=3,
+        max_current_a=16,
+        voltage_v=240.0,
+        margin_p=0.3,
+    )
+    values.update(overrides)
+    return load_spike_override(**values)
+
+
+def _solar(**overrides):
+    values = dict(
+        dp_action_kind="idle",
+        surplus_w=3500.0,
+        charge_floor_a=3.0,
+        activation_w=720.0,
+        soc=60.0,
+        charge_cap=97.0,
+        min_current_a=3,
+        max_current_a=16,
+    )
+    values.update(overrides)
+    return solar_spike_override(**values)
+
+
+def test_load_spike_is_covered_when_import_beats_later_export():
+    decision = _load()
+
+    assert decision is not None
+    assert decision.kind == "load"
+    assert decision.min_current_a == 3
+    assert decision.max_current_a == 16
+    assert decision.activation_w == 0.0
+    assert "32.3p" in decision.reason
+    assert "27.4p" in decision.reason
+
+
+def test_load_spike_is_not_covered_when_later_export_is_better():
+    assert _load(best_export_p=40.0) is None
+
+
+def test_load_spike_does_not_override_a_non_idle_dp_action():
+    for kind in (
+        "charge",
+        "discharge",
+        "follow_house_aggressive",
+        "follow_house_floor_aggressive",
+        "follow_solar",
+    ):
+        assert _load(dp_action_kind=kind) is None
+
+
+def test_load_spike_returns_to_dp_when_the_load_drops():
+    assert _load(baseline_w=300.0) is None
+
+
+def test_load_spike_respects_the_discharge_floor():
+    assert _load(soc=40.0) is None
+    assert _load(soc=39.0) is None
+
+
+def test_solar_spike_is_charged_when_it_can_start_the_floor():
+    decision = _solar()
+
+    assert decision is not None
+    assert decision.kind == "solar"
+    assert decision.min_current_a == 3
+    assert decision.max_current_a == 16
+    assert decision.activation_w == 720.0
+    assert "3500W" in decision.reason
+
+
+def test_solar_spike_is_not_charged_below_the_activation():
+    assert _solar(surplus_w=500.0) is None
+
+
+def test_solar_spike_is_not_charged_at_the_cap():
+    assert _solar(soc=97.0) is None
+
+
+def test_solar_spike_is_not_charged_when_no_current_is_worth_keeping():
+    assert _solar(charge_floor_a=0.0) is None
+
+
+def test_solar_spike_does_not_override_a_non_idle_dp_action():
+    for kind in (
+        "charge",
+        "discharge",
+        "follow_house_aggressive",
+        "follow_solar",
+    ):
+        assert _solar(dp_action_kind=kind) is None

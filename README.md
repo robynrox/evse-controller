@@ -1054,6 +1054,18 @@ build a fresh plan, for example because the model or weather is missing or the
 plan is stale, that slot falls back to the heuristic and the dashboard says
 `heuristic fallback`.
 
+A control plan is based on the load distribution it was given, so a one-off
+shower or solar burst can be missing from it. When the plan says `idle` but the
+live measurement shows a spike, a temporary override can cover it:
+
+- a house-load spike above the Wallbox minimum is discharged when the import
+  avoided now is worth more than the best later export value;
+- a solar surplus above the solar charge floor is charged.
+
+The override is recomputed every control cycle, so the controller returns to
+the DP plan as soon as the spike ends. It is shown in the dashboard preview as
+`Live: …` rather than being silently folded into the plan.
+
 `learning.hybrid_discharge` is an opt-in feature, default `off`.
 `aggressive` adds unconditional floor-plus-follow discharge arcs for the fixed
 currents selected by the baseline plan, plus neighbours and a small fallback
