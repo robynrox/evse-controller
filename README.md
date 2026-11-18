@@ -1429,15 +1429,19 @@ most of the saving. A floor at the slot's discharge limit has no follow
 headroom, so it is pruned: the fixed discharge arc already represents exactly
 the same action.
 
-The pure follow-house gates use the **energy-weighted marginal planned
-export**, not a DP valuation. The current action's energy demand consumes the
-planned export slots from worst price upward; a small action only has to beat
-the worst slot, while a larger action reaches the next one. The gate is the
-first integer current whose net gain beats that marginal slot, and its power
-equivalent is the house load at which the Wallbox would choose that current.
-The conservative mode uses the same marginal for its floor output; the
-aggressive mode scans integer currents and their measured efficiency. If no
-current clears it, that follow arc is omitted for the slot.
+The **live heuristic gate** uses the worst remaining planned export. The
+heuristic re-plans every 20 seconds, so the current action consumes far less
+than one export slot and only needs to beat that worst slot.
+
+The **DP follow gates** use the energy-weighted marginal planned export,
+because their actions are half-hour slots: a larger action can consume more
+than the worst slot, so the gate reaches the next one. The current action's
+energy demand consumes the planned export slots from worst price upward; the
+gate is the first integer current whose net gain beats that marginal slot, and
+its power equivalent is the house load at which the Wallbox would choose that
+current. The conservative mode uses the same marginal for its floor output;
+the aggressive mode scans integer currents and their measured efficiency. If
+no current clears it, that follow arc is omitted for the slot.
 
 For a dynamic-export tariff, the moving horizon runs to the last **contiguous
 slot with a published export price**. When today's series reaches midnight and

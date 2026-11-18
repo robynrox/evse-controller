@@ -1295,14 +1295,14 @@ class TestDischargeActivation:
         assert current_235 >= 5
         assert at_235 > at_22
 
-    def test_uncommitted_export_alternative_raises_the_gate(
+    def test_planned_export_alternative_raises_the_gate(
         self, agile_tariff, monkeypatch
     ):
-        """A better unplanned slot is a real alternative for the energy."""
+        """A worse planned slot is the marginal alternative for the energy."""
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
         self._ledger(agile_tariff, dc_kwh=10.0, cost_gbp=1.0)  # 10p DC
 
-        # No better slot ahead: the cheap ledger cost sets a modest gate.
+        # No planned export ahead: the cheap ledger cost sets a modest gate.
         TestStageOneExportBudget._set_rates(
             agile_tariff, {24: 5.0}, default=0.0
         )
@@ -1311,13 +1311,13 @@ class TestDischargeActivation:
         )
         assert 0 < without_better["activation_w"] < 720
 
-        # The same slot with a 26p uncommitted export ahead: spending the
-        # energy now forgoes that sale, so the gate rises above 720 W.
+        # A planned 26p export ahead: spending the energy now forgoes that
+        # sale, so the gate rises above 720 W.
         TestStageOneExportBudget._set_rates(
             agile_tariff, {24: 5.0, 36: 26.0}, default=0.0
         )
         with_better = agile_tariff._aggressive_slot_gate(
-            24, planned_slots=set()
+            24, planned_slots={36}
         )
         assert with_better["alternative_rate_p"] == pytest.approx(26.0)
         assert with_better["activation_w"] > without_better["activation_w"]
@@ -3858,7 +3858,7 @@ class TestStageOneExportBudget:
         ) == pytest.approx(42.0)
         assert agile_tariff._discharge_policy == "idle"
 
-    def test_aggressive_slots_are_the_next_highest_priority_prices(
+    def test_aggressive_slots_below_the_planned_export_are_rejected(
         self, agile_tariff, monkeypatch
     ):
         monkeypatch.setattr(config, "IMPORT_HIGH", 30.0)
@@ -3866,8 +3866,7 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
         # A large export loss leaves headroom above the 50% aggressive target
-        # after the one full export that fits.  The forecast says the house
-        # will not need conservative coverage, so aggressive may use it.
+        # after the one full export that fits.
         agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
         monkeypatch.setattr(
@@ -3879,7 +3878,6 @@ class TestStageOneExportBudget:
             agile_tariff, "_conservative_would_activate", lambda slot: False
         )
 
-        priority = [38, 40, 42]
         prices = {42: 37.0, 40: 36.0, 38: 35.0}
         self._set_rates(agile_tariff, prices)
 
@@ -3890,11 +3888,11 @@ class TestStageOneExportBudget:
             for slot, action in agile_tariff._planned_slot_actions.items()
             if action == "aggressive"
         )
-        # 42 is the only full export that fits.  The two remaining priority
-        # slots are the next highest prices and still leave the running
-        # minimum above the 50% target, so they get aggressive load-following.
+        # 42 is the only full export that fits.  The lower-priced slots would
+        # spend the same stored energy for less than the planned export, so
+        # the future-aware gate rejects them.
         assert plan == [42]
-        assert aggressive == [38, 40]
+        assert aggressive == []
         assert agile_tariff._planned_slot_actions[42] == "export"
 
     def test_aggressive_cost_sits_between_conservative_and_bulk_export(
@@ -3984,7 +3982,7 @@ class TestStageOneExportBudget:
         monkeypatch.setattr(config, "MIN_AGILE_DISCHARGE_SOC", 50)
         monkeypatch.setattr(config, "IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 40)
         self._set_time(agile_tariff, 9, 0)
-        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 20.0
+        agile_tariff.EXPORT_SLOT_SOC_LOSS_PERCENT = 50.0
         agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT = 1.1
         monkeypatch.setattr(
             agile_tariff,
@@ -3999,16 +3997,16 @@ class TestStageOneExportBudget:
         prices = {42: 37.0, 40: 36.0, 38: 35.0}
         self._set_rates(agile_tariff, prices)
 
-        agile_tariff.get_control_state(create_test_state(79), 9 * 60)
+        agile_tariff.get_control_state(create_test_state(60), 9 * 60)
         explanation = agile_tariff.get_decision_explanation()
         plan = explanation["plan"]
 
-        assert plan["planned_slots"] == [42]
-        assert plan["aggressive_slots"] == [38, 40]
+        assert plan["planned_slots"] == []
+        assert plan["aggressive_slots"] == [42]
         aggressive_rows = [
             row for row in plan["rows"] if row["kind"] == "aggressive"
         ]
-        assert [row["slot"] for row in aggressive_rows] == [38, 40]
+        assert [row["slot"] for row in aggressive_rows] == [42]
         assert all(row["status"] == "aggressive" for row in aggressive_rows)
         assert all(row["revenue_gbp"] for row in aggressive_rows)
         # The plan is conditional: every aggressive row carries the live
@@ -4022,8 +4020,8 @@ class TestStageOneExportBudget:
                 in row["reason"]
                 or "starts on any grid import" in row["reason"]
             )
-        assert set(plan["aggressive_activation_w"]) == {38, 40}
-        assert set(plan["aggressive_hurdle_p"]) == {38, 40}
+        assert set(plan["aggressive_activation_w"]) == {42}
+        assert set(plan["aggressive_hurdle_p"]) == {42}
         assert plan["aggressive_conditional"] is True
         assert plan["selected_revenue_gbp"] == pytest.approx(
             sum(
@@ -4033,10 +4031,14 @@ class TestStageOneExportBudget:
             )
         )
         assert "aggressive" in plan["diagnosis"].lower()
-        assert {row["slot"] for row in plan["options"] if row["kind"] == "aggressive"} == {38, 40}
+        assert {
+            row["slot"]
+            for row in plan["options"]
+            if row["kind"] == "aggressive"
+        } == {42}
 
         html = agile_tariff.get_dashboard_html()
-        assert "2 aggressive (conditional house + surplus export)" in html
+        assert "Aggressive plan: 1 conditional slot(s)" in html
 
     def test_ordinary_exports_stop_at_the_bulk_target(
         self, agile_tariff, monkeypatch
@@ -5022,15 +5024,15 @@ class TestFutureAwareGate:
             energy == pytest.approx(1.32) for _, energy in planned
         )
 
-    def test_current_discharge_gate_passes_planned_exports(
+    def test_current_discharge_gate_uses_worst_planned_export(
         self, monkeypatch
     ):
         tariff = _build_tariff()
         tariff._aggressive_slot_gates = {}
         monkeypatch.setattr(
             tariff,
-            "_planned_export_energy_prices",
-            lambda slot, voltage: [(20.0, 1.0)],
+            "_worst_planned_export_price",
+            lambda slot: 20.0,
         )
         captured = {}
 
@@ -5056,7 +5058,8 @@ class TestFutureAwareGate:
         assert tariff._current_discharge_activation_w(
             24, 24 * 30, aggressive=True
         ) == 720.0
-        assert captured["planned_exports"] == [(20.0, 1.0)]
+        assert captured["alternative_rate_p"] == 20.0
+        assert captured.get("planned_exports") is None
 
     def test_aggressive_scan_uses_the_energy_weighted_marginal(
         self, monkeypatch

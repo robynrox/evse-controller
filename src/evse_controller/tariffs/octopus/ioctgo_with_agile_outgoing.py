@@ -1767,7 +1767,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
 
-    def _worst_planned_export_price(self, current_slot: int) -> float:
+    def _worst_planned_export_price(
+        self,
+        current_slot: int,
+        planned_slots: Optional[Iterable[int]] = None,
+    ) -> float:
         """Worst price among the remaining planned export slots.
 
         The load-following gate compares the current action with the marginal
@@ -1777,7 +1781,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         planned = {
             slot
-            for slot in self._planned_export_slots
+            for slot in (
+                self._planned_export_slots
+                if planned_slots is None
+                else planned_slots
+            )
             if slot > current_slot
         }
         if not planned:
@@ -4714,9 +4722,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             alternative_rate_p=self._worst_planned_export_price(
                 current_slot
             ),
-            planned_exports=self._planned_export_energy_prices(
-                current_slot, voltage
-            ),
         )
 
     @classmethod
@@ -4769,20 +4774,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         from disagreeing about whether the slot is worthwhile.
 
         The stored energy is valued at the higher of its ledger cost and the
-        best *uncommitted* export price.  Planned sales are already committed
-        to the pack, so they are not an alternative for the small extra SoC
-        this slot would spend; an unplanned higher-priced slot is, because
-        spending now could put it out of reach.  The scan evaluates the
-        integer current the Wallbox would actually choose, so the 4 A/5 A
-        efficiency step is included.  The export price and the live voltage
-        come from the same helpers the control loop uses.
+        worst *planned* export price.  A planned sale is the marginal use of
+        the energy; an unplanned higher-priced slot is not, because the plan
+        does not intend to reach it.  The 20-second control tick consumes far
+        less than one export slot, so the current action only needs to beat
+        that worst planned slot.  The scan evaluates the integer current the
+        Wallbox would actually choose, so the 4 A/5 A efficiency step is
+        included.  The export price and the live voltage come from the same
+        helpers the control loop uses.
         """
         power = self._read_power_snapshot()
         voltage = power["voltage"] if power else None
         export_rate_p = self._current_export_rate_p(slot)
         import_rate_p = self._current_import_rate_p(slot * SLOT_MINUTES)
-        alternative_rate_p = self._best_alternative_export_rate(
-            slot, planned_slots=planned_slots
+        alternative_rate_p = self._worst_planned_export_price(
+            slot, planned_slots
         )
         (
             activation_w,
