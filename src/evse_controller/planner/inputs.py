@@ -97,8 +97,19 @@ def build_planner_input(
     load_prior: Optional[Sequence[tuple[float, float]]] = None,
     unknown_import_p: Optional[float] = None,
     unknown_export_p: Optional[float] = 0.0,
+    horizon_end: Optional[datetime] = None,
 ) -> PlannerInput:
-    """Build the horizon from *current_slot* to the end of the local day.
+    """Build the planner horizon.
+
+    Without ``horizon_end`` this is the moving end-of-day horizon: dynamic
+    export stops at the last published export price and may append tomorrow
+    when today's series runs to midnight.  A fixed-export tariff plans to the
+    end of the current day.
+
+    ``horizon_end`` extends the horizon to a readiness deadline.  Fixed-import
+    tariffs can plan through it.  Agile import stops at the last published
+    import price, and Agile export may use the ``unknown_export_p`` fallback
+    when tomorrow's export series is not published yet.
 
     ``unknown_export_p`` defaults to 0p, matching the existing Agile control
     fallback for a slot whose export rate is not yet published.  Import should
@@ -113,6 +124,7 @@ def build_planner_input(
 
     current_slot = max(0, min(SLOTS_PER_DAY, int(current_slot)))
     dynamic_export = bool(getattr(source, "dynamic_export", False))
+    dynamic_import = bool(getattr(source, "dynamic_import", False))
 
     def day_rates(day_to_load: date):
         rates = source.rates_for_day(day_to_load)
@@ -130,13 +142,24 @@ def build_planner_input(
                 return index
         return SLOTS_PER_DAY
 
+    def known_import_end(rates, start_index: int) -> int:
+        """First contiguous end of published import prices."""
+        for index in range(start_index, SLOTS_PER_DAY):
+            if rates[index].import_p is None:
+                return index
+        return SLOTS_PER_DAY
+
     # A moving horizon for a dynamic-export tariff ends at the last
     # contiguous slot with a published export price.  When today's prices run
     # to midnight, tomorrow's series is appended if it is already published.
     # Fixed-export tariffs still plan to the end of the current day.
     days_to_plan: list[date] = [day]
     horizon_limited = False
-    if dynamic_export:
+    if horizon_end is not None:
+        last_day = max(day, horizon_end.date())
+        while days_to_plan[-1] < last_day:
+            days_to_plan.append(days_to_plan[-1] + timedelta(days=1))
+    elif dynamic_export:
         today_rates = day_rates(day)
         if known_export_end(today_rates, current_slot) >= SLOTS_PER_DAY:
             tomorrow = day + timedelta(days=1)
@@ -163,10 +186,23 @@ def build_planner_input(
         )
         start_index = current_slot if day_index == 0 else 0
         end_slot = SLOTS_PER_DAY
-        if dynamic_export:
-            end_slot = known_export_end(rates, start_index)
+        if dynamic_import:
+            end_slot = min(
+                end_slot, known_import_end(rates, start_index)
+            )
             if end_slot < SLOTS_PER_DAY:
                 horizon_limited = True
+        if dynamic_export and horizon_end is None:
+            end_slot = min(
+                end_slot, known_export_end(rates, start_index)
+            )
+            if end_slot < SLOTS_PER_DAY:
+                horizon_limited = True
+        if horizon_end is not None and plan_day == horizon_end.date():
+            horizon_slot = horizon_end.hour * 2 + (
+                1 if horizon_end.minute >= 30 else 0
+            )
+            end_slot = min(end_slot, horizon_slot)
         if end_slot <= start_index:
             continue
 

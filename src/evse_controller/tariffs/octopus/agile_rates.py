@@ -34,10 +34,33 @@ AGILE_TARIFF_CODES = {
 
 DEFAULT_AGILE_TARIFF_CODE = 'AGILE-OUTGOING-19-05-13'
 
+#: Current Octopus Agile import product.  The product code is versioned; the
+#: config can override it if Octopus publishes a newer one.
+DEFAULT_AGILE_IMPORT_PRODUCT = 'AGILE-24-10-01'
+
 
 def tariff_code_for_region(region: str) -> str:
     """The Agile Outgoing product code for a DNO region letter."""
     return AGILE_TARIFF_CODES.get(region, DEFAULT_AGILE_TARIFF_CODE)
+
+
+def fetch_import_rates(
+    region: str,
+    days: Sequence[date],
+    product_code: str | None = None,
+) -> list:
+    """Fetch Octopus Agile import rates for the requested local days.
+
+    Agile import uses the same standard-unit-rates endpoint as Agile Outgoing,
+    but a different product code.  The returned rows have the same
+    ``{"start", "end", "rate"}`` shape, with ``rate`` in p/kWh including VAT.
+    An empty list means the fetch failed or no rates were returned.
+    """
+    return fetch_rates(
+        region,
+        days,
+        tariff_code=product_code or DEFAULT_AGILE_IMPORT_PRODUCT,
+    )
 
 
 def fetch_rates(

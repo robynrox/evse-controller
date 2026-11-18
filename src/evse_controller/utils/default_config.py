@@ -85,5 +85,6 @@ DEFAULT_CONFIG = {
     },
     "octopus": {
         "region": "K",
+        "agile_import_product": "AGILE-24-10-01",
     },
 }

@@ -7305,6 +7305,129 @@ class TestFluxShared:
         assert tariff.SMART_OCPP_OPERATION is False
 
 
+class TestAgileImportShared:
+    """Agile import is dynamic and DP-first, with a minimal fallback."""
+
+    @pytest.fixture(autouse=True)
+    def _agile_import(self, monkeypatch):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "agile_import")
+        monkeypatch.setitem(tariffs, "export_source", "zero")
+        monkeypatch.setattr(
+            "evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing."
+            "fetch_import_rates",
+            lambda *args, **kwargs: [],
+        )
+        prices = config._config_data.setdefault("prices", {}).setdefault(
+            "import", {}
+        )
+        for tier, value in (
+            ("standard", 30.0),
+            ("cheap", 10.0),
+            ("peak", 30.0),
+        ):
+            monkeypatch.setitem(prices, tier, value)
+
+    @staticmethod
+    def _rates(tariff, rates_by_slot):
+        base = tariff.get_current_datetime().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return [
+            {
+                "start": base + timedelta(minutes=30 * slot),
+                "end": base + timedelta(minutes=30 * (slot + 1)),
+                "rate": float(rates_by_slot.get(slot, 20.0)),
+            }
+            for slot in range(48)
+        ]
+
+    def test_dynamic_import_prices_drive_the_heuristic(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=10, minute=0, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff.agile_import_rates = self._rates(
+            tariff, {19: -5.0, 20: 12.0, 32: 45.0}
+        )
+        day = fixed.date()
+
+        assert tariff.dynamic_import is True
+        assert tariff.import_price_p(day, 19) == pytest.approx(-5.0)
+        assert tariff.import_price_p(day, 20) == pytest.approx(12.0)
+        assert tariff.import_price_p(day, 32) == pytest.approx(45.0)
+        assert tariff._current_import_rate_p(19 * 30) == pytest.approx(-5.0)
+        assert tariff.is_off_peak(19 * 30) is True
+        assert tariff.is_off_peak(20 * 30) is False
+        assert tariff._best_remaining_import_p() == pytest.approx(45.0)
+        assert tariff.AUTO_OCPP_SUPPORTED is False
+
+    def test_negative_price_charges_at_max(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=9, minute=30, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff.agile_import_rates = self._rates(tariff, {19: -5.0})
+
+        control_state, _, _, _ = tariff.get_control_state(
+            create_test_state(50), 9 * 60 + 30
+        )
+
+        assert control_state == ControlState.CHARGE
+        assert tariff._decision_snapshot.current_rate_p == pytest.approx(-5.0)
+
+    def test_missing_import_price_falls_back_to_standard(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=10, minute=0, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff.agile_import_rates = []
+
+        assert tariff.import_price_p(fixed.date(), 20) is None
+        assert tariff._current_import_rate_p(20 * 30) == pytest.approx(
+            tariff._import_standard_p()
+        )
+
+    def test_dashboard_shows_the_import_strip(self):
+        tariff = _build_tariff()
+        fixed = datetime.now().replace(
+            hour=10, minute=0, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        tariff.agile_import_rates = self._rates(
+            tariff, {19: -5.0, 20: 12.0, 32: 45.0}
+        )
+
+        html = tariff.get_dashboard_html()
+
+        assert "Agile import (Region" in html
+        assert "Low: -5.0p" in html
+        assert "High: 45.0p" in html
+
+    def test_readiness_checkpoint_target_keeps_the_target_reachable(self):
+        tariff = _build_tariff()
+
+        # Ten half-hour slots at 5%/slot: 80% target needs 30% by the
+        # checkpoint.
+        assert tariff._readiness_checkpoint_target(
+            80.0,
+            datetime(2026, 11, 18, 16, 0),
+            datetime(2026, 11, 18, 21, 0),
+            5.0,
+        ) == pytest.approx(30.0)
+
+        # Beyond the maximum possible gain the checkpoint is already zero.
+        assert tariff._readiness_checkpoint_target(
+            80.0,
+            datetime(2026, 11, 18, 16, 0),
+            datetime(2026, 11, 19, 7, 0),
+            5.0,
+        ) == 0.0
+
+
 class TestIntelligentOctopusGoStillUsesItsOwnWindow:
     def test_cheap_window_and_ocpp_are_unchanged(self, monkeypatch):
         tariffs = config._config_data.setdefault("tariffs", {})

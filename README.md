@@ -439,7 +439,7 @@ only chooses whether to begin in `SMART` or `FREERUN`.
 
 ```yaml
 tariffs:
-  preset: iog_prime          # import/control preset: iog_* | octopus_go | cosy | flux
+  preset: iog_prime          # import/control preset: iog_* | octopus_go | cosy | flux | agile_import
   export_source: tiers       # optional: agile | tiers | zero | none
 prices:
   import:
@@ -465,6 +465,13 @@ every import tariff except Flux:
   peak window (16:00–19:00 by default).
 - `iog_no_export`: Intelligent Octopus Go import, default no export tariff
   (price unknown rather than 0p).
+- `agile_import`: Octopus Agile import. Import prices are fetched per
+  half-hour; there are no fixed cheap windows. It is DP-first: set an EV
+  Readiness target for planned charging, and run a control mode so the DP can
+  choose the cheapest slots (including negative-price slots). A minimal
+  fallback charges from solar, covers the house on price, and charges at
+  maximum only for negative import prices. It can pair with any export
+  source. It does not auto-trigger OCPP.
 - `octopus_go`: standard Octopus Go import. It uses the same heuristic and DP,
   with the 00:30–05:30 cheap import window instead of 23:30–05:30, and it does
   not automatically trigger OCPP.
@@ -496,8 +503,19 @@ Flux:
 Each import preset supplies its own cheap window: Intelligent Octopus Go uses
 23:30–05:30, standard Octopus Go uses 00:30–05:30, and Cosy uses its three
 cheap windows. Flux is coupled: it always uses its own import and export
-windows and prices, and ignores `export_source`. The preset is the single
-tariff selector; there is no separate import-tariff dropdown under Charging.
+windows and prices, and ignores `export_source`. Agile import has no fixed
+cheap window: its fetched half-hour import series drives the DP and the
+price-based heuristic, and it can pair with any export source. The preset is
+the single tariff selector; there is no separate import-tariff dropdown under
+Charging.
+
+For a readiness target that falls beyond the known price horizon, the planner
+extends to the target deadline when prices are available. If tomorrow’s Agile
+import prices are not published yet, it uses a **checkpoint target**: the SoC
+needed at the end of the known horizon so that charging at maximum in every
+remaining slot could still reach the target. This keeps a morning readiness
+target reachable without guessing tomorrow’s prices; after 16:00 the next plan
+can use the published series.
 
 
 ##### Link health

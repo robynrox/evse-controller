@@ -1,5 +1,5 @@
 from ..base import Tariff
-from .agile_rates import fetch_rates
+from .agile_rates import fetch_import_rates, fetch_rates
 from .battery_efficiency import BatteryEfficiencyModel, DASHBOARD_SOC_CAPACITY_KWH
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
@@ -437,6 +437,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if self._resolved_price_table is not None
             else True
         )
+        self.dynamic_import = config.TARIFF_PRESET == "agile_import"
+        # Agile import storage must exist before the initial self-use value is
+        # computed below.
+        self.agile_import_rates = []
+        self.agile_import_rates_fetched_at = None
 
         # Where the ledger and today's saving are kept between runs.  Tests
         # pass a temporary file; production uses config.IOCTGO_AGILE_STATE_FILE.
@@ -532,6 +537,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     },
                 }
         
+        if self.dynamic_import:
+            self.time_of_use = {
+                "dynamic": {
+                    "start": "00:00",
+                    "end": "24:00",
+                    "import_rate": self._import_standard_p() / 100,
+                    "export_rate": self._export_standard_p(),
+                }
+            }
+
         # Agile Outgoing rate storage
         self.agile_rates = []  # List of {start, end, rate} dicts
         self.agile_rates_fetched_at = None
@@ -628,6 +643,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # so it must exist from construction rather than only after a fetch
         # that stored new data.
         self._rate_fetch_timer = None
+        self._import_rate_fetch_timer = None
         self._last_fetch_attempt = None
         self._last_fetch_date = None
         
@@ -744,6 +760,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Fetch rates at startup (async). Keep this last so the fetch thread
         # cannot run before the instance attributes it needs are initialised.
         self._fetch_rates_async()
+        self._fetch_import_rates_async()
 
     @staticmethod
     def _resolve_learning_mode() -> str:
@@ -2274,12 +2291,38 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ),
         )
 
+    @staticmethod
+    def _readiness_checkpoint_target(
+        target_soc: float,
+        horizon_end: datetime,
+        deadline: datetime,
+        max_gain_percent: float,
+    ) -> float:
+        """SoC needed at *horizon_end* to keep *target_soc* reachable.
+
+        The unknown slots between the horizon end and the deadline are assumed
+        to charge at the maximum rate, so this is the lowest SoC from which
+        the target cannot be missed.  It is a safety floor, not a price
+        forecast.
+        """
+        missing_slots = max(
+            0,
+            int(
+                (deadline - horizon_end).total_seconds()
+                // (SLOT_MINUTES * 60)
+            ),
+        )
+        return max(
+            0.0,
+            float(target_soc) - float(max_gain_percent) * missing_slots,
+        )
+
     def _readiness_plan(self, planner_input, target):
         """Plan to a ready-by target, then keep it as a floor.
 
-        Returns ``(planner_input, result, info)``.  ``result`` is ``None``
-        when the target is beyond the planning horizon; the caller should use
-        the normal plan.
+        Returns ``(planner_input, result, info)``.  When the target is beyond
+        the known horizon, a checkpoint plan keeps it reachable from the last
+        known slot; ``result`` is ``None`` only when no action is needed.
         """
         target_soc = min(
             float(target.target_soc_percent),
@@ -2296,7 +2339,36 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return planner_input, None, info
         horizon_end = slots[-1].start + timedelta(minutes=SLOT_MINUTES)
         if deadline > horizon_end:
-            return planner_input, None, info
+            # The target is beyond the known price horizon.  Keep it
+            # reachable by assuming the maximum charge rate in every unknown
+            # slot between the horizon end and the deadline.  This is the
+            # 16:00 checkpoint for Agile import: before tomorrow's prices are
+            # published, charge enough today that the target cannot be missed
+            # later even if every remaining slot is used at full power.
+            max_gain = self._full_charge_slot_soc_gain_percent()
+            checkpoint_target = self._readiness_checkpoint_target(
+                target_soc, horizon_end, deadline, max_gain
+            )
+            info["checkpoint"] = horizon_end.isoformat()
+            info["checkpoint_target"] = checkpoint_target
+            if checkpoint_target <= planner_input.initial_soc + 1e-9:
+                info["checkpoint_met"] = True
+                return planner_input, None, info
+            planner = self._make_shadow_planner(
+                target_soc_percent=checkpoint_target
+            )
+            result = planner.plan(
+                slots, planner_input.initial_soc
+            )
+            info["relaxed"] = bool(
+                result.relaxed
+                or planner_input.initial_soc < checkpoint_target
+            )
+            return (
+                replace(planner_input, target_soc=None),
+                result,
+                info,
+            )
         phase_one = tuple(slot for slot in slots if slot.start < deadline)
         phase_two = tuple(slot for slot in slots if slot.start >= deadline)
         if not phase_one:
@@ -2485,26 +2557,56 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 if self._soc_estimator is not None
                 else float(battery)
             )
-            planner_input = build_planner_input(
-                source,
-                self._load_profile,
-                now.date(),
-                current_slot,
-                initial_soc,
-                target_soc=None,
-                max_charge_current_a=float(
-                    config.WALLBOX_MAX_CHARGE_CURRENT
-                ),
-                max_discharge_current_a=float(
-                    config.WALLBOX_MAX_DISCHARGE_CURRENT
-                ),
-                load_fallback_kw=float(self.SHADOW_LOAD_FALLBACK_KW),
-                load_prior=uniform_load_prior(),
-                unknown_export_p=0.0,
-            )
+            target = ev_readiness_store.active()
+
+            def build_input(horizon_end=None):
+                return build_planner_input(
+                    source,
+                    self._load_profile,
+                    now.date(),
+                    current_slot,
+                    initial_soc,
+                    target_soc=None,
+                    max_charge_current_a=float(
+                        config.WALLBOX_MAX_CHARGE_CURRENT
+                    ),
+                    max_discharge_current_a=float(
+                        config.WALLBOX_MAX_DISCHARGE_CURRENT
+                    ),
+                    load_fallback_kw=float(self.SHADOW_LOAD_FALLBACK_KW),
+                    load_prior=uniform_load_prior(),
+                    unknown_export_p=0.0,
+                    horizon_end=horizon_end,
+                )
+
+            planner_input = build_input()
+            if target is not None and planner_input.slots:
+                normal_end = (
+                    planner_input.slots[-1].start
+                    + timedelta(minutes=SLOT_MINUTES)
+                )
+                if target.ready_by > normal_end:
+                    # Extend to the readiness deadline.  Agile import stops at
+                    # its last published slot; before 16:00 the plan uses a
+                    # 16:00 checkpoint so tomorrow's newly published prices
+                    # can be used from the next tick.
+                    extension = target.ready_by
+                    if (
+                        self.dynamic_import
+                        and now.hour < 16
+                        and target.ready_by.date() > now.date()
+                    ):
+                        extension = now.replace(
+                            hour=16,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        )
+                    planner_input = build_input(
+                        horizon_end=extension
+                    )
             planner_input = self._with_follow_gates(planner_input)
             planner_input = self._with_direction_hedge(planner_input)
-            target = ev_readiness_store.active()
             if self._hybrid_discharge_mode == "aggressive":
                 baseline_result = self._make_shadow_planner().plan(
                     planner_input.slots, planner_input.initial_soc
@@ -3506,6 +3608,73 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return "Export tariff"
         return f"Agile Outgoing Export (Region {self.region})"
 
+    def _today_import_rates(self) -> list:
+        """Agile import rate rows for today, or an empty list."""
+        today = self.get_current_datetime().date()
+        return [
+            rate
+            for rate in self.agile_import_rates
+            if rate["start"].date() == today
+        ]
+
+    def _agile_import_strip_html(self) -> str:
+        """A compact 48-cell strip for Agile import prices."""
+        if not self.dynamic_import:
+            return ""
+        rates = self._today_import_rates()
+        if not rates:
+            return (
+                '<div style="height:28px;display:flex;align-items:center;'
+                'justify-content:center;background:#f5f5f5;border-radius:4px;'
+                'margin:6px 0 8px 0;color:#666;font-size:11px;">'
+                "Loading Agile import rates...</div>"
+            )
+        by_slot = {}
+        for rate_data in rates:
+            slot = rate_data["start"].hour * 2 + (
+                1 if rate_data["start"].minute >= 30 else 0
+            )
+            by_slot[slot] = float(rate_data["rate"])
+        now = self.get_current_datetime()
+        current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        values = list(by_slot.values())
+        cells = []
+        for slot in range(48):
+            rate = by_slot.get(slot)
+            if rate is None:
+                background = "#eeeeee"
+                text = ""
+            else:
+                if rate <= 0:
+                    background = "#2e7d32"
+                elif rate <= 15:
+                    background = "#66bb6a"
+                elif rate <= 30:
+                    background = "#ffb74d"
+                else:
+                    background = "#e57373"
+                text = f"{rate:.1f}"
+            border = (
+                "2px solid #111" if slot == current_slot else "none"
+            )
+            cells.append(
+                '<div style="flex:1;min-width:0;height:100%;'
+                f"background:{background};border:{border};color:#fff;"
+                'font-size:8px;display:flex;align-items:center;'
+                f'justify-content:center;overflow:hidden;">{text}</div>'
+            )
+        return (
+            '<div style="display:flex;justify-content:space-between;'
+            'font-size:10px;color:#666;margin-top:6px;">'
+            f"<span>Agile import (Region {self.region})</span>"
+            f"<span>Low: {min(values):.1f}p · High: {max(values):.1f}p</span>"
+            "</div>"
+            '<div class="agile-rate-strip" style="height:28px;display:flex;'
+            'gap:1px;border-radius:4px;overflow:hidden;margin:2px 0 8px 0;">'
+            + "".join(cells)
+            + "</div>"
+        )
+
     def _current_export_rate_p(self, current_slot: int) -> float:
         """Export price for *current_slot*, or 0p if it is not known."""
         table = self.resolved_price_table()
@@ -3522,7 +3691,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return 0.0
 
     def import_price_p(self, day: date, slot: int) -> Optional[float]:
-        """Import price for one slot, using the configured tier windows."""
+        """Import price for one slot, using Agile or the tier windows."""
+        if self.dynamic_import:
+            for rate_data in self.agile_import_rates:
+                start = rate_data['start']
+                if start.date() != day:
+                    continue
+                slot_idx = start.hour * 2 + (
+                    1 if start.minute >= 30 else 0
+                )
+                if slot_idx == slot:
+                    return float(rate_data['rate'])
+            return None
         table = self.resolved_price_table()
         if table is not None:
             return table.import_price_with(
@@ -3752,17 +3932,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         )
 
     def _best_remaining_import_p(self) -> float:
-        """Highest import price still ahead today, from the price table.
+        """Highest import price still ahead today, from the price source.
 
         This is the value of stored energy used for self-consumption.  It is
-        not a forecast: it only reads the configured prices for the remaining
+        not a forecast: it only reads the known prices for the remaining
         half-hours.  For Intelligent Octopus Go the highest remaining price is
         the standard rate, so this is unchanged.  For Cosy Octopus it is the
-        peak rate while a peak window is still ahead, which is the load the
-        stored solar should be kept for.
+        peak rate while a peak window is still ahead.  For Agile import it is
+        the highest fetched Agile price still ahead.
         """
         now = self.get_current_datetime()
         current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        if self.dynamic_import:
+            prices = [
+                price
+                for price in (
+                    self.import_price_p(now.date(), slot)
+                    for slot in range(current_slot, 48)
+                )
+                if price is not None
+            ]
+            if prices:
+                return max(prices)
+            return self._import_standard_p()
         table = self.resolved_price_table()
         if table is not None:
             prices = [
@@ -4788,6 +4980,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         session = self._session_at(self._slot_start_datetime(day_minute))
         if session is not None and session.kind == FREE_IMPORT:
             return 0.0
+        if self.dynamic_import:
+            price = self.import_price_p(
+                self.get_current_datetime().date(), day_minute // 30
+            )
+            return (
+                self._import_standard_p()
+                if price is None
+                else float(price)
+            )
         table = self.resolved_price_table()
         if table is not None:
             return table.import_price_with(
@@ -5410,6 +5611,81 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             soc_percent,
             harvest_current_a=harvest_current_a,
         ).use_bidirectional
+
+    def _fetch_import_rates_async(self):
+        """Fetch today's and tomorrow's Agile import rates asynchronously.
+
+        Agile import is dynamic, so the planner needs a per-slot series.  The
+        fetch runs at the same day boundaries as the export fetch.  Tomorrow's
+        rates are normally published after 16:00; until then the readiness
+        planner keeps the target reachable with a max-charge checkpoint.
+        """
+        if not self.dynamic_import:
+            return
+
+        def fetch_thread():
+            try:
+                now = datetime.now()
+                today = now.date()
+                tomorrow = today + timedelta(days=1)
+                rates = fetch_import_rates(
+                    self.region,
+                    [today, tomorrow],
+                    product_code=config.OCTOPUS_AGILE_IMPORT_PRODUCT,
+                )
+                with self._rates_lock:
+                    if not rates:
+                        debug(
+                            "IOCTGO_AGILEOUT: No Agile import rates returned, "
+                            "will retry"
+                        )
+                        self._schedule_next_import_fetch()
+                        return
+                    self.agile_import_rates = rates
+                    self.agile_import_rates_fetched_at = now
+                    self._shadow_force_replan = True
+                    counts = {}
+                    for rate_data in rates:
+                        day = rate_data["start"].date()
+                        counts[day] = counts.get(day, 0) + 1
+                    info(
+                        "IOCTGO_AGILEOUT: Fetched "
+                        f"{len(rates)} Agile import rates "
+                        f"(region {self.region}, product "
+                        f"{config.OCTOPUS_AGILE_IMPORT_PRODUCT})"
+                    )
+                    if counts.get(tomorrow, 0) in (46, 48):
+                        if self._import_rate_fetch_timer:
+                            self._import_rate_fetch_timer.cancel()
+                            self._import_rate_fetch_timer = None
+                    elif counts.get(today, 0) in (46, 48) and now.hour < 16:
+                        target = now.replace(
+                            hour=16, minute=0, second=0, microsecond=0
+                        )
+                        self._schedule_next_import_fetch(
+                            max(60.0, (target - now).total_seconds())
+                        )
+                    else:
+                        self._schedule_next_import_fetch()
+            except Exception as exc:
+                error(
+                    f"IOCTGO_AGILEOUT: Failed to fetch Agile import rates: {exc}"
+                )
+                with self._rates_lock:
+                    self._schedule_next_import_fetch()
+
+        thread = threading.Thread(target=fetch_thread, daemon=True)
+        thread.start()
+
+    def _schedule_next_import_fetch(self, delay: float = 60.0):
+        """Schedule the next Agile import fetch attempt."""
+        if self._import_rate_fetch_timer:
+            self._import_rate_fetch_timer.cancel()
+        self._import_rate_fetch_timer = threading.Timer(
+            max(1.0, float(delay)), self._fetch_import_rates_async
+        )
+        self._import_rate_fetch_timer.daemon = True
+        self._import_rate_fetch_timer.start()
 
     def _fetch_rates_async(self):
         """Fetch today's and tomorrow's Agile Outgoing rates asynchronously.
@@ -8455,6 +8731,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         with self._rates_lock:
             mode_line = self._mode_line_html()
+            mode_line += self._agile_import_strip_html()
             # Only today's rates are valid.  Empty (no fetch yet, or only
             # stale data) shows the loading placeholder rather than yesterday's
             # prices.
@@ -9010,12 +9287,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return ''.join(html)
 
     def is_off_peak(self, dayMinute: int) -> bool:
-        """Whether the slot is inside the preset's cheap import window.
+        """Whether the slot is inside a cheap import window.
 
-        Intelligent Octopus Go uses 23:30-05:30; standard Octopus Go uses
-        00:30-05:30.  The resolved price table is authoritative, so a custom
-        cheap-window override is honoured too.
+        For Agile import there is no fixed cheap window.  A negative import
+        price is treated as an off-peak charging opportunity; positive Agile
+        slots are left to the DP or the normal price-based heuristic.
         """
+        if self.dynamic_import:
+            price = self.import_price_p(
+                self.get_current_datetime().date(), dayMinute // 30
+            )
+            return price is not None and float(price) < 0.0
         table = self.resolved_price_table()
         if table is not None:
             return table.is_cheap(dayMinute)
@@ -9194,10 +9476,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         # If we have just reached the 00:00 slot or the 16:00 slot then we should schedule fetching
         # the rates again.
-        should_fetch_rates = self.dynamic_export and (current_slot != self._last_plan_slot) and (current_slot == 0 or current_slot == 32)
+        should_fetch_rates = (
+            (self.dynamic_export or self.dynamic_import)
+            and (current_slot != self._last_plan_slot)
+            and (current_slot == 0 or current_slot == 32)
+        )
 
         if should_fetch_rates:
-            self._fetch_rates_async()
+            if self.dynamic_export:
+                self._fetch_rates_async()
+            if self.dynamic_import:
+                self._fetch_import_rates_async()
 
         # Recalculate export plan only at slot boundaries (every 30 minutes)
         # unless we triggered fetching the rates again (which should trigger a
@@ -9315,6 +9604,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # Charge at max rate regardless of SoC or other states
         if self.is_off_peak(dayMinute):
             cap = self.charge_cap_percent(dayMinute)
+            off_peak_price_p = self._current_import_rate_p(dayMinute)
             charge_efficiency = (
                 self.EFFICIENCY_MODEL.charge_efficiency(
                     self.GRID_CHARGE_REFERENCE_CURRENT
@@ -9323,7 +9613,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             if battery_level < cap:
                 mode = f"Max charge ({self.MAX_CHARGE_CURRENT:.0f} A)"
                 reason = (
-                    f"off-peak {self._import_cheap_p():.1f}p — charging to the "
+                    f"off-peak {off_peak_price_p:.1f}p — charging to the "
                     f"{cap:.0f}% cap"
                 )
                 self._record_decision(
@@ -9331,12 +9621,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     reason=reason,
                     soc_percent=battery_level,
                     detail=(
-                        f"Off-peak import at {self._import_cheap_p():.1f}p/kWh. "
+                        f"Off-peak import at {off_peak_price_p:.1f}p/kWh. "
                         f"SoC {battery_level}%, cap {cap:.0f}%. Charge "
                         f"efficiency {charge_efficiency:.0f}% at "
                         f"{self.GRID_CHARGE_REFERENCE_CURRENT:.0f} A."
                     ),
-                    current_rate_p=self._import_cheap_p(),
+                    current_rate_p=off_peak_price_p,
                     efficiency_pct=charge_efficiency,
                     efficiency_label="charge",
                     min_gain_p=self.MIN_PROFIT_MARGIN_P_PER_KWH,
@@ -9344,7 +9634,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     charge_max_a=self.MAX_CHARGE_CURRENT,
                     charge_activation_w=0,
                     decision_tier="off_peak",
-                    import_rate_p=self._import_cheap_p(),
+                    import_rate_p=off_peak_price_p,
                     charge_cap_percent=cap,
                 )
                 return (
@@ -9357,18 +9647,18 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 self._record_decision(
                     mode=f"Idle — SoC at {cap:.0f}% cap",
                     reason=(
-                        f"off-peak {self._import_cheap_p():.1f}p — no charge needed "
+                        f"off-peak {off_peak_price_p:.1f}p — no charge needed "
                         f"at SoC {battery_level}%"
                     ),
                     soc_percent=battery_level,
                     detail=(
-                        f"Off-peak import at {self._import_cheap_p():.1f}p/kWh. "
+                        f"Off-peak import at {off_peak_price_p:.1f}p/kWh. "
                         f"SoC {battery_level}% is at or above the {cap:.0f}% "
                         "charge cap, so the battery is left alone."
                     ),
-                    current_rate_p=self._import_cheap_p(),
+                    current_rate_p=off_peak_price_p,
                     decision_tier="off_peak",
-                    import_rate_p=self._import_cheap_p(),
+                    import_rate_p=off_peak_price_p,
                     charge_cap_percent=cap,
                 )
                 return ControlState.DORMANT, None, None, "IOCTGO_AGILEOUT Off-peak: SoC max, dormant"

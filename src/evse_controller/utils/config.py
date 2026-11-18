@@ -95,7 +95,8 @@ class Config:
                             }
                         },
                         'octopus': {
-                            'region': 'K'  # Southern Wales (default)
+                            'region': 'K',  # Southern Wales (default)
+                            'agile_import_product': 'AGILE-24-10-01',
                         }
                     }
             else:
@@ -873,6 +874,27 @@ class Config:
         lambda self, value: self._set_config_value("octopus", "region", value)
     )
 
+    # Agile import is a versioned Octopus product.  Keep the current product
+    # as the default, but allow a config override when Octopus publishes a
+    # newer version.
+    OCTOPUS_AGILE_IMPORT_PRODUCT = property(
+        lambda self: self._get_config_value(
+            "octopus", "agile_import_product", None
+        )
+        or self._default_agile_import_product(),
+        lambda self, value: self._set_config_value(
+            "octopus", "agile_import_product", value
+        ),
+    )
+
+    @staticmethod
+    def _default_agile_import_product() -> str:
+        from evse_controller.tariffs.octopus.agile_rates import (
+            DEFAULT_AGILE_IMPORT_PRODUCT,
+        )
+
+        return DEFAULT_AGILE_IMPORT_PRODUCT
+
     # SoC floors for discharge and export.  All three are explicit percentages;
     # none is an offset from another floor.  The effective order is always
     # ``hard <= buffer <= bulk``:
@@ -1536,7 +1558,8 @@ class Config:
                 }
             },
             'octopus': {
-                'region': self.OCTOPUS_REGION
+                'region': self.OCTOPUS_REGION,
+                'agile_import_product': self.OCTOPUS_AGILE_IMPORT_PRODUCT,
             },
             'weather': {
                 'latitude': self.WEATHER_LATITUDE,

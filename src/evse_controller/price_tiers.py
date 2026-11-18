@@ -34,6 +34,7 @@ IOG_PRESETS = frozenset(
         "octopus_go",
         "cosy",
         "flux",
+        "agile_import",
     }
 )
 
@@ -55,6 +56,7 @@ PRESET_TARIFF = {
     "octopus_go": "IOCTGO_AGILEOUT",
     "cosy": "IOCTGO_AGILEOUT",
     "flux": "IOCTGO_AGILEOUT",
+    "agile_import": "IOCTGO_AGILEOUT",
 }
 
 
@@ -296,6 +298,17 @@ PRESETS: dict[str, PricePreset] = {
         default_import_prices={"standard": 30.0, "cheap": 10.0, "peak": 30.0},
         default_export_prices={"standard": 0.0, "cheap": 0.0, "peak": 0.0},
         export_source="none",
+    ),
+    "agile_import": PricePreset(
+        key="agile_import",
+        label="Octopus Agile (import)",
+        # Agile import prices are fetched per half-hour; these fixed windows
+        # and prices are only the fallback if the series is unavailable.
+        import_windows={"cheap": (), "peak": ()},
+        export_windows={"cheap": (), "peak": ()},
+        default_import_prices={"standard": 30.0, "cheap": 10.0, "peak": 30.0},
+        default_export_prices={"standard": 8.0, "cheap": 8.0, "peak": 12.0},
+        export_source="agile",
     ),
     "octopus_go": PricePreset(
         key="octopus_go",

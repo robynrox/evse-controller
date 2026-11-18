@@ -1145,6 +1145,20 @@ class TestPriceTiers:
         assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
         assert config.AUTO_OCPP_SUPPORTED is False
 
+        config.TARIFF_PRESET = "agile_import"
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+        assert config.AUTO_OCPP_SUPPORTED is False
+
+    def test_agile_import_product_defaults_and_overrides(self):
+        config = self._config()
+        octopus = config._config_data.setdefault("octopus", {})
+        octopus.pop("agile_import_product", None)
+
+        assert config.OCTOPUS_AGILE_IMPORT_PRODUCT == "AGILE-24-10-01"
+
+        config.OCTOPUS_AGILE_IMPORT_PRODUCT = "AGILE-25-01-01"
+        assert config.OCTOPUS_AGILE_IMPORT_PRODUCT == "AGILE-25-01-01"
+
     def test_legacy_startup_state_survives_without_a_preset(self):
         config = self._config()
         config._config_data.setdefault("tariffs", {}).pop("preset", None)

@@ -874,6 +874,13 @@ def config_page():
                 )
                 logging.info(f"DEBUG: Set MAX_EXPORT_POWER_KW to {config.MAX_EXPORT_POWER_KW}")
             config.OCTOPUS_REGION = request.form.get('octopus[region]', 'K')
+            agile_import_product = request.form.get(
+                'octopus[agile_import_product]'
+            )
+            if agile_import_product:
+                config.OCTOPUS_AGILE_IMPORT_PRODUCT = (
+                    agile_import_product.strip()
+                )
 
             # Update Agile Outgoing export planning parameters
             export_slot_loss = request.form.get('tariffs.ioctgo[export_slot_soc_loss_percent]')

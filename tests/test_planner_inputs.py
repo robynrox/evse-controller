@@ -18,7 +18,7 @@ DAY = date(2026, 11, 7)
 
 class FakeSource:
     name = "Fake"
-    dynamic_import = True
+    dynamic_import = False
     dynamic_export = True
 
     def __init__(
@@ -27,11 +27,13 @@ class FakeSource:
         export_p=10.0,
         sessions=None,
         dynamic_export=True,
+        dynamic_import=False,
     ):
         self.import_p = import_p
         self.export_p = export_p
         self.sessions = list(sessions or [])
         self.dynamic_export = dynamic_export
+        self.dynamic_import = dynamic_import
 
     def rates_for_day(self, day):
         start = datetime.combine(day, time())
@@ -463,3 +465,75 @@ def test_profile_is_reported_as_profile():
     first = result.slots[0]
     assert first.load_source == "profile"
     assert first.load_samples == ((0.1, 0.5), (0.3, 0.5))
+
+
+def test_dynamic_import_stops_at_the_last_known_price():
+    import_p = [20.0] * 24 + [None] * 24
+
+    result = build_planner_input(
+        FakeSource(
+            import_p=import_p,
+            export_p=10.0,
+            dynamic_export=False,
+            dynamic_import=True,
+        ),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+    )
+
+    assert result.horizon_end_slot == 23
+    assert result.horizon_limited_by_export is True
+
+
+def test_horizon_end_extends_fixed_import_into_tomorrow():
+    tomorrow = DAY + timedelta(days=1)
+    horizon_end = datetime.combine(tomorrow, time()) + timedelta(hours=7)
+
+    result = build_planner_input(
+        FakeSource(
+            import_p=20.0,
+            export_p=10.0,
+            dynamic_export=False,
+            dynamic_import=False,
+        ),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+        horizon_end=horizon_end,
+    )
+
+    assert result.horizon_end_date == tomorrow
+    assert result.horizon_end_slot == 13
+
+
+def test_horizon_end_caps_today_at_a_checkpoint():
+    checkpoint = datetime.combine(DAY, time()) + timedelta(hours=16)
+
+    result = build_planner_input(
+        FakeSource(
+            import_p=20.0,
+            export_p=10.0,
+            dynamic_export=False,
+            dynamic_import=False,
+        ),
+        FakeProfile([]),
+        DAY,
+        current_slot=0,
+        current_soc=50,
+        target_soc=None,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+        horizon_end=checkpoint,
+    )
+
+    assert result.horizon_end_date == DAY
+    assert result.horizon_end_slot == 31

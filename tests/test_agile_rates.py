@@ -135,3 +135,18 @@ def test_failed_fetch_is_unknown_rather_than_free(monkeypatch):
     )
 
     assert agile_rates.fetch_day_rates("K", date(2026, 6, 1)) == []
+
+
+def test_import_fetch_uses_the_agile_import_product(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(request, timeout=10):
+        seen["url"] = request.full_url
+        return _response([])
+
+    monkeypatch.setattr(agile_rates.urllib.request, "urlopen", fake_urlopen)
+
+    agile_rates.fetch_import_rates("K", [date(2026, 6, 1)])
+
+    assert "AGILE-24-10-01" in seen["url"]
+    assert "E-1R-AGILE-24-10-01-K" in seen["url"]

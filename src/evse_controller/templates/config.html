@@ -416,8 +416,8 @@
     </div>
 
     <div class="config-section">
-        <h2>Octopus Agile Outgoing Configuration</h2>
-        <p>Configure your region for Agile Outgoing export rate display.</p>
+        <h2>Octopus Agile Configuration</h2>
+        <p>Configure your region for Agile import and Agile Outgoing export rates.</p>
         <div class="form-group">
             <label for="octopus_region">Region:</label>
             <select id="octopus_region" name="octopus[region]" required>
@@ -436,7 +436,13 @@
                 <option value="N" {% if config.get('octopus', {}).get('region', 'K')=='N' %}selected{% endif %}>North Wales (part) (N)</option>
                 <option value="P" {% if config.get('octopus', {}).get('region', 'K')=='P' %}selected{% endif %}>Northern Ireland (P)</option>
             </select>
-            <small>Select your UK region for accurate Agile Outgoing export rates</small>
+            <small>Select your UK region for accurate Agile import and Agile Outgoing export rates</small>
+        </div>
+        <div class="form-group">
+            <label for="octopus_agile_import_product">Agile import product code:</label>
+            <input type="text" id="octopus_agile_import_product" name="octopus[agile_import_product]"
+                   value="{{ config.OCTOPUS_AGILE_IMPORT_PRODUCT }}">
+            <small>Octopus versions its Agile import product. The default is the current product; update this if Octopus publishes a newer one.</small>
         </div>
         <div class="form-group">
             <label for="hard_floor_soc">Hard protection floor (%):</label>
@@ -609,14 +615,14 @@
                 {% endfor %}
             </select>
             <small>
-                The preset selects the tariff controller, its time windows and
-                its export source. Agile preset uses the fetched Agile Outgoing
-                export series; Outgoing, Prime and the fixed time-of-use
-                tariffs use the export tiers below. Intelligent Octopus Go,
-                standard Octopus Go and Cosy Octopus share the same controller;
-                standard Go uses the 00:30-05:30 cheap window and does not
-                auto-trigger OCPP. Startup mode under Charging chooses whether
-                to begin in SMART or FREE RUN.
+                The preset selects the import tariff and controller. Agile
+                import uses the fetched Agile import series; Agile Outgoing
+                uses the fetched export series; fixed time-of-use tariffs use
+                the export tiers below. Intelligent Octopus Go, standard
+                Octopus Go, Cosy Octopus and Flux share the same controller;
+                standard Go and Cosy do not auto-trigger OCPP. Flux couples
+                its import and export tariff. Startup mode under Charging
+                chooses whether to begin in SMART or FREE RUN.
             </small>
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
