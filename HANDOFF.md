@@ -360,10 +360,14 @@ completed fixes.
   (14.10/28.75/43.13p) and remain editable. `charging.solar_period_max_charge`
   is Cosy-only: it caps the 13:00–16:00 charge so the afternoon grid charge
   leaves room for solar. Only Intelligent Octopus Go uses OCPP; standard Go,
-  Cosy and Flux do not auto-trigger it. Flux still opts in when its own preset
-  is selected: prices and cheap/peak decision windows come from the table, but
-  its control strategy is unchanged. A mismatched preset leaves a tariff on
-  its legacy bands rather than applying another product's prices.
+  Cosy and Flux do not auto-trigger it. `export_source` is independent of the
+  import preset: `agile` uses the fetched series, `tiers` uses the fixed
+  export prices (Outgoing, Prime or Flat Rate), `zero` is a real 0p export,
+  and `none` is an unknown/no export tariff. Flux ignores `export_source`.
+  Flux still opts in when its own preset is selected: prices and cheap/peak
+  decision windows come from the table, but its control strategy is unchanged.
+  A mismatched preset leaves a tariff on its legacy bands rather than applying
+  another product's prices.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

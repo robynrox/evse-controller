@@ -7210,6 +7210,23 @@ class TestCosyOctopusShared:
         day = datetime.now().date()
         assert tariff.ocpp_import_price_p(day, 33) == pytest.approx(43.13)
 
+    def test_zero_export_rate_can_be_selected(self, monkeypatch):
+        monkeypatch.setattr(config, "EXPORT_SOURCE", "zero")
+        tariff = _build_tariff()
+
+        rates = tariff._today_rates()
+        assert len(rates) == 48
+        assert all(rate["rate"] == 0.0 for rate in rates)
+        assert "Zero-rate export" in tariff.get_dashboard_html()
+        assert tariff.calculate_export_plan(90) == []
+
+    def test_agile_export_can_be_selected_for_cosy(self, monkeypatch):
+        monkeypatch.setattr(config, "EXPORT_SOURCE", "agile")
+        tariff = _build_tariff()
+
+        assert tariff.dynamic_export is True
+        assert tariff._today_rates()
+
 
 class TestIntelligentOctopusGoStillUsesItsOwnWindow:
     def test_cheap_window_and_ocpp_are_unchanged(self, monkeypatch):

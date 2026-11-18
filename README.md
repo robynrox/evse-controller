@@ -439,9 +439,8 @@ only chooses whether to begin in `SMART` or `FREERUN`.
 
 ```yaml
 tariffs:
-  preset: iog_prime          # iog_agile | iog_outgoing | iog_prime |
-                             # iog_no_export | octopus_go | cosy | flux
-  export_source: tiers       # optional: agile | tiers | none
+  preset: iog_prime          # import/control preset: iog_* | octopus_go | cosy | flux
+  export_source: tiers       # optional: agile | tiers | zero | none
 prices:
   import:
     standard: 30.0
@@ -456,32 +455,44 @@ prices:
     # peak_windows: ["16:00-19:00"]
 ```
 
-The outgoing products, standard Octopus Go and Cosy Octopus are presets over
-the same smart controller, not separate controllers:
+The preset selects the import tariff and controller. For convenience it also
+supplies a default export choice, but `export_source` overrides that choice for
+every import tariff except Flux:
 
-- `iog_agile`: fetched Agile Outgoing half-hour export prices.
-- `iog_outgoing`: one flat export price for the whole day.
-- `iog_prime`: standard export price, with a peak window (16:00–19:00 by
-  default).
-- `iog_no_export`: no export tariff; export price is unknown rather than 0p.
-- `octopus_go`: standard Octopus Go. It uses the same heuristic and DP, with
-  the 00:30–05:30 cheap import window instead of 23:30–05:30, and it does not
-  automatically trigger OCPP. Its export side uses the fixed tiers.
-- `cosy`: Cosy Octopus. It uses the same heuristic and DP with cheap windows
-  04:00–07:00, 13:00–16:00 and 22:00–24:00, a peak window 16:00–19:00, and
-  standard at other times. The `solar_period_max_charge` setting caps the
-  13:00–16:00 charge so the afternoon grid charge leaves room for solar. It
-  does not auto-trigger OCPP. Starter prices are 14.10/28.75/43.13p for
-  cheap/standard/peak; edit them under `prices` for your area and season.
+- `iog_agile`: Intelligent Octopus Go import, default Agile Outgoing export.
+- `iog_outgoing`: Intelligent Octopus Go import, default flat export.
+- `iog_prime`: Intelligent Octopus Go import, default fixed export with a
+  peak window (16:00–19:00 by default).
+- `iog_no_export`: Intelligent Octopus Go import, default no export tariff
+  (price unknown rather than 0p).
+- `octopus_go`: standard Octopus Go import. It uses the same heuristic and DP,
+  with the 00:30–05:30 cheap import window instead of 23:30–05:30, and it does
+  not automatically trigger OCPP.
+- `cosy`: Cosy Octopus import. It uses the same heuristic and DP with cheap
+  windows 04:00–07:00, 13:00–16:00 and 22:00–24:00, a peak window
+  16:00–19:00, and standard at other times. The `solar_period_max_charge`
+  setting caps the 13:00–16:00 charge so the afternoon grid charge leaves room
+  for solar. It does not auto-trigger OCPP. Starter prices are
+  14.10/28.75/43.13p for cheap/standard/peak; edit them under `prices` for
+  your area and season.
 
-`export_source` overrides the preset's export choice. Each preset supplies its
-own import cheap window: Intelligent Octopus Go uses 23:30–05:30, standard
-Octopus Go uses 00:30–05:30, and Cosy uses its three cheap windows. Flux also
-uses the table when its own preset is selected, so its prices and cheap/peak
-decision windows are editable without changing its control strategy. The
-preset is the single tariff selector; there is no separate tariff dropdown
-under Charging. Some controller-specific behaviour, such as Flux's 16:00
-discharge ramp, still uses its built-in timing.
+`export_source` is independent of the import preset:
+
+- `agile`: fetched Agile Outgoing half-hour prices.
+- `tiers`: fixed export prices from the `prices.export` block. This covers
+  Outgoing Octopus, Prime Outgoing (when an export peak window is set) and
+  Flat Rate (the same fixed mechanism with a lower standard price).
+- `zero`: a real 0p export price, for installations that are not paid for
+  export.
+- `none`: no export tariff; the price is unknown rather than 0p.
+
+Each import preset supplies its own cheap window: Intelligent Octopus Go uses
+23:30–05:30, standard Octopus Go uses 00:30–05:30, and Cosy uses its three
+cheap windows. Flux is the exception: it keeps its own export structure and
+ignores `export_source`. The preset is the single tariff selector; there is
+no separate import-tariff dropdown under Charging. Some controller-specific
+behaviour, such as Flux's 16:00 discharge ramp, still uses its built-in
+timing.
 
 
 ##### Link health

@@ -19,7 +19,7 @@ from typing import Iterable, Mapping, Optional
 
 TIERS = ("standard", "cheap", "peak")
 SIDES = ("import", "export")
-EXPORT_SOURCES = ("agile", "tiers", "none")
+EXPORT_SOURCES = ("agile", "tiers", "zero", "none")
 DAY_MINUTES = 24 * 60
 
 #: Presets that use the shared smart-tariff controller.  Standard Octopus Go
@@ -210,6 +210,8 @@ class PriceTierTable:
     def export_price_p(self, day_minute: int) -> Optional[float]:
         if self.export_source == "none":
             return None
+        if self.export_source == "zero":
+            return 0.0
         return self._lookup(
             self.export_prices, self.export_windows, day_minute
         )
@@ -220,6 +222,8 @@ class PriceTierTable:
         """Look up a slot using current prices with this table's windows."""
         if self.export_source == "none":
             return None
+        if self.export_source == "zero":
+            return 0.0
         return self._lookup(prices, self.export_windows, day_minute)
 
     def is_cheap(self, day_minute: int) -> bool:

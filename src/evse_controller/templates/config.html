@@ -621,7 +621,7 @@
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
         <div class="form-group">
-            <label for="export_source">Export price source</label>
+            <label for="export_source">Outgoing tariff</label>
             <select id="export_source" name="tariffs[export_source]">
                 <option value=""
                     {% if not config.tariffs.get('export_source') %}selected{% endif %}>
@@ -629,17 +629,29 @@
                 </option>
                 <option value="agile"
                     {% if config.tariffs.get('export_source') == 'agile' %}selected{% endif %}>
-                    Agile dynamic series
+                    Agile Outgoing (dynamic half-hour prices)
                 </option>
                 <option value="tiers"
                     {% if config.tariffs.get('export_source') == 'tiers' %}selected{% endif %}>
-                    Fixed tiers
+                    Fixed rate — Outgoing Octopus, Prime Outgoing or Flat Rate
+                </option>
+                <option value="zero"
+                    {% if config.tariffs.get('export_source') == 'zero' %}selected{% endif %}>
+                    Zero Rate — 0p export
                 </option>
                 <option value="none"
                     {% if config.tariffs.get('export_source') == 'none' %}selected{% endif %}>
-                    No export tariff
+                    No export tariff — price unknown
                 </option>
             </select>
+            <small>
+                Applies to every import tariff except Flux. Agile uses the
+                fetched series; fixed, flat and zero rates use the export
+                price fields below. Prime Outgoing uses the export peak
+                window; Outgoing Octopus and Flat Rate use the standard export
+                price. Set a low standard price for Flat Rate, or choose Zero
+                Rate for no export payment.
+            </small>
         </div>
         <div class="form-group">
             <label for="import_standard">Import standard price in p/kWh</label>

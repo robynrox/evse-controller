@@ -976,10 +976,9 @@ def config_page():
             # fields are still accepted from a stale tab so a save cannot
             # silently discard the live rates.
             preset = request.form.get('tariffs[preset]') or config.TARIFF_PRESET
-            export_source = (
-                request.form.get('tariffs[export_source]')
-                or config.EXPORT_SOURCE
-            )
+            export_source = request.form.get('tariffs[export_source]')
+            if export_source is None:
+                export_source = config.EXPORT_SOURCE
 
             legacy_import = {
                 'high': request.form.get('import[high]'),

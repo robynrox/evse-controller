@@ -3500,6 +3500,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def _export_rate_label(self) -> str:
         """Human label for the export strip: Agile series or fixed tiers."""
         table = self.resolved_price_table()
+        if table is not None and table.export_source == "zero":
+            return "Zero-rate export"
         if table is not None and not table.dynamic_export:
             return "Export tariff"
         return f"Agile Outgoing Export (Region {self.region})"

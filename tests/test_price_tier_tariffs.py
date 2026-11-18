@@ -6,6 +6,7 @@ import pytest
 
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.drivers.evse.async_interface import EvseAsyncState
+from evse_controller.price_tiers import build_price_table
 from evse_controller.tariffs.octopus.cosy import CosyOctopusTariff
 from evse_controller.tariffs.octopus.flux import OctopusFluxTariff
 from evse_controller.tariffs.octopus.octgo import OctopusGoTariff
@@ -145,3 +146,37 @@ class TestMismatchedPresets:
 
         assert tariff.resolved_price_table() is None
         assert isinstance(tariff.get_control_state(_state(60), 12 * 60)[0], ControlState)
+
+
+class TestExportSources:
+    @staticmethod
+    def _table(export_source):
+        return build_price_table(
+            "cosy",
+            {"standard": 28.75, "cheap": 14.10, "peak": 43.13},
+            {"standard": 15.0, "cheap": 15.0, "peak": 15.0},
+            export_source=export_source,
+        )
+
+    def test_zero_source_is_a_real_zero_price(self):
+        table = self._table("zero")
+
+        assert table.export_price_p(0) == 0.0
+        assert table.export_price_p(12 * 60) == 0.0
+        assert table.dynamic_export is False
+
+    def test_none_source_is_unknown(self):
+        table = self._table("none")
+
+        assert table.export_price_p(12 * 60) is None
+        assert table.dynamic_export is False
+
+    def test_agile_override_is_dynamic_for_any_import_preset(self):
+        table = self._table("agile")
+
+        assert table.dynamic_export is True
+
+    def test_fixed_source_uses_the_configured_prices(self):
+        table = self._table("tiers")
+
+        assert table.export_price_p(12 * 60) == pytest.approx(15.0)
