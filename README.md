@@ -1089,10 +1089,11 @@ Follow actions use the DP's modelled minimum current as the floor but the
 Wallbox maximum as the ceiling. The modelled maximum is not an actuator cap,
 so a higher actual house load or solar surplus is still followed. Bidirectional
 actions use the Wallbox minimum in both directions and the DP's gate; the
-dashboard label reads `solar up to +XA house cons from YW (~ZA)` rather than
-`>=XA`, because the DP's discharge current is a modelled maximum, not a floor.
-When the gate is at or below the minimum output, the label shows the discharge
-floor instead — `house cons ≥3A` — rather than a misleading `0W (~0A)`.
+dashboard label reads `solar from +3A house cons from YW (~ZA)`. The charge
+range starts at the Wallbox minimum and follows the surplus up to the Wallbox
+maximum; the discharge side starts at the gate. When the gate is at or below
+the minimum output, the label shows the discharge floor instead — `house cons
+≥3A` — rather than a misleading `0W (~0A)`.
 The conservative gate is the minimum discharge current (3A) converted at the
 measured grid voltage: about 720W at 240V and 690W at 230V. Aggressive
 load-following is an economic power break-even, also evaluated at the measured

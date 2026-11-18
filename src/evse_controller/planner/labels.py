@@ -182,8 +182,11 @@ def action_label(
             ),
         )
         parts = ["Bidir"]
+        charge_floor = (
+            _number((slot_input or {}).get("min_discharge_a")) or 3.0
+        )
         if charge is not None and charge > 0:
-            parts.append(f"solar up to +{charge:.0f}A")
+            parts.append(f"solar from +{charge_floor:.0f}A")
         if discharge is not None and discharge < 0:
             if gate:
                 parts.append(f"house {variant}{gate}")
