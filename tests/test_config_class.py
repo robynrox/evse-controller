@@ -1131,7 +1131,11 @@ class TestPriceTiers:
         assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
 
         config.TARIFF_PRESET = "octopus_go"
-        assert config.SMART_TARIFF == "OCTGO"
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+        assert config.AUTO_OCPP_SUPPORTED is False
+
+        config.TARIFF_PRESET = "iog_agile"
+        assert config.AUTO_OCPP_SUPPORTED is True
 
         config.TARIFF_PRESET = "cosy"
         assert config.SMART_TARIFF == "COSY"

@@ -549,8 +549,8 @@
     </div>
 
     <div class="config-section">
-        <h2>Intelligent Octopus Go Tariff Configuration (IOCTGO-specific)</h2>
-        <p>These settings apply only to the Intelligent Octopus Go (IOCTGO) tariff and are not used in standard Octopus Go (OCTGO).</p>
+        <h2>Intelligent Octopus Go OCPP Configuration</h2>
+        <p>These settings apply to Intelligent Octopus Go. Standard Octopus Go uses the same controller and heuristic, but does not automatically trigger OCPP.</p>
         <div class="form-group">
             <label class="checkbox-label">
                 <input type="checkbox" id="ioctgo_smart_ocpp_operation" name="tariffs.ioctgo[smart_ocpp_operation]" 
@@ -585,7 +585,7 @@
         </div>
         <div class="form-group">
             <div class="notification">
-                <strong>Note:</strong> After changing any of these parameters, you must switch away from the IOCTGO tariff and back to it (e.g., go to PAUSE mode and then back to IOCTGO) for changes to take effect.
+                <strong>Note:</strong> After changing any of these parameters, you must switch away from the Intelligent Octopus Go tariff and back to it (e.g., go to PAUSE mode and then back to the tariff) for changes to take effect.
             </div>
         </div>
     </div>
@@ -610,9 +610,11 @@
             <small>
                 The preset selects the tariff controller, its time windows and
                 its export source. Agile preset uses the fetched Agile Outgoing
-                export series; Outgoing and Prime use the export tiers below.
-                Startup mode under Charging chooses whether to begin in SMART
-                or FREE RUN.
+                export series; Outgoing, Prime and standard Go use the export
+                tiers below. Intelligent and standard Octopus Go share the same
+                controller; standard Go uses the 00:30-05:30 cheap window and
+                does not auto-trigger OCPP. Startup mode under Charging chooses
+                whether to begin in SMART or FREE RUN.
             </small>
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
@@ -725,6 +727,7 @@
                     {% if config.ocpp.get('auto_enabled') %}checked{% endif %}>
                 Enable automatic OCPP handoff
             </label>
+            <small>Intelligent Octopus Go only. Standard Octopus Go does not auto-trigger OCPP.</small>
         </div>
         <div class="form-group">
             <label for="ocpp_frequency_days">Interval in days (1 = daily, 7 = weekly, maximum 30):</label>

@@ -624,6 +624,12 @@ class Config:
 
     SMART_TARIFF = property(_smart_tariff)
 
+    #: Standard Octopus Go has no supplier-scheduled OCPP charging, so the
+    #: controller and the automatic handoff must not trigger OCPP for it.
+    AUTO_OCPP_SUPPORTED = property(
+        lambda self: self.TARIFF_PRESET != "octopus_go"
+    )
+
     # -- automatic OCPP handoff ------------------------------------------
     #
     # The supplier handoff is useful periodically even when the heuristic

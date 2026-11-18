@@ -603,7 +603,7 @@ def _dismiss_active_session() -> None:
 
 def _maybe_schedule_auto_ocpp(now: datetime) -> None:
     """Create the next automatic OCPP handoff when one is due."""
-    if not config.OCPP_AUTO_ENABLED:
+    if not config.OCPP_AUTO_ENABLED or not config.AUTO_OCPP_SUPPORTED:
         return
 
     try:

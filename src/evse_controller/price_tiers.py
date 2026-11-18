@@ -22,20 +22,22 @@ SIDES = ("import", "export")
 EXPORT_SOURCES = ("agile", "tiers", "none")
 DAY_MINUTES = 24 * 60
 
-#: Presets that use the Intelligent Octopus Go import/control strategy.
+#: Presets that use the shared smart-tariff controller.  Standard Octopus Go
+#: is a simpler sibling of Intelligent Octopus Go: same heuristic and DP, but
+#: a 00:30-05:30 cheap window and no automatic OCPP handoff.
 IOG_PRESETS = frozenset(
-    {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export"}
+    {"iog_agile", "iog_outgoing", "iog_prime", "iog_no_export", "octopus_go"}
 )
 
-#: Tariff controller selected by each price preset.  The IOG presets all use
-#: the same controller; the preset's export source decides whether it follows
-#: Agile or fixed export tiers.
+#: Tariff controller selected by each price preset.  The IOG presets and
+#: standard Octopus Go share the same controller; the preset's export source
+#: decides whether it follows Agile or fixed export tiers.
 PRESET_TARIFF = {
     "iog_agile": "IOCTGO_AGILEOUT",
     "iog_outgoing": "IOCTGO_AGILEOUT",
     "iog_prime": "IOCTGO_AGILEOUT",
     "iog_no_export": "IOCTGO_AGILEOUT",
-    "octopus_go": "OCTGO",
+    "octopus_go": "IOCTGO_AGILEOUT",
     "cosy": "COSY",
     "flux": "FLUX",
 }

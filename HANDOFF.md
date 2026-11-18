@@ -351,8 +351,10 @@ completed fixes.
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,
   `iog_outgoing`, `iog_prime`, `iog_no_export`, `octopus_go`, `cosy`,
   `flux`); the six `prices` values are what users normally edit. The IOctGo
-  variants use the same table, so Agile/fixed/prime/no-export differ only in
-  export pricing, not control logic. Go, Cosy and Flux opt in when their own
+  variants and standard Octopus Go use the same controller, so they differ
+  only in import/export pricing and timing, not control logic. Standard Go
+  uses the 00:30–05:30 cheap window and does not auto-trigger OCPP; the
+  Intelligent variants use 23:30–05:30. Cosy and Flux opt in when their own
   preset is selected: prices and cheap/peak decision windows come from the
   table, but their control strategies are unchanged. A mismatched preset
   leaves a tariff on its legacy bands rather than applying another product's

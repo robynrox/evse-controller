@@ -399,8 +399,8 @@ where available, otherwise archive/reanalysis. The historical forecast
 archive is not a fixed lead time; use the Previous Runs API for a strict
 day-ahead comparison.
 
-#### Intelligent Octopus Go Tariff Section
-The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go tariff. They can be edited directly in `config.yaml` or from the web interface.
+#### Smart Octopus Go Tariff Section
+The `tariffs.ioctgo` section contains parameters shared by the Intelligent and standard Octopus Go controllers. They can be edited directly in `config.yaml` or from the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
@@ -456,22 +456,26 @@ prices:
     # peak_windows: ["16:00-19:00"]
 ```
 
-The three outgoing products are presets over the same IOctGo controller, not
-separate controllers:
+The outgoing products and standard Octopus Go are presets over the same
+smart controller, not separate controllers:
 
 - `iog_agile`: fetched Agile Outgoing half-hour export prices.
 - `iog_outgoing`: one flat export price for the whole day.
 - `iog_prime`: standard export price, with a peak window (16:00–19:00 by
   default).
 - `iog_no_export`: no export tariff; export price is unknown rather than 0p.
+- `octopus_go`: standard Octopus Go. It uses the same heuristic and DP, with
+  the 00:30–05:30 cheap import window instead of 23:30–05:30, and it does not
+  automatically trigger OCPP. Its export side uses the fixed tiers.
 
-`export_source` overrides the preset's export choice. The import side keeps the
-Intelligent Octopus Go cheap window. Octopus Go, Cosy and Flux also use the
-table when their own preset is selected, so their prices and cheap/peak
-decision windows are editable without changing their control strategies. The
-preset is the single tariff selector; there is no separate tariff dropdown
-under Charging. Some controller-specific behaviour, such as Flux's 16:00
-discharge ramp, still uses its built-in timing.
+`export_source` overrides the preset's export choice. Each preset supplies its
+own import cheap window: Intelligent Octopus Go uses 23:30–05:30 and standard
+Octopus Go uses 00:30–05:30. Cosy and Flux also use the table when their own
+preset is selected, so their prices and cheap/peak decision windows are
+editable without changing their control strategies. The preset is the single
+tariff selector; there is no separate tariff dropdown under Charging. Some
+controller-specific behaviour, such as Flux's 16:00 discharge ramp, still uses
+its built-in timing.
 
 
 ##### Link health

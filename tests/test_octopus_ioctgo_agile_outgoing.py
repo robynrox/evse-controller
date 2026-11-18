@@ -7011,6 +7011,106 @@ class TestHighValueExportRecharge:
         assert minimum == maximum == config.WALLBOX_MAX_CHARGE_CURRENT
 
 
+class TestStandardOctopusGo:
+    """Standard Go is the same controller with a 00:30 cheap window."""
+
+    @pytest.fixture(autouse=True)
+    def _standard_go(self, monkeypatch):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "octopus_go")
+        for side, tier, value in (
+            ("import", "standard", 31.42),
+            ("import", "cheap", 8.50),
+            ("import", "peak", 31.42),
+            ("export", "standard", 15.0),
+            ("export", "cheap", 15.0),
+            ("export", "peak", 15.0),
+        ):
+            prices = config._config_data.setdefault("prices", {}).setdefault(
+                side, {}
+            )
+            monkeypatch.setitem(prices, tier, value)
+
+    def test_cheap_window_is_0030_to_0530(self):
+        tariff = _build_tariff()
+
+        assert tariff.is_off_peak(0) is False
+        assert tariff.is_off_peak(30) is True
+        assert tariff.is_off_peak(5 * 60 + 29) is True
+        assert tariff.is_off_peak(5 * 60 + 30) is False
+        assert tariff.is_off_peak(23 * 60 + 45) is False
+        assert tariff.time_of_use["low"]["start"] == "00:30"
+        assert tariff.time_of_use["low"]["end"] == "05:30"
+
+    def test_ocpp_is_not_auto_triggered(self, monkeypatch):
+        monkeypatch.setattr(config, "IOCTGO_SMART_OCPP_OPERATION", True)
+        tariff = _build_tariff()
+        queue = Mock()
+        tariff.command_queue = queue
+
+        assert tariff.AUTO_OCPP_SUPPORTED is False
+        assert tariff.SMART_OCPP_OPERATION is False
+        assert tariff.should_enable_ocpp_due_to_soc(
+            create_test_state(10)
+        ) is False
+        assert tariff.should_enable_ocpp_due_to_time(23 * 60 + 45) is False
+
+        tariff._ocpp_check_turn_on(create_test_state(10), 23 * 60 + 45)
+        queue.put.assert_not_called()
+
+    def test_manual_ocpp_uses_the_actual_slot_price(self):
+        tariff = _build_tariff()
+        day = datetime.now().date()
+
+        assert tariff.ocpp_import_price_p(day, 2) == pytest.approx(
+            tariff._import_cheap_p()
+        )
+        assert tariff.ocpp_import_price_p(day, 24) == pytest.approx(
+            tariff._current_import_rate_p(12 * 60)
+        )
+
+    def test_fixed_export_rates_feed_the_planner(self, monkeypatch):
+        tariff = _build_tariff()
+        monkeypatch.setattr(
+            tariff, "_conservative_would_activate", lambda slot: False
+        )
+
+        rates = tariff._today_rates()
+        assert len(rates) == 48
+        assert all(rate["rate"] == pytest.approx(15.0) for rate in rates)
+
+        plan = tariff.calculate_export_plan(90)
+        assert plan
+        assert all(
+            tariff._planned_slot_actions[slot] == "export"
+            for slot in plan
+        )
+
+    def test_dashboard_uses_the_fixed_export_label(self):
+        tariff = _build_tariff()
+
+        html = tariff.get_dashboard_html()
+
+        assert "Export tariff" in html
+        assert "Agile Outgoing Export" not in html
+
+
+class TestIntelligentOctopusGoStillUsesItsOwnWindow:
+    def test_cheap_window_and_ocpp_are_unchanged(self, monkeypatch):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "iog_agile")
+        monkeypatch.setattr(config, "IOCTGO_SMART_OCPP_OPERATION", True)
+        tariff = _build_tariff()
+
+        assert tariff.is_off_peak(0) is True
+        assert tariff.is_off_peak(23 * 60 + 45) is True
+        assert tariff.is_off_peak(30) is True
+        assert tariff.is_off_peak(5 * 60 + 30) is False
+        assert tariff.time_of_use["low"]["start"] == "23:30"
+        assert tariff.AUTO_OCPP_SUPPORTED is True
+        assert tariff.SMART_OCPP_OPERATION is True
+
+
 class TestTieredExportVariants:
     """The three outgoing products share one controller and one price table."""
 

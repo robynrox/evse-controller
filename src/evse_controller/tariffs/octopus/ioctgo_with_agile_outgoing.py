@@ -134,15 +134,18 @@ class DecisionSnapshot:
 
 
 class IOctGoWithAgileOutgoingTariff(Tariff):
-    """Intelligent Octopus Go tariff with Agile Outgoing export display.
+    """Smart Octopus Go tariff with Agile Outgoing or fixed export display.
 
     This tariff combines:
-    - Intelligent Octopus Go import (cheap rate 23:30-05:30)
-    - Agile Outgoing export rate display on dashboard
+    - Intelligent Octopus Go import (cheap rate 23:30-05:30) or standard
+      Octopus Go import (cheap rate 00:30-05:30)
+    - Agile Outgoing or fixed-tier export display on the dashboard
     - Intelligent bidirectional load-following for solar charging
 
-    The dashboard shows a 48-cell visual strip of today's Agile Outgoing
-    export rates, allowing users to see peak export periods at a glance.
+    Standard Octopus Go is a special case of the same controller: only the
+    import window and the automatic OCPP handoff differ.  The dashboard shows
+    a 48-cell visual strip of today's export rates, allowing users to see peak
+    export periods at a glance.
 
     The tariff intelligently chooses between:
     - LOAD_FOLLOW_DISCHARGE: Export when current rates are favorable
@@ -507,6 +510,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             "low":  {"start": "23:30", "end": "05:30", "import_rate": self._import_cheap_p() / 100, "export_rate": self._export_standard_p()},
             "high": {"start": "05:30", "end": "23:30", "import_rate": self._import_standard_p() / 100, "export_rate": self._export_standard_p()}
         }
+        # The resolved table is authoritative for the cheap window.  Standard
+        # Octopus Go uses 00:30-05:30; Intelligent Octopus Go uses 23:30-05:30.
+        table = self.resolved_price_table()
+        if table is not None:
+            cheap_windows = table.import_windows.get("cheap", ())
+            if cheap_windows:
+                cheap_start, cheap_end = cheap_windows[0].text.split("-")
+                self.time_of_use = {
+                    "low": {
+                        "start": cheap_start,
+                        "end": cheap_end,
+                        "import_rate": self._import_cheap_p() / 100,
+                        "export_rate": self._export_standard_p(),
+                    },
+                    "high": {
+                        "start": cheap_end,
+                        "end": cheap_start,
+                        "import_rate": self._import_standard_p() / 100,
+                        "export_rate": self._export_standard_p(),
+                    },
+                }
         
         # Agile Outgoing rate storage
         self.agile_rates = []  # List of {start, end, rate} dicts
@@ -536,8 +560,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self.GRID_IMPORT_THRESHOLD_HIGH_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC
         self.GRID_IMPORT_THRESHOLD_LOW_SOC = config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC
         
-        # OCPP parameters
-        self.SMART_OCPP_OPERATION = config.IOCTGO_SMART_OCPP_OPERATION
+        # OCPP parameters.  Standard Octopus Go has no supplier-scheduled
+        # OCPP charging, so it must not auto-trigger OCPP even when the
+        # Intelligent Octopus Go setting is enabled.
+        self.AUTO_OCPP_SUPPORTED = config.AUTO_OCPP_SUPPORTED
+        self.SMART_OCPP_OPERATION = (
+            config.IOCTGO_SMART_OCPP_OPERATION and self.AUTO_OCPP_SUPPORTED
+        )
         self._state_lock = threading.Lock()
         self.OCPP_ENABLE_TIME_STR = config.IOCTGO_OCPP_ENABLE_TIME
         self.OCPP_DISABLE_TIME_STR = config.IOCTGO_OCPP_DISABLE_TIME
@@ -3435,16 +3464,47 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return planned_slots
 
     def _today_rates(self) -> list:
-        """Rate entries for today, or an empty list if none are available.
+        """Export rate rows for today, or an empty list if none are available.
 
-        An empty list deliberately means every export price is **0p** rather
-        than a special "no data" state: the normal tier logic then stores
-        instead of exporting, and the export planner finds no profitable
-        slots.  Stale entries from a previous day are excluded by date, so a
-        failed fetch cannot silently reuse yesterday's prices.
+        Agile Outgoing uses the fetched series.  Fixed/Prime/no-export
+        presets synthesize today's half-hour rows from the configured export
+        tiers, so the dashboard, export planner and best-unused-slot logic all
+        see a complete day.  A no-export preset returns an empty list, which
+        deliberately means every export price is **0p** rather than a special
+        "no data" state: the normal tier logic then stores instead of
+        exporting, and the export planner finds no profitable slots.  Stale
+        entries from a previous day are excluded by date, so a failed fetch
+        cannot silently reuse yesterday's prices.
         """
         today = self.get_current_datetime().date()
-        return [rate for rate in self.agile_rates if rate['start'].date() == today]
+        table = self.resolved_price_table()
+        if table is not None and not table.dynamic_export:
+            base = datetime.combine(today, time())
+            synthesized = []
+            for slot in range(48):
+                price = table.export_price_p(slot * 30)
+                if price is None:
+                    continue
+                start = base + timedelta(minutes=30 * slot)
+                synthesized.append(
+                    {
+                        "start": start,
+                        "end": start + timedelta(minutes=30),
+                        "rate": float(price),
+                    }
+                )
+            return synthesized
+
+        return [
+            rate for rate in self.agile_rates if rate['start'].date() == today
+        ]
+
+    def _export_rate_label(self) -> str:
+        """Human label for the export strip: Agile series or fixed tiers."""
+        table = self.resolved_price_table()
+        if table is not None and not table.dynamic_export:
+            return "Export tariff"
+        return f"Agile Outgoing Export (Region {self.region})"
 
     def _current_export_rate_p(self, current_slot: int) -> float:
         """Export price for *current_slot*, or 0p if it is not known."""
@@ -3496,13 +3556,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         return None if match is None else float(match['rate'])
 
     def ocpp_import_price_p(self, day: date, slot: int) -> Optional[float]:
-        """Book a supplier-scheduled OCPP charge at the off-peak rate.
+        """Import price to book for an OCPP charge.
 
         Intelligent Octopus bills charging it schedules through OCPP at the
         cheap rate, even when that slot falls outside the fixed overnight
-        band.  The energy really was bought, so this is a price override for
-        the report, not a zero-priced session.
+        band.  Standard Octopus Go has no supplier-scheduled OCPP charging, so
+        a manual OCPP slot is booked at its actual time-of-use price.
         """
+        if not self.AUTO_OCPP_SUPPORTED:
+            return self._current_import_rate_p(slot * 30)
         return self._import_cheap_p()
 
     def export_min_rate_p(self) -> float:
@@ -8343,7 +8405,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         }
 
     def get_dashboard_html(self) -> str:
-        """Return HTML for Agile Outgoing rate display.
+        """Return HTML for the export-rate display.
 
         Returns a 48-cell visual strip showing today's export rates with
         red→green gradient coloring. Responsive design adapts to viewport width.
@@ -8359,13 +8421,19 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # prices.
             rates = self._today_rates()
             if not rates:
+                table = self.resolved_price_table()
+                message = (
+                    "No export tariff configured"
+                    if table is not None and not table.dynamic_export
+                    else "Loading Agile Outgoing rates..."
+                )
                 return (
                     mode_line
-                    + """
+                    + f"""
                 <div class="agile-rate-strip" style="height:40px;display:flex;
                     align-items:center;justify-content:center;background:#f5f5f5;
                     border-radius:4px;margin:10px 0;">
-                    <span style="color:#666;font-size:12px;">Loading Agile Outgoing rates...</span>
+                    <span style="color:#666;font-size:12px;">{message}</span>
                 </div>
                 """
                 )
@@ -8701,7 +8769,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             html.append(f'''
             <div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px;">
                 <span>Low: {min_rate:.1f}p</span>
-                <span>Agile Outgoing Export (Region {self.region}){f" - Est. £{expected_revenue_gbp:.2f} ({num_slots} slots)" if num_slots > 0 else ""}</span>
+                <span>{self._export_rate_label()}{f" - Est. £{expected_revenue_gbp:.2f} ({num_slots} slots)" if num_slots > 0 else ""}</span>
                 <span>High: {max_rate:.1f}p | SoC: {soc_drop_per_slot:.1f}%/slot</span>
             </div>
             ''')
@@ -8903,11 +8971,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return ''.join(html)
 
     def is_off_peak(self, dayMinute: int) -> bool:
-        """Check if current time is during off-peak period (23:30-05:30)"""
+        """Whether the slot is inside the preset's cheap import window.
+
+        Intelligent Octopus Go uses 23:30-05:30; standard Octopus Go uses
+        00:30-05:30.  The resolved price table is authoritative, so a custom
+        cheap-window override is honoured too.
+        """
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_cheap(dayMinute)
         return dayMinute >= 1410 or dayMinute < 330
 
     def is_expensive_period(self, dayMinute: int) -> bool:
-        """No specifically expensive periods in Intelligent Octopus Go"""
+        """Whether the slot is inside a configured peak import window."""
+        table = self.resolved_price_table()
+        if table is not None:
+            return table.is_peak(dayMinute)
         return False
 
     def calculate_target_discharge_current(self, current_soc: float, dayMinute: int) -> float:
@@ -10692,12 +10771,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     
     def should_enable_ocpp_due_to_soc(self, state):
         """Check if OCPP should be enabled due to low SoC."""
+        if not self.AUTO_OCPP_SUPPORTED:
+            return False
         if state.battery_level < 0:
             return False
         return state.battery_level < self.OCPP_ENABLE_SOC_THRESHOLD
     
     def should_enable_ocpp_due_to_time(self, dayMinute):
         """Check if OCPP should be enabled due to time (23:30)."""
+        if not self.AUTO_OCPP_SUPPORTED:
+            return False
         return dayMinute >= self.OCPP_ENABLE_TIME or dayMinute <= 5 * 60 + 30 # between OCPP_ENABLE_TIME and 05:30, wrapping around midnight
 
     def _schedule_return_to_smart(self):
@@ -10766,6 +10849,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         should_enable_due_to_soc = self.should_enable_ocpp_due_to_soc(state)
         should_enable_due_to_time = self.should_enable_ocpp_due_to_time(dayMinute)
+
+        if not self.AUTO_OCPP_SUPPORTED:
+            return
 
         # Handle OCPP enable (both SoC and time triggers use the command queue)
         if should_enable_due_to_soc or should_enable_due_to_time:
