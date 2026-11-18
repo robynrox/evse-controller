@@ -113,10 +113,10 @@ class TestFluxTiers:
 
         assert tariff.is_off_peak(3 * 60) is True
         assert tariff.is_expensive_period(17 * 60) is True
-        assert _slot_price(tariff, 3) == pytest.approx(14.91)
-        assert _slot_price(tariff, 17) == pytest.approx(34.79)
-        assert _export_price(tariff, 3) == pytest.approx(4.69)
-        assert _export_price(tariff, 17) == pytest.approx(26.42)
+        assert _slot_price(tariff, 3) == pytest.approx(16.14)
+        assert _slot_price(tariff, 17) == pytest.approx(37.33)
+        assert _export_price(tariff, 3) == pytest.approx(4.71)
+        assert _export_price(tariff, 17) == pytest.approx(30.26)
 
     def test_custom_window_override_drives_control(self, preset):
         preset("flux")
@@ -180,3 +180,14 @@ class TestExportSources:
         table = self._table("tiers")
 
         assert table.export_price_p(12 * 60) == pytest.approx(15.0)
+
+    def test_flux_ignores_the_outgoing_override(self):
+        table = build_price_table(
+            "flux",
+            {"standard": 26.73, "cheap": 16.14, "peak": 37.33},
+            {"standard": 11.10, "cheap": 4.71, "peak": 30.26},
+            export_source="zero",
+        )
+
+        assert table.export_price_p(2 * 60 + 30) == pytest.approx(4.71)
+        assert table.export_price_p(16 * 60 + 30) == pytest.approx(30.26)

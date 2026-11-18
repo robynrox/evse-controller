@@ -17,18 +17,18 @@ class OctopusFluxTariff(Tariff):
     price_presets = frozenset({"flux"})
 
     def __init__(self, command_queue=None):
-        """Initialize Flux tariff with specific time periods and rates. Rates provided are for South Wales March 2025.
+        """Initialize Flux tariff with specific time periods and rates. Rates are the current South Wales values and are also editable in config.
         
         Args:
             command_queue: Queue for sending commands to the main loop
         """
         super().__init__(command_queue=command_queue)
         self.time_of_use = {
-            "night": {"start": "02:00", "end": "05:00", "import_rate": 0.1491, "export_rate": 0.0469},
-            "peak":  {"start": "16:00", "end": "19:00", "import_rate": 0.3479, "export_rate": 0.2642},
-            "day":   {"start": "00:00", "end": "02:00", "import_rate": 0.2485, "export_rate": 0.1326},
-            "day2":  {"start": "05:00", "end": "16:00", "import_rate": 0.2485, "export_rate": 0.1326},
-            "day3":  {"start": "19:00", "end": "24:00", "import_rate": 0.2485, "export_rate": 0.1326}
+            "night": {"start": "02:00", "end": "05:00", "import_rate": 0.1614, "export_rate": 0.0471},
+            "peak":  {"start": "16:00", "end": "19:00", "import_rate": 0.3733, "export_rate": 0.3026},
+            "day":   {"start": "00:00", "end": "02:00", "import_rate": 0.2673, "export_rate": 0.1110},
+            "day2":  {"start": "05:00", "end": "16:00", "import_rate": 0.2673, "export_rate": 0.1110},
+            "day3":  {"start": "19:00", "end": "24:00", "import_rate": 0.2673, "export_rate": 0.1110}
         }
 
     def is_off_peak(self, dayMinute: int) -> bool:

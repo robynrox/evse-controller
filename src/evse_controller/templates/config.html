@@ -620,6 +620,16 @@
             </small>
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
+        {% if config.TARIFF_PRESET == 'flux' %}
+        <div class="form-group">
+            <div class="notification">
+                <strong>Octopus Flux</strong> includes both the import and
+                export tariff. Its export prices and windows come from the
+                Flux preset and the export price fields below; the outgoing
+                tariff selector does not apply.
+            </div>
+        </div>
+        {% else %}
         <div class="form-group">
             <label for="export_source">Outgoing tariff</label>
             <select id="export_source" name="tariffs[export_source]">
@@ -653,6 +663,7 @@
                 Rate for no export payment.
             </small>
         </div>
+        {% endif %}
         <div class="form-group">
             <label for="import_standard">Import standard price in p/kWh</label>
             <input type="number" step="0.01" name="prices[import][standard]"

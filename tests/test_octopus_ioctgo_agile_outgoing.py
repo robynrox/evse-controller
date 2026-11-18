@@ -7228,6 +7228,83 @@ class TestCosyOctopusShared:
         assert tariff._today_rates()
 
 
+class TestFluxShared:
+    """Flux is coupled: one import/export product on the shared controller."""
+
+    @pytest.fixture(autouse=True)
+    def _flux(self, monkeypatch):
+        tariffs = config._config_data.setdefault("tariffs", {})
+        monkeypatch.setitem(tariffs, "preset", "flux")
+        for side, tier, value in (
+            ("import", "standard", 26.73),
+            ("import", "cheap", 16.14),
+            ("import", "peak", 37.33),
+            ("export", "standard", 11.10),
+            ("export", "cheap", 4.71),
+            ("export", "peak", 30.26),
+        ):
+            prices = config._config_data.setdefault("prices", {}).setdefault(
+                side, {}
+            )
+            monkeypatch.setitem(prices, tier, value)
+
+    @staticmethod
+    def _at(tariff, hour, minute=0):
+        fixed = datetime.now().replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        tariff.set_time_functions(datetime_func=lambda: fixed)
+        return fixed
+
+    def test_import_and_export_windows_are_coupled(self):
+        tariff = _build_tariff()
+        day = datetime.now().date()
+
+        assert tariff.is_off_peak(2 * 60 + 30) is True
+        assert tariff.is_expensive_period(16 * 60 + 30) is True
+        assert tariff.import_price_p(day, 4) == pytest.approx(16.14)
+        assert tariff.import_price_p(day, 33) == pytest.approx(37.33)
+        assert tariff.export_price_p(day, 4) == pytest.approx(4.71)
+        assert tariff.export_price_p(day, 33) == pytest.approx(30.26)
+
+    def test_export_source_override_is_ignored(self, monkeypatch):
+        monkeypatch.setattr(config, "EXPORT_SOURCE", "zero")
+        tariff = _build_tariff()
+        day = datetime.now().date()
+
+        assert tariff.export_price_p(day, 33) == pytest.approx(30.26)
+        assert tariff.dynamic_export is False
+
+    def test_peak_export_is_a_priority_slot(self):
+        tariff = _build_tariff()
+        self._at(tariff, 12, 0)
+
+        assert 33 in tariff._export_priority_slots(24)
+
+    def test_off_peak_charges_and_peak_does_not_idle(self):
+        tariff = _build_tariff()
+
+        self._at(tariff, 2, 30)
+        morning, _, _, _ = tariff.get_control_state(
+            create_test_state(50), 2 * 60 + 30
+        )
+        assert morning == ControlState.CHARGE
+
+        self._at(tariff, 16, 30)
+        evening, _, _, _ = tariff.get_control_state(
+            create_test_state(60), 16 * 60 + 30
+        )
+        assert evening != ControlState.DORMANT
+        assert tariff._decision_snapshot.import_rate_p == pytest.approx(37.33)
+
+    def test_ocpp_is_not_auto_triggered(self, monkeypatch):
+        monkeypatch.setattr(config, "IOCTGO_SMART_OCPP_OPERATION", True)
+        tariff = _build_tariff()
+
+        assert tariff.AUTO_OCPP_SUPPORTED is False
+        assert tariff.SMART_OCPP_OPERATION is False
+
+
 class TestIntelligentOctopusGoStillUsesItsOwnWindow:
     def test_cheap_window_and_ocpp_are_unchanged(self, monkeypatch):
         tariffs = config._config_data.setdefault("tariffs", {})
@@ -7316,7 +7393,7 @@ class TestTieredExportVariants:
         self, monkeypatch
     ):
         tariffs = config._config_data.setdefault("tariffs", {})
-        monkeypatch.setitem(tariffs, "preset", "flux")
+        monkeypatch.setitem(tariffs, "preset", "unknown_product")
 
         tariff = _build_tariff()
 

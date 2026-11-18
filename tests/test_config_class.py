@@ -1142,7 +1142,8 @@ class TestPriceTiers:
         assert config.AUTO_OCPP_SUPPORTED is False
 
         config.TARIFF_PRESET = "flux"
-        assert config.SMART_TARIFF == "FLUX"
+        assert config.SMART_TARIFF == "IOCTGO_AGILEOUT"
+        assert config.AUTO_OCPP_SUPPORTED is False
 
     def test_legacy_startup_state_survives_without_a_preset(self):
         config = self._config()

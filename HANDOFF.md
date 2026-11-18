@@ -351,21 +351,23 @@ completed fixes.
   cheap/peak overlap. `tariffs.preset` carries the windows (`iog_agile`,
   `iog_outgoing`, `iog_prime`, `iog_no_export`, `octopus_go`, `cosy`,
   `flux`); the six `prices` values are what users normally edit. The IOctGo
-  variants, standard Octopus Go and Cosy Octopus use the same controller, so
-  they differ only in import/export pricing and timing, not control logic.
-  Standard Go uses the 00:30–05:30 cheap window and does not auto-trigger
-  OCPP; the Intelligent variants use 23:30–05:30. Cosy uses three cheap
-  windows (04:00–07:00, 13:00–16:00, 22:00–24:00) and a 16:00–19:00 peak
-  window; its starter prices are the current South Wales values
-  (14.10/28.75/43.13p) and remain editable. `charging.solar_period_max_charge`
-  is Cosy-only: it caps the 13:00–16:00 charge so the afternoon grid charge
-  leaves room for solar. Only Intelligent Octopus Go uses OCPP; standard Go,
-  Cosy and Flux do not auto-trigger it. `export_source` is independent of the
-  import preset: `agile` uses the fetched series, `tiers` uses the fixed
-  export prices (Outgoing, Prime or Flat Rate), `zero` is a real 0p export,
-  and `none` is an unknown/no export tariff. Flux ignores `export_source`.
-  Flux still opts in when its own preset is selected: prices and cheap/peak
-  decision windows come from the table, but its control strategy is unchanged.
+  variants, standard Octopus Go, Cosy Octopus and Flux use the same
+  controller, so they differ only in import/export pricing and timing, not
+  control logic. Standard Go uses the 00:30–05:30 cheap window and does not
+  auto-trigger OCPP; the Intelligent variants use 23:30–05:30. Cosy uses
+  three cheap windows (04:00–07:00, 13:00–16:00, 22:00–24:00) and a
+  16:00–19:00 peak window; its starter prices are the current South Wales
+  values (14.10/28.75/43.13p) and remain editable.
+  `charging.solar_period_max_charge` is Cosy-only: it caps the 13:00–16:00
+  charge so the afternoon grid charge leaves room for solar. Flux is coupled:
+  cheap 02:00–05:00, peak 16:00–19:00, and its own export prices
+  (16.14/26.73/37.33p import and 4.71/11.10/30.26p export for
+  cheap/standard/peak, editable). It always uses its own import and export
+  windows and ignores `export_source`. Only Intelligent Octopus Go uses OCPP;
+  standard Go, Cosy and Flux do not auto-trigger it. `export_source` is
+  independent of the import preset for the others: `agile` uses the fetched
+  series, `tiers` uses the fixed export prices (Outgoing, Prime or Flat Rate),
+  `zero` is a real 0p export, and `none` is an unknown/no export tariff.
   A mismatched preset leaves a tariff on its legacy bands rather than applying
   another product's prices.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per

@@ -22,9 +22,9 @@ SIDES = ("import", "export")
 EXPORT_SOURCES = ("agile", "tiers", "zero", "none")
 DAY_MINUTES = 24 * 60
 
-#: Presets that use the shared smart-tariff controller.  Standard Octopus Go
-#: and Cosy Octopus are time-of-use siblings of Intelligent Octopus Go: same
-#: heuristic and DP, with their own import windows and prices.
+#: Presets that use the shared smart-tariff controller.  Standard Octopus Go,
+#: Cosy Octopus and Flux are time-of-use siblings of Intelligent Octopus Go:
+#: same heuristic and DP, with their own import windows and prices.
 IOG_PRESETS = frozenset(
     {
         "iog_agile",
@@ -33,6 +33,7 @@ IOG_PRESETS = frozenset(
         "iog_no_export",
         "octopus_go",
         "cosy",
+        "flux",
     }
 )
 
@@ -43,8 +44,9 @@ OCPP_PRESETS = frozenset(
 )
 
 #: Tariff controller selected by each price preset.  The IOG presets, standard
-#: Octopus Go and Cosy Octopus share the same controller; the preset's import
-#: windows and export source decide how it prices each slot.
+#: Octopus Go, Cosy Octopus and Flux share the same controller; the preset's
+#: import/export windows and prices decide how it behaves.  Flux couples its
+#: import and export product, so it ignores the export_source override.
 PRESET_TARIFF = {
     "iog_agile": "IOCTGO_AGILEOUT",
     "iog_outgoing": "IOCTGO_AGILEOUT",
@@ -52,7 +54,7 @@ PRESET_TARIFF = {
     "iog_no_export": "IOCTGO_AGILEOUT",
     "octopus_go": "IOCTGO_AGILEOUT",
     "cosy": "IOCTGO_AGILEOUT",
-    "flux": "FLUX",
+    "flux": "IOCTGO_AGILEOUT",
 }
 
 
@@ -325,8 +327,8 @@ PRESETS: dict[str, PricePreset] = {
         label="Octopus Flux",
         import_windows={"cheap": ("02:00-05:00",), "peak": ("16:00-19:00",)},
         export_windows={"cheap": ("02:00-05:00",), "peak": ("16:00-19:00",)},
-        default_import_prices={"standard": 24.85, "cheap": 14.91, "peak": 34.79},
-        default_export_prices={"standard": 13.26, "cheap": 4.69, "peak": 26.42},
+        default_import_prices={"standard": 26.73, "cheap": 16.14, "peak": 37.33},
+        default_export_prices={"standard": 11.10, "cheap": 4.71, "peak": 30.26},
         export_source="tiers",
     ),
 }
@@ -353,6 +355,11 @@ def build_price_table(
             f"{', '.join(sorted(PRESETS))}"
         )
     definition = PRESETS[preset]
+    if preset == "flux":
+        # Flux is a coupled import/export product.  Its own export windows and
+        # prices are part of the preset, so the outgoing-tariff override does
+        # not apply.
+        export_source = None
 
     def resolve(
         side: str,

@@ -137,11 +137,11 @@ def test_cosy_boundaries_are_pinned():
 def test_flux_boundaries_are_pinned():
     rates = _prices(OctopusFluxTariff())
 
-    assert rates[4].import_p == pytest.approx(14.91)   # 02:00 night
-    assert rates[4].export_p == pytest.approx(4.69)
-    assert rates[10].import_p == pytest.approx(24.85)  # 05:00 day
-    assert rates[32].import_p == pytest.approx(34.79)  # 16:00 peak
-    assert rates[32].export_p == pytest.approx(26.42)
+    assert rates[4].import_p == pytest.approx(16.14)   # 02:00 night
+    assert rates[4].export_p == pytest.approx(4.71)
+    assert rates[10].import_p == pytest.approx(26.73)  # 05:00 day
+    assert rates[32].import_p == pytest.approx(37.33)  # 16:00 peak
+    assert rates[32].export_p == pytest.approx(30.26)
 
 
 def test_ioctgo_boundaries_are_pinned():

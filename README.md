@@ -475,8 +475,15 @@ every import tariff except Flux:
   for solar. It does not auto-trigger OCPP. Starter prices are
   14.10/28.75/43.13p for cheap/standard/peak; edit them under `prices` for
   your area and season.
+- `flux`: Octopus Flux. It uses the same heuristic and DP, but import and
+  export are coupled: cheap 02:00–05:00, peak 16:00–19:00, standard otherwise.
+  It always uses its own export prices and windows and ignores
+  `export_source`. It does not auto-trigger OCPP. Starter prices are
+  16.14/26.73/37.33p import and 4.71/11.10/30.26p export for
+  cheap/standard/peak.
 
-`export_source` is independent of the import preset:
+`export_source` is independent of the import preset for every tariff except
+Flux:
 
 - `agile`: fetched Agile Outgoing half-hour prices.
 - `tiers`: fixed export prices from the `prices.export` block. This covers
@@ -488,11 +495,9 @@ every import tariff except Flux:
 
 Each import preset supplies its own cheap window: Intelligent Octopus Go uses
 23:30–05:30, standard Octopus Go uses 00:30–05:30, and Cosy uses its three
-cheap windows. Flux is the exception: it keeps its own export structure and
-ignores `export_source`. The preset is the single tariff selector; there is
-no separate import-tariff dropdown under Charging. Some controller-specific
-behaviour, such as Flux's 16:00 discharge ramp, still uses its built-in
-timing.
+cheap windows. Flux is coupled: it always uses its own import and export
+windows and prices, and ignores `export_source`. The preset is the single
+tariff selector; there is no separate import-tariff dropdown under Charging.
 
 
 ##### Link health
