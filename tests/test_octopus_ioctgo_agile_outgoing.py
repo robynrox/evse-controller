@@ -4856,6 +4856,175 @@ class TestExplicitSocLimitsInTheTariff:
         assert agile_tariff._apply_discharge_policy(39) == "inhibited"
 
 
+class TestFutureAwareGate:
+    """The gate current is the first current that beats the future gain."""
+
+    def _tariff(self, monkeypatch, efficiency):
+        tariff = _build_tariff()
+        tariff.MIN_DISCHARGE_CURRENT = 3
+        tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0
+        monkeypatch.setattr(
+            tariff, "_aggressive_energy_dc_cost_p", lambda alternative: 20.0
+        )
+
+        class FakeEfficiency:
+            def discharge_efficiency(self, current):
+                return efficiency(float(current))
+
+        tariff.EFFICIENCY_MODEL = FakeEfficiency()
+        return tariff
+
+    def test_aggressive_gate_current_is_the_first_current_that_beats_future(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(
+            monkeypatch,
+            lambda current: 0.9 if current < 11 else 1.0,
+        )
+
+        activation_w, _, current_a = tariff._aggressive_activation_scan(
+            20.1,
+            import_rate_p=20.1,
+            alternative_rate_p=20.0,
+            voltage=240.0,
+        )
+
+        assert current_a == 11
+        assert activation_w == pytest.approx(2400, abs=10)
+
+    def test_aggressive_gate_can_start_at_the_minimum_current(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch, lambda current: 1.0)
+
+        activation_w, _, current_a = tariff._aggressive_activation_scan(
+            20.1,
+            import_rate_p=20.1,
+            alternative_rate_p=20.0,
+            voltage=240.0,
+        )
+
+        assert current_a == 3
+        assert activation_w == 0.0
+
+    def test_aggressive_gate_is_absent_when_no_current_beats_future(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(monkeypatch, lambda current: 0.5)
+
+        activation_w, _, _ = tariff._aggressive_activation_scan(
+            20.1,
+            import_rate_p=20.1,
+            alternative_rate_p=20.0,
+            voltage=240.0,
+        )
+
+        assert activation_w == tariff.NEVER_DISCHARGE_ACTIVATION_W
+
+    def test_worst_planned_export_price_uses_the_plan(self, monkeypatch):
+        tariff = _build_tariff()
+        tariff._planned_export_slots = [25, 26]
+        monkeypatch.setattr(
+            tariff,
+            "_today_rates",
+            lambda: [
+                {
+                    "start": datetime(2026, 11, 18, 12, 30),
+                    "rate": 20.0,
+                },
+                {
+                    "start": datetime(2026, 11, 18, 13, 0),
+                    "rate": 27.4,
+                },
+            ],
+        )
+
+        assert tariff._worst_planned_export_price(24) == 20.0
+        assert tariff._worst_planned_export_price(26) == 0.0
+
+    def test_follow_gates_use_the_worst_planned_export(self, monkeypatch):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        tariff._planned_export_slots = [25, 26]
+        monkeypatch.setattr(
+            tariff,
+            "_today_rates",
+            lambda: [
+                {
+                    "start": datetime(2026, 11, 18, 12, 30),
+                    "rate": 20.0,
+                },
+                {
+                    "start": datetime(2026, 11, 18, 13, 0),
+                    "rate": 27.4,
+                },
+            ],
+        )
+        captured = []
+
+        def fake_gate(export_rate_p, **kwargs):
+            captured.append(kwargs.get("alternative_rate_p"))
+            return 720.0
+
+        monkeypatch.setattr(
+            tariff, "discharge_activation_threshold_w", fake_gate
+        )
+        planner_input = PlannerInput(
+            day=datetime(2026, 11, 18).date(),
+            slots=(
+                PlannerSlot(
+                    start=datetime(2026, 11, 18, 12, 0),
+                    slot=24,
+                    import_p=32.26,
+                    export_p=18.0,
+                    load_kw=0.5,
+                    load_samples=((0.5, 1.0),),
+                    max_discharge_current_a=16.0,
+                ),
+            ),
+            initial_soc=60.0,
+            target_soc=None,
+            source_name="test",
+        )
+
+        tariff._with_follow_gates(planner_input)
+
+        assert captured
+        assert all(rate == 20.0 for rate in captured)
+
+    def test_conservative_gate_uses_the_future_gain(self, monkeypatch):
+        tariff = _build_tariff()
+        tariff.MIN_DISCHARGE_CURRENT = 3
+        tariff.MIN_PROFIT_MARGIN_P_PER_KWH = 0
+        monkeypatch.setattr(
+            tariff, "_delivered_cost_per_kwh_p", lambda current=None: 10.0
+        )
+        monkeypatch.setattr(
+            tariff, "export_discharge_efficiency", lambda: 1.0
+        )
+
+        base = tariff.discharge_activation_threshold_w(
+            5.0,
+            import_rate_p=30.0,
+            aggressive=False,
+            voltage=240.0,
+            alternative_rate_p=0.0,
+            floor_current_a=11.0,
+        )
+        future = tariff.discharge_activation_threshold_w(
+            5.0,
+            import_rate_p=30.0,
+            aggressive=False,
+            voltage=240.0,
+            alternative_rate_p=20.0,
+            floor_current_a=11.0,
+        )
+
+        assert future > base
+
+
 class TestLiveSpikeOverride:
     """Live load and solar spikes override only an idle DP action."""
 

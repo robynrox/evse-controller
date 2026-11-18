@@ -1766,6 +1766,31 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         except Exception as exc:  # history must not break control
             warning(f"IOCTGO_AGILEOUT: Could not record SoC sample: {exc}")
 
+    def _worst_planned_export_price(self, current_slot: int) -> float:
+        """Worst price among the remaining planned export slots.
+
+        The load-following gate compares the current action with the marginal
+        future use of the same stored energy.  That is the worst planned
+        export, not the best one.  An empty plan returns 0p, which leaves the
+        ledger cost to set the hurdle.
+        """
+        planned = {
+            slot
+            for slot in self._planned_export_slots
+            if slot > current_slot
+        }
+        if not planned:
+            return 0.0
+        prices = []
+        for rate_data in self._today_rates():
+            start = rate_data.get("start")
+            if start is None:
+                continue
+            slot = start.hour * 2 + (1 if start.minute == 30 else 0)
+            if slot in planned:
+                prices.append(float(rate_data.get("rate") or 0.0))
+        return min(prices) if prices else 0.0
+
     def _with_follow_gates(
         self, planner_input, hybrid_floors: Optional[Iterable[float]] = None
     ):
@@ -1799,19 +1824,17 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         for index, slot in enumerate(slots):
             if slot.forced:
                 continue
-            alternative_rate_p = max(
-                (
-                    later.export_p
-                    for later in slots[index + 1:]
-                    if later.export_p is not None
-                ),
-                default=0.0,
+            alternative_rate_p = (
+                self._worst_planned_export_price(slot.slot)
+                if slot.start.date() == planner_input.day
+                else 0.0
             )
             conservative_gate = self.discharge_activation_threshold_w(
                 slot.export_p,
                 import_rate_p=slot.import_p,
                 aggressive=False,
                 voltage=voltage,
+                alternative_rate_p=alternative_rate_p,
             )
             aggressive_gate = self.discharge_activation_threshold_w(
                 slot.export_p,
@@ -4496,11 +4519,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         p_min_w = max(0.0, self.MIN_DISCHARGE_CURRENT) * volts
         if floor_current_a is not None:
             p_min_w = max(p_min_w, float(floor_current_a) * volts)
-        hurdle_p = (
+        future_p = (
+            max(0.0, float(alternative_rate_p or 0.0))
+            * self.export_discharge_efficiency()
+        )
+        hurdle_p = max(
             self._delivered_cost_per_kwh_p(
                 None if floor_current_a is None else float(floor_current_a)
             )
-            + self.MIN_PROFIT_MARGIN_P_PER_KWH
+            + self.MIN_PROFIT_MARGIN_P_PER_KWH,
+            future_p,
         )
 
         if hurdle_p >= import_p:
@@ -4595,10 +4623,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             import_rate_p=self._current_import_rate_p(day_minute),
             aggressive=aggressive,
             voltage=power["voltage"] if power else None,
-            alternative_rate_p=(
-                self._best_alternative_export_rate(current_slot)
-                if aggressive
-                else None
+            alternative_rate_p=self._worst_planned_export_price(
+                current_slot
             ),
         )
 

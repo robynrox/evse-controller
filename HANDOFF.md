@@ -673,9 +673,13 @@ completed fixes.
   one-direction arc remains as a fallback when its bidirectional counterpart
   cannot reach that SoC's floor or cap.
   Gates come from the same `discharge_activation_threshold_w` calculation as
-  the live heuristic and are stored per input row with their floors. Follow
-  arcs use expected cost, expected net SoC change and gross throughput for
-  degradation.
+  the live heuristic and are stored per input row with their floors. The gate
+  is now the first integer current whose net gain beats the **worst remaining
+  planned export** (the marginal stored-energy opportunity), not the best
+  remaining export; if no current clears it, the follow arc is omitted. The
+  gate's power equivalent is the house load at which the Wallbox would choose
+  that current. Follow arcs use expected cost, expected net SoC change and
+  gross throughput for degradation.
 - Net grid load keeps its sign: the `house` series is `grid − Wallbox`, so
   negative values are export and are passed through to the DP instead of being
   clipped. This makes observed solar surplus visible to the follow arcs.
