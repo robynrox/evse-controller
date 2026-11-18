@@ -901,60 +901,58 @@ def config_page():
                     config.IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH,
                 )
 
-            # Hard protection floor for discharge and export
-            absolute_min_soc = _form_int(
-                request.form.get('tariffs.ioctgo[absolute_min_soc_percent]'),
+            # Three explicit SoC floors, applied low to high so the setters
+            # clamp the effective order to hard <= buffer <= bulk.  Accept the
+            # old form field names too so a stale browser tab cannot silently
+            # discard the setting.
+            hard_soc = _form_int(
+                request.form.get('tariffs.ioctgo[hard_floor_soc]'),
                 None,
             )
-            if absolute_min_soc is not None:
-                config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = absolute_min_soc
+            if hard_soc is None:
+                hard_soc = _form_int(
+                    request.form.get(
+                        'tariffs.ioctgo[absolute_min_soc_percent]'
+                    ),
+                    None,
+                )
+            if hard_soc is not None:
+                config.HARD_FLOOR_SOC = hard_soc
 
-            # Three economic SoC limits.  Accept the old form field names too
-            # so a stale browser tab cannot silently discard the setting.
+            buffer_soc = _form_int(
+                request.form.get('tariffs.ioctgo[buffer_floor_soc]'),
+                None,
+            )
+            if buffer_soc is None:
+                buffer_soc = _form_int(
+                    request.form.get(
+                        'tariffs.ioctgo[conservative_soc_lower_limit]'
+                    ),
+                    None,
+                )
+            if buffer_soc is not None:
+                config.BUFFER_FLOOR_SOC = buffer_soc
+
             bulk_soc = _form_int(
-                request.form.get(
-                    'tariffs.ioctgo[bulk_discharge_soc_lower_limit]'
-                ),
+                request.form.get('tariffs.ioctgo[bulk_floor_soc]'),
                 None,
             )
-            if bulk_soc is not None:
-                config.BULK_DISCHARGE_SOC_LOWER_LIMIT = bulk_soc
-
-            aggressive_soc = _form_int(
-                request.form.get(
-                    'tariffs.ioctgo[aggressive_soc_lower_limit]'
-                ),
-                None,
-            )
-            if aggressive_soc is None:
-                aggressive_soc = _form_int(
+            if bulk_soc is None:
+                bulk_soc = _form_int(
+                    request.form.get(
+                        'tariffs.ioctgo[aggressive_soc_lower_limit]'
+                    ),
+                    None,
+                )
+            if bulk_soc is None:
+                bulk_soc = _form_int(
                     request.form.get(
                         'tariffs.ioctgo[min_agile_discharge_soc]'
                     ),
                     None,
                 )
-            if aggressive_soc is not None:
-                config.AGGRESSIVE_SOC_LOWER_LIMIT = aggressive_soc
-
-            conservative_soc = _form_int(
-                request.form.get(
-                    'tariffs.ioctgo[conservative_soc_lower_limit]'
-                ),
-                None,
-            )
-            if conservative_soc is None:
-                margin = _form_int(
-                    request.form.get(
-                        'tariffs.ioctgo[house_load_margin_percent]'
-                    ),
-                    None,
-                )
-                if margin is not None:
-                    conservative_soc = (
-                        config.AGGRESSIVE_SOC_LOWER_LIMIT - margin
-                    )
-            if conservative_soc is not None:
-                config.CONSERVATIVE_SOC_LOWER_LIMIT = conservative_soc
+            if bulk_soc is not None:
+                config.BULK_FLOOR_SOC = bulk_soc
 
             # Handle channel configuration for both devices
             devices = ['primary']

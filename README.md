@@ -187,10 +187,9 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       preset: "iog_agile"              # selects the tariff controller and prices
       ioctgo:
         battery_capacity_kwh: 59.0     # Vehicle battery capacity in kWh
-        aggressive_soc_lower_limit: 50    # Aggressive house discharge floor and 23:30 target
-        conservative_soc_lower_limit: 45  # Conservative house discharge floor
-        bulk_discharge_soc_lower_limit: 40 # High-value/priority export floor
-        absolute_min_soc_percent: 25      # Hard protection floor (cannot be below 25)
+        hard_floor_soc: 25            # Hard protection floor (cannot be below 25)
+        buffer_floor_soc: 45          # Lower discretionary floor: house/grid coverage
+        bulk_floor_soc: 50            # Higher discretionary floor: planned bulk/priority exports stop here
         bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
         min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
         soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
@@ -405,11 +404,10 @@ The `tariffs.ioctgo` section contains parameters for the Intelligent Octopus Go 
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
 - `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
-- `aggressive_soc_lower_limit`: Aggressive house-discharge floor and the 23:30 target (whole percent, default 50, 0-100). Aggressive discharge stops here. It must be at or above the conservative lower limit
-- `conservative_soc_lower_limit`: Conservative house-discharge floor (whole percent, default 45). Between this and the aggressive lower limit the controller covers most of the house load; below this the house imports. It must be at or above the bulk discharge lower limit
-- `bulk_discharge_soc_lower_limit`: SoC floor for high-value/priority exports (whole percent, defaults to the hard protection floor). These slots may spend the reserve down to this figure, but not below the hard protection floor
-- `absolute_min_soc_percent`: Hard protection floor for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve. Scheduled events may override the three economic limits above, but never this one. Surplus solar may still charge the pack below this level
-- `house_load_margin_percent`: Deprecated migration setting. If `conservative_soc_lower_limit` is absent, it is used to derive the conservative floor from the old `min_agile_discharge_soc` value
+- `hard_floor_soc`: Hard protection floor for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve. Scheduled events, including Save Energy sessions, may not discharge below it. Surplus solar may still charge the pack below this level
+- `buffer_floor_soc`: Lower discretionary floor (whole percent, default 45). House and grid-load coverage may spend down to here, using either conservative or aggressive discharge. The DP uses this as its single discretionary floor. It must be at or above `hard_floor_soc`
+- `bulk_floor_soc`: Higher discretionary floor (whole percent, default 50). Planned bulk and priority exports stop here; ordinary house coverage may still use the buffer below it. It must be at or above `buffer_floor_soc`
+- The effective order is always `hard_floor_soc <= buffer_floor_soc <= bulk_floor_soc`. Old `absolute_min_soc_percent`, `conservative_soc_lower_limit`, `aggressive_soc_lower_limit`, `min_agile_discharge_soc` and `house_load_margin_percent` values are read as migration fallbacks when the new keys are absent; the retired `bulk_discharge_soc_lower_limit` is ignored
 - `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
 - `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
 - `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
@@ -615,16 +613,16 @@ does not grid-charge while that surplus is being exported.
   energy costs more than the import it avoids`. Detailed SoC projections and
   slot analysis remain in the text log; hover the line for a fuller
   explanation.
-- **Aggressive vs conservative** follows the projected 23:30 SoC. Aggressive
-  house discharge runs while the projection is at or above
-  `aggressive_soc_lower_limit`. Between that and
-  `conservative_soc_lower_limit` it discharges conservatively. Below the
-  conservative floor it stops and the house imports; below
-  `absolute_min_soc_percent` even committed exports are inhibited. Priority
-  exports get first claim and may spend down to
-  `bulk_discharge_soc_lower_limit`. Conservative coverage comes next; surplus
-  exports and aggressive discharge only use headroom above the aggressive
-  floor that conservative does not need.
+- **Aggressive vs conservative** follows the projected 23:30 SoC and the
+  three explicit floors. Aggressive house discharge runs at or above
+  `bulk_floor_soc`. Between `buffer_floor_soc` and `bulk_floor_soc` the pack
+  is in the buffer zone: house and grid-load coverage are allowed with either
+  conservative or aggressive bias, and the per-slot price gate chooses. Below
+  `buffer_floor_soc` discretionary house discharge stops and the house
+  imports; below `hard_floor_soc` even committed exports are inhibited.
+  Planned bulk and priority exports get first claim and stop at
+  `bulk_floor_soc`. Conservative coverage comes next; surplus exports and
+  aggressive discharge may use the buffer, but not spend below it.
 - **Export priority** applies when the quoted export price clears the
   house-offset break-even:
   `η_house ÷ η_export × import price`, using the measured discharge
@@ -632,8 +630,8 @@ does not grid-charge while that surplus is being exported.
   (about 77.8% of the import price at the default table). Both options consume
   the same stored energy, so the ratio is a pure efficiency comparison and no
   profit margin is added. Such a slot is exported at maximum rate and is
-  selected before surplus export slots when energy is limited; it may spend
-  the reserve down to `bulk_discharge_soc_lower_limit`.
+  selected before surplus export slots when energy is limited; it stops at
+  `bulk_floor_soc`.
 - **Efficiency** is the measured value actually used for this decision
   (`charge`, `discharge`, `round trip`, or `solar → house`). The model is
   current-dependent, so there is no single global minimum figure. The solar
@@ -652,7 +650,7 @@ does not grid-charge while that surplus is being exported.
 - **Aggressive slots are conditional, not guaranteed.** Remaining high-value
   slots can be planned for aggressive load-following only when the rolling
   house-load forecast says conservative coverage would not activate there and
-  the running minimum stays above `aggressive_soc_lower_limit`. The house is
+  the running minimum stays above `buffer_floor_soc`. The house is
   covered and the small surplus is exported. The SoC cost is estimated from
   the forecasted load and the integer current the Wallbox would choose, not a
   flat constant, so it fits when a full export no longer does. These slots
@@ -671,10 +669,9 @@ does not grid-charge while that surplus is being exported.
   gate; an unplanned higher-priced slot does, because spending the energy now
   could put it out of reach. If even the full output cannot repay the pack,
   the slot is not planned as aggressive at all; it falls through to
-  conservative coverage or idle. A planned aggressive slot only forces the
-  aggressive mode while the policy is still in the aggressive band; if the
-  projection has fallen below the aggressive floor, the current policy wins
-  and the pack is conserved. See `evse.log`'s
+  conservative coverage or idle. A planned aggressive slot forces the
+  aggressive mode in the buffer zone and above `bulk_floor_soc`; below the
+  buffer the current policy wins and the pack is conserved. See `evse.log`'s
   `CONTROL Setting discharge activation power to N W` line for the live
   value.
 - **Grid-load forecast.** The controller keeps sparse 25 W time-weighted
@@ -782,8 +779,7 @@ numbers the control loop used:
 - It declares the state at the moment of the decision: time and half-hour
   slot, SoC, charge cap, import and export prices, the best later export slot,
   harvest estimate, live grid balance, stored-energy cost, the 3 A minimum
-  output, the projected 23:30 SoC, and the aggressive, conservative, bulk
-  discharge and hard protection floors.
+  output, the projected 23:30 SoC, and the hard, buffer and bulk floors.
 - It walks through the checks in order: whether the pack will last to 23:30,
   what the surplus is worth exported now, what it is worth kept for the house,
   what it is worth stored for a later sale, where each break-even lies, whether
@@ -837,7 +833,7 @@ marketing:
   asked for less grid demand. For a battery-backed installation the useful
   response is maximum export for the window, regardless of the quoted export
   price, down to
-  `absolute_min_soc_percent` (25% by default). The supplier's reward is not a
+  `hard_floor_soc` (25% by default). The supplier's reward is not a
   price the tariff can see, so it is deliberately not modelled or booked; the
   dashboard says the request is the reason for exporting.
 - **EV Away** (`ev_away`): the EV is expected to be disconnected. These slots
@@ -1468,8 +1464,8 @@ The shadow DP has **no fixed end-of-day SoC target**. It optimises the priced
 horizon within the configured limits:
 
 - protection floor (hard),
-- bulk/priority export discharge floor for ordinary fixed discharge,
-- conservative and aggressive discharge floors for the follow modes,
+- discretionary discharge floor (buffer) for ordinary fixed discharge and
+  the follow modes,
 - the hard protection floor for supplier grid-support sessions,
 - charge cap and current limits.
 

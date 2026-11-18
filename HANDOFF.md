@@ -209,21 +209,26 @@ completed fixes.
   `G* = P_min × (H − P_export) / (P_import − P_export)` and floors the
   activation at `P_min`; when `H ≥ P_import` the controller never starts a
   discharge.
-- The four SoC limits are explicit: `aggressive_soc_lower_limit` (default
-  50%, also the 23:30 target), `conservative_soc_lower_limit` (default 45%),
-  `bulk_discharge_soc_lower_limit` (defaults to the hard protection floor),
-  and `absolute_min_soc_percent` (hard protection floor, default 25%). Old
-  `min_agile_discharge_soc` and `house_load_margin_percent` values migrate
-  automatically when the new keys are absent.
+- The three SoC floors are explicit percentages, always ordered
+  `hard <= buffer <= bulk`. `hard_floor_soc` (default 25%) is the protection
+  floor. `buffer_floor_soc` (default 45%) is the lower discretionary floor:
+  house and grid-load coverage may spend down to it with either conservative
+  or aggressive discharge, and the DP uses it as its single discretionary
+  floor. `bulk_floor_soc` (default 50%) is the higher discretionary floor:
+  planned bulk and priority exports stop there. Old
+  `absolute_min_soc_percent`, `conservative_soc_lower_limit`,
+  `aggressive_soc_lower_limit`, `min_agile_discharge_soc` and
+  `house_load_margin_percent` values migrate automatically when the new keys
+  are absent; the retired `bulk_discharge_soc_lower_limit` is ignored.
 - Priority exports (price above the house-offset break-even) get first claim
-  and may spend down to `bulk_discharge_soc_lower_limit`. While one is still
-  ahead, an energy shortfall pauses house discharge so the pack is not spent
-  at 3 A first; surplus solar may still charge.
+  and stop at `bulk_floor_soc`. While one is still ahead, an energy shortfall
+  pauses house discharge so the pack is not spent at 3 A first; surplus solar
+  may still charge.
 - The plan order is priority exports, conservative house coverage, surplus
-  exports, then aggressive discharge. Conservative coverage wins where the
-  forecast expects it to activate; surplus and aggressive use only headroom
-  above `aggressive_soc_lower_limit` that conservative does not need. A day
-  that maxes out its export budget therefore has no aggressive slots.
+  exports, then aggressive discharge. Conservative and aggressive coverage
+  may both use the buffer; planned exports stop at the bulk floor. Conservative
+  coverage wins where the forecast expects it to activate, and aggressive
+  slots use only headroom above the buffer that conservative does not need.
 - The rolling grid-load profile lives in
   `data/state/load_profile/YYYY-MM-DD.json`. Each file holds sparse 25 W
   time-weighted histograms per half-hour slot for every CT clamp and a derived

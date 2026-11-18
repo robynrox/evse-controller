@@ -78,10 +78,9 @@ DEFAULT_CONFIG = {
     },
     "tariffs": {
         "ioctgo": {
-            "aggressive_soc_lower_limit": 50,
-            "conservative_soc_lower_limit": 45,
-            "bulk_discharge_soc_lower_limit": 25,
-            "absolute_min_soc_percent": 25,
+            "hard_floor_soc": 25,
+            "buffer_floor_soc": 45,
+            "bulk_floor_soc": 50,
         }
     },
     "octopus": {

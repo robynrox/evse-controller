@@ -342,7 +342,14 @@ class TestConfig:
         assert config_dict["tariffs"]["ioctgo"]["bulk_discharge_end_time"] == "19:00"
         assert config_dict["tariffs"]["ioctgo"]["enable_bulk_discharge"] is True
         assert config_dict["tariffs"]["ioctgo"]["min_profit_margin_p_per_kwh"] == 0.3
-        assert config_dict["tariffs"]["ioctgo"]["house_load_margin_percent"] == 5
+        assert config_dict["tariffs"]["ioctgo"]["hard_floor_soc"] == 25
+        assert config_dict["tariffs"]["ioctgo"]["buffer_floor_soc"] == 45
+        assert config_dict["tariffs"]["ioctgo"]["bulk_floor_soc"] == 50
+        assert (
+            config_dict["tariffs"]["ioctgo"]["hard_floor_soc"]
+            <= config_dict["tariffs"]["ioctgo"]["buffer_floor_soc"]
+            <= config_dict["tariffs"]["ioctgo"]["bulk_floor_soc"]
+        )
 
         # Update a value and check it appears in as_dict
         config.IOCTGO_BATTERY_CAPACITY_KWH = 70
@@ -834,11 +841,11 @@ class TestConfig:
                 assert saved_config['shelly']['evse']['device'] == "secondary"
 
 class TestWholeNumberSocSettings:
-    """SoC targets, thresholds and margins are whole percentages.
+    """SoC targets, thresholds and floors are whole percentages.
 
     The web form submits integers, but the YAML can be edited by hand.  A
     fractional value there used to survive into the decision line, where a
-    44.6% projection against a 45% house floor rendered as "45% < 45%".
+    44.6% projection against a 45% buffer floor rendered as "45% < 45%".
     """
 
     WHOLE_SOC_SETTINGS = [
@@ -849,9 +856,9 @@ class TestWholeNumberSocSettings:
         ("IOCTGO_SOC_THRESHOLD_FOR_STRATEGY", 49.6, 50),
         ("IOCTGO_OCPP_ENABLE_SOC_THRESHOLD", 29.6, 30),
         ("IOCTGO_OCPP_DISABLE_SOC_THRESHOLD", 94.6, 95),
-        ("MIN_AGILE_DISCHARGE_SOC", 59.6, 60),
-        ("IOCTGO_ABSOLUTE_MIN_SOC_PERCENT", 39.6, 40),
-        ("HOUSE_LOAD_MARGIN_PERCENT", 4.6, 5),
+        ("HARD_FLOOR_SOC", 39.6, 40),
+        ("BUFFER_FLOOR_SOC", 44.6, 45),
+        ("BULK_FLOOR_SOC", 49.6, 50),
     ]
 
     @pytest.mark.parametrize("attribute,written,expected", WHOLE_SOC_SETTINGS)
@@ -868,44 +875,46 @@ class TestWholeNumberSocSettings:
         config = Config()
         _ = config.WALLBOX_URL
         config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {})[
-            "house_load_margin_percent"
-        ] = 4.6
+            "buffer_floor_soc"
+        ] = 44.6
 
-        assert config.HOUSE_LOAD_MARGIN_PERCENT == 5
+        assert config.BUFFER_FLOOR_SOC == 45
 
-    def test_absolute_minimum_defaults_to_the_physical_reserve(self):
+    def test_hard_floor_defaults_to_the_physical_reserve(self):
         config = Config()
         _ = config.WALLBOX_URL
-        config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {}).pop(
-            "absolute_min_soc_percent", None
+        ioctgo = config._config_data.setdefault("tariffs", {}).setdefault(
+            "ioctgo", {}
         )
+        ioctgo.pop("hard_floor_soc", None)
+        ioctgo.pop("absolute_min_soc_percent", None)
 
-        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+        assert config.HARD_FLOOR_SOC == 25
 
-    def test_absolute_minimum_cannot_be_set_below_the_physical_reserve(self):
+    def test_hard_floor_cannot_be_set_below_the_physical_reserve(self):
         config = Config()
         _ = config.WALLBOX_URL
 
-        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 10
+        config.HARD_FLOOR_SOC = 10
 
-        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 25
+        assert config.HARD_FLOOR_SOC == 25
 
-    def test_absolute_minimum_is_capped_at_one_hundred(self):
+    def test_hard_floor_is_capped_at_one_hundred(self):
         config = Config()
         _ = config.WALLBOX_URL
 
-        config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT = 120
+        config.HARD_FLOOR_SOC = 120
 
-        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 100
+        assert config.HARD_FLOOR_SOC == 100
 
     def test_non_numeric_value_falls_back_to_the_default(self):
         config = Config()
         _ = config.WALLBOX_URL
         config._config_data.setdefault("tariffs", {}).setdefault("ioctgo", {})[
-            "min_agile_discharge_soc"
+            "hard_floor_soc"
         ] = "not a number"
 
-        assert config.MIN_AGILE_DISCHARGE_SOC == 50
+        assert config.HARD_FLOOR_SOC == 25
 
     def test_per_slot_soc_loss_rates_stay_fractional(self):
         """These are rates, not thresholds, so 0.5%/slot must survive."""
@@ -921,8 +930,8 @@ class TestWholeNumberSocSettings:
         assert config.IOCTGO_FULL_CHARGE_SLOT_SOC_GAIN_PERCENT == pytest.approx(6.5)
 
 
-class TestExplicitSocLimits:
-    """The three economic limits and the separate hard protection floor."""
+class TestExplicitSocFloors:
+    """Three explicit floors, always ordered hard <= buffer <= bulk."""
 
     @staticmethod
     def _config():
@@ -930,57 +939,92 @@ class TestExplicitSocLimits:
         _ = config.WALLBOX_URL  # force initialisation
         return config
 
-    def test_new_keys_override_the_old_derived_settings(self):
+    def test_new_keys_override_the_old_keys(self):
         config = self._config()
         config._config_data.setdefault("tariffs", {})["ioctgo"] = {
-            "aggressive_soc_lower_limit": 55,
-            "conservative_soc_lower_limit": 48,
-            "bulk_discharge_soc_lower_limit": 42,
-            "absolute_min_soc_percent": 40,
+            "hard_floor_soc": 40,
+            "buffer_floor_soc": 48,
+            "bulk_floor_soc": 55,
+            "absolute_min_soc_percent": 30,
+            "conservative_soc_lower_limit": 44,
+            "aggressive_soc_lower_limit": 50,
             "min_agile_discharge_soc": 60,
-            "house_load_margin_percent": 5,
         }
 
-        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 55
-        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 48
-        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 42
-        assert config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT == 40
+        assert config.HARD_FLOOR_SOC == 40
+        assert config.BUFFER_FLOOR_SOC == 48
+        assert config.BULK_FLOOR_SOC == 55
 
     def test_old_keys_migrate(self):
         config = self._config()
         config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "absolute_min_soc_percent": 40,
+            "conservative_soc_lower_limit": 48,
+            "aggressive_soc_lower_limit": 55,
+            "min_agile_discharge_soc": 60,
+        }
+
+        assert config.HARD_FLOOR_SOC == 40
+        assert config.BUFFER_FLOOR_SOC == 48
+        assert config.BULK_FLOOR_SOC == 55
+
+    def test_old_min_agile_and_margin_migrate(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
             "min_agile_discharge_soc": 60,
             "house_load_margin_percent": 5,
             "absolute_min_soc_percent": 40,
         }
 
-        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 60
-        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 55
-        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 40
+        assert config.HARD_FLOOR_SOC == 40
+        assert config.BUFFER_FLOOR_SOC == 55
+        assert config.BULK_FLOOR_SOC == 60
 
     def test_limits_are_clamped_into_order(self):
         config = self._config()
         config._config_data.setdefault("tariffs", {})["ioctgo"] = {
-            "aggressive_soc_lower_limit": 20,
-            "conservative_soc_lower_limit": 20,
-            "bulk_discharge_soc_lower_limit": 20,
-            "absolute_min_soc_percent": 25,
+            "hard_floor_soc": 25,
+            "buffer_floor_soc": 20,
+            "bulk_floor_soc": 20,
         }
 
-        assert config.BULK_DISCHARGE_SOC_LOWER_LIMIT == 25
-        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 25
-        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 25
+        assert config.HARD_FLOOR_SOC == 25
+        assert config.BUFFER_FLOOR_SOC == 25
+        assert config.BULK_FLOOR_SOC == 25
 
-    def test_aggressive_cannot_sit_below_conservative(self):
+    def test_hard_floor_above_buffer_raises_the_effective_floors(self):
         config = self._config()
         config._config_data.setdefault("tariffs", {})["ioctgo"] = {
-            "aggressive_soc_lower_limit": 45,
-            "conservative_soc_lower_limit": 50,
-            "bulk_discharge_soc_lower_limit": 40,
-            "absolute_min_soc_percent": 25,
+            "hard_floor_soc": 60,
+            "buffer_floor_soc": 45,
+            "bulk_floor_soc": 50,
         }
 
-        assert config.AGGRESSIVE_SOC_LOWER_LIMIT == 50
+        assert config.HARD_FLOOR_SOC == 60
+        assert config.BUFFER_FLOOR_SOC == 60
+        assert config.BULK_FLOOR_SOC == 60
+
+    def test_bulk_cannot_sit_below_buffer(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "hard_floor_soc": 25,
+            "buffer_floor_soc": 50,
+            "bulk_floor_soc": 45,
+        }
+
+        assert config.BUFFER_FLOOR_SOC == 50
+        assert config.BULK_FLOOR_SOC == 50
+
+    def test_retired_bulk_discharge_floor_is_ignored(self):
+        config = self._config()
+        config._config_data.setdefault("tariffs", {})["ioctgo"] = {
+            "hard_floor_soc": 25,
+            "buffer_floor_soc": 45,
+            "bulk_floor_soc": 50,
+            "bulk_discharge_soc_lower_limit": 20,
+        }
+
+        assert config.BULK_FLOOR_SOC == 50
 
     def test_old_negative_margin_is_treated_as_zero(self):
         config = self._config()
@@ -990,7 +1034,8 @@ class TestExplicitSocLimits:
             "absolute_min_soc_percent": 25,
         }
 
-        assert config.CONSERVATIVE_SOC_LOWER_LIMIT == 60
+        assert config.BUFFER_FLOOR_SOC == 60
+        assert config.BULK_FLOOR_SOC == 60
 
 
 class TestWeatherConfig:

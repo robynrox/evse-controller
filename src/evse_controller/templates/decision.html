@@ -580,14 +580,12 @@
             otherwise. Planned export slots lose
             {{ '%.1f'|format(plan.export_soc_loss_percent) }}%, free-import
             slots charge at full rate, grid-support slots export at full rate,
-            and EV-away slots are skipped entirely. High-value exports may
+            and EV-away slots are skipped entirely. Planned exports may
             spend down to the {{ '%.1f'|format(plan.bulk_floor_soc) }}% bulk
-            discharge lower limit; ordinary/surplus exports stop at the
-            {{ '%.1f'|format(plan.aggressive_floor_soc) }}% aggressive lower
-            limit; conservative house coverage stops at the
-            {{ '%.1f'|format(plan.house_floor_soc) }}% conservative lower
-            limit. The hard protection floor is
-            {{ '%.1f'|format(plan.absolute_min_soc) }}%.
+            floor; house and grid-load coverage may spend down to the
+            {{ '%.1f'|format(plan.house_floor_soc) }}% buffer floor with
+            either conservative or aggressive discharge. The hard protection
+            floor is {{ '%.1f'|format(plan.absolute_min_soc) }}%.
         </p>
 
         <div class="plan-summary">

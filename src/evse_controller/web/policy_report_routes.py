@@ -219,11 +219,11 @@ def _build_context(run: dict) -> RunContext:
     )
     floor = _number(
         params.get("protection_floor_percent"),
-        float(config.IOCTGO_ABSOLUTE_MIN_SOC_PERCENT),
+        float(config.HARD_FLOOR_SOC),
     )
     discharge_floor = _number(
         params.get("discharge_floor_percent"),
-        max(floor, float(config.BULK_DISCHARGE_SOC_LOWER_LIMIT)),
+        max(floor, float(config.BUFFER_FLOOR_SOC)),
     )
     raw_target = params.get(
         "target_soc_percent", run.get("target_soc")
