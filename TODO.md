@@ -10,6 +10,14 @@
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
 - [ ] Make the is_empty SoC configurable
+- [ ] Recurring EV readiness schedule: weekday timer, automatic release after
+      the target is reached, and paused/holiday periods. Design note:
+      [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md)
+- [ ] First-run onboarding: integrate the existing `evse_discovery` scanner into
+      the config page, add connection tests and a quick-start checklist, then a
+      guided setup wizard for hardware, tariff, SoC floors and control mode
+- [ ] Document the "external controller / backend" setup path (learning mode
+      off, MQTT/REST command contract, and what the scheduler may still do)
 
 ## Low Priority
 - [ ] Improve Docker container support and testing
