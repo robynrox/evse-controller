@@ -685,8 +685,8 @@ completed fixes.
   full-power slot that would cross the charge cap is clamped to the cap in
   the model, so the plan keeps the maximum current instead of choosing a
   weaker one to land just underneath it. Recurring schedules are deferred;
-  the proposed weekly timer, automatic release after the target is reached
-  and paused/holiday periods are sketched in
+  the proposed weekly timer, automatic release after the ready-by hold and
+  paused/holiday periods are sketched in
   [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md).
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
