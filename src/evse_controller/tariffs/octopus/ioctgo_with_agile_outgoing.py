@@ -2530,6 +2530,21 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             ControlState.LOAD_FOLLOW_DISCHARGE,
         )
 
+    @staticmethod
+    def _apply_readiness_target_to_run(run, readiness_info) -> None:
+        """Record the target the readiness planner actually used."""
+        if not readiness_info:
+            return
+        target = readiness_info.get("checkpoint_target")
+        if target is None:
+            target = readiness_info.get("target_soc")
+        if target is None:
+            return
+        run["target_soc"] = float(target)
+        planner = run.get("planner")
+        if isinstance(planner, dict):
+            planner["target_soc_percent"] = float(target)
+
     def _shadow_plan(self, state, current_slot: int, now) -> None:
         """Run the DP as an observer and record its plan.  Never actuate it."""
         if not self._shadow_enabled:
@@ -2641,6 +2656,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             run["load_source"] = "recorded"
             if readiness_info:
                 run["readiness"] = readiness_info
+                self._apply_readiness_target_to_run(run, readiness_info)
             self._history.record_run(now.date(), run)
             self._last_shadow_run = run
             self._last_shadow_slot = current_slot
@@ -2667,6 +2683,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     component_run["load_source"] = "component"
                     if component_readiness:
                         component_run["readiness"] = component_readiness
+                        self._apply_readiness_target_to_run(
+                            component_run, component_readiness
+                        )
                     self._last_component_shadow_run = component_run
                     if self._learning_mode == "control_comp":
                         self._history.record_run(now.date(), component_run)

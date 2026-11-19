@@ -228,6 +228,11 @@ def _build_context(run: dict) -> RunContext:
     raw_target = params.get(
         "target_soc_percent", run.get("target_soc")
     )
+    if raw_target is None:
+        readiness = run.get("readiness") or {}
+        raw_target = readiness.get(
+            "checkpoint_target", readiness.get("target_soc")
+        )
     target = (
         None if raw_target is None else _number(raw_target)
     )
@@ -402,6 +407,25 @@ def _slot_index_for_action(ctx: RunContext, action) -> int:
     if action.horizon_index >= 0:
         return min(action.horizon_index, len(ctx.slots) - 1)
     return _slot_index_for_absolute(ctx, action.slot)
+
+
+def _run_action_slot_index(ctx: RunContext, action: dict) -> int:
+    """Map a recorded run action to its heatmap column."""
+    start = action.get("start")
+    if start:
+        try:
+            start_dt = datetime.fromisoformat(str(start))
+        except (TypeError, ValueError):
+            start_dt = None
+        if start_dt is not None:
+            for index, slot in enumerate(ctx.slots):
+                if slot.start == start_dt:
+                    return index
+    try:
+        absolute = int(action.get("slot"))
+    except (TypeError, ValueError):
+        absolute = 0
+    return _slot_index_for_absolute(ctx, absolute)
 
 
 def _selected_slot(ctx: RunContext, requested: Optional[str]) -> int:
@@ -706,16 +730,31 @@ def _heatmap(ctx: RunContext, states, view: str) -> str:
     # changes at the slot boundary, so the end-of-slot point sits on the
     # right edge of the column rather than half a cell early.
     planned_points = []
-    for action in ctx.policy.actions:
-        column = _slot_index_for_action(ctx, action)
-        if column >= n_cols:
-            continue
-        x_start = left + column * cell_w
-        x_end = left + (column + 1) * cell_w
-        if not planned_points:
-            planned_points.append((x_start, action.soc_before))
-        planned_points.append((x_end, action.soc_before))
-        planned_points.append((x_end, action.soc_after))
+    recorded_actions = ctx.run.get("actions") or []
+    if recorded_actions:
+        for action in recorded_actions:
+            column = _run_action_slot_index(ctx, action)
+            if column >= n_cols:
+                continue
+            x_start = left + column * cell_w
+            x_end = left + (column + 1) * cell_w
+            soc_before = _number(action.get("soc_before"), 0.0)
+            soc_after = _number(action.get("soc_after"), soc_before)
+            if not planned_points:
+                planned_points.append((x_start, soc_before))
+            planned_points.append((x_end, soc_before))
+            planned_points.append((x_end, soc_after))
+    else:
+        for action in ctx.policy.actions:
+            column = _slot_index_for_action(ctx, action)
+            if column >= n_cols:
+                continue
+            x_start = left + column * cell_w
+            x_end = left + (column + 1) * cell_w
+            if not planned_points:
+                planned_points.append((x_start, action.soc_before))
+            planned_points.append((x_end, action.soc_before))
+            planned_points.append((x_end, action.soc_after))
     if planned_points:
         path = " ".join(
             f"{x:.1f},{_soc_y(ctx, states, soc, top, cell_h):.1f}"

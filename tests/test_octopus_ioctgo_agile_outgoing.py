@@ -5998,7 +5998,8 @@ class TestShadowPlannerAndEstimator:
         run = runs[0]
         expected = min(97.0, tariff.charge_cap_percent())
         assert run["readiness"]["target_soc"] == pytest.approx(expected)
-        assert run["target_soc"] is None
+        assert run["target_soc"] == pytest.approx(expected)
+        assert run["planner"]["target_soc_percent"] == pytest.approx(expected)
         assert len(run["actions"]) == 24
 
     def test_readiness_plan_splits_at_ready_by(self):

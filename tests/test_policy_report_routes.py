@@ -11,6 +11,7 @@ from evse_controller.tariffs.octopus.battery_efficiency import (
     BatteryEfficiencyModel,
 )
 from evse_controller.web.policy_report_routes import (
+    _build_context,
     _fmt_action_current,
     _fmt_gate,
     _hedge_note,
@@ -334,6 +335,61 @@ def test_page_shows_config_limits_only_when_there_is_no_target(tmp_path):
     body = response.get_data(as_text=True)
     assert "config limits only" in body
     assert "export floor 40.0%" in body
+
+
+def test_context_uses_the_readiness_target_when_not_in_planner_params():
+    run = _run(with_params=True)
+    run["target_soc"] = None
+    run["planner"]["target_soc_percent"] = None
+    run["readiness"] = {
+        "target_soc": 97.0,
+        "ready_by": "2026-11-09T09:00:00",
+        "status": "active",
+    }
+
+    ctx = _build_context(run)
+
+    assert ctx.target == pytest.approx(97.0)
+
+
+def test_context_prefers_a_checkpoint_target():
+    run = _run(with_params=True)
+    run["target_soc"] = None
+    run["planner"]["target_soc_percent"] = None
+    run["readiness"] = {
+        "target_soc": 97.0,
+        "checkpoint_target": 70.0,
+        "ready_by": "2026-11-09T09:00:00",
+        "status": "active",
+    }
+
+    ctx = _build_context(run)
+
+    assert ctx.target == pytest.approx(70.0)
+
+
+def test_policy_page_draws_the_readiness_target(tmp_path):
+    run = _run(with_params=True)
+    run["target_soc"] = None
+    run["planner"]["target_soc_percent"] = None
+    run["planner"]["charge_cap_percent"] = 100.0
+    run["readiness"] = {
+        "target_soc": 97.0,
+        "ready_by": "2026-11-09T09:00:00",
+        "status": "active",
+    }
+    store = PlannerHistory(tmp_path / "readiness-target")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get(
+        f"/reports/policy?date={DAY.isoformat()}"
+    ).get_data(as_text=True)
+
+    assert "target 97%" in body
+    assert "97.0%" in body
 
 
 def test_page_labels_a_prior_as_a_prior(tmp_path):

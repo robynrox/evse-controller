@@ -364,6 +364,12 @@
                 it; afterwards it is a discharge floor. The policy surface is
                 replayed without the two-phase split, so use the run's action
                 path for the plan that was actually recorded.
+                {% if run.readiness.get('checkpoint_target') is not none %}
+                    This run ends at the known-price checkpoint
+                    {{ run.readiness.get('checkpoint') }} and targets
+                    {{ run.readiness.checkpoint_target|round(0)|int }}% there,
+                    keeping the full target reachable.
+                {% endif %}
             </div>
         {% endif %}
 
