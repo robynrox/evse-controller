@@ -117,7 +117,6 @@ class TestConfig:
         config.IOCTGO_BULK_DISCHARGE_START_TIME = "17:00"
         config.IOCTGO_BULK_DISCHARGE_END_TIME = "19:00"
         config.IOCTGO_ENABLE_BULK_DISCHARGE = False
-        config.IOCTGO_MIN_DISCHARGE_CURRENT = 4
         config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = 60
         config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = 100
         config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = 800
@@ -133,7 +132,6 @@ class TestConfig:
         assert config.IOCTGO_BULK_DISCHARGE_START_TIME == "17:00"
         assert config.IOCTGO_BULK_DISCHARGE_END_TIME == "19:00"
         assert config.IOCTGO_ENABLE_BULK_DISCHARGE is False
-        assert config.IOCTGO_MIN_DISCHARGE_CURRENT == 4
         assert config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY == 60
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC == 100
         assert config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC == 800
@@ -492,7 +490,6 @@ class TestConfig:
             'IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END': 65,
             'IOCTGO_BULK_DISCHARGE_END_TIME': "21:00",
             'IOCTGO_ENABLE_BULK_DISCHARGE': False,
-            'IOCTGO_MIN_DISCHARGE_CURRENT': 5,
             'IOCTGO_SOC_THRESHOLD_FOR_STRATEGY': 60,
             'IOCTGO_MIN_PROFIT_MARGIN_P_PER_KWH': 0.75
         }
@@ -775,7 +772,6 @@ class TestConfig:
 
         # Set values for all dotted sections
         config.IOCTGO_BATTERY_CAPACITY_KWH = 80
-        config.IOCTGO_TARGET_SOC_AT_CHEAP_START = 70
         
         config.SIMULATOR_INITIAL_BATTERY_LEVEL = 65
         config.SIMULATOR_BATTERY_CAPACITY_KWH = 60
@@ -851,7 +847,6 @@ class TestWholeNumberSocSettings:
     WHOLE_SOC_SETTINGS = [
         ("MAX_CHARGE_PERCENT", 89.6, 90),
         ("SOLAR_PERIOD_MAX_CHARGE", 79.6, 80),
-        ("IOCTGO_TARGET_SOC_AT_CHEAP_START", 53.6, 54),
         ("IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END", 59.6, 60),
         ("IOCTGO_SOC_THRESHOLD_FOR_STRATEGY", 49.6, 50),
         ("IOCTGO_OCPP_ENABLE_SOC_THRESHOLD", 29.6, 30),

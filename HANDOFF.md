@@ -759,6 +759,14 @@ completed fixes.
   tariff dropdown is gone from the config page; a legacy config with no
   preset keeps its old tariff until it is saved. Splitting the preset into
   separate import and export selectors is the next step.
+- Config page audit: the three SoC floors now sit under **Battery and SoC
+  floors** with explicit labels, and the page hides sections that do not apply
+  to the selected tariff (OCPP only for Intelligent Octopus Go, the Cosy
+  afternoon cap only for Cosy, Agile settings only for Agile import/export,
+  and fixed price/window fields only when the outgoing tariff uses them). The
+  legacy bulk-discharge, strategy and grid-import threshold fields are hidden
+  and retained only for old controllers. Unused `target_soc_at_cheap_start`
+  and `tariffs.ioctgo.min_discharge_current` settings were removed.
 - Local full test suite: **1193 passed, 1 skipped, 24 subtests passed**.
 - No PR: `gh` is not authenticated on this machine (`HTTP 401`).
 

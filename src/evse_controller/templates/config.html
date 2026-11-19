@@ -41,6 +41,12 @@
 {% endblock %}
 
 {% block content %}
+{% set current_preset = config.tariffs.get('preset') %}
+{% set is_iog = current_preset in ['iog_agile', 'iog_outgoing', 'iog_prime', 'iog_no_export'] %}
+{% set is_cosy = current_preset == 'cosy' %}
+{% set is_agile_import = current_preset == 'agile_import' %}
+{% set preset_definition = price_presets.get(current_preset) %}
+{% set effective_export_source = config.tariffs.get('export_source') or (preset_definition.export_source if preset_definition else 'tiers') %}
 <div class="nav-links">
     <a href="/">← Back to Dashboard</a>
 </div>
@@ -366,12 +372,14 @@
             <input type="number" id="max_charge_percent" name="charging[max_charge_percent]"
                 value="{{ config.charging.max_charge_percent }}" min="0" max="100" step="1" required>
         </div>
+        {% if is_cosy %}
         <div class="form-group">
-            <label for="solar_period_max_charge">Solar Period Maximum Charge:</label>
+            <label for="solar_period_max_charge">Cosy afternoon solar charge cap:</label>
             <input type="number" id="solar_period_max_charge" name="charging[solar_period_max_charge]"
                 value="{{ config.charging.solar_period_max_charge }}" min="0" max="100" step="1" required>
             <small>Cosy Octopus only: the charge ceiling during the 13:00–16:00 cheap window, so the afternoon grid charge leaves room for solar. Other tariffs use the normal maximum charge percentage.</small>
         </div>
+        {% endif %}
         <div class="form-group">
             <label for="startup_mode">Startup mode:</label>
             <select id="startup_mode" name="charging[startup_mode]" required>
@@ -415,9 +423,10 @@
         </div>
     </div>
 
+    {% if is_agile_import or effective_export_source == 'agile' %}
     <div class="config-section">
-        <h2>Octopus Agile Configuration</h2>
-        <p>Configure your region for Agile import and Agile Outgoing export rates.</p>
+        <h2>Octopus Agile (optional)</h2>
+        <p>Used only when Agile import or Agile Outgoing is selected.</p>
         <div class="form-group">
             <label for="octopus_region">Region:</label>
             <select id="octopus_region" name="octopus[region]" required>
@@ -438,30 +447,50 @@
             </select>
             <small>Select your UK region for accurate Agile import and Agile Outgoing export rates</small>
         </div>
+        {% if is_agile_import %}
         <div class="form-group">
             <label for="octopus_agile_import_product">Agile import product code:</label>
             <input type="text" id="octopus_agile_import_product" name="octopus[agile_import_product]"
-                   value="{{ config.OCTOPUS_AGILE_IMPORT_PRODUCT }}">
+                   value="{{ config.octopus.agile_import_product }}">
             <small>Octopus versions its Agile import product. The default is the current product; update this if Octopus publishes a newer one.</small>
         </div>
+        {% endif %}
+    </div>
+
+    {% endif %}
+
+    <div class="config-section">
+        <h2>Battery and SoC floors</h2>
+        <p>These floors apply to the shared smart-tariff controller.</p>
         <div class="form-group">
-            <label for="hard_floor_soc">Hard protection floor (%):</label>
+            <label for="ioctgo_battery_capacity_kwh">Vehicle Battery Capacity (kWh):</label>
+            <input type="number" id="ioctgo_battery_capacity_kwh" name="tariffs.ioctgo[battery_capacity_kwh]"
+                   value="{{ config.tariffs.ioctgo.battery_capacity_kwh }}" min="10" max="200" step="0.1">
+            <small>Set to 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles.</small>
+        </div>
+        <div class="form-group">
+            <label for="hard_floor_soc">Hard protection floor — absolute minimum SoC (%):</label>
             <input type="number" id="hard_floor_soc" name="tariffs.ioctgo[hard_floor_soc]"
-                   value="{{ config.HARD_FLOOR_SOC }}" min="25" max="100" step="1">
+                   value="{{ config.tariffs.ioctgo.hard_floor_soc }}" min="25" max="100" step="1">
             <small>Hardware/protection floor for all discharge and export, including Save Energy sessions. It cannot be set below the 25% physical reserve. Raise it (for example to 40%) to avoid draining the pack on winter days. Surplus solar can still charge the pack below this level.</small>
         </div>
         <div class="form-group">
-            <label for="buffer_floor_soc">Buffer floor (%):</label>
+            <label for="buffer_floor_soc">Buffer floor — load-follow / house coverage SoC (%):</label>
             <input type="number" id="buffer_floor_soc" name="tariffs.ioctgo[buffer_floor_soc]"
-                   value="{{ config.BUFFER_FLOOR_SOC }}" min="25" max="100" step="1">
+                   value="{{ config.tariffs.ioctgo.buffer_floor_soc }}" min="25" max="100" step="1">
             <small>Lower discretionary floor. House and grid-load coverage may spend down to here, using either conservative or aggressive discharge. The DP uses this as its single discretionary floor. Must be at or above the hard floor.</small>
         </div>
         <div class="form-group">
-            <label for="bulk_floor_soc">Bulk floor (%):</label>
+            <label for="bulk_floor_soc">Bulk floor — bulk/priority export SoC (%):</label>
             <input type="number" id="bulk_floor_soc" name="tariffs.ioctgo[bulk_floor_soc]"
-                   value="{{ config.BULK_FLOOR_SOC }}" min="25" max="100" step="1">
+                   value="{{ config.tariffs.ioctgo.bulk_floor_soc }}" min="25" max="100" step="1">
             <small>Higher discretionary floor. Planned bulk and priority exports stop here; ordinary house coverage may still use the buffer below it. Must be at or above the buffer floor. Defaults 25 / 45 / 50 for hard / buffer / bulk.</small>
         </div>
+    </div>
+
+    <div class="config-section">
+        <h2>Smart tariff tuning</h2>
+        <p>These settings tune the shared heuristic and DP. The defaults are sensible for most installations.</p>
         <div class="form-group">
             <label for="max_export_power_kw">Maximum Export Power (kW):</label>
             <input type="number" id="max_export_power_kw" name="tariffs.ioctgo[max_export_power_kw]"
@@ -494,67 +523,7 @@
         </div>
     </div>
 
-    <div class="config-section">
-        <h2>Octopus Go Tariff Configuration (Shared)</h2>
-        <p>These settings apply to both the standard Octopus Go (OCTGO) and Intelligent Octopus Go (IOCTGO) tariffs.</p>
-        <div class="form-group">
-            <label for="ioctgo_battery_capacity_kwh">Vehicle Battery Capacity (kWh):</label>
-            <input type="number" id="ioctgo_battery_capacity_kwh" name="tariffs.ioctgo[battery_capacity_kwh]" 
-                   value="{{ config.tariffs.ioctgo.battery_capacity_kwh }}" min="10" max="200" step="0.1">
-            <small>Set to 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles</small>
-        </div>
-        <div class="form-group">
-            <label class="checkbox-label">
-                <input type="checkbox" id="ioctgo_enable_bulk_discharge" name="tariffs.ioctgo[enable_bulk_discharge]"
-                    {% if config.tariffs.ioctgo.enable_bulk_discharge %}checked{% endif %}>
-                Enable Bulk Discharge Operation
-            </label>
-            <small>Enable or disable bulk discharge operation</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_bulk_discharge_start_time">Bulk Discharge Start Time (HH:MM):</label>
-            <input type="text" id="ioctgo_bulk_discharge_start_time" name="tariffs.ioctgo[bulk_discharge_start_time]" 
-                   value="{{ config.tariffs.ioctgo.bulk_discharge_start_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to start bulk discharge. Default 16:00. Adjust to start earlier or later</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_bulk_discharge_end_time">Bulk Discharge End Time (HH:MM):</label>
-            <input type="text" id="ioctgo_bulk_discharge_end_time" name="tariffs.ioctgo[bulk_discharge_end_time]" 
-                   value="{{ config.tariffs.ioctgo.bulk_discharge_end_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to end bulk discharge. Default 19:00. Adjust to end earlier or later. Can wrap around midnight (e.g. 16:00 to 00:30)</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_target_soc_at_bulk_discharge_end">Target SoC at Bulk Discharge End Time (%):</label>
-            <input type="number" id="ioctgo_target_soc_at_bulk_discharge_end" name="tariffs.ioctgo[target_soc_at_bulk_discharge_end]" 
-                   value="{{ config.tariffs.ioctgo.target_soc_at_bulk_discharge_end }}" min="0" max="100" step="1">
-            <small>Target state of charge at end of bulk discharge period.</small>
-        </div>
-
-        <div class="form-group">
-            <label for="ioctgo_soc_threshold_strategy">SoC Threshold for Strategy (%):</label>
-            <input type="number" id="ioctgo_soc_threshold_strategy" name="tariffs.ioctgo[soc_threshold_for_strategy]" 
-                   value="{{ config.tariffs.ioctgo.soc_threshold_for_strategy }}" min="0" max="100" step="1">
-            <small>Battery state of charge threshold for switching between discharge strategies</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_grid_import_threshold_high_soc">Grid Import Threshold - High SoC (W):</label>
-            <input type="number" id="ioctgo_grid_import_threshold_high_soc" name="tariffs.ioctgo[grid_import_threshold_high_soc]" 
-                   value="{{ config.tariffs.ioctgo.grid_import_threshold_high_soc }}" min="0" max="5000" step="1">
-            <small>When SoC >= threshold, grid import level greater than this amount starts load following. The system aims to cover the house load completely.</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_grid_import_threshold_low_soc">Grid Import Threshold - Low SoC (W):</label>
-            <input type="number" id="ioctgo_grid_import_threshold_low_soc" name="tariffs.ioctgo[grid_import_threshold_low_soc]" 
-                   value="{{ config.tariffs.ioctgo.grid_import_threshold_low_soc }}" min="0" max="5000" step="1">
-            <small>When SoC < threshold, grid import level greater than this amount starts load following. The system aims to cover most of the house load with a small amount coming from the grid.</small>
-        </div>
-        <div class="form-group">
-            <div class="notification">
-                <strong>Note:</strong> After changing any of these parameters, you must switch away from the tariff and back to it (e.g., go to PAUSE mode and then back to IOCTGO/OCTGO) for changes to take effect.
-            </div>
-        </div>
-    </div>
-
+    {% if is_iog %}
     <div class="config-section">
         <h2>Intelligent Octopus Go OCPP Configuration</h2>
         <p>Only Intelligent Octopus Go uses OCPP mode. Standard Octopus Go, Cosy Octopus and Flux use the same controller family but never auto-trigger OCPP.</p>
@@ -596,20 +565,21 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     <div class="config-section">
         <h2>Tariff prices</h2>
         <p>
             Choose the preset that matches your supplier product. The preset
-            supplies the time windows; normally you only edit the six prices.
-            Prices are in p/kWh.
+            supplies the time windows; edit the price fields that apply to the
+            selected import and outgoing tariff. Prices are in p/kWh.
         </p>
         <div class="form-group">
             <label for="tariff_preset">Tariff preset</label>
             <select id="tariff_preset" name="tariffs[preset]">
                 {% for key, preset in price_presets.items() %}
                 <option value="{{ key }}"
-                    {% if key == config.tariffs.get('preset') %}selected{% endif %}>
+                    {% if key == current_preset %}selected{% endif %}>
                     {{ preset.label }}
                 </option>
                 {% endfor %}
@@ -626,7 +596,7 @@
             </small>
             <small>Selected controller: {{ config.tariffs.smart_tariff }}</small>
         </div>
-        {% if config.TARIFF_PRESET == 'flux' %}
+        {% if current_preset == 'flux' %}
         <div class="form-group">
             <div class="notification">
                 <strong>Octopus Flux</strong> includes both the import and
@@ -670,6 +640,13 @@
             </small>
         </div>
         {% endif %}
+        {% if is_agile_import %}
+        <div class="notification">
+            <strong>Agile import</strong> prices are fetched for every
+            half-hour. The fixed import prices below are only a fallback if the
+            fetch fails; they are not used for normal planning.
+        </div>
+        {% else %}
         <div class="form-group">
             <label for="import_standard">Import standard price in p/kWh</label>
             <input type="number" step="0.01" name="prices[import][standard]"
@@ -688,7 +665,9 @@
                    value="{{ config.prices.import.peak }}">
             <small>Peak or day unit rate, depending on the preset.</small>
         </div>
+        {% endif %}
         <hr>
+        {% if effective_export_source == 'tiers' %}
         <div class="form-group">
             <label for="export_standard">Export standard price in p/kWh</label>
             <input type="number" step="0.01" name="prices[export][standard]"
@@ -707,6 +686,22 @@
                    value="{{ config.prices.export.peak }}">
             <small>Prime Outgoing peak rate, for example.</small>
         </div>
+        {% elif effective_export_source == 'agile' %}
+        <div class="notification">
+            Export prices come from the fetched Agile Outgoing series; the
+            fixed export prices are not used.
+        </div>
+        {% elif effective_export_source == 'zero' %}
+        <div class="notification">
+            Zero Rate is selected: export is possible but worth 0p.
+        </div>
+        {% else %}
+        <div class="notification">
+            No export tariff is selected: the export price is unknown rather
+            than 0p.
+        </div>
+        {% endif %}
+        {% if (not is_agile_import) or (effective_export_source == 'tiers') %}
         <details>
             <summary>Advanced: custom time windows</summary>
             <p>
@@ -717,6 +712,7 @@
                 windows. Controller-specific behaviour such as Flux's 16:00
                 discharge ramp still uses its built-in timing.
             </p>
+            {% if not is_agile_import %}
             <div class="form-group">
                 <label for="import_cheap_windows">Import cheap windows</label>
                 <input type="text" id="import_cheap_windows"
@@ -729,6 +725,8 @@
                        name="prices[import][peak_windows]"
                        value="{{ (config.prices.import.peak_windows or [])|join(', ') }}">
             </div>
+            {% endif %}
+            {% if effective_export_source == 'tiers' %}
             <div class="form-group">
                 <label for="export_cheap_windows">Export cheap windows</label>
                 <input type="text" id="export_cheap_windows"
@@ -741,9 +739,12 @@
                        name="prices[export][peak_windows]"
                        value="{{ (config.prices.export.peak_windows or [])|join(', ') }}">
             </div>
+            {% endif %}
         </details>
+        {% endif %}
     </div>
 
+    {% if is_iog %}
     <div class="config-section">
         <h2>Automatic OCPP handoff</h2>
         <p>
@@ -785,6 +786,7 @@
             <small>May cross midnight. The cheapest block in this window is chosen.</small>
         </div>
     </div>
+    {% endif %}
 
     <div class="config-section">
         <h2>Learning mode</h2>

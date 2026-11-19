@@ -185,7 +185,7 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
       backup_count: 30
     charging:
       max_charge_percent: 90           # Maximum battery charge percentage
-      solar_period_max_charge: 80      # Maximum charge during solar generation periods
+      solar_period_max_charge: 80      # Cosy only: afternoon solar charge cap
       startup_mode: "SMART"            # SMART or FREERUN
     tariffs:
       preset: "iog_agile"              # selects the tariff controller and prices
@@ -194,11 +194,6 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
         hard_floor_soc: 25            # Hard protection floor (cannot be below 25)
         buffer_floor_soc: 45          # Lower discretionary floor: house/grid coverage
         bulk_floor_soc: 50            # Higher discretionary floor: planned bulk/priority exports stop here
-        bulk_discharge_start_time: "16:00"  # Time to start bulk discharge
-        min_discharge_current: 3.0     # Minimum sustained discharge current in Amps
-        soc_threshold_for_strategy: 50 # SoC threshold for switching strategies
-        grid_import_threshold_high_soc: 0   # Grid import threshold when SoC is high (W)
-        grid_import_threshold_low_soc: 720  # Grid import threshold when SoC is low (W)
         smart_ocpp_operation: true     # Enable intelligent OCPP management
         ocpp_enable_soc_threshold: 30  # Enable OCPP when SoC drops below this level (%)
         ocpp_disable_soc_threshold: 95 # Disable OCPP when SoC reaches this level (%)
@@ -407,17 +402,15 @@ day-ahead comparison.
 The `tariffs.ioctgo` section contains parameters shared by the Intelligent and standard Octopus Go controllers. They can be edited directly in `config.yaml` or from the web interface.
 
 - `battery_capacity_kwh`: Vehicle battery capacity in kWh (typically 30, 40 or 59 for Nissan's Leaf and e-NV200 vehicles)
-- `target_soc_at_cheap_start`: Target state of charge at start of cheap rate period (23:30) (whole percent, 0-100)
 - `hard_floor_soc`: Hard protection floor for discharge and export (whole percent, default 25). It cannot be set below the 25% physical protection reserve. Scheduled events, including Save Energy sessions, may not discharge below it. Surplus solar may still charge the pack below this level
 - `buffer_floor_soc`: Lower discretionary floor (whole percent, default 45). House and grid-load coverage may spend down to here, using either conservative or aggressive discharge. The DP uses this as its single discretionary floor. It must be at or above `hard_floor_soc`
 - `bulk_floor_soc`: Higher discretionary floor (whole percent, default 50). Planned bulk and priority exports stop here; ordinary house coverage may still use the buffer below it. It must be at or above `buffer_floor_soc`
 - The effective order is always `hard_floor_soc <= buffer_floor_soc <= bulk_floor_soc`. Old `absolute_min_soc_percent`, `conservative_soc_lower_limit`, `aggressive_soc_lower_limit`, `min_agile_discharge_soc` and `house_load_margin_percent` values are read as migration fallbacks when the new keys are absent; the retired `bulk_discharge_soc_lower_limit` is ignored
-- `bulk_discharge_start_time`: Time to start bulk discharge in "HH:MM" format (default "16:00"). Adjust to start earlier or later
-- `min_discharge_current`: Minimum sustained discharge current threshold during bulk discharge period in Amps (minimum 3A). Wallbox efficiency reduces at lower currents
-- `soc_threshold_for_strategy`: Battery state of charge threshold for switching between discharge strategies (0-100). Used by OCTGO and IOCTGO; IOCTGO_AGILEOUT replaces it with a dynamic projection of whether the target SoC will be reached by 23:30
-- `grid_import_threshold_high_soc`: When SoC >= threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover the house load completely
-- `grid_import_threshold_low_soc`: When SoC < threshold, grid import level greater than this amount starts load following in Watts (0-5000). The system aims to cover most of the house load with a small amount coming from the grid
 - `smart_ocpp_operation`: Flag to enable intelligent OCPP management for Intelligent Octopus Go (true/false). Standard Go, Cosy and Flux never auto-trigger OCPP
+
+The web config groups the three SoC floors under **Battery and SoC floors** and hides sections that do not apply to the selected tariff: OCPP is shown only for Intelligent Octopus Go, the Cosy afternoon cap only for Cosy, Agile region/product settings only for Agile import/export, and fixed price/window fields only when the selected outgoing tariff uses them.
+
+Legacy controller settings (`enable_bulk_discharge`, `bulk_discharge_start_time`, `bulk_discharge_end_time`, `target_soc_at_bulk_discharge_end`, `soc_threshold_for_strategy`, `grid_import_threshold_high_soc`, `grid_import_threshold_low_soc`) are retained for old configs but are not shown in the web config and are not used by the shared smart controller.
 - `ocpp_enable_soc_threshold`: Enable OCPP when SoC drops below this level (0-100)
 - `ocpp_disable_soc_threshold`: Disable OCPP in the next half hour slot when SoC rises to this level (0-100)
 - `ocpp_enable_time`: Time to enable OCPP if SoC does not fall to the lower limit in "HH:MM" format (default "23:30")

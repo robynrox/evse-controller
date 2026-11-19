@@ -827,33 +827,6 @@ def config_page():
                 request.form.get('tariffs.ioctgo[battery_capacity_kwh]'),
                 config.IOCTGO_BATTERY_CAPACITY_KWH,
             )
-            config.IOCTGO_TARGET_SOC_AT_CHEAP_START = _form_int(
-                request.form.get('tariffs.ioctgo[target_soc_at_cheap_start]'),
-                config.IOCTGO_TARGET_SOC_AT_CHEAP_START,
-            )
-            config.IOCTGO_BULK_DISCHARGE_START_TIME = request.form.get('tariffs.ioctgo[bulk_discharge_start_time]', '16:00')
-            config.IOCTGO_BULK_DISCHARGE_END_TIME = request.form.get('tariffs.ioctgo[bulk_discharge_end_time]', '19:00')
-            config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = _form_int(
-                request.form.get('tariffs.ioctgo[target_soc_at_bulk_discharge_end]'),
-                config.IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END,
-            )
-            config.IOCTGO_MIN_DISCHARGE_CURRENT = _form_float(
-                request.form.get('tariffs.ioctgo[min_discharge_current]'),
-                config.IOCTGO_MIN_DISCHARGE_CURRENT,
-            )
-            config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = _form_int(
-                request.form.get('tariffs.ioctgo[soc_threshold_for_strategy]'),
-                config.IOCTGO_SOC_THRESHOLD_FOR_STRATEGY,
-            )
-            config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC = _form_int(
-                request.form.get('tariffs.ioctgo[grid_import_threshold_high_soc]'),
-                config.IOCTGO_GRID_IMPORT_THRESHOLD_HIGH_SOC,
-            )
-            config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC = _form_int(
-                request.form.get('tariffs.ioctgo[grid_import_threshold_low_soc]'),
-                config.IOCTGO_GRID_IMPORT_THRESHOLD_LOW_SOC,
-            )
-            config.IOCTGO_ENABLE_BULK_DISCHARGE = bool(request.form.get('tariffs.ioctgo[enable_bulk_discharge]'))
             config.IOCTGO_SMART_OCPP_OPERATION = bool(request.form.get('tariffs.ioctgo[smart_ocpp_operation]'))
             config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = _form_int(
                 request.form.get('tariffs.ioctgo[ocpp_enable_soc_threshold]'),

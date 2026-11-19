@@ -798,11 +798,6 @@ class Config:
         lambda self, value: self._set_config_value("tariffs.ioctgo", "battery_capacity_kwh", value)
     )
 
-    IOCTGO_TARGET_SOC_AT_CHEAP_START = property(
-        lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", 54),
-        lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_cheap_start", value, 54)
-    )
-
     IOCTGO_TARGET_SOC_AT_BULK_DISCHARGE_END = property(
         lambda self: self._get_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", 60),
         lambda self, value: self._set_config_int("tariffs.ioctgo", "target_soc_at_bulk_discharge_end", value, 60)
@@ -821,11 +816,6 @@ class Config:
     IOCTGO_ENABLE_BULK_DISCHARGE = property(
         lambda self: self._get_config_value("tariffs.ioctgo", "enable_bulk_discharge", True),
         lambda self, value: self._set_config_value("tariffs.ioctgo", "enable_bulk_discharge", value)
-    )
-
-    IOCTGO_MIN_DISCHARGE_CURRENT = property(
-        lambda self: self._get_config_value("tariffs.ioctgo", "min_discharge_current", 3),
-        lambda self, value: self._set_config_value("tariffs.ioctgo", "min_discharge_current", value)
     )
 
     IOCTGO_SOC_THRESHOLD_FOR_STRATEGY = property(
@@ -1215,11 +1205,6 @@ class Config:
         lambda self, value: self._set_config_value("import", "high", value)
     )
 
-    IMPORT_MID = property(
-        lambda self: self._get_config_value("import", "mid", 20),
-        lambda self, value: self._set_config_value("import", "mid", value)
-    )
-
     IMPORT_LOW = property(
         lambda self: self._get_config_value("import", "low", 10),
         lambda self, value: self._set_config_value("import", "low", value)
@@ -1233,11 +1218,6 @@ class Config:
     EXPORT_MID = property(
         lambda self: self._get_config_value("export", "mid", 8),
         lambda self, value: self._set_config_value("export", "mid", value)
-    )
-
-    EXPORT_LOW = property(
-        lambda self: self._get_config_value("export", "low", 4),
-        lambda self, value: self._set_config_value("export", "low", value)
     )
 
     # -- three-tier price table ------------------------------------------
@@ -1586,13 +1566,11 @@ class Config:
             },
             'import': {
                 'high': self.IMPORT_HIGH,
-                'mid': self.IMPORT_MID,
                 'low': self.IMPORT_LOW
             },
             'export': {
                 'high': self.EXPORT_HIGH,
-                'mid': self.EXPORT_MID,
-                'low': self.EXPORT_LOW
+                'mid': self.EXPORT_MID
             },
             'prices': {
                 'import': {
