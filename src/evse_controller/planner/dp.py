@@ -232,7 +232,13 @@ class _ActionTemplate:
 
 
 class DpPlanner:
-    """Dynamic-programming planner for a finite half-hour horizon."""
+    """Dynamic-programming planner for a finite half-hour horizon.
+
+    ``max_charge_below_percent`` models a passed readiness deadline.  Below
+    that SoC the only action is maximum charge; the same value also raises the
+    discharge floor, so at the target the plan may idle or charge but cannot
+    discharge.  At and above it the normal cost-optimal policy applies.
+    """
 
     def __init__(
         self,
@@ -245,6 +251,7 @@ class DpPlanner:
         protection_floor_percent: float = 25.0,
         discharge_floor_percent: Optional[float] = None,
         target_soc_percent: Optional[float] = 50.0,
+        max_charge_below_percent: Optional[float] = None,
         degradation_p_per_kwh: float = 0.0,
         terminal_energy_value_p_per_kwh: float = 0.0,
         horizon_slots: Optional[int] = None,
@@ -273,6 +280,12 @@ class DpPlanner:
             0.0 <= float(target_soc_percent) <= 100.0
         ):
             raise ValueError("target_soc_percent must be in [0, 100] or None")
+        if max_charge_below_percent is not None and not (
+            0.0 <= float(max_charge_below_percent) <= 100.0
+        ):
+            raise ValueError(
+                "max_charge_below_percent must be in [0, 100] or None"
+            )
 
         if efficiency_model is None:
             from evse_controller.tariffs.octopus.battery_efficiency import (
@@ -289,12 +302,23 @@ class DpPlanner:
         self.voltage_v = float(voltage_v)
         self.charge_cap_percent = float(charge_cap_percent)
         self.protection_floor_percent = float(protection_floor_percent)
-        self.discharge_floor_percent = max(
+        self.max_charge_below_percent = (
+            None
+            if max_charge_below_percent is None
+            else float(max_charge_below_percent)
+        )
+        floor = max(
             self.protection_floor_percent,
             self.protection_floor_percent
             if discharge_floor_percent is None
             else float(discharge_floor_percent),
         )
+        if self.max_charge_below_percent is not None:
+            # Never discharge below the target either: at the target SoC the
+            # policy may idle or charge, but a discharge would immediately
+            # drop back below it and start the ping-pong.
+            floor = max(floor, self.max_charge_below_percent)
+        self.discharge_floor_percent = floor
         self.target_soc_percent = (
             None
             if target_soc_percent is None
@@ -1067,7 +1091,14 @@ class DpPlanner:
 
     def _plan_templates(self, slot: PlannerSlot) -> list[_ActionTemplate]:
         """Templates used by the DP passes, with dominated fixed currents gone."""
-        return self._dedupe_fixed_templates(self._action_templates(slot))
+        templates = self._action_templates(slot)
+        if self.max_charge_below_percent is not None:
+            # Surety below the target needs the full current even when a
+            # cheaper action lands on the same SoC step.  Do not dedupe here;
+            # above the target the extra options are still dominated because
+            # they reach the same state at a higher cost.
+            return templates
+        return self._dedupe_fixed_templates(templates)
 
     @staticmethod
     def _dedupe_fixed_templates(
@@ -1151,6 +1182,13 @@ class DpPlanner:
         key = self._state_band_key(
             state * self.soc_step_percent, lower, upper
         )
+        if self.max_charge_below_percent is not None:
+            # The surety mask changes at the target SoC, which is inside the
+            # usual bands.  Keep those two cases in separate cache entries.
+            key = key + (
+                state * self.soc_step_percent
+                < self.max_charge_below_percent - 1e-9,
+            )
         cached = cache.get(key)
         if cached is None:
             cached = self._templates_for_state(templates, state)
@@ -1175,6 +1213,29 @@ class DpPlanner:
         or below the floor are impossible by construction.
         """
         soc = state * self.soc_step_percent
+        if (
+            self.max_charge_below_percent is not None
+            and soc < self.max_charge_below_percent - 1e-9
+        ):
+            # Below the target, surety is the only objective: use the highest
+            # current that is actually feasible from this state.  Forced
+            # idle/discharge sessions have no charge template and fall
+            # through to their normal handling.
+            charges = [
+                template
+                for template in templates
+                if template.kind == "charge"
+                and self._feasible_next_state(state, template) is not None
+            ]
+            if charges:
+                max_current = max(
+                    template.current_a for template in charges
+                )
+                return [
+                    template
+                    for template in charges
+                    if abs(template.current_a - max_current) <= 1e-9
+                ]
         charge_blocked = soc >= self.charge_cap_percent - 1e-9
         masked: list[_ActionTemplate] = []
         for template in templates:

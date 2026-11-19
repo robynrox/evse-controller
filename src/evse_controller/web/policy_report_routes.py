@@ -198,6 +198,7 @@ class RunContext:
     max_charge_a: float
     max_discharge_a: float
     params_recorded: bool
+    max_charge_below: Optional[float] = None
     samples: tuple[dict, ...] = ()
 
 
@@ -247,6 +248,9 @@ def _build_context(run: dict) -> RunContext:
     max_discharge = _number(
         params.get("max_discharge_current_a"),
         float(config.WALLBOX_MAX_DISCHARGE_CURRENT),
+    )
+    max_charge_below = _number(
+        params.get("max_charge_below_percent")
     )
 
     efficiency_payload = params.get("efficiency_model")
@@ -340,7 +344,10 @@ def _build_context(run: dict) -> RunContext:
         charge_cap_percent=cap,
         protection_floor_percent=floor,
         discharge_floor_percent=discharge_floor,
-        target_soc_percent=target,
+        target_soc_percent=(
+            None if max_charge_below is not None else target
+        ),
+        max_charge_below_percent=max_charge_below,
         degradation_p_per_kwh=degradation,
         terminal_energy_value_p_per_kwh=terminal_value,
         voltage_v=_number(params.get("voltage_v"), 240.0),
@@ -368,6 +375,7 @@ def _build_context(run: dict) -> RunContext:
         max_charge_a=max_charge,
         max_discharge_a=max_discharge,
         params_recorded=bool(params.get("efficiency_model")),
+        max_charge_below=max_charge_below,
         samples=(),
     )
 
@@ -1069,7 +1077,23 @@ def _why_text(ctx, slot_index, cell, options) -> str:
             )
         else:
             comparison = "the only feasible mode"
-    if ctx.target is None:
+    if ctx.max_charge_below is not None:
+        if cell.soc_percent < ctx.max_charge_below - 1e-9:
+            target = (
+                "The readiness deadline has passed; below the target the "
+                "planner charges at maximum."
+            )
+        elif cell.soc_percent <= ctx.max_charge_below + 1e-9:
+            target = (
+                "The readiness target has been reached; discharge is held "
+                "at the target to avoid cycling."
+            )
+        else:
+            target = (
+                "Above the readiness target normal operation applies; "
+                "discharge stops at the target."
+            )
+    elif ctx.target is None:
         target = (
             "There is no fixed end-of-day target; the planner optimises the "
             "remaining priced slots within the configured floor and cap."

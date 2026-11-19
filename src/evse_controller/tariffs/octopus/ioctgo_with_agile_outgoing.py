@@ -2268,6 +2268,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         *,
         target_soc_percent: Optional[float] = None,
         discharge_floor_percent: Optional[float] = None,
+        max_charge_below_percent: Optional[float] = None,
     ) -> DpPlanner:
         floor = self._normal_discharge_floor()
         if discharge_floor_percent is not None:
@@ -2281,6 +2282,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             protection_floor_percent=self.hard_floor_soc(),
             discharge_floor_percent=floor,
             target_soc_percent=target_soc_percent,
+            max_charge_below_percent=max_charge_below_percent,
             degradation_p_per_kwh=0.0,
             terminal_energy_value_p_per_kwh=(
                 self.dp_terminal_energy_value_p_per_kwh()
@@ -2374,10 +2376,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         if not phase_one:
             floor = max(self._normal_discharge_floor(), target_soc)
             planner = self._make_shadow_planner(
-                discharge_floor_percent=floor
+                discharge_floor_percent=floor,
+                max_charge_below_percent=target_soc,
             )
             result = planner.plan(phase_two, planner_input.initial_soc)
             info["floor"] = floor
+            info["post_deadline"] = True
             info["relaxed"] = bool(
                 result.relaxed
                 or planner_input.initial_soc < target_soc
@@ -2410,7 +2414,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         floor = max(self._normal_discharge_floor(), target_soc)
         planner_two = self._make_shadow_planner(
-            discharge_floor_percent=floor
+            discharge_floor_percent=floor,
+            max_charge_below_percent=target_soc,
         )
         result_two = planner_two.plan(
             phase_two, result_one.final_soc
@@ -2544,7 +2549,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         run["target_soc"] = float(target)
         planner = run.get("planner")
         if isinstance(planner, dict):
-            planner["target_soc_percent"] = float(target)
+            if readiness_info.get("post_deadline"):
+                # Past the deadline the target is a charge-surety threshold
+                # and a discharge floor, not a terminal target.
+                planner["target_soc_percent"] = None
+                planner["max_charge_below_percent"] = float(target)
+            else:
+                planner["target_soc_percent"] = float(target)
 
     def _shadow_plan(self, state, current_slot: int, now) -> None:
         """Run the DP as an observer and record its plan.  Never actuate it."""

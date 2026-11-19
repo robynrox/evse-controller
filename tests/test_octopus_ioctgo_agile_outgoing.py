@@ -6042,6 +6042,41 @@ class TestShadowPlannerAndEstimator:
         assert run["planner"]["target_soc_percent"] == pytest.approx(expected)
         assert len(run["actions"]) == 24
 
+    def test_readiness_plan_records_post_deadline_mode(
+        self, tmp_path, monkeypatch
+    ):
+        tariff = _build_tariff()
+        tariff._shadow_enabled = True
+        tariff._history.set_directory(tmp_path / "history")
+        today = datetime.now().date()
+        profile_dir = tmp_path / "profiles"
+        for offset in range(14):
+            self._write_profile_day(
+                profile_dir, today - timedelta(days=offset)
+            )
+        tariff._load_profile.set_directory(profile_dir)
+        TestDecisionSnapshot._set_time(tariff, 12, 0)
+        now = tariff.get_current_datetime()
+        target = EvReadinessTarget(
+            97, now - timedelta(hours=1)
+        )
+        monkeypatch.setattr(
+            ev_readiness_store, "active", lambda: target
+        )
+
+        tariff.get_control_state(create_test_state(60), 12 * 60)
+
+        runs = tariff._history.runs_for_day(today)
+        assert runs
+        run = runs[0]
+        expected = min(97.0, tariff.charge_cap_percent())
+        assert run["readiness"]["post_deadline"] is True
+        assert run["planner"]["target_soc_percent"] is None
+        assert run["planner"]["max_charge_below_percent"] == pytest.approx(
+            expected
+        )
+        assert run["target_soc"] == pytest.approx(expected)
+
     def test_readiness_plan_splits_at_ready_by(self):
         from evse_controller.planner.dp import PlannerSlot
         from evse_controller.planner.inputs import PlannerInput
@@ -6081,6 +6116,47 @@ class TestShadowPlannerAndEstimator:
         assert info["target_soc"] == pytest.approx(80.0)
         assert info["floor"] >= 80.0
         assert planned.target_soc is None
+
+    def test_readiness_plan_charges_at_maximum_after_ready_by(self):
+        from evse_controller.planner.dp import PlannerSlot
+        from evse_controller.planner.inputs import PlannerInput
+
+        tariff = _build_tariff()
+        now = datetime(2026, 11, 16, 12, 0)
+        slots = tuple(
+            PlannerSlot(
+                start=now + timedelta(minutes=30 * index),
+                slot=24 + index,
+                import_p=20.0,
+                export_p=100.0,
+                load_kw=0.5,
+                load_samples=((0.5, 1.0),),
+                load_source="profile",
+                max_discharge_current_a=16.0,
+            )
+            for index in range(4)
+        )
+        planner_input = PlannerInput(
+            day=now.date(),
+            slots=slots,
+            initial_soc=50.0,
+            target_soc=None,
+            source_name="test",
+        )
+        target = EvReadinessTarget(
+            80, now - timedelta(minutes=30)
+        )
+
+        _, result, info = tariff._readiness_plan(
+            planner_input, target
+        )
+
+        assert result is not None
+        assert info["floor"] >= 80.0
+        assert result.actions[0].kind == "charge"
+        assert result.actions[0].current_a == pytest.approx(
+            slots[0].max_charge_current_a
+        )
 
     def test_readiness_plan_ignores_a_target_beyond_the_horizon(self):
         from evse_controller.planner.dp import PlannerSlot

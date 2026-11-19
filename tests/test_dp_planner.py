@@ -728,6 +728,41 @@ def test_unreachable_target_uses_the_full_current_when_steps_collide():
     assert cell.action.current_a == pytest.approx(10.0)
 
 
+def test_post_deadline_below_target_uses_maximum_charge():
+    # Below the target after the deadline the only arc is maximum charge.
+    p = planner(
+        capacity_kwh=100.0,
+        target_soc_percent=None,
+        max_charge_below_percent=60.0,
+    )
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, 40.0)
+
+    assert [action.kind for action in result.actions] == ["charge"]
+    assert result.actions[0].current_a == pytest.approx(10.0)
+
+
+def test_post_deadline_target_has_no_discharge_arc():
+    p = planner(
+        target_soc_percent=None,
+        max_charge_below_percent=60.0,
+    )
+    # A high export price makes discharge attractive everywhere else.
+    slots = [slot(0, import_p=10.0, export_p=100.0, load_kw=0.0)]
+
+    policy = p.policy(slots, 60.0)
+
+    at_target = policy.cells[0][120]  # 60%
+    assert at_target.action is not None
+    assert at_target.action.kind != "discharge"
+
+    above_target = policy.cells[0][122]  # 61%
+    assert above_target.action is not None
+    assert above_target.action.kind == "discharge"
+    assert above_target.action.soc_after >= 60.0 - 1e-9
+
+
 def test_hard_floor_blocks_discharge():
     result = planner(target_soc_percent=25.0).plan(
         [

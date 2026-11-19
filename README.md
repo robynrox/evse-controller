@@ -965,7 +965,11 @@ target and pauses the Wallbox until the plug is removed; a physical unplug
 after the ready-by time also completes it. A target above the configured charge
 cap is clamped and a warning is shown. If the target is unreachable, the
 controller charges at maximum in every feasible slot before the deadline,
-prioritising surety over cost, and reports the shortfall. Targets persist
+prioritising surety over cost, and reports the shortfall. After the ready-by
+time the target becomes a floor: below it the controller charges at maximum
+until the target is reached, at the target it may idle or charge but never
+discharge, and above the target normal optimisation resumes with discharge
+stopping at the target. Targets persist
 in `data/state/ev_readiness.json`. Recurring schedules are a later extension;
 this page handles one-off targets.
 

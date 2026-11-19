@@ -74,6 +74,9 @@ EV Readiness is the intended way to ask for a charge by a time:
 - set a target SoC and a ready-by time;
 - the planner charges to the target and then keeps it as a discharge floor
   until the trip is complete or the vehicle is unplugged;
+- after the ready-by time, below the target the controller charges at maximum,
+  at the target it may idle or charge but cannot discharge, and above the
+  target normal optimisation resumes with discharge stopping at the target;
 - for **Agile import**, use a DP control mode so the planner can choose the
   cheapest slots, including negative-price slots;
 - the heuristic fallback for Agile import is deliberately minimal: solar

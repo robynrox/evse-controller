@@ -368,6 +368,31 @@ def test_context_prefers_a_checkpoint_target():
     assert ctx.target == pytest.approx(70.0)
 
 
+def test_context_reconstructs_the_post_deadline_surety_mode():
+    run = _run(with_params=True)
+    run["target_soc"] = 80.0
+    run["planner"]["target_soc_percent"] = 80.0
+    run["planner"]["max_charge_below_percent"] = 80.0
+    run["readiness"] = {
+        "target_soc": 80.0,
+        "ready_by": "2026-11-08T00:00:00",
+        "status": "active",
+        "post_deadline": True,
+    }
+
+    ctx = _build_context(run)
+
+    assert ctx.target == pytest.approx(80.0)
+    assert ctx.max_charge_below == pytest.approx(80.0)
+    assert ctx.planner.target_soc_percent is None
+    assert ctx.planner.max_charge_below_percent == pytest.approx(80.0)
+    assert ctx.planner.discharge_floor_percent == pytest.approx(80.0)
+    cell = ctx.policy.cells[0][110]  # 55%
+    assert cell.action is not None
+    assert cell.action.kind == "charge"
+    assert cell.action.current_a == pytest.approx(16.0)
+
+
 def test_policy_page_draws_the_readiness_target(tmp_path):
     run = _run(with_params=True)
     run["target_soc"] = None

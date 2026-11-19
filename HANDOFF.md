@@ -675,8 +675,11 @@ completed fixes.
   completes the target and pauses until disconnect; a physical unplug after
   ready-by also completes it. Targets above the charge cap are clamped;
   unreachable targets charge at maximum in every feasible slot before the
-  deadline, prioritising surety over cost, and report the shortfall. Recurring
-  schedules are deferred.
+  deadline, prioritising surety over cost, and report the shortfall. After
+  the deadline the target becomes a floor with a one-way surety rule: below
+  it only maximum charge is allowed, at it discharge is excluded, and above
+  it normal optimisation resumes with discharge stopping at the target.
+  Recurring schedules are deferred.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

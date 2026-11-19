@@ -106,6 +106,7 @@ def _build_planner(params: dict) -> DpPlanner:
             None if discharge_floor is None else float(discharge_floor)
         ),
         target_soc_percent=params.get("target_soc_percent"),
+        max_charge_below_percent=params.get("max_charge_below_percent"),
         degradation_p_per_kwh=float(
             params.get("degradation_p_per_kwh", 0.0)
         ),
