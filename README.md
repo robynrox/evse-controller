@@ -969,7 +969,9 @@ prioritising surety over cost, and reports the shortfall. After the ready-by
 time the target becomes a floor: below it the controller charges at maximum
 until the target is reached, at the target it may idle or charge but never
 discharge, and above the target normal optimisation resumes with discharge
-stopping at the target. Targets persist
+stopping at the target. A full-power slot that would overshoot the charge cap
+is modelled as ending at the cap, because the pack stops there; the plan does
+not pick a weaker current just to land underneath it. Targets persist
 in `data/state/ev_readiness.json`. Recurring schedules are a later extension;
 this page handles one-off targets.
 

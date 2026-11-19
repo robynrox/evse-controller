@@ -681,8 +681,10 @@ completed fixes.
   deadline, prioritising surety over cost, and report the shortfall. After
   the deadline the target becomes a floor with a one-way surety rule: below
   it only maximum charge is allowed, at it discharge is excluded, and above
-  it normal optimisation resumes with discharge stopping at the target.
-  Recurring schedules are deferred.
+  it normal optimisation resumes with discharge stopping at the target. A
+  full-power slot that would cross the charge cap is clamped to the cap in
+  the model, so the plan keeps the maximum current instead of choosing a
+  weaker one to land just underneath it. Recurring schedules are deferred.
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and
   tomorrow's prices are already published, tomorrow's series is appended and

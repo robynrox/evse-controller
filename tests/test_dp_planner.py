@@ -763,6 +763,40 @@ def test_post_deadline_target_has_no_discharge_arc():
     assert above_target.action.soc_after >= 60.0 - 1e-9
 
 
+def test_post_deadline_surety_uses_full_current_near_the_cap():
+    p = planner(
+        capacity_kwh=100.0,
+        target_soc_percent=None,
+        max_charge_below_percent=95.0,
+        charge_cap_percent=95.0,
+    )
+    slots = [slot(0, import_p=10.0, export_p=100.0, load_kw=0.0)]
+
+    policy = p.policy(slots, 40.0)
+
+    # Every state below the target charges at the full current.  The cache
+    # must not reuse the action chosen one state further from the cap.
+    for soc in (93.5, 94.0, 94.5):
+        state = int(round(soc / p.soc_step_percent))
+        cell = policy.cells[0][state]
+        assert cell.action is not None, soc
+        assert cell.action.kind == "charge", soc
+        assert cell.action.current_a == pytest.approx(10.0), soc
+        assert cell.action.soc_after > soc, soc
+        assert cell.action.soc_after <= 95.0 + 1e-9, soc
+
+    # The state just below the cap is clamped to the cap rather than being
+    # rejected or using a weaker current.
+    just_below = policy.cells[0][189]  # 94.5%
+    assert just_below.action is not None
+    assert just_below.action.current_a == pytest.approx(10.0)
+    assert just_below.action.soc_after == pytest.approx(95.0)
+
+    at_target = policy.cells[0][190]  # 95%
+    assert at_target.action is not None
+    assert at_target.action.kind == "idle"
+
+
 def test_hard_floor_blocks_discharge():
     result = planner(target_soc_percent=25.0).plan(
         [

@@ -952,7 +952,25 @@ class DpPlanner:
             template.kind == "charge"
             and next_soc > self.charge_cap_percent + 1e-9
         ):
-            return None
+            if (
+                self.max_charge_below_percent is None
+                or soc >= self.max_charge_below_percent - 1e-9
+            ):
+                return None
+            # Below the post-deadline target, charge at full power even if the
+            # modelled slot would cross the cap.  The pack stops at the cap;
+            # the plan should not select a weaker current merely to land just
+            # underneath it.
+            next_state = self._clamp_state(
+                int(
+                    math.floor(
+                        self.charge_cap_percent
+                        / self.soc_step_percent
+                        + 1e-9
+                    )
+                )
+            )
+            next_soc = next_state * self.soc_step_percent
         if template.follow:
             if template.delta_steps > 0 and (
                 next_soc > self.charge_cap_percent + 1e-9
@@ -1183,11 +1201,18 @@ class DpPlanner:
             state * self.soc_step_percent, lower, upper
         )
         if self.max_charge_below_percent is not None:
-            # The surety mask changes at the target SoC, which is inside the
-            # usual bands.  Keep those two cases in separate cache entries.
-            key = key + (
+            # The surety mask chooses the highest feasible current, which
+            # changes as the state approaches the charge cap.  Cache each
+            # below-target state separately; the normal bands are still safe
+            # at and above the target.
+            below_target = (
                 state * self.soc_step_percent
-                < self.max_charge_below_percent - 1e-9,
+                < self.max_charge_below_percent - 1e-9
+            )
+            key = (
+                key,
+                below_target,
+                state if below_target else None,
             )
         cached = cache.get(key)
         if cached is None:
