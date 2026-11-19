@@ -204,7 +204,11 @@ completed fixes.
   higher of its ledger cost and the best *uncommitted* export price
   (converted to DC); the hurdle applies the delivery loss at that current
   plus the profit margin. A better unplanned slot therefore raises the gate,
-  while planned sales do not. Conservative mode keeps the closed-form
+  while planned sales do not. Once a discharge is already running, the live
+  gate is recomputed with a zero margin, so the controller holds until the
+  trade falls to break-even rather than chattering around the margin. This is
+  start/stop hysteresis only; it does not change the chosen current level.
+  Conservative mode keeps the closed-form
   break-even at the minimum output
   `G* = P_min × (H − P_export) / (P_import − P_export)` and floors the
   activation at `P_min`; when `H ≥ P_import` the controller never starts a

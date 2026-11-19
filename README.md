@@ -419,7 +419,7 @@ Legacy controller settings (`enable_bulk_discharge`, `bulk_discharge_start_time`
 - `max_export_power_kw`: Upper bound on export power in kW (default 7.2, the non-derated Wallbox limit). The planner also caps this at the measured AC power for the configured discharge current (~3.53 kW at 16 A, ~7.07 kW at 32 A)
 - `non_export_slot_soc_loss_percent`: State of charge loss percentage per 30-minute slot during load-following (non-export) periods. Used to project available SoC for export planning
 - `full_charge_slot_soc_gain_percent`: State of charge gain percentage per 30-minute slot while a free-import session is charging at full rate (0 = calculate it from charge power, charge efficiency and battery capacity). Free-import and grid-support session slots are both included in the 23:30 SoC projection; grid-support slots use `export_slot_soc_loss_percent`
-- `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure
+- `min_profit_margin_p_per_kwh`: Minimum profit margin in p/kWh delivered before the controller will cycle the battery or export (default 0.3; set 0 to optimise purely on the measured efficiency model). This is a policy hurdle covering marginal wear and unmodelled actuation/forecast overheads, not a measured degradation figure. It is also the start threshold for load-following discharge: once discharging, the controller holds until the trade falls to zero margin, giving start/stop hysteresis without changing current levels
 
 ##### Prices, windows and presets
 

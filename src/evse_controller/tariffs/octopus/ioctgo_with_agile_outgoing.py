@@ -4746,6 +4746,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         planned_exports: Optional[
             Iterable[tuple[float, float]]
         ] = None,
+        margin_p: Optional[float] = None,
     ) -> tuple[float, float, float]:
         """Scan house load for the first economic aggressive discharge.
 
@@ -4776,7 +4777,11 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
         energy_dc_p = self._aggressive_energy_dc_cost_p(alternative_rate_p)
         planned = list(planned_exports or ())
-        margin_p = self.MIN_PROFIT_MARGIN_P_PER_KWH
+        margin_p = (
+            self.MIN_PROFIT_MARGIN_P_PER_KWH
+            if margin_p is None
+            else float(margin_p)
+        )
         min_hurdle_p = 0.0
         max_load_w = int(math.floor(max_current * volts))
 
@@ -4841,6 +4846,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         planned_exports: Optional[
             Iterable[tuple[float, float]]
         ] = None,
+        margin_p: Optional[float] = None,
     ) -> float:
         """Smallest house import at which discharging still makes money.
 
@@ -4908,6 +4914,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 voltage=volts,
                 floor_current_a=floor_current_a,
                 planned_exports=planned_exports,
+                margin_p=margin_p,
             )
             return threshold_w
 
@@ -4934,11 +4941,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             max(0.0, float(future_rate_p or 0.0))
             * self.export_discharge_efficiency()
         )
+        margin = (
+            self.MIN_PROFIT_MARGIN_P_PER_KWH
+            if margin_p is None
+            else float(margin_p)
+        )
         hurdle_p = max(
             self._delivered_cost_per_kwh_p(
                 None if floor_current_a is None else float(floor_current_a)
             )
-            + self.MIN_PROFIT_MARGIN_P_PER_KWH,
+            + margin,
             future_p,
         )
 
@@ -5019,8 +5031,22 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             else self._import_standard_p()
         )
 
+    @staticmethod
+    def _discharge_is_active(state) -> bool:
+        """True when the Wallbox is already discharging."""
+        current = getattr(state, "current", 0) or 0
+        if current < 0:
+            return True
+        power = getattr(state, "power_watts", 0) or 0
+        return power < -100.0
+
     def _current_discharge_activation_w(
-        self, current_slot: int, day_minute: int, *, aggressive: bool
+        self,
+        current_slot: int,
+        day_minute: int,
+        *,
+        aggressive: bool,
+        discharge_on: bool = False,
     ) -> float:
         """Discharge activation for the live prices and stored-energy cost.
 
@@ -5032,18 +5058,27 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         A planned aggressive slot reuses the gate the planner recorded, so the
         threshold the plan explains and the threshold the Wallbox receives
         cannot drift apart inside the slot.
+
+        Start/stop hysteresis: the normal threshold includes the configured
+        profit margin.  Once the Wallbox is already discharging, the gate is
+        recomputed with a zero margin, so it keeps running until the trade
+        merely breaks even rather than chattering around the margin.
         """
-        if aggressive:
-            gate = self._aggressive_slot_gates.get(current_slot)
-            if gate is not None:
-                return gate["activation_w"]
+        margin_p = 0.0 if discharge_on else None
+        gate = (
+            self._aggressive_slot_gates.get(current_slot)
+            if aggressive
+            else None
+        )
+        if aggressive and gate is not None and not discharge_on:
+            return gate["activation_w"]
         power = self._read_power_snapshot()
         voltage = (
             float(power["voltage"])
             if power and power.get("voltage")
             else self._live_voltage()
         )
-        return self.discharge_activation_threshold_w(
+        threshold = self.discharge_activation_threshold_w(
             self._current_export_rate_p(current_slot),
             import_rate_p=self._current_import_rate_p(day_minute),
             aggressive=aggressive,
@@ -5051,7 +5086,12 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             alternative_rate_p=self._worst_planned_export_price(
                 current_slot
             ),
+            margin_p=margin_p,
         )
+        if aggressive and discharge_on and gate is not None:
+            # Never make the gate harder once the discharge is running.
+            return min(float(gate["activation_w"]), threshold)
+        return threshold
 
     @classmethod
     def _activation_note(cls, activation_w: float) -> str:
@@ -10349,7 +10389,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # Conservative discharge deliberately refuses to start below the
             # Wallbox's minimum output, so this is usually the 3 A floor.
             activation_w = self._current_discharge_activation_w(
-                current_slot, dayMinute, aggressive=False
+                current_slot,
+                dayMinute,
+                aggressive=False,
+                discharge_on=self._discharge_is_active(state),
             )
             activation_text = self._activation_note(activation_w)
             if charge_at_cap:
@@ -10448,7 +10491,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             charge_at_cap = battery_level >= charge_cap
             activation_w = self._current_discharge_activation_w(
-                current_slot, dayMinute, aggressive=True
+                current_slot,
+                dayMinute,
+                aggressive=True,
+                discharge_on=self._discharge_is_active(state),
             )
             activation_text = self._activation_note(activation_w)
             if charge_at_cap:
@@ -10534,7 +10580,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             )
             charge_at_cap = battery_level >= charge_cap
             activation_w = self._current_discharge_activation_w(
-                current_slot, dayMinute, aggressive=True
+                current_slot,
+                dayMinute,
+                aggressive=True,
+                discharge_on=self._discharge_is_active(state),
             )
             activation_text = self._activation_note(activation_w)
             committed_slot, committed_rate = self._best_planned_export_slot_rate(
@@ -10960,7 +11009,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             # minimum output (3 A, ~720 W), so it never starts a discharge
             # that would have to export at the activation point.
             activation_w = self._current_discharge_activation_w(
-                current_slot, dayMinute, aggressive=False
+                current_slot,
+                dayMinute,
+                aggressive=False,
+                discharge_on=self._discharge_is_active(state),
             )
             if charge_at_cap:
                 charge_min_a, charge_activation_w = 0.0, 0.0
@@ -11020,7 +11072,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         # 720 W for cheap energy, but never at the old blanket 1 W, which
         # exported at a loss.
         activation_w = self._current_discharge_activation_w(
-            current_slot, dayMinute, aggressive=True
+            current_slot,
+            dayMinute,
+            aggressive=True,
+            discharge_on=self._discharge_is_active(state),
         )
 
         if decision.use_bidirectional:

@@ -1263,6 +1263,46 @@ class TestDischargeActivation:
 
         assert 0 < at_eight < at_zero < 720
 
+    def test_zero_margin_gives_a_lower_shutdown_threshold(self, agile_tariff):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
+
+        on = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0
+        )
+        off = agile_tariff.discharge_activation_threshold_w(
+            0.0, import_rate_p=30.0, margin_p=0.0
+        )
+
+        assert 0 < off < on < 720
+
+    def test_running_discharge_recomputes_without_the_margin(
+        self, agile_tariff
+    ):
+        self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.0)
+        slot = 24
+        agile_tariff._aggressive_slot_gates = {
+            slot: {"activation_w": 500.0}
+        }
+
+        assert agile_tariff._current_discharge_activation_w(
+            slot, 12 * 60, aggressive=True, discharge_on=False
+        ) == pytest.approx(500.0)
+        assert agile_tariff._current_discharge_activation_w(
+            slot, 12 * 60, aggressive=True, discharge_on=True
+        ) == pytest.approx(0.0)
+
+    def test_discharge_is_active_uses_current_or_power(self):
+        state = create_test_state(50)
+        state.current = -3
+        assert IOctGoWithAgileOutgoingTariff._discharge_is_active(state)
+
+        state.current = 0
+        state.power_watts = -800.0
+        assert IOctGoWithAgileOutgoingTariff._discharge_is_active(state)
+
+        state.power_watts = 0.0
+        assert not IOctGoWithAgileOutgoingTariff._discharge_is_active(state)
+
     def test_negative_export_price_raises_the_threshold(self, agile_tariff):
         """Paying to export means the forced excess hurts more, not less."""
         self._ledger(agile_tariff, dc_kwh=1.0, cost_gbp=0.08)
