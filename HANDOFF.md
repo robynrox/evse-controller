@@ -758,9 +758,12 @@ completed fixes.
   SoC floor; priced slots the plan does not intend to reach are ignored. The
   decision is a pure helper (`control_overrides.py`), recomputed each cycle,
   so the next cycle returns to the DP plan. The dashboard preview says
-  `Live: …`. Tests cover the load/solar decisions, the tariff wiring, the
-  worst-planned-export selection and the return to DP. The arc-scoring test
-  also shows a 5% high-load sample makes the follow arc cheaper than idling.
+  `Live: …`. The dashboard's **Idle load override** toggle persists
+  `control.live_load_spike_override` and disables only the load half; the
+  solar-spike override remains active. Tests cover the load/solar decisions,
+  the tariff wiring, the worst-planned-export selection and the return to DP.
+  The arc-scoring test also shows a 5% high-load sample makes the follow arc
+  cheaper than idling.
 - Config cleanup: the **tariff preset is now the single tariff selector**.
   `charging.startup_mode` is `SMART` or `FREERUN`, and `config.SMART_TARIFF`
   derives the controller from the preset. The old `charging.startup_state`

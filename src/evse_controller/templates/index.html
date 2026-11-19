@@ -341,6 +341,13 @@
                     data-mode="control_comp"
                     title="DP control using the weather-driven component forecast.">LEARN FORECAST</button>
             <span id="mode-status" class="mode-status"></span>
+            <label class="idle-override-toggle"
+                   title="Let a live house-load spike replace an idle DP action with discharge. Solar-spike overrides are unaffected.">
+                <input type="checkbox" id="idle-load-override"
+                       {% if live_load_spike_override %}checked{% endif %}>
+                <span>Idle load override</span>
+            </label>
+            <span id="idle-load-override-status" class="mode-status"></span>
         </div>
         <div id="link-health" class="link-health" hidden></div>
         <div class="nav-links">
@@ -575,6 +582,26 @@
     .mode-status {
         font-size: 12px;
         color: #6c757d;
+    }
+
+    .idle-override-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #495057;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .idle-override-toggle input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: #0b5cad;
+        cursor: pointer;
     }
 
     .svg-button-container {
@@ -1186,6 +1213,50 @@
                 changeLearningMode(button.dataset.mode);
             });
         });
+
+        const idleLoadOverride = document.getElementById('idle-load-override');
+        const idleLoadOverrideStatus = document.getElementById(
+            'idle-load-override-status'
+        );
+
+        async function changeIdleLoadOverride(enabled) {
+            if (!idleLoadOverride) return;
+            const previous = !enabled;
+            idleLoadOverride.disabled = true;
+            if (idleLoadOverrideStatus) {
+                idleLoadOverrideStatus.textContent = 'Saving…';
+            }
+            try {
+                const response = await fetch('/api/idle-load-override', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: enabled})
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(
+                        data.error || 'Could not save the toggle'
+                    );
+                }
+                idleLoadOverride.checked = !!data.enabled;
+                if (idleLoadOverrideStatus) {
+                    idleLoadOverrideStatus.textContent = '';
+                }
+            } catch (error) {
+                idleLoadOverride.checked = previous;
+                if (idleLoadOverrideStatus) {
+                    idleLoadOverrideStatus.textContent = error.message;
+                }
+            } finally {
+                idleLoadOverride.disabled = false;
+            }
+        }
+
+        if (idleLoadOverride) {
+            idleLoadOverride.addEventListener('change', () => {
+                changeIdleLoadOverride(idleLoadOverride.checked);
+            });
+        }
 
         async function updateStatus() {
             try {

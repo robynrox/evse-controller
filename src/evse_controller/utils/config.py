@@ -710,6 +710,20 @@ class Config:
         )
     )
 
+    #: Let a live house-load spike replace an idle DP action with discharge.
+    #: Disable it when the live measurement should not override the plan; the
+    #: solar-spike override is independent and remains available.
+    LIVE_LOAD_SPIKE_OVERRIDE = property(
+        lambda self: self._bool_setting(
+            self.get("control.live_load_spike_override", True), True
+        ),
+        lambda self, value: self._set_config_value(
+            "control",
+            "live_load_spike_override",
+            self._bool_setting(value, True),
+        ),
+    )
+
     #: Dashboard command buttons use the supplied illustrations by default.
     #: Users who prefer words can switch to the text abbreviations.
     UI_USE_ICON_BUTTONS = property(
@@ -1598,6 +1612,9 @@ class Config:
             'learning': {
                 'mode': self.LEARNING_MODE,
                 'hybrid_discharge': self.LEARNING_HYBRID_DISCHARGE,
+            },
+            'control': {
+                'live_load_spike_override': self.LIVE_LOAD_SPIKE_OVERRIDE,
             },
             'ui': {
                 'use_icon_buttons': self.UI_USE_ICON_BUTTONS,

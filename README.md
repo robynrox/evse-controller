@@ -1112,6 +1112,12 @@ The override is recomputed every control cycle, so the controller returns to
 the DP plan as soon as the spike ends. It is shown in the dashboard preview as
 `Live: …` rather than being silently folded into the plan.
 
+The load-spike half of the override can be switched off with the dashboard's
+**Idle load override** toggle, persisted as
+`control.live_load_spike_override`. The solar-spike override is independent,
+so turning the load override off still allows a live solar surplus to be
+absorbed.
+
 `learning.hybrid_discharge` is an opt-in feature, default `off`.
 `aggressive` adds unconditional floor-plus-follow discharge arcs for the fixed
 currents selected by the baseline plan, plus neighbours and a small fallback

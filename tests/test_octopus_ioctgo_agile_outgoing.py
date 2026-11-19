@@ -5352,6 +5352,40 @@ class TestLiveSpikeOverride:
             24, action, tariff.get_current_datetime()
         ) is None
 
+    def test_live_load_spike_override_can_be_disabled(self, monkeypatch):
+        tariff = self._tariff(monkeypatch)
+        monkeypatch.setattr(
+            Config,
+            "LIVE_LOAD_SPIKE_OVERRIDE",
+            property(lambda self: False),
+        )
+
+        assert tariff._live_spike_override(
+            24, {"kind": "idle"}, tariff.get_current_datetime()
+        ) is None
+
+    def test_disabling_load_override_keeps_solar_override(
+        self, monkeypatch
+    ):
+        tariff = self._tariff(
+            monkeypatch,
+            baseline_w=-3500.0,
+            surplus_w=3500.0,
+            solar_floor=(3.0, 720.0),
+        )
+        monkeypatch.setattr(
+            Config,
+            "LIVE_LOAD_SPIKE_OVERRIDE",
+            property(lambda self: False),
+        )
+
+        override = tariff._live_spike_override(
+            24, {"kind": "idle"}, tariff.get_current_datetime()
+        )
+
+        assert override is not None
+        assert override.kind == "solar"
+
     def test_live_load_spike_does_not_override_a_follow_action(
         self, monkeypatch
     ):

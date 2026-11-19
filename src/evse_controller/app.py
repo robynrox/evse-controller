@@ -1313,6 +1313,9 @@ def index():
                              learning_mode
                          ),
                          learning_preview=learning_preview,
+                         live_load_spike_override=(
+                             config.LIVE_LOAD_SPIKE_OVERRIDE
+                         ),
                          ev_target=_ev_readiness_status(),
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 
@@ -1352,6 +1355,22 @@ def set_learning_mode():
         'label': _learning_mode_label(effective),
         'preview': preview,
     })
+
+
+@app.route('/api/idle-load-override', methods=['POST'])
+def set_idle_load_override():
+    """Persist the dashboard's idle load-spike override toggle."""
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get('enabled')
+    if not isinstance(enabled, bool):
+        return jsonify({'error': "'enabled' must be true or false"}), 400
+    try:
+        config.LIVE_LOAD_SPIKE_OVERRIDE = enabled
+        config.save()
+    except Exception as error:
+        logging.error(f"Could not set the idle load override: {error}")
+        return jsonify({'error': str(error)}), 500
+    return jsonify({'enabled': enabled})
 
 
 @app.route('/decision')

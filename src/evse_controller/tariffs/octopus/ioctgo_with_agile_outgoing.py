@@ -1184,7 +1184,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             math.ceil(self.MIN_DISCHARGE_CURRENT - 1e-9)
         )
         max_discharge = int(self.MAX_DISCHARGE_CURRENT)
-        if not self._discharge_inhibited:
+        if not self._discharge_inhibited and bool(
+            config.LIVE_LOAD_SPIKE_OVERRIDE
+        ):
             load = load_spike_override(
                 dp_action_kind="idle",
                 baseline_w=float(snapshot.get("baseline_w") or 0.0),

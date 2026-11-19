@@ -106,6 +106,11 @@ the optimiser's view.
 An Agile import strip appears above the export strip when the Agile import
 preset is selected.
 
+The dashboard's **Idle load override** toggle controls whether a live
+house-load spike may replace an idle DP action with discharge. Turning it off
+does not affect the separate solar-spike override. The choice is saved in the
+configuration, so it survives a restart.
+
 ## Suggested test checklist
 
 1. **Start in FREERUN.** Confirm the dashboard, prices and decision line load.

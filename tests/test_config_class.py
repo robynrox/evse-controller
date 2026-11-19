@@ -1272,6 +1272,31 @@ class TestLearningMode:
         assert config.as_dict()["learning"]["mode"] == "off"
 
 
+class TestLiveLoadSpikeOverride:
+    @staticmethod
+    def _config():
+        config = Config()
+        _ = config.WALLBOX_URL  # force initialisation
+        return config
+
+    def test_enabled_is_the_default(self):
+        config = self._config()
+
+        assert config.LIVE_LOAD_SPIKE_OVERRIDE is True
+        assert (
+            config.as_dict()["control"]["live_load_spike_override"] is True
+        )
+
+    def test_can_be_disabled(self):
+        config = self._config()
+        config.LIVE_LOAD_SPIKE_OVERRIDE = False
+
+        assert config.LIVE_LOAD_SPIKE_OVERRIDE is False
+        assert (
+            config.as_dict()["control"]["live_load_spike_override"] is False
+        )
+
+
 class TestDashboardButtonStyle:
     @staticmethod
     def _config():

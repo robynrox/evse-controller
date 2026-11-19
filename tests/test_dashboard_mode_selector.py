@@ -13,7 +13,11 @@ TEMPLATES = (
 )
 
 
-def _render(learning_mode="preview", label="Heuristic"):
+def _render(
+    learning_mode="preview",
+    label="Heuristic",
+    live_load_spike_override=True,
+):
     app = Flask(__name__, template_folder=str(TEMPLATES))
     app.config.update(SERVER_NAME="localhost", PREFERRED_URL_SCHEME="http")
     for name in (
@@ -41,6 +45,7 @@ def _render(learning_mode="preview", label="Heuristic"):
             learning_mode=learning_mode,
             learning_mode_label=label,
             learning_preview="Would: Charge 11A",
+            live_load_spike_override=live_load_spike_override,
             ev_target="No target",
             use_icon_buttons=True,
         )
@@ -65,3 +70,20 @@ def test_control_comp_is_the_active_button():
     assert 'class="mode-button active"' in body
     assert 'data-mode="control_comp"' in body
     assert "Learn forecast" in body
+
+
+def test_dashboard_shows_the_idle_load_override_toggle():
+    body = _render()
+
+    assert 'id="idle-load-override"' in body
+    assert "Idle load override" in body
+    markup = body.split('id="idle-load-override"', 1)[1].split(">", 1)[0]
+    assert "checked" in markup
+
+
+def test_idle_load_override_toggle_reflects_the_setting():
+    body = _render(live_load_spike_override=False)
+
+    assert 'id="idle-load-override"' in body
+    markup = body.split('id="idle-load-override"', 1)[1].split(">", 1)[0]
+    assert "checked" not in markup
