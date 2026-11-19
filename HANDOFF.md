@@ -558,7 +558,10 @@ completed fixes.
   guides. Cells within 1p of the next-best mode are hatched as near-ties.
   Policies are replayed from recorded run inputs; old runs without planner
   parameters show a caveat, and a run with no load profile shows a prominent
-  no-load warning.
+  no-load warning. A run with a readiness target is rebuilt in two phases at
+  the ready-by slot: the terminal target before it and the one-way surety
+  threshold/floor after it, so the heatmap matches the recorded plan rather
+  than treating the deadline as the horizon end.
 - **Learning mode** is the user-facing name for the DP planner.
   `learning.mode` accepts `preview` (default), `control_hist`, `control_comp`
   or `off`; `control` is an alias for `control_hist`. Preview is

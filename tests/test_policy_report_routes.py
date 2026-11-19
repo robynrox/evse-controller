@@ -368,6 +368,43 @@ def test_context_prefers_a_checkpoint_target():
     assert ctx.target == pytest.approx(70.0)
 
 
+def test_context_reconstructs_the_readiness_phase_split():
+    run = _run(with_params=True)
+    run["target_soc"] = 60.0
+    run["planner"]["target_soc_percent"] = 60.0
+    run["planner"]["charge_cap_percent"] = 90.0
+    run["inputs"][2]["export_p"] = 100.0
+    run["readiness"] = {
+        "target_soc": 60.0,
+        "ready_by": "2026-11-08T01:00:00",
+        "status": "active",
+    }
+
+    ctx = _build_context(run)
+
+    assert ctx.deadline_index == 2
+    assert ctx.max_charge_below == pytest.approx(60.0)
+    assert len(ctx.policy_phases) == 2
+    assert ctx.policy_phases[1][0] == 2
+
+    # After the deadline, below the target, maximum charge wins even though
+    # the slot has a very attractive export price.
+    below = ctx.policy.cells[2][100]  # 50%
+    assert below.action is not None
+    assert below.action.kind == "charge"
+    assert below.action.current_a == pytest.approx(16.0)
+
+    # At the target discharge is blocked; above it discharge is allowed but
+    # cannot cross the target.
+    at_target = ctx.policy.cells[2][120]  # 60%
+    above_target = ctx.policy.cells[2][122]  # 61%
+    assert at_target.action is not None
+    assert at_target.action.kind != "discharge"
+    assert above_target.action is not None
+    assert above_target.action.kind == "discharge"
+    assert above_target.action.soc_after >= 60.0 - 1e-9
+
+
 def test_context_reconstructs_the_post_deadline_surety_mode():
     run = _run(with_params=True)
     run["target_soc"] = 80.0
@@ -415,6 +452,34 @@ def test_policy_page_draws_the_readiness_target(tmp_path):
 
     assert "target 97%" in body
     assert "97.0%" in body
+
+
+def test_policy_page_renders_a_split_readiness_run(tmp_path):
+    run = _run(with_params=True)
+    run["target_soc"] = 60.0
+    run["planner"]["target_soc_percent"] = 60.0
+    run["planner"]["charge_cap_percent"] = 90.0
+    run["inputs"][2]["export_p"] = 100.0
+    run["readiness"] = {
+        "target_soc": 60.0,
+        "ready_by": "2026-11-08T01:00:00",
+        "status": "active",
+    }
+    store = PlannerHistory(tmp_path / "readiness-split")
+    store.record_run(DAY, run)
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    register_policy_report_routes(app, history=store)
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(
+        f"/reports/policy?date={DAY.isoformat()}&slot=2&soc=50"
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "60.0%" in body
+    assert "charges at maximum" in body
+    assert "01:00 · 50.0% · charge" in body
 
 
 def test_page_labels_a_prior_as_a_prior(tmp_path):

@@ -1391,6 +1391,11 @@ the optimal action for every half-hour slot and every SoC state:
   guides at every labelled SoC (also labelled on the right edge, so they stay
   readable when scrolled), target/floor/cap lines, the run's planned SoC path
   and the estimated SoC that actually happened.
+- **Readiness targets:** when the run contains a readiness target, the map is
+  rebuilt in two phases at the ready-by slot. Before it the target is a
+  terminal target; after it the target is a one-way surety threshold and
+  discharge floor. This keeps the heatmap consistent with the recorded plan
+  instead of treating the readiness deadline as the end of the whole horizon.
 - **Views:** Mode, Decision margin (how much better the chosen mode is than
   the next-best mode), and Current.
 - **Resolution:** 1% by default, 0.5% for boundary inspection, with the same

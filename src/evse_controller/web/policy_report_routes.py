@@ -15,6 +15,7 @@ from typing import Iterable, Optional
 
 from flask import abort, render_template, request
 
+from evse_controller.energy_sessions import floor_to_slot
 from evse_controller.planner.dp import (
     DpPlanner,
     PlannerSlot,
@@ -199,6 +200,10 @@ class RunContext:
     max_discharge_a: float
     params_recorded: bool
     max_charge_below: Optional[float] = None
+    deadline_index: Optional[int] = None
+    policy_phases: tuple[
+        tuple[int, DpPlanner, PolicyResult], ...
+    ] = ()
     samples: tuple[dict, ...] = ()
 
 
@@ -226,11 +231,11 @@ def _build_context(run: dict) -> RunContext:
         params.get("discharge_floor_percent"),
         max(floor, float(config.BUFFER_FLOOR_SOC)),
     )
+    readiness = run.get("readiness") or {}
     raw_target = params.get(
         "target_soc_percent", run.get("target_soc")
     )
     if raw_target is None:
-        readiness = run.get("readiness") or {}
         raw_target = readiness.get(
             "checkpoint_target", readiness.get("target_soc")
         )
@@ -336,30 +341,116 @@ def _build_context(run: dict) -> RunContext:
     if not slots:
         raise ValueError("The run has no usable input rows")
 
-    planner = DpPlanner(
-        efficiency_model=efficiency_model,
-        capacity_kwh=capacity,
-        soc_step_percent=step,
-        min_current_a=min_current,
-        charge_cap_percent=cap,
-        protection_floor_percent=floor,
-        discharge_floor_percent=discharge_floor,
-        target_soc_percent=(
-            None if max_charge_below is not None else target
-        ),
-        max_charge_below_percent=max_charge_below,
-        degradation_p_per_kwh=degradation,
-        terminal_energy_value_p_per_kwh=terminal_value,
-        voltage_v=_number(params.get("voltage_v"), 240.0),
-        hybrid_unconditional=bool(
-            params.get("hybrid_unconditional", False)
-        ),
-    )
+    def make_planner(
+        *,
+        target_soc_percent: Optional[float],
+        max_charge_below_percent: Optional[float],
+        phase_floor: float,
+    ) -> DpPlanner:
+        return DpPlanner(
+            efficiency_model=efficiency_model,
+            capacity_kwh=capacity,
+            soc_step_percent=step,
+            min_current_a=min_current,
+            charge_cap_percent=cap,
+            protection_floor_percent=floor,
+            discharge_floor_percent=phase_floor,
+            target_soc_percent=target_soc_percent,
+            max_charge_below_percent=max_charge_below_percent,
+            degradation_p_per_kwh=degradation,
+            terminal_energy_value_p_per_kwh=terminal_value,
+            voltage_v=_number(params.get("voltage_v"), 240.0),
+            hybrid_unconditional=bool(
+                params.get("hybrid_unconditional", False)
+            ),
+        )
+
     initial_soc = _number(
         run.get("estimate_soc"),
         _number(run.get("reported_soc"), 50.0),
     )
-    policy = planner.policy(slots, initial_soc or 0.0)
+    initial_soc = initial_soc or 0.0
+
+    # A readiness target splits the recorded horizon at the ready-by slot.
+    # Before it the target is terminal; after it the target is a one-way
+    # surety threshold and a discharge floor.  Reconstruct both phases so the
+    # heatmap matches the recorded plan instead of treating the readiness
+    # deadline as the end of the whole horizon.
+    deadline = None
+    ready_by = readiness.get("ready_by")
+    if ready_by:
+        try:
+            deadline = floor_to_slot(datetime.fromisoformat(str(ready_by)))
+        except (TypeError, ValueError):
+            deadline = None
+    split = None
+    if (
+        deadline is not None
+        and target is not None
+        and readiness.get("checkpoint_target") is None
+    ):
+        split = len(slots)
+        for index, slot in enumerate(slots):
+            if slot.start >= deadline:
+                split = index
+                break
+
+    if split is None:
+        planner = make_planner(
+            target_soc_percent=(
+                None if max_charge_below is not None else target
+            ),
+            max_charge_below_percent=max_charge_below,
+            phase_floor=discharge_floor,
+        )
+        policy = planner.policy(slots, initial_soc)
+        phases = ((0, planner, policy),)
+        deadline_index = 0 if max_charge_below is not None else None
+        effective_max_charge_below = max_charge_below
+    elif split == 0:
+        planner = make_planner(
+            target_soc_percent=None,
+            max_charge_below_percent=target,
+            phase_floor=max(discharge_floor, target),
+        )
+        policy = planner.policy(slots, initial_soc)
+        phases = ((0, planner, policy),)
+        deadline_index = 0
+        effective_max_charge_below = target
+    elif split >= len(slots):
+        planner = make_planner(
+            target_soc_percent=target,
+            max_charge_below_percent=None,
+            phase_floor=discharge_floor,
+        )
+        policy = planner.policy(slots, initial_soc)
+        phases = ((0, planner, policy),)
+        deadline_index = None
+        effective_max_charge_below = None
+    else:
+        planner_one = make_planner(
+            target_soc_percent=target,
+            max_charge_below_percent=None,
+            phase_floor=discharge_floor,
+        )
+        policy_one = planner_one.policy(slots[:split], initial_soc)
+        planner_two = make_planner(
+            target_soc_percent=None,
+            max_charge_below_percent=target,
+            phase_floor=max(discharge_floor, target),
+        )
+        policy_two = planner_two.policy(
+            slots[split:], policy_one.final_soc
+        )
+        phases = (
+            (0, planner_one, policy_one),
+            (split, planner_two, policy_two),
+        )
+        planner = planner_one
+        policy = _combine_policies(phases, initial_soc, readiness)
+        deadline_index = split
+        effective_max_charge_below = target
+
     return RunContext(
         run=run,
         planner=planner,
@@ -375,9 +466,82 @@ def _build_context(run: dict) -> RunContext:
         max_charge_a=max_charge,
         max_discharge_a=max_discharge,
         params_recorded=bool(params.get("efficiency_model")),
-        max_charge_below=max_charge_below,
+        max_charge_below=effective_max_charge_below,
+        deadline_index=deadline_index,
+        policy_phases=phases,
         samples=(),
     )
+
+
+def _combine_policies(
+    phases: tuple[tuple[int, DpPlanner, PolicyResult], ...],
+    initial_soc: float,
+    readiness: dict,
+) -> PolicyResult:
+    """Stitch phase policies into one surface for the page.
+
+    Each phase is solved over its own slice of the horizon.  The first phase's
+    full value layers are kept; each later phase contributes layers ``1:``
+    because its layer 0 is the boundary already represented by the previous
+    phase's terminal layer.
+    """
+    if len(phases) == 1:
+        return phases[0][2]
+    slots = tuple(
+        slot
+        for _start, _planner, policy in phases
+        for slot in policy.slots
+    )
+    cells = []
+    for start, _planner, policy in phases:
+        for row_index, row in enumerate(policy.cells):
+            cells.append(
+                tuple(
+                    replace(cell, slot=start + row_index)
+                    for cell in row
+                )
+            )
+    energy_values = tuple(phases[0][2].energy_values)
+    policy_values = tuple(phases[0][2].policy_values)
+    reachable_values = tuple(phases[0][2].reachable_values)
+    actions = []
+    for _start, _planner, policy in phases[1:]:
+        energy_values += tuple(policy.energy_values[1:])
+        policy_values += tuple(policy.policy_values[1:])
+        reachable_values += tuple(policy.reachable_values[1:])
+    for _start, _planner, policy in phases:
+        actions.extend(policy.actions)
+    last = phases[-1][2]
+    relaxed = readiness.get("relaxed")
+    if relaxed is None:
+        relaxed = any(policy.relaxed for _s, _p, policy in phases)
+    return PolicyResult(
+        slots=slots,
+        cells=tuple(cells),
+        energy_values=energy_values,
+        policy_values=policy_values,
+        reachable_values=reachable_values,
+        terminal_state=last.terminal_state,
+        relaxed=bool(relaxed),
+        initial_soc_percent=float(initial_soc),
+        actions=tuple(actions),
+        final_soc=last.final_soc,
+        total_cost_p=sum(
+            policy.total_cost_p for _s, _p, policy in phases
+        ),
+    )
+
+
+def _options_for_cell(
+    ctx: RunContext, slot_index: int, state_index: int
+):
+    """Options from the phase planner that owns this heatmap column."""
+    for start, planner, policy in reversed(ctx.policy_phases):
+        if slot_index >= start:
+            return planner.options(
+                policy, slot_index - start, state_index
+            )
+    return ctx.planner.options(ctx.policy, slot_index, state_index)
 
 
 def _state_values(
@@ -1077,7 +1241,13 @@ def _why_text(ctx, slot_index, cell, options) -> str:
             )
         else:
             comparison = "the only feasible mode"
-    if ctx.max_charge_below is not None:
+    if (
+        ctx.max_charge_below is not None
+        and (
+            ctx.deadline_index is None
+            or slot_index >= ctx.deadline_index
+        )
+    ):
         if cell.soc_percent < ctx.max_charge_below - 1e-9:
             target = (
                 "The readiness deadline has passed; below the target the "
@@ -1202,7 +1372,7 @@ def _render(history: PlannerHistory):
         ctx, states, request.args.get("soc")
     )
     cell = ctx.policy.cells[slot_index][state_index]
-    options = ctx.planner.options(ctx.policy, slot_index, state_index)
+    options = _options_for_cell(ctx, slot_index, state_index)
     follow_notes = _follow_notes(ctx.slots[slot_index], options)
     bands = _bands(ctx, slot_index, states)
     forecast_days = int(run.get("forecast_days") or 0)
