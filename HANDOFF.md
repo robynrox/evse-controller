@@ -684,9 +684,15 @@ completed fixes.
   it normal optimisation resumes with discharge stopping at the target. A
   full-power slot that would cross the charge cap is clamped to the cap in
   the model, so the plan keeps the maximum current instead of choosing a
-  weaker one to land just underneath it. Recurring schedules are deferred;
-  the proposed weekly timer, automatic release after the ready-by hold and
-  paused/holiday periods are sketched in
+  weaker one to land just underneath it. The recurring weekly schedule is
+  implemented in `ev_readiness_schedule.py`: events select weekdays, a
+  target time on the hour/half hour, a target SoC and a hold in 30-minute
+  steps. The control loop materialises the next occurrence inside a 24-hour
+  lead window, keeps the target as a floor until `target_time + hold`, then
+  completes it automatically even if the SoC was missed. Per-event
+  enable/disable, a schedule-wide pause-through date, manual-target
+  precedence and per-occurrence cancellation are supported. The design note
+  and edge cases are in
   [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md).
 - For dynamic-export tariffs the moving horizon ends at the last contiguous
   slot with a published export price. If today's series reaches midnight and

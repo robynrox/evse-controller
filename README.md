@@ -49,7 +49,7 @@ version 1, so I would suggest installing as per the official instructions on the
 All variable data (configuration, logs, and state) is stored in a `data` directory. The default location is within the project root, including:
 - `data/config/` - Configuration files including `config.yaml`
 - `data/logs/` - Log files
-- `data/state/` - State files including schedule, supplier energy sessions and EV-availability windows, EVSE state and the Agile rate cache
+- `data/state/` - State files including schedule, supplier energy sessions and EV-availability windows, EVSE state, EV readiness targets and the recurring readiness schedule, and the Agile rate cache
 - `data/reports/daily/` - One JSON half-hour energy report per day
 
 You can override the data directory location by setting the `EVSE_DATA_DIR` environment variable:
@@ -972,8 +972,22 @@ discharge, and above the target normal optimisation resumes with discharge
 stopping at the target. A full-power slot that would overshoot the charge cap
 is modelled as ending at the cap, because the pack stops there; the plan does
 not pick a weaker current just to land underneath it. Targets persist
-in `data/state/ev_readiness.json`. Recurring schedules are a later extension;
-this page handles one-off targets.
+in `data/state/ev_readiness.json`.
+
+The same page also has a **weekly schedule** for a regular departure. Each
+event selects weekdays, a target time on the hour or half hour, a target SoC
+and a hold period in 30-minute steps. The target time is when the car should
+be ready; the hold starts at that time, not when the SoC is reached. For
+example, `60% by 07:00 Mon–Thu and 08:00 Fri, held for two hours` releases the
+floor at 09:00 and 10:00 respectively. A hold that crosses midnight shows the
+next-day marker. Events can be enabled, edited or deleted individually, and
+the whole schedule can be paused through a date. A scheduled target is
+completed automatically at the end of its hold even if the SoC was not
+reached, so a forgotten target cannot hold the car indefinitely. A manual
+one-off target takes precedence over the schedule, and cancelling a scheduled
+occurrence suppresses just that occurrence. The schedule persists in
+`data/state/ev_readiness_schedule.json`. The design decisions and edge cases
+are recorded in [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md).
 
 ##### Daily energy report (`/reports/daily`)
 

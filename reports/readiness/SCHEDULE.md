@@ -1,7 +1,7 @@
 # Recurring EV readiness schedule
 
-**Status:** design/backlog. Not implemented. One-off readiness targets remain
-the current behaviour.
+**Status:** implemented. The one-off readiness target remains available, and
+the weekly schedule below generates the same kind of target automatically.
 
 ## Why
 
@@ -65,29 +65,28 @@ So:
   target was not reached. The shortfall is reported rather than leaving the
   target active indefinitely.
 
-This is deliberate holiday protection: the timer always ends. If a user wants
-"keep trying until the target is reached, however long that takes", that
-should be a separate option, not the default.
-
-A manual complete/cancel should still win and should not be recreated by the
-timer for that occurrence.
+This is deliberate holiday protection: the timer always ends rather than
+leaving the target active indefinitely. A manual complete/cancel suppresses
+the current occurrence and the scheduler does not recreate it.
 
 ### Unplugging
 
 The existing readiness rules still apply. An unplug after the ready-by time
-completes the target as it does today. An unplug before the occurrence is
-materialised means there is nothing to charge; the schedule should not create
-a target for a car that is away unless that is useful for the next connection.
-This needs a decision when the feature is implemented.
+completes the target as it does today. The scheduler itself does not know
+whether the car is connected; it materialises the occurrence as usual, and the
+tariff's normal readiness charge/floor rules decide what to do. A future
+refinement could suppress an occurrence while the car is away.
 
 ## Paused periods
 
-The schedule should support a paused-until date, or explicit active-from /
-active-until dates. While paused:
+The schedule has a **pause through** date. While paused:
 
 - no new targets are materialised;
-- an already-materialised target for a paused day is cancelled;
+- an already-materialised scheduled target is cancelled;
 - the schedule remains visible and can be resumed without re-entering it.
+
+Each event also has its own enabled switch and can be edited or deleted.
+Disabling or deleting an event releases a target it already materialised.
 
 Manual one-off targets take precedence over the schedule.
 
@@ -97,73 +96,68 @@ For a morning ready-by time, the planner needs the previous evening's cheap
 slots. The target therefore needs to exist before midnight, not at 00:00 on
 the ready-by day.
 
-The schedule should either:
-
-- materialise the next occurrence at a configurable lead time (for example
-  16:00 or 20:00 the previous day), or
-- materialise it when the moving planner horizon first reaches the occurrence.
-
-Use an idempotency key such as `(schedule_id, occurrence_date)` so repeated
-control ticks cannot create duplicate targets.
+The scheduler uses a fixed **24-hour lead window**. It materialises the next
+occurrence as soon as it is within 24 hours, and not before. Repeated ticks
+are idempotent: an active target for the same occurrence is reused, and a
+target is only created when no target is active. A manual target owns the
+slot until it is completed or cancelled.
 
 The target SoC still matters for planning and for the shortfall report, but
 the release is purely time-based.
 
-## Proposed data model
+## Data model
 
 ```text
-RecurringReadinessSchedule
+RecurringReadinessEvent
   id
-  name
-  enabled
-  days_of_week                  # mon..sun
-  ready_by                      # local time
+  days                          # mon..sun
+  ready_time                    # local time, on :00 or :30
   target_soc_percent
-  hold_minutes_after_ready_by
-  active_from                   # optional date
-  active_until                  # optional date
+  hold_minutes                  # 0..24h in 30-minute steps
+  enabled
   created_at
   updated_at
 ```
 
-Optional extension for a single grouped rule:
-
-```text
-ready_by_by_day                 # e.g. {mon: 07:00, ..., fri: 08:00}
-```
-
-Materialised targets should record their source and planned release:
+Materialised targets record their source and planned release:
 
 ```text
 source                          # "manual" or "schedule"
 schedule_id
-occurrence_date
 release_at                      # ready_by + hold
+completion_reason               # "released", "schedule disabled", etc.
+completed_soc_percent           # optional shortfall record
 ```
 
-That lets auto-release, the dashboard and the API distinguish a timer-generated
-target from a one-off target.
+That lets auto-release and the page distinguish a timer-generated target from
+a one-off target.
 
-Storage: extend `data/state/ev_readiness.json` with a top-level `schedules`
-key, keeping the existing one-off target shape compatible. A separate file is
-also possible; the single file keeps the readiness feature together.
+Storage: `data/state/ev_readiness_schedule.json` holds the events, the
+paused-through date and skipped occurrences. One-off targets remain in
+`data/state/ev_readiness.json`.
+
+An optional future extension is a single grouped rule with a
+`ready_by_by_day` map, so the UI can express the Mon–Thu/Friday example as one
+row. The current implementation uses two event rows, which is simpler to edit
+and test.
 
 ## UI and API
 
-`/ev-readiness` should gain a weekly schedule section:
+`/ev-readiness` has a weekly schedule section:
 
-- a table of days, ready-by time, target, hold and release time;
+- a table of days, target time, target SoC, hold and release time;
 - add/edit/delete and enable/disable;
-- pause until a date, with the next occurrence and "paused until" shown;
+- pause through a date, with the pause shown on the page;
 - the currently active generated target, its source and its release time;
 - manual one-off targets on the same page, with clear precedence.
 
-A friendly summary should be generated from the rules, for example:
+A friendly summary is generated from the rules, for example:
 
-> 60% by 07:00 Mon-Thu and 08:00 Fri, held until 09:00 / 10:00.
+> 60% by 07:00 Mon–Thu and 08:00 Fri, held until 09:00 / 10:00.
 
-API endpoints should mirror the page: list, create, update, delete, pause and
-resume. The existing one-off target endpoints stay.
+The page handles the schedule. REST/MQTT endpoints for the schedule are not
+implemented yet; they are a natural follow-up if external controllers need to
+edit it.
 
 ## Edge cases
 
@@ -171,27 +165,30 @@ resume. The existing one-off target endpoints stay.
   ready-by time may be skipped or repeated; define the behaviour and test it.
 - **Midnight:** anchor an occurrence to the ready-by date, not the date the
   target was materialised.
-- **Overlapping schedules:** keep one active target. Warn on overlap or define
-  a deterministic precedence rather than silently creating two.
-- **Holiday pause:** cancel a materialised target when the pause begins.
-- **Manual cancel during the hold:** do not recreate until the next occurrence.
+- **Overlapping schedules:** keep one active target. The scheduler chooses the
+  earliest upcoming occurrence deterministically; the page does not warn
+  about overlap yet.
+- **Holiday pause:** the pause-through date cancels a materialised target.
+- **Manual cancel during the hold:** the occurrence is skipped and is not
+  recreated; the next occurrence still runs.
 - **Target above the charge cap:** clamp as today and show the warning.
 - **No price horizon:** keep the existing checkpoint-target behaviour.
-- **Missed target:** complete at the release time with a shortfall warning.
-- **Car away:** no target, or complete per the existing readiness rules.
+- **Missed target:** complete at the release time with the shortfall recorded.
+- **Car away:** the scheduler creates the occurrence as usual; the existing
+  readiness charge/floor rules handle the unplugged car.
 
 ## Tests
 
-- the Mon-Thu 07:00 / Fri 08:00 example produces the right occurrences;
+- the Mon–Thu 07:00 / Fri 08:00 example produces the right occurrences;
 - the floor is retained until `ready-by + hold`, even if the target SoC is
   reached early;
-- a missed target completes at the release time with a shortfall;
+- a missed target completes at the release time with the shortfall recorded;
 - weekly evaluation with enabled/disabled days;
-- paused and active date ranges;
-- materialisation before midnight and idempotency across repeated ticks;
+- pause-through dates, per-event enable/disable and per-occurrence skip;
+- the 24-hour lead window and idempotency across repeated ticks;
 - manual target precedence and manual cancel;
-- unplug/completion interaction;
-- API and page CRUD.
+- page CRUD for schedule events and pause/resume;
+- the existing readiness unplug/completion tests still pass.
 
 ## Non-goals
 

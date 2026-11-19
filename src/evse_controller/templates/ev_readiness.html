@@ -120,6 +120,38 @@
         color: #0b5cad;
         text-decoration: none;
     }
+    .day-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 4px;
+    }
+    .day-options label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-weight: 600;
+        font-size: 13px;
+    }
+    .schedule-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+    }
+    .schedule-actions form {
+        margin: 0;
+    }
+    .schedule-actions button {
+        padding: 4px 8px;
+        font-size: 12px;
+    }
+    .schedule-actions a {
+        color: #0b5cad;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 12px;
+    }
 </style>
 {% endblock %}
 
@@ -127,12 +159,12 @@
 <div class="page">
     <h1>EV Readiness</h1>
     <p class="intro">
-        Set a one-off state-of-charge target and the time it is needed. Before
-        that time the planner works out the cheapest path to reach it. After
-        that time the target becomes a floor: the car may keep charging, or
-        discharge, but not below the target until you mark the trip complete
-        or remove the plug. If the target cannot be reached, the controller
-        charges as much as it can and reports the shortfall.
+        Set a one-off state-of-charge target and the time it is needed, or use
+        the weekly schedule for a regular departure. Before the target time the
+        planner works out the cheapest path to reach it. From the target time
+        the target becomes a floor: the car may keep charging, or discharge,
+        but not below the target until the trip is complete, the plug is
+        removed, or a scheduled hold ends.
     </p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -151,13 +183,25 @@
             Ready by {{ active.ready_by.strftime("%A %d %B %Y at %H:%M") }}
             <span class="status-pill">{{ active.status }}</span>
         </div>
+        {% if active.source == 'schedule' and active.release_at %}
+        <div class="muted">
+            Scheduled target. The floor is released automatically at
+            {{ active.release_at.strftime("%A %d %B at %H:%M") }}.
+        </div>
+        {% endif %}
         <div class="muted">
             {% if current_soc is not none %}
             Current SoC: {{ current_soc }}%.
             {% endif %}
             {% if now >= active.ready_by %}
-            The ready-by time has passed; the target is now a discharge floor
-            until the trip is complete.
+                {% if active.source == 'schedule' and active.release_at %}
+                The ready-by time has passed; the target is a discharge floor
+                until the scheduled release at
+                {{ active.release_at.strftime("%H:%M") }}.
+                {% else %}
+                The ready-by time has passed; the target is now a discharge
+                floor until the trip is complete.
+                {% endif %}
             {% else %}
             The planner is working towards this target.
             {% endif %}
@@ -185,7 +229,156 @@
     </div>
 
     <div class="card">
-        <h2>{% if active %}Replace target{% else %}Set a target{% endif %}</h2>
+        <h2>Weekly schedule</h2>
+        <p class="muted">
+            Each event makes sure the car has at least the target SoC at its
+            target time, then holds that floor for the hold period. The hold
+            starts at the target time even if the car charged early, and the
+            target is released automatically at the end of the hold.
+        </p>
+        {% if paused_until %}
+        <div class="flash-message flash-info">
+            Schedule paused through {{ paused_until.strftime("%d %B %Y") }}.
+            <form method="post" style="display:inline">
+                <input type="hidden" name="action" value="resume_schedule">
+                <button type="submit">Resume now</button>
+            </form>
+        </div>
+        {% endif %}
+        {% if schedule_rows %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Days</th>
+                        <th>Target time</th>
+                        <th>Target</th>
+                        <th>Hold</th>
+                        <th>Released</th>
+                        <th>Enabled</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in schedule_rows %}
+                    <tr>
+                        <td>{{ row.days_label }}</td>
+                        <td>{{ row.ready_label }}</td>
+                        <td>{{ row.target_label }}</td>
+                        <td>{{ row.hold_label }}</td>
+                        <td>{{ row.release_label }}</td>
+                        <td>{{ "Yes" if row.enabled else "No" }}</td>
+                        <td class="schedule-actions">
+                            <a href="{{ url_for('ev_readiness_page', edit_schedule=row.id) }}">Edit</a>
+                            <form method="post">
+                                <input type="hidden" name="action" value="toggle_schedule">
+                                <input type="hidden" name="schedule_id" value="{{ row.id }}">
+                                <input type="hidden" name="enabled" value="{{ 0 if row.enabled else 1 }}">
+                                <button type="submit">{{ "Disable" if row.enabled else "Enable" }}</button>
+                            </form>
+                            <form method="post" onsubmit="return confirm('Delete this schedule event?');">
+                                <input type="hidden" name="action" value="delete_schedule">
+                                <input type="hidden" name="schedule_id" value="{{ row.id }}">
+                                <button type="submit" class="danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p>No schedule events yet.</p>
+        {% endif %}
+
+        <h3>{% if editing_schedule %}Edit event{% else %}Add event{% endif %}</h3>
+        <form method="post">
+            <input type="hidden" name="action" value="save_schedule">
+            {% if editing_schedule %}
+            <input type="hidden" name="schedule_id" value="{{ editing_schedule.id }}">
+            {% endif %}
+            <div class="form-row">
+                <div>
+                    <label>Days</label>
+                    <div class="day-options">
+                        {% for day in day_options %}
+                        <label>
+                            <input type="checkbox" name="days" value="{{ day.value }}"
+                                   {% if day.checked %}checked{% endif %}>
+                            {{ day.label }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div>
+                    <label for="schedule_ready_time">Target time</label>
+                    <select id="schedule_ready_time" name="ready_time">
+                        {% for option in time_options %}
+                        <option value="{{ option }}" {% if option == schedule_ready_time %}selected{% endif %}>{{ option }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="schedule_target_soc">Target SoC (%)</label>
+                    <input type="number" id="schedule_target_soc" name="target_soc"
+                           min="1" max="{{ charge_cap|round(0)|int }}" step="1"
+                           value="{{ schedule_target_soc|round(0)|int }}" required>
+                </div>
+                <div>
+                    <label for="schedule_hold">Hold after target</label>
+                    <select id="schedule_hold" name="hold_minutes">
+                        {% for option in hold_options %}
+                        <option value="{{ option.value }}" {% if option.value == schedule_hold_minutes %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label>
+                        <input type="checkbox" name="enabled" {% if schedule_enabled %}checked{% endif %}>
+                        Enabled
+                    </label>
+                </div>
+                <div>
+                    <button type="submit" class="primary">{% if editing_schedule %}Save changes{% else %}Add event{% endif %}</button>
+                </div>
+            </div>
+            {% if editing_schedule %}
+            <p class="muted">
+                <a href="{{ url_for('ev_readiness_page') }}">Cancel editing</a>
+            </p>
+            {% endif %}
+        </form>
+
+        <h3>Pause the schedule</h3>
+        <form method="post">
+            <input type="hidden" name="action" value="pause_schedule">
+            <div class="form-row">
+                <div>
+                    <label for="paused_until">Pause through</label>
+                    <input type="date" id="paused_until" name="paused_until"
+                           min="{{ today.isoformat() }}"
+                           value="{{ paused_until.isoformat() if paused_until else today.isoformat() }}"
+                           required>
+                </div>
+                <div>
+                    <button type="submit">Pause</button>
+                </div>
+            </div>
+            <p class="muted">
+                No new target is created on or before this date. An active
+                scheduled target is cancelled.
+            </p>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>{% if active %}Replace active target{% else %}Set a one-off target{% endif %}</h2>
+        <p class="muted">
+            Use the weekly schedule above for a regular departure. A one-off
+            target takes precedence over the schedule.
+        </p>
         <form method="post">
             <input type="hidden" name="action" value="set">
             <div class="form-row">
@@ -227,7 +420,9 @@
                 <tr>
                     <th>Target</th>
                     <th>Ready by</th>
+                    <th>Source</th>
                     <th>Status</th>
+                    <th>Release</th>
                     <th>Created</th>
                 </tr>
             </thead>
@@ -236,7 +431,11 @@
                 <tr>
                     <td>{{ target.target_soc_percent|round(0)|int }}%</td>
                     <td>{{ target.ready_by.strftime("%d %b %Y %H:%M") }}</td>
-                    <td>{{ target.status }}</td>
+                    <td>{{ "Scheduled" if target.source == "schedule" else "Manual" }}</td>
+                    <td>
+                        {{ target.status }}{% if target.completion_reason %} ({{ target.completion_reason }}){% endif %}{% if target.completed_soc_percent is not none %} at {{ target.completed_soc_percent|round(0)|int }}%{% endif %}
+                    </td>
+                    <td>{{ target.release_at.strftime("%d %b %Y %H:%M") if target.release_at else "—" }}</td>
                     <td>{{ target.created_at.strftime("%d %b %Y %H:%M") }}</td>
                 </tr>
                 {% endfor %}

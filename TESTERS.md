@@ -79,6 +79,13 @@ EV Readiness is the intended way to ask for a charge by a time:
   target normal optimisation resumes with discharge stopping at the target;
   a full-power slot that would overshoot the cap is recorded as ending at the
   cap, so the policy map shows charge right up to the cap;
+- the **weekly schedule** creates these targets automatically. Each event has
+  weekdays, a target time on the hour or half hour, a target SoC and a hold in
+  30-minute steps. The hold starts at the target time (not when the SoC is
+  reached), and the target is released at the end of it even if the SoC was
+  missed. Events can be enabled, edited or deleted, and the whole schedule can
+  be paused through a date. A manual one-off target overrides the schedule;
+  cancelling a scheduled occurrence suppresses only that occurrence;
 - for **Agile import**, use a DP control mode so the planner can choose the
   cheapest slots, including negative-price slots;
 - the heuristic fallback for Agile import is deliberately minimal: solar
@@ -120,7 +127,11 @@ configuration, so it survives a restart.
    few slots.
 3. **Try a readiness target.** Use a target within today and one for tomorrow
    morning. Watch the 16:00 checkpoint behaviour when Agile import prices for
-   tomorrow are not yet published.
+   tomorrow are not yet published. Then add a weekly event for today with a
+   target time 30–60 minutes ahead and a 30-minute hold: confirm it appears as
+   the active target, holds until target time + hold, and releases
+   automatically. Try disabling the event, pausing the schedule and
+   cancelling one occurrence.
 4. **Check the cheap windows.** Confirm charging starts and stops at the
    expected times for your preset.
 5. **Check peak behaviour.** Confirm the house is covered during peak import

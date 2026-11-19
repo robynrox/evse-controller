@@ -44,6 +44,7 @@ from evse_controller.energy_sessions import (
     SOLAR_ONLY,
     session_store,
 )
+from evse_controller.ev_readiness_schedule import ev_readiness_scheduler
 from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
 from evse_controller.ocpp_slot import (
     OcppChargeTracker,
@@ -1205,6 +1206,14 @@ def main():
             # the release check, so an expiring session and a starting one
             # cannot both leave the Wallbox ownerless.
             now_for_sessions = datetime.now()
+            try:
+                ev_readiness_scheduler.tick(
+                    now_for_sessions, current_soc=current_soc
+                )
+            except Exception as exc:
+                warning(
+                    f"EV READINESS: schedule check failed: {exc}"
+                )
             _maybe_schedule_auto_ocpp(now_for_sessions)
             _sync_session_override(now_for_sessions)
             try:

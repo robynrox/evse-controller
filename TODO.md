@@ -10,9 +10,6 @@
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
 - [ ] Make the is_empty SoC configurable
-- [ ] Recurring EV readiness schedule: weekday timer, automatic release after
-      the ready-by hold, and paused/holiday periods. Design note:
-      [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md)
 - [ ] First-run onboarding: integrate the existing `evse_discovery` scanner into
       the config page, add connection tests and a quick-start checklist, then a
       guided setup wizard for hardware, tariff, SoC floors and control mode
@@ -28,6 +25,9 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Recurring EV readiness schedule: weekday timer, automatic release after
+      the ready-by hold, per-event enable/disable and a schedule-wide pause.
+      Design note: [`reports/readiness/SCHEDULE.md`](reports/readiness/SCHEDULE.md)
 - [x] Basic scheduling functionality
 - [x] V2G and S2V capabilities
 - [x] Web interface prototype
