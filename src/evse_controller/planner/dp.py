@@ -418,6 +418,27 @@ class DpPlanner:
                 message="No reachable state at the end of the horizon",
             )
 
+        if relaxed and self.target_soc_percent is not None:
+            # The target cannot be met.  Rather than merely finding the
+            # cheapest path to the highest reachable state, use maximum
+            # charge wherever possible: this maximises the real chance of
+            # reaching the target if the model is slightly optimistic.
+            surety = self._max_soc_actions(horizon, initial)
+            if surety is not None:
+                surety_actions, surety_state, surety_cost = surety
+                return PlanResult(
+                    actions=tuple(surety_actions),
+                    final_soc=surety_state * self.soc_step_percent,
+                    total_cost_p=float(surety_cost),
+                    success=False,
+                    relaxed=True,
+                    message=(
+                        f"Target {self.target_soc_percent:.1f}% unreachable; "
+                        "charged at maximum to maximise the chance of "
+                        "reaching it"
+                    ),
+                )
+
         actions = self._reconstruct(
             terminal_state, prev, choice, horizon
         )
@@ -583,8 +604,55 @@ class DpPlanner:
             state_cache: dict = {}
             choice_cur = choices[index] or []
             row = []
+            surety_templates: Optional[list[_ActionTemplate]] = None
+            surety_lower: tuple[float, ...] = ()
+            surety_upper: tuple[float, ...] = ()
+            surety_cache: dict = {}
             for state in range(n_states):
                 entry = choice_cur[state]
+                if not bool(reachable_layers[index][state]):  # type: ignore[index]
+                    # Target unreachable from this state: show the surety
+                    # action (maximum charge) rather than the cheapest path to
+                    # an equally unreachable final state.
+                    if surety_templates is None:
+                        surety_templates = self._action_templates(
+                            horizon[index]
+                        )
+                        surety_lower, surety_upper = (
+                            self._state_band_thresholds(surety_templates)
+                        )
+                    candidates = []
+                    for candidate in self._templates_for_state_cached(
+                        surety_templates,
+                        state,
+                        surety_lower,
+                        surety_upper,
+                        surety_cache,
+                    ):
+                        candidate_next = self._feasible_next_state(
+                            state, candidate
+                        )
+                        if candidate_next is None:
+                            continue
+                        candidates.append((candidate_next, candidate))
+                    if candidates:
+                        highest = max(
+                            next_state for next_state, _ in candidates
+                        )
+                        best = max(
+                            (
+                                candidate
+                                for next_state, candidate in candidates
+                                if next_state == highest
+                            ),
+                            key=lambda candidate: (
+                                candidate.current_a
+                                if candidate.kind == "charge"
+                                else -1.0,
+                                -candidate.cost_p,
+                            ),
+                        )
+                        entry = (best, highest)
                 if entry is None:
                     row.append(
                         PolicyCell(
@@ -670,37 +738,47 @@ class DpPlanner:
         initial = self._clamp_state(
             int(round(initial_soc_percent / self.soc_step_percent))
         )
+        relaxed_initial = not bool(reachable_layers[0][initial])  # type: ignore[index]
+        total = energy_layers[0][initial]  # type: ignore[index]
         state = initial
         actions = []
-        for index, slot in enumerate(horizon):
-            entry = (choices[index] or [])[state]
-            if entry is None:
-                break
-            template, next_state = entry
-            actions.append(
-                PlannerAction(
-                    slot=(
-                        slot.slot if slot.slot >= 0 else index
-                    ),
-                    start=slot.start,
-                    kind=template.kind,
-                    current_a=template.current_a,
-                    ac_power_kw=template.ac_power_kw,
-                    stored_kwh=template.stored_kwh,
-                    soc_before=state * self.soc_step_percent,
-                    soc_after=next_state * self.soc_step_percent,
-                    cost_p=template.cost_p,
-                    session=template.session,
-                    current_min_a=template.current_min_a,
-                    current_max_a=template.current_max_a,
-                    follow=template.follow,
-                    floor_current_a=template.floor_current_a,
-                    horizon_index=slot.horizon_index,
+        surety = (
+            self._max_soc_actions(horizon, initial)
+            if relaxed_initial and self.target_soc_percent is not None
+            else None
+        )
+        if surety is not None:
+            actions, state, total_cost = surety
+            total = total_cost
+        else:
+            for index, slot in enumerate(horizon):
+                entry = (choices[index] or [])[state]
+                if entry is None:
+                    break
+                template, next_state = entry
+                actions.append(
+                    PlannerAction(
+                        slot=(
+                            slot.slot if slot.slot >= 0 else index
+                        ),
+                        start=slot.start,
+                        kind=template.kind,
+                        current_a=template.current_a,
+                        ac_power_kw=template.ac_power_kw,
+                        stored_kwh=template.stored_kwh,
+                        soc_before=state * self.soc_step_percent,
+                        soc_after=next_state * self.soc_step_percent,
+                        cost_p=template.cost_p,
+                        session=template.session,
+                        current_min_a=template.current_min_a,
+                        current_max_a=template.current_max_a,
+                        follow=template.follow,
+                        floor_current_a=template.floor_current_a,
+                        horizon_index=slot.horizon_index,
+                    )
                 )
-            )
-            state = next_state
+                state = next_state
 
-        total = energy_layers[0][initial]  # type: ignore[index]
         return PolicyResult(
             slots=tuple(horizon),
             cells=tuple(cells),
@@ -714,7 +792,7 @@ class DpPlanner:
                 layer for layer in reachable_layers if layer is not None
             ),
             terminal_state=state,
-            relaxed=not bool(reachable_layers[0][initial]),  # type: ignore[index]
+            relaxed=relaxed_initial,
             initial_soc_percent=float(initial_soc_percent),
             actions=tuple(actions),
             final_soc=state * self.soc_step_percent,
@@ -1589,6 +1667,81 @@ class DpPlanner:
             (cost for state, cost in reachable if state == highest)
         )
         return highest, True
+
+    def _max_soc_actions(
+        self,
+        slots: Sequence[PlannerSlot],
+        initial_state: int,
+    ) -> Optional[tuple[list[PlannerAction], int, float]]:
+        """Maximise SoC at every slot when a target cannot be reached.
+
+        The normal DP minimises cost after relaxing an unreachable target.
+        That can still choose a lower charge current when it reaches the same
+        final state.  For a readiness target, surety matters more: every
+        feasible slot charges at the highest current that keeps the action
+        legal.  Forced idle/discharge sessions are respected because the
+        highest feasible next state is always selected.
+        """
+        state = initial_state
+        actions: list[PlannerAction] = []
+        total_cost = 0.0
+        for index, slot in enumerate(slots):
+            # Use the undeduped actions: the DP drops a higher current that
+            # lands on the same SoC step in favour of a cheaper one, but
+            # surety wants the full current even when the modelled step is
+            # identical.
+            templates = self._action_templates(slot)
+            lower, upper = self._state_band_thresholds(templates)
+            state_cache: dict = {}
+            candidates = []
+            for template in self._templates_for_state_cached(
+                templates, state, lower, upper, state_cache
+            ):
+                next_state = self._feasible_next_state(state, template)
+                if next_state is None:
+                    continue
+                candidates.append((next_state, template))
+            if not candidates:
+                return None
+            highest = max(next_state for next_state, _ in candidates)
+            best_template = max(
+                (
+                    template
+                    for next_state, template in candidates
+                    if next_state == highest
+                ),
+                key=lambda template: (
+                    template.current_a
+                    if template.kind == "charge"
+                    else -1.0,
+                    -template.cost_p,
+                ),
+            )
+            next_state = highest
+            soc_before = state * self.soc_step_percent
+            soc_after = next_state * self.soc_step_percent
+            actions.append(
+                PlannerAction(
+                    slot=slot.slot if slot.slot >= 0 else index,
+                    start=slot.start,
+                    kind=best_template.kind,
+                    current_a=best_template.current_a,
+                    ac_power_kw=best_template.ac_power_kw,
+                    stored_kwh=best_template.stored_kwh,
+                    soc_before=soc_before,
+                    soc_after=soc_after,
+                    cost_p=best_template.cost_p,
+                    session=best_template.session,
+                    current_min_a=best_template.current_min_a,
+                    current_max_a=best_template.current_max_a,
+                    follow=best_template.follow,
+                    floor_current_a=best_template.floor_current_a,
+                    horizon_index=slot.horizon_index,
+                )
+            )
+            total_cost += best_template.cost_p
+            state = next_state
+        return actions, state, total_cost
 
     def _reconstruct(
         self,

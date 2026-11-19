@@ -142,6 +142,9 @@ def test_policy_marks_an_unreachable_target():
     assert policy.relaxed is True
     cell = policy.cells[0][80]
     assert cell.target_reachable is False
+    # Surety: an unreachable target uses the maximum charge arc.
+    assert cell.action.kind == "charge"
+    assert cell.action.current_a == pytest.approx(10.0)
 
 
 @pytest.mark.parametrize("limit", [16, 32])
@@ -698,6 +701,31 @@ def test_unreachable_target_relaxes_to_the_highest_soc():
     assert result.relaxed
     assert result.final_soc == pytest.approx(46.0)
     assert "unreachable" in result.message
+    charge_actions = [
+        action for action in result.actions if action.kind == "charge"
+    ]
+    assert charge_actions
+    assert all(
+        action.current_a == pytest.approx(10.0)
+        for action in charge_actions
+    )
+
+
+def test_unreachable_target_uses_the_full_current_when_steps_collide():
+    # A 100 kWh pack makes 7-10 A round to the same 0.5% SoC step.
+    # The normal DP dedupes to the cheapest 7 A; surety must still use 10 A.
+    p = planner(capacity_kwh=100.0, target_soc_percent=95.0)
+    slots = [slot(0, import_p=10.0, export_p=0.0, load_kw=0.0)]
+
+    result = p.plan(slots, initial_soc_percent=40.0)
+    policy = p.policy(slots, initial_soc_percent=40.0)
+
+    assert result.relaxed
+    charge = [action for action in result.actions if action.kind == "charge"]
+    assert charge and charge[0].current_a == pytest.approx(10.0)
+    cell = policy.cells[0][80]  # 40%
+    assert cell.action is not None
+    assert cell.action.current_a == pytest.approx(10.0)
 
 
 def test_hard_floor_blocks_discharge():

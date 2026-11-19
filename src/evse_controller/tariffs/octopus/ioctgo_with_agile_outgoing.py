@@ -2424,7 +2424,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             message = (
                 f"Target {target_soc:.1f}% by "
                 f"{target.ready_by:%a %H:%M} was not reachable; "
-                "kept the highest reachable SoC"
+                "charged at maximum to maximise the chance of "
+                "reaching it"
             )
         combined = PlanResult(
             actions=result_one.actions + result_two.actions,

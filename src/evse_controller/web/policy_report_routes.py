@@ -1057,15 +1057,18 @@ def _why_text(ctx, slot_index, cell, options) -> str:
         return "No feasible action at this state."
     slot = ctx.slots[slot_index]
     best = cell.action
-    others = [option for option in options if option.kind != best.kind]
-    if others:
-        next_best = min(others, key=lambda option: option.policy_cost_p)
-        margin = next_best.policy_cost_p - best.policy_cost_p
-        comparison = (
-            f"{margin:.1f}p better than the best {next_best.kind} option"
-        )
+    if not cell.target_reachable:
+        comparison = "selected for surety by charging at the maximum current"
     else:
-        comparison = "the only feasible mode"
+        others = [option for option in options if option.kind != best.kind]
+        if others:
+            next_best = min(others, key=lambda option: option.policy_cost_p)
+            margin = next_best.policy_cost_p - best.policy_cost_p
+            comparison = (
+                f"{margin:.1f}p better than the best {next_best.kind} option"
+            )
+        else:
+            comparison = "the only feasible mode"
     if ctx.target is None:
         target = (
             "There is no fixed end-of-day target; the planner optimises the "
@@ -1076,7 +1079,8 @@ def _why_text(ctx, slot_index, cell, options) -> str:
             "It can still reach the end-of-day target."
             if cell.target_reachable
             else "The end-of-day target is not reachable from this state; "
-            "the planner relaxes to the highest reachable SoC."
+            "the planner charges at maximum to maximise the chance of "
+            "reaching it."
         )
     return (
         f"At {slot.start.strftime('%H:%M')} and {cell.soc_percent:.1f}% SoC, "
