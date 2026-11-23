@@ -400,9 +400,10 @@ completed fixes.
   values before the form is submitted.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
-  link-health failures. A successful fallback verifies the Shelly MAC or
-  Wallbox identity before the new IP is persisted. The design, safety rules
-  and tests are in
+  link-health failures. The Wallbox hostname contains its `WB`+serial and the
+  Shelly hostname contains the 12-hex MAC; a successful fallback checks those
+  identities against the stored value and the device response before the new
+  IP is persisted. The design, safety rules and tests are in
   [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md).
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on

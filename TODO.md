@@ -21,7 +21,8 @@
       off, MQTT/REST command contract, and what the scheduler may still do)
 - [ ] Dual device addressing: store the IP and hostname together, prefer the
       IP, fall back to the hostname after link-health failures, verify the
-      device identity and update the stored IP. Design note:
+      serial/MAC identity embedded in the hostname, and update the stored IP.
+      Design note:
       [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
