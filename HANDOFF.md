@@ -398,6 +398,12 @@ completed fixes.
   `/status` endpoint; `/api/connection-test` dispatches to them. The config
   page fills the address fields from discovery results and tests unsaved
   values before the form is submitted.
+- **Proposed dual device addressing.** Store a last-known IP and a hostname
+  per device, prefer the IP while healthy, and resolve the hostname after
+  link-health failures. A successful fallback verifies the Shelly MAC or
+  Wallbox identity before the new IP is persisted. The design, safety rules
+  and tests are in
+  [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md).
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

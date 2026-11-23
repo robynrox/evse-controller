@@ -19,6 +19,10 @@
       and control mode
 - [ ] Document the "external controller / backend" setup path (learning mode
       off, MQTT/REST command contract, and what the scheduler may still do)
+- [ ] Dual device addressing: store the IP and hostname together, prefer the
+      IP, fall back to the hostname after link-health failures, verify the
+      device identity and update the stored IP. Design note:
+      [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
 - [ ] Improve Docker container support and testing
