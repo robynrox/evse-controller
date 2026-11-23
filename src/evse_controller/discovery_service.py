@@ -8,6 +8,7 @@ quick connection checks that do not require a full network scan.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import threading
 import time
@@ -48,9 +49,17 @@ def _device_payload(device: Any) -> dict:
     device_type = str(getattr(device, "device_type", "") or "")
     raw = getattr(device, "details", None) or {}
     if isinstance(raw, dict) and device_type.startswith("Shelly"):
+        emeters = raw.get("emeters") or []
+        total_power = raw.get("total_power")
+        if total_power is None and isinstance(emeters, list):
+            total_power = sum(
+                float(item.get("power", 0) or 0)
+                for item in emeters
+                if isinstance(item, dict)
+            )
         details = {
-            "emeters": len(raw.get("emeters") or []),
-            "total_power_w": raw.get("total_power"),
+            "emeters": len(emeters),
+            "total_power_w": total_power,
         }
     elif isinstance(raw, dict) and device_type == "Wallbox":
         details = {
@@ -117,17 +126,28 @@ class DiscoveryService:
         try:
             DeviceDiscovery, _DeviceInfo = _load_discovery()
             discovery = DeviceDiscovery()
-            try:
-                devices = asyncio.run(
-                    asyncio.wait_for(
+
+            async def _scan():
+                try:
+                    return await asyncio.wait_for(
                         discovery.discover_devices(), timeout=120.0
                     )
-                )
+                finally:
+                    try:
+                        result = discovery.close()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception:
+                        pass
+
+            devices = None
+            pymodbus_logger = logging.getLogger("pymodbus")
+            previous_level = pymodbus_logger.level
+            pymodbus_logger.setLevel(logging.CRITICAL)
+            try:
+                devices = asyncio.run(_scan())
             finally:
-                try:
-                    discovery.close()
-                except Exception:
-                    pass
+                pymodbus_logger.setLevel(previous_level)
             payload = [_device_payload(device) for device in devices]
             with self._lock:
                 self._devices = payload
@@ -246,12 +266,19 @@ def check_shelly(value: str) -> dict:
         }
     emeters = data.get("emeters") if isinstance(data, dict) else None
     if emeters:
+        total_power = data.get("total_power")
+        if total_power is None and isinstance(emeters, list):
+            total_power = sum(
+                float(item.get("power", 0) or 0)
+                for item in emeters
+                if isinstance(item, dict)
+            )
         return {
             "ok": True,
             "message": f"Shelly EM responded with {len(emeters)} meter(s).",
             "details": {
                 "emeters": len(emeters),
-                "total_power_w": data.get("total_power"),
+                "total_power_w": total_power,
             },
         }
     return {
