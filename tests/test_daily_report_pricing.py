@@ -15,6 +15,7 @@ import pytest
 from evse_controller.daily_report import DailyEnergyLog, SeriesSpec
 from evse_controller.energy_sessions import (
     FREE_IMPORT,
+    OCPP,
     EnergySession,
     session_store,
 )
@@ -286,6 +287,26 @@ def test_ocpp_slot_is_booked_at_the_octopus_off_peak_rate(tmp_path):
     assert prices[24]["import_p"] == pytest.approx(config.IMPORT_LOW)
 
 
+def test_ocpp_session_with_charging_books_the_rate_without_a_flag(
+    tmp_path,
+):
+    session_store.add(
+        EnergySession(OCPP, _at(12, 0), _at(13, 0))
+    )
+    source = TariffSourceAdapter(_build(IntelligentOctopusGoTariff))
+    log = _log(tmp_path)
+    log.set_price_source(source)
+    log._ensure_day(DAY)
+    slot = log._slots[24]
+    slot["energy"]["evse"] = {"in": 1.0, "out": 0.0}
+    slot["soc"] = {"start": 40, "end": 45}
+
+    log._price_slot(slot)
+
+    assert "ocpp" in slot["flags"]
+    assert slot["prices"]["import_p"] == pytest.approx(config.IMPORT_LOW)
+
+
 def test_free_import_still_wins_over_the_ocpp_rate(tmp_path):
     session_store.add(
         EnergySession(FREE_IMPORT, _at(12, 0), _at(13, 0))
@@ -318,3 +339,78 @@ def test_price_book_has_no_ocpp_rule(tmp_path):
     source = SlotPriceBookSource()
 
     assert source.ocpp_import_price_p(DAY, 24) is None
+
+
+def _write_ocpp_slot(log, slot_index, *, evse_in, soc_before, soc_after):
+    log._ensure_day(DAY)
+    slot = log._slots[slot_index]
+    slot["closed"] = True
+    slot["energy"]["grid"] = {"in": 1.0, "out": 0.0}
+    slot["energy"]["evse"] = {"in": evse_in, "out": 0.0}
+    slot["soc"] = {"start": soc_before, "end": soc_after}
+    slot["prices"] = {
+        "import_p": 99.0,
+        "export_p": 5.0,
+        "session": "ocpp",
+    }
+    slot["money"] = {
+        "import_cost_gbp": 0.99,
+        "export_revenue_gbp": 0.0,
+        "net_cost_gbp": 0.99,
+    }
+    log._write(force=True)
+
+
+def test_historical_ocpp_session_is_repaired_when_charging_is_visible(
+    tmp_path,
+):
+    source = TariffSourceAdapter(_build(IntelligentOctopusGoTariff))
+    writer = _log(tmp_path)
+    writer.set_price_source(source)
+    _write_ocpp_slot(
+        writer, 24, evse_in=1.2, soc_before=40, soc_after=45
+    )
+
+    reader = _log(tmp_path)
+    reader.set_price_source(source)
+    slot = reader.snapshot_for(DAY)["slots"][24]
+
+    assert "ocpp" in slot["flags"]
+    assert slot["prices"]["import_p"] == pytest.approx(config.IMPORT_LOW)
+    assert slot["money"]["import_cost_gbp"] == pytest.approx(
+        1.0 * config.IMPORT_LOW / 100.0
+    )
+
+
+def test_historical_ocpp_session_without_charging_is_not_repaired(
+    tmp_path,
+):
+    source = TariffSourceAdapter(_build(IntelligentOctopusGoTariff))
+    writer = _log(tmp_path)
+    writer.set_price_source(source)
+    _write_ocpp_slot(
+        writer, 24, evse_in=0.001, soc_before=40, soc_after=40
+    )
+
+    reader = _log(tmp_path)
+    reader.set_price_source(source)
+    slot = reader.snapshot_for(DAY)["slots"][24]
+
+    assert "ocpp" not in slot["flags"]
+    assert slot["prices"]["import_p"] == pytest.approx(99.0)
+
+
+def test_historical_ocpp_repair_needs_a_tariff_with_the_rule(tmp_path):
+    source = TariffSourceAdapter(_build(CosyOctopusTariff))
+    writer = _log(tmp_path)
+    writer.set_price_source(source)
+    _write_ocpp_slot(
+        writer, 24, evse_in=1.2, soc_before=40, soc_after=45
+    )
+
+    reader = _log(tmp_path)
+    reader.set_price_source(source)
+    slot = reader.snapshot_for(DAY)["slots"][24]
+
+    assert "ocpp" not in slot["flags"]
+    assert slot["prices"]["import_p"] == pytest.approx(99.0)

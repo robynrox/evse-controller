@@ -664,6 +664,8 @@ def _evse_is_charging() -> bool:
 
 def _flag_ocpp_slot_if_active(
     now: Optional[datetime] = None,
+    *,
+    ocpp_active: Optional[bool] = None,
 ) -> None:
     """Record an OCPP-charged slot for off-peak import pricing.
 
@@ -671,12 +673,21 @@ def _flag_ocpp_slot_if_active(
     under that handoff for at least a minute in this slot.  A handoff on its
     own is not enough, because Octopus may enable OCPP without the vehicle
     taking any power.
+
+    ``ocpp_active`` lets the caller supply the handoff state directly.  An
+    OCPP override or an ``ocpp`` energy session is authoritative even when
+    the Wallbox API has not confirmed the manager's state yet; relying only on
+    ``ocpp_manager.get_state()`` missed those slots.
     """
     now = now or datetime.now()
     try:
-        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+        if ocpp_active is None:
+            from evse_controller.drivers.evse.ocpp_manager import (
+                ocpp_manager,
+            )
 
-        if ocpp_manager.get_state() is not True:
+            ocpp_active = ocpp_manager.get_state() is True
+        if not ocpp_active:
             _ocpp_charge_tracker.reset()
             return
         if not should_flag_ocpp_slot(
@@ -770,8 +781,10 @@ def _apply_override(override: ControlOverride) -> None:
         info(f"CONTROL {mode.name} (override) - EVSE operates independently")
         if mode == ExecState.OCPP:
             # The report prices OCPP-driven import at the tariff's off-peak
-            # rate, so record which slots were handed to the supplier.
-            _flag_ocpp_slot_if_active()
+            # rate, so record which slots were handed to the supplier.  The
+            # override is authoritative even if the Wallbox API has not yet
+            # confirmed the manager's state.
+            _flag_ocpp_slot_if_active(ocpp_active=True)
     elif mode == ExecState.SMART:
         # SMART is not a hardware override; fail safe if it is ever stored.
         warning("SMART cannot be an actuator override; leaving EVSE untouched")
@@ -1276,7 +1289,9 @@ def main():
                 # In OCPP state, we don't send any control commands to the EVSE
                 # The EVSE operates via OCPP protocol, which is handled by the Wallbox API
                 info("CONTROL OCPP - EVSE operating via OCPP protocol")
-                _flag_ocpp_slot_if_active(now_for_sessions)
+                _flag_ocpp_slot_if_active(
+                    now_for_sessions, ocpp_active=True
+                )
                 # No action needed - the EVSE is operating via OCPP
                 _observe_tariff(dayMinute)
             elif execState in [ExecState.PAUSE, ExecState.CHARGE, ExecState.DISCHARGE]:

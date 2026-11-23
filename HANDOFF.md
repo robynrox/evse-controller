@@ -321,7 +321,12 @@ completed fixes.
   the daily report and booked at the tariff's off-peak import price only when
   OCPP is on and the Wallbox has actually charged for at least 60 seconds in
   the slot; the handoff alone is not enough.  The timing rule lives in
-  `ocpp_slot.py` so it is testable without hardware threads.
+  `ocpp_slot.py` so it is testable without hardware threads.  An OCPP override
+  or session supplies the handoff state directly, so the flag no longer waits
+  for the Wallbox API to confirm `ocpp_manager`; and the report's pricing pass
+  treats an OCPP session with measured EVSE/DC charging or a rising SoC as
+  qualifying even if the live flag was missed.  Loading an older day with a
+  tariff source active re-prices those slots and writes the missing flag.
 - **Automatic OCPP handoff.** `ocpp_auto.py` chooses the cheapest contiguous
   block in a preferred window, skips overlaps and adds a normal OCPP session
   marked `auto`. The interval is measured from the last handoff's start date

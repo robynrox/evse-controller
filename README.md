@@ -895,7 +895,12 @@ Five further kinds are temporary control sessions rather than price overlays:
   The report books the resulting import at the tariff's off-peak rate only
   when OCPP is on **and** the Wallbox actually charged for at least a minute
   in that slot. A handoff on its own is not enough, because Octopus may enable
-  OCPP without the vehicle taking any power.
+  OCPP without the vehicle taking any power. An OCPP override or session is
+  authoritative even if the Wallbox API has not confirmed the manager state.
+  If the live flag is missing, an OCPP session with measured EVSE/DC charging
+  or a rising SoC still qualifies. When an older day is loaded with a tariff
+  source active, slots like that are re-priced and the missing `ocpp` flag is
+  written into the report.
 
 While a control session owns the Wallbox, the configured tariff keeps running
 as an observer: SoC estimates, planner history and decisions continue. A

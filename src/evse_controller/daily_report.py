@@ -25,7 +25,7 @@ import os
 import threading
 from typing import TYPE_CHECKING, Callable, Optional
 
-from evse_controller.energy_sessions import FREE_IMPORT
+from evse_controller.energy_sessions import FREE_IMPORT, OCPP
 from evse_controller.slot_prices import SLOT_MINUTES
 from evse_controller.utils.config import config
 from evse_controller.utils.logging_config import debug, warning
@@ -38,6 +38,31 @@ SLOTS_PER_DAY = 48
 GAP_CAP_SECONDS = 300.0
 WRITE_INTERVAL_SECONDS = 60.0
 STATE_VERSION = 1
+
+
+def _slot_has_ev_charging(slot: dict) -> bool:
+    """True when the slot records meaningful energy into the vehicle.
+
+    The OCPP flag is normally written live.  A report written before that
+    flag existed can still be repaired from the measured energy: the EVSE
+    channel, the DC battery channel or a rising SoC all show that the car
+    actually charged rather than merely being handed to the supplier.
+    """
+    energy = slot.get("energy") or {}
+    evse = energy.get("evse") or {}
+    battery = energy.get("battery_dc") or {}
+    evse_in = evse.get("in") or 0.0
+    battery_in = battery.get("in") or 0.0
+    soc = slot.get("soc") or {}
+    start = soc.get("start")
+    end = soc.get("end")
+    soc_gain = (
+        float(end) - float(start)
+        if start is not None and end is not None
+        else 0.0
+    )
+    return evse_in > 0.05 or battery_in > 0.05 or soc_gain >= 1.0
+
 
 # Power histograms used by the house-load forecast.  The bin width is the
 # resolution of the stored distribution; the range is unbounded, so a large
@@ -724,9 +749,19 @@ class DailyEnergyLog:
             # An OCPP handoff can be billed at the tariff's off-peak rate even
             # when the clock time is outside the cheap band.  A free-import
             # window is still genuinely 0p and outranks that rule.
-            if session_kind != FREE_IMPORT and "ocpp" in (
-                slot.get("flags") or []
+            flags = slot.setdefault("flags", [])
+            ocpp_handoff = "ocpp" in flags
+            if (
+                not ocpp_handoff
+                and session_kind == OCPP
+                and _slot_has_ev_charging(slot)
             ):
+                # The live flag can be missed when the Wallbox API has not
+                # confirmed the handoff.  An OCPP session with measured
+                # charging is enough to apply the supplier's OCPP price.
+                flags.append("ocpp")
+                ocpp_handoff = True
+            if session_kind != FREE_IMPORT and ocpp_handoff:
                 try:
                     ocpp_p = (
                         source.ocpp_import_price_p(self._day, slot["index"])
@@ -842,6 +877,66 @@ class DailyEnergyLog:
                 )
                 slot.setdefault("coverage", {}).setdefault(key, 0.0)
 
+    def _repair_ocpp_prices(self, day: date, data: dict) -> bool:
+        """Re-price historical OCPP session slots that missed the live flag.
+
+        A report written before the handoff was recorded can still be
+        corrected from its own measurements: if the slot has an OCPP session,
+        shows actual vehicle charging and has no OCPP flag, the tariff's OCPP
+        import rule is applied and the slot's money is recomputed.
+        """
+        source = self._price_source
+        if source is None:
+            return False
+        slots = data.get("slots") or []
+        changed = False
+        saved = (
+            self._day,
+            self._slots,
+            self._day_data,
+            self._last_write,
+        )
+        self._day = day
+        self._slots = slots
+        self._day_data = data
+        try:
+            for slot in slots:
+                if not slot.get("closed"):
+                    continue
+                prices = slot.get("prices") or {}
+                if prices.get("session") != OCPP:
+                    continue
+                flags = slot.setdefault("flags", [])
+                if "ocpp" in flags:
+                    continue
+                if not _slot_has_ev_charging(slot):
+                    continue
+                try:
+                    ocpp_p = source.ocpp_import_price_p(
+                        day, slot["index"]
+                    )
+                except Exception as exc:
+                    warning(
+                        f"DAILY_REPORT: OCPP repair price failed: {exc}"
+                    )
+                    continue
+                if ocpp_p is None:
+                    continue
+                flags.append("ocpp")
+                self._price_slot(slot)
+                changed = True
+            if changed:
+                self._recompute_totals()
+                self._write(force=True)
+        finally:
+            (
+                self._day,
+                self._slots,
+                self._day_data,
+                self._last_write,
+            ) = saved
+        return changed
+
     def _load_day(self, day: date) -> Optional[dict]:
         path = self._path(day)
         if not path.exists():
@@ -889,6 +984,10 @@ class DailyEnergyLog:
             slot.setdefault("saved_gbp", None)
             slot.setdefault("closed", False)
             slot.setdefault("flags", [])
+        try:
+            self._repair_ocpp_prices(day, data)
+        except Exception as exc:
+            warning(f"DAILY_REPORT: OCPP repair failed: {exc}")
         return data
 
     def _recompute_totals(self) -> None:
