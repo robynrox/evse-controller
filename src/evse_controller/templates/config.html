@@ -37,6 +37,67 @@
         margin: 10px 0;
         color: #004085;
     }
+
+    .discovery-card {
+        border: 1px solid #d8dde3;
+        border-radius: 6px;
+        padding: 14px;
+        margin: 14px 0;
+        background: #fff;
+    }
+    .discovery-card h2 {
+        margin-top: 0;
+        font-size: 18px;
+    }
+    .discovery-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+    }
+    .discovery-status {
+        color: #555;
+        font-size: 13px;
+    }
+    .discovery-results {
+        margin-top: 12px;
+    }
+    .discovery-results table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .discovery-results th,
+    .discovery-results td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid #e5e8ec;
+    }
+    .discovery-results th {
+        color: #555;
+        font-weight: 600;
+    }
+    .discovery-use {
+        padding: 4px 8px;
+        margin: 0 4px 4px 0;
+        font-size: 12px;
+    }
+    .test-connection {
+        padding: 4px 8px;
+        margin-left: 8px;
+        font-size: 12px;
+    }
+    .connection-result {
+        display: inline-block;
+        margin-left: 8px;
+        font-size: 12px;
+    }
+    .connection-ok {
+        color: #1e5b2a;
+    }
+    .connection-fail {
+        color: #8a1c1c;
+    }
 </style>
 {% endblock %}
 
@@ -61,12 +122,29 @@
 {% endif %}
 {% endwith %}
 
+<div class="discovery-card">
+    <h2>Find devices on your network</h2>
+    <p>
+        Scan the local network for a Wallbox Quasar and Shelly EM. The scan can
+        take up to a minute. Addresses are only a starting point; use the
+        <strong>Test</strong> buttons next to the fields below before saving.
+    </p>
+    <div class="discovery-actions">
+        <button type="button" id="discovery-start">Scan network</button>
+        <span id="discovery-status" class="discovery-status">Not started.</span>
+    </div>
+    <div id="discovery-results" class="discovery-results"></div>
+</div>
+
 <form id="configForm" method="POST">
     <div class="config-section">
         <h2>Wallbox Configuration</h2>
         <div class="form-group">
             <label for="wallbox_url">Wallbox URL:</label>
             <input type="text" id="wallbox_url" name="wallbox[url]" value="{{ config.wallbox.url }}" required>
+            <button type="button" class="test-connection" data-kind="wallbox"
+                    data-source="wallbox_url" data-result="wallbox-test-result">Test</button>
+            <span id="wallbox-test-result" class="connection-result"></span>
         </div>
         <div class="form-group">
             <label for="wallbox_username">Username (for auto-restart and OCPP state read/write functions):</label>
@@ -124,11 +202,17 @@
             <label for="shelly_url">Shelly 1 URL:</label>
             <input type="text" id="shelly_url" name="shelly[primary_url]" value="{{ config.shelly.primary_url }}"
                 required>
+            <button type="button" class="test-connection" data-kind="shelly"
+                    data-source="shelly_url" data-result="shelly1-test-result">Test</button>
+            <span id="shelly1-test-result" class="connection-result"></span>
         </div>
         <div class="form-group">
             <label for="shelly_secondary_url">Shelly 2 URL (optional):</label>
             <input type="text" id="shelly_secondary_url" name="shelly[secondary_url]"
                 value="{{ config.shelly.secondary_url }}">
+            <button type="button" class="test-connection" data-kind="shelly"
+                    data-source="shelly_secondary_url" data-result="shelly2-test-result">Test</button>
+            <span id="shelly2-test-result" class="connection-result"></span>
         </div>
 
         <!-- Shelly 1 Channel Configuration -->
@@ -1056,6 +1140,209 @@
     // InfluxDB toggle
     document.getElementById('influxdb_enabled').addEventListener('change', function () {
         document.getElementById('influxdb_settings').style.display = this.checked ? 'block' : 'none';
+    });
+
+    // Device discovery and connection tests.
+    const discoveryStart = document.getElementById('discovery-start');
+    const discoveryStatus = document.getElementById('discovery-status');
+    const discoveryResults = document.getElementById('discovery-results');
+
+    function setFieldValue(fieldId, value) {
+        const field = document.getElementById(fieldId);
+        if (!field) return;
+        field.value = value;
+        field.focus();
+    }
+
+    function addTextCell(row, value) {
+        const cell = document.createElement('td');
+        cell.textContent = value == null ? '' : String(value);
+        row.appendChild(cell);
+        return cell;
+    }
+
+    function renderDiscovery(state) {
+        if (!discoveryResults) return;
+        discoveryResults.replaceChildren();
+        const devices = state.devices || [];
+        if (!devices.length) {
+            if (state.status === 'running') {
+                discoveryResults.textContent = 'Searching the local network…';
+            } else if (state.status === 'done') {
+                discoveryResults.textContent =
+                    'No devices found. Check that this computer is on the same ' +
+                    'network as the Wallbox and Shelly.';
+            } else if (state.status === 'error') {
+                discoveryResults.textContent =
+                    state.error || 'Discovery failed.';
+            }
+            return;
+        }
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['Type', 'Address', 'Name', 'Details', 'Use'].forEach(label => {
+            const th = document.createElement('th');
+            th.textContent = label;
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        devices.forEach(device => {
+            const row = document.createElement('tr');
+            addTextCell(row, device.type || 'Device');
+            addTextCell(row, device.ip || '');
+            addTextCell(row, device.name || '');
+            const details = device.details || {};
+            let detailText = '';
+            const deviceType = String(device.type || '');
+            if (deviceType.indexOf('Shelly') === 0) {
+                if (details.emeters != null) {
+                    detailText += `${details.emeters} meter(s)`;
+                }
+                if (details.total_power_w != null) {
+                    detailText += `; total ${details.total_power_w} W`;
+                }
+            } else if (deviceType === 'Wallbox') {
+                if (details.register) {
+                    detailText += `register ${details.register}`;
+                }
+                if (details.value != null) {
+                    detailText += ` = ${details.value}`;
+                }
+            }
+            addTextCell(row, detailText);
+            const actionCell = document.createElement('td');
+            if (deviceType.indexOf('Wallbox') !== -1) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'discovery-use';
+                button.textContent = 'Use as Wallbox';
+                button.addEventListener('click', () => {
+                    setFieldValue('wallbox_url', device.ip);
+                });
+                actionCell.appendChild(button);
+            }
+            if (deviceType.indexOf('Shelly') !== -1) {
+                const primary = document.createElement('button');
+                primary.type = 'button';
+                primary.className = 'discovery-use';
+                primary.textContent = 'Use as Shelly 1';
+                primary.addEventListener('click', () => {
+                    setFieldValue('shelly_url', device.ip);
+                });
+                actionCell.appendChild(primary);
+                const secondary = document.createElement('button');
+                secondary.type = 'button';
+                secondary.className = 'discovery-use';
+                secondary.textContent = 'Use as Shelly 2';
+                secondary.addEventListener('click', () => {
+                    setFieldValue('shelly_secondary_url', device.ip);
+                });
+                actionCell.appendChild(secondary);
+            }
+            row.appendChild(actionCell);
+            tbody.appendChild(row);
+        });
+        table.appendChild(tbody);
+        discoveryResults.appendChild(table);
+    }
+
+    function discoveryStatusText(state) {
+        if (!state) return 'Not started.';
+        if (state.status === 'running') {
+            const elapsed = state.elapsed_s == null
+                ? 0
+                : Math.round(state.elapsed_s);
+            return `Scanning… ${elapsed} s`;
+        }
+        if (state.status === 'done') {
+            const count = (state.devices || []).length;
+            return `Scan finished: ${count} device${count === 1 ? '' : 's'} found.`;
+        }
+        if (state.status === 'error') {
+            return state.error || 'Scan failed.';
+        }
+        return 'Not started.';
+    }
+
+    async function pollDiscovery() {
+        try {
+            const response = await fetch('/api/discovery/status');
+            const state = await response.json();
+            if (discoveryStatus) {
+                discoveryStatus.textContent = discoveryStatusText(state);
+            }
+            renderDiscovery(state);
+            if (state.status === 'running') {
+                window.setTimeout(pollDiscovery, 2000);
+            } else if (discoveryStart) {
+                discoveryStart.disabled = false;
+            }
+        } catch (error) {
+            if (discoveryStatus) {
+                discoveryStatus.textContent =
+                    `Could not check discovery: ${error.message}`;
+            }
+            if (discoveryStart) discoveryStart.disabled = false;
+        }
+    }
+
+    async function startDiscovery() {
+        if (!discoveryStart) return;
+        discoveryStart.disabled = true;
+        if (discoveryStatus) discoveryStatus.textContent = 'Starting…';
+        try {
+            const response = await fetch('/api/discovery/start', {
+                method: 'POST'
+            });
+            const state = await response.json();
+            if (!response.ok) {
+                throw new Error(state.error || 'Could not start discovery');
+            }
+            if (discoveryStatus) {
+                discoveryStatus.textContent = discoveryStatusText(state);
+            }
+            renderDiscovery(state);
+            window.setTimeout(pollDiscovery, 1000);
+        } catch (error) {
+            if (discoveryStatus) discoveryStatus.textContent = error.message;
+            discoveryStart.disabled = false;
+        }
+    }
+
+    async function testConnection(button) {
+        const kind = button.dataset.kind;
+        const source = document.getElementById(button.dataset.source);
+        const result = document.getElementById(button.dataset.result);
+        if (!source || !result) return;
+        button.disabled = true;
+        result.className = 'connection-result';
+        result.textContent = 'Testing…';
+        try {
+            const response = await fetch('/api/connection-test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({kind: kind, url: source.value.trim()})
+            });
+            const data = await response.json();
+            result.textContent = data.message || (data.ok ? 'Connected.' : 'Failed.');
+            result.classList.add(data.ok ? 'connection-ok' : 'connection-fail');
+        } catch (error) {
+            result.textContent = `Test failed: ${error.message}`;
+            result.classList.add('connection-fail');
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    if (discoveryStart) {
+        discoveryStart.addEventListener('click', startDiscovery);
+        pollDiscovery();
+    }
+    document.querySelectorAll('.test-connection').forEach(button => {
+        button.addEventListener('click', () => testConnection(button));
     });
 </script>
 {% endblock %}

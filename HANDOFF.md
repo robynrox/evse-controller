@@ -387,6 +387,17 @@ completed fixes.
   real 0p export, and `none` is an unknown/no export tariff. A mismatched
   preset leaves a tariff on its legacy bands rather than applying another
   product's prices.
+- **Network discovery and connection tests.** `discovery_service.py` runs the
+  `evse_discovery` proof-of-concept scanner once at a time in a background
+  thread and exposes `/api/discovery/start` and `/api/discovery/status` for
+  the config page. The scanner is imported from
+  `src/evse_discovery/evse_discovery`; the service puts that directory on
+  `sys.path` so the flat development layout works without a package install.
+  Scans are capped at 1024 hosts per interface. `check_wallbox` reads a
+  Wallbox Modbus status register and `check_shelly` fetches the Shelly
+  `/status` endpoint; `/api/connection-test` dispatches to them. The config
+  page fills the address fields from discovery results and tests unsaved
+  values before the form is submitted.
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on
   every Shelly sample so it runs in SMART, FREERUN, PAUSE and OCPP alike. It

@@ -72,6 +72,11 @@ class DeviceDiscovery:
             # Also skip .1 which is typically the gateway
             hosts = [ip for ip in network.hosts() 
                     if ip.packed[-1] not in (0, 1, 255)]
+            if len(hosts) > 1024:
+                logger.warning(
+                    "Skipping %s: more than 1024 hosts", network
+                )
+                continue
             
             # Create tasks for all hosts
             tasks = []
@@ -122,7 +127,7 @@ class DeviceDiscovery:
             client = ModbusTcpClient(ip, port=502, timeout=1)
             
             for address, count in registers:
-                logger.info(f"Trying register {hex(address)} at {ip}")
+                logger.debug(f"Trying register {hex(address)} at {ip}")
                 try:
                     result = await asyncio.to_thread(
                         client.read_holding_registers,

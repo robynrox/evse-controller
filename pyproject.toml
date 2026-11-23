@@ -5,7 +5,7 @@ description = "EVSE Controller with Wallbox Quasar support"
 authors = ["Robyn <robynrox@users.noreply.github.com>"]
 packages = [
     { include = "evse_controller", from = "src" },
-    { include = "evse_discovery", from = "src" }
+    { include = "evse_discovery", from = "src/evse_discovery" }
 ]
 
 [tool.poetry.dependencies]

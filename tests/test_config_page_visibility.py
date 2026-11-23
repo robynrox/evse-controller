@@ -46,6 +46,15 @@ def _field_value(html, field_id):
     return None if match is None else match.group(1)
 
 
+def test_discovery_and_connection_tests_are_on_the_config_page(app):
+    body = _render(app, "iog_agile")
+
+    assert 'id="discovery-start"' in body
+    assert 'id="discovery-results"' in body
+    assert 'data-kind="wallbox"' in body
+    assert body.count('data-kind="shelly"') >= 2
+
+
 def test_soc_floors_are_visible_and_populated(app):
     body = _render(app, "iog_agile")
 

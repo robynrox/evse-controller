@@ -242,6 +242,25 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
    python -m evse_controller.smart_evse_controller
    ```
 
+### First-time setup: find and test your devices
+
+The configuration page starts with a **Find devices on your network** card.
+It scans the local network for a Wallbox Quasar (Modbus port 502) and Shelly EM
+devices (HTTP `/status`) and lists anything it finds. The scan runs in the
+background and can take up to a minute. Use the **Use as Wallbox / Shelly 1 /
+Shelly 2** buttons to fill the address fields.
+
+Every address field also has a **Test** button:
+
+- the Wallbox test opens a short Modbus connection and reads a status register;
+- the Shelly test fetches `/status` and reports the number of meters and the
+  total power if the device is a Shelly EM.
+
+Use the test before saving. A discovered address can still be the wrong device,
+and a valid Shelly that is not an EM will be reported as reachable but without
+the `emeters` this build expects. The scan and tests are local-network tools;
+they are not exposed as a remote service.
+
 ### Configuration Options
 
 Detailed explanation of each configuration option:
