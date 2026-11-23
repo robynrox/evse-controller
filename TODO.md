@@ -10,6 +10,10 @@
 ## Medium Priority
 - [ ] Implement support for Octopus Agile tariff
 - [ ] Make the is_empty SoC configurable
+- [ ] Soft SoC band / goldilocks penalty for the DP: configurable, off by
+      default, with a per-slot convex penalty outside a comfort band and a
+      backtest before enabling. Design note:
+      [`reports/dp/SOFT_SOC_BAND.md`](reports/dp/SOFT_SOC_BAND.md)
 - [ ] First-run onboarding: integrate the existing `evse_discovery` scanner into
       the config page, add connection tests and a quick-start checklist, then a
       guided setup wizard for hardware, tariff, SoC floors and control mode

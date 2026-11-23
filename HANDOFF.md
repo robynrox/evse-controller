@@ -712,7 +712,10 @@ completed fixes.
   terminal state. Runs store `horizon_end_slot`, `horizon_end_date`,
   `horizon_limited_by_export`, a null `target_soc`, the
   `terminal_energy_value_p_per_kwh` and per-input `horizon_index` values for
-  cross-day actions.
+  cross-day actions. A proposed soft SoC comfort band (a configurable,
+  convex per-slot penalty outside a goldilocks range) is sketched in
+  [`reports/dp/SOFT_SOC_BAND.md`](reports/dp/SOFT_SOC_BAND.md); it is not
+  implemented and should be backtested before becoming a default.
 - Fixed actions are scored by expected grid cost over the per-slot load
   histogram (`load_samples`), not just the median. The sparse histograms are
   passed through the input builder; slots with many bins are condensed into at
