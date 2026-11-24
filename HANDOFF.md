@@ -419,7 +419,12 @@ completed fixes.
   The four hardware items always block the dashboard card; the review items
   block only when their value is invalid. The card disappears when everything
   blocking is ready. `index()` wraps the check so a configuration error can
-  never stop the dashboard rendering.
+  never stop the dashboard rendering. The config page embeds a sticky live
+  version in its right-hand column: the browser re-evaluates the form on every
+  input/change, uses the Wallbox/Shelly connection-test state, and turns each
+  item red or green with a summary count. The config page anchors are
+  `#wallbox`, `#shelly`, `#device-assignment`, `#soc-floors`,
+  `#tariff-prices` and `#learning-mode`.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

@@ -1257,8 +1257,14 @@ def config_page():
     # GET request - display current configuration
     try:
         config_dict = config.as_dict()
+        try:
+            setup_checklist = build_setup_checklist(config)
+        except Exception as exc:
+            debug(f"Could not build setup checklist: {exc}")
+            setup_checklist = []
         return render_template('config.html', config=config_dict,
                                price_presets=PRESETS,
+                               setup_checklist=setup_checklist,
                                solver_version=SOLVER_VERSION,
                                live_model_job=live_model_fit.latest_job())
     except Exception as e:

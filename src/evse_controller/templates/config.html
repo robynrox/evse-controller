@@ -98,6 +98,84 @@
     .connection-fail {
         color: #8a1c1c;
     }
+
+    .config-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 310px;
+        gap: 18px;
+        align-items: start;
+    }
+    .config-main {
+        min-width: 0;
+    }
+    .config-aside {
+        position: sticky;
+        top: 12px;
+    }
+    .setup-checklist {
+        border: 1px solid #e6c36a;
+        background: #fff9e8;
+        border-radius: 6px;
+        padding: 14px 16px;
+    }
+    .setup-checklist h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+    }
+    .setup-checklist p {
+        margin: 4px 0 8px;
+        color: #5c4a1a;
+        font-size: 13px;
+    }
+    .setup-checklist ul {
+        list-style: none;
+        padding: 0;
+        margin: 8px 0 0;
+    }
+    .setup-checklist li {
+        margin: 7px 0;
+        font-size: 13px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        align-items: baseline;
+    }
+    .setup-mark {
+        width: 16px;
+        font-weight: 700;
+    }
+    .setup-item-label {
+        font-weight: 600;
+    }
+    .setup-item-detail {
+        color: #6c5a2a;
+        flex: 1 1 100%;
+        padding-left: 21px;
+    }
+    .setup-checklist a {
+        color: #0b5cad;
+        font-size: 12px;
+    }
+    .setup-ready .setup-mark {
+        color: #2e7d32;
+    }
+    .setup-missing .setup-mark {
+        color: #b26a00;
+    }
+    .setup-missing .setup-item-label {
+        color: #8a4b00;
+    }
+    @media (max-width: 1100px) {
+        .config-layout {
+            display: flex;
+            flex-direction: column;
+        }
+        .config-aside {
+            order: -1;
+            position: static;
+            margin-bottom: 14px;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -149,6 +227,8 @@
     <div id="discovery-results" class="discovery-results"></div>
 </div>
 
+<div class="config-layout">
+<div class="config-main">
 <form id="configForm" method="POST">
     <div class="config-section" id="wallbox">
         <h2>Wallbox Configuration</h2>
@@ -1111,6 +1191,25 @@
 
     <button type="submit">Save Configuration</button>
 </form>
+</div>
+<aside class="config-aside">
+    <div class="setup-checklist" id="config-setup-checklist">
+        <h2>Setup checklist</h2>
+        <p id="setup-summary">{% if setup_checklist %}Checking…{% else %}Setup checklist unavailable.{% endif %}</p>
+        <ul>
+            {% for item in setup_checklist or [] %}
+            <li data-setup-key="{{ item.key }}"
+                class="{% if item.ready %}setup-ready{% else %}setup-missing{% endif %}">
+                <span class="setup-mark">{{ "✓" if item.ready else "○" }}</span>
+                <span class="setup-item-label">{{ item.label }}</span>
+                <a href="{{ item.anchor }}">{{ "Review" if item.ready else "Fix" }}</a>
+                <span class="setup-item-detail">{{ item.detail }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</aside>
+</div>
 
 <script>
     // Add validation for current inputs
@@ -1362,9 +1461,13 @@
             const data = await response.json();
             result.textContent = data.message || (data.ok ? 'Connected.' : 'Failed.');
             result.classList.add(data.ok ? 'connection-ok' : 'connection-fail');
+            source.dataset.connection = data.ok ? 'ok' : 'failed';
+            setupUpdate();
         } catch (error) {
             result.textContent = `Test failed: ${error.message}`;
             result.classList.add('connection-fail');
+            source.dataset.connection = 'failed';
+            setupUpdate();
         } finally {
             button.disabled = false;
         }
@@ -1375,7 +1478,194 @@
         pollDiscovery();
     }
     document.querySelectorAll('.test-connection').forEach(button => {
+        const source = document.getElementById(button.dataset.source);
+        if (source) {
+            source.addEventListener('input', () => {
+                delete source.dataset.connection;
+            });
+        }
         button.addEventListener('click', () => testConnection(button));
     });
+
+    // Live setup checklist on the configuration page.
+    const setupNodes = {};
+    document.querySelectorAll(
+        '#config-setup-checklist [data-setup-key]'
+    ).forEach(node => {
+        setupNodes[node.dataset.setupKey] = node;
+    });
+    const setupSummary = document.getElementById('setup-summary');
+
+    function setupValue(id) {
+        const element = document.getElementById(id);
+        return element ? String(element.value || '').trim() : '';
+    }
+
+    function setupOptionText(id) {
+        const element = document.getElementById(id);
+        if (!element || element.selectedIndex < 0) return '';
+        return String(
+            element.options[element.selectedIndex].textContent || ''
+        ).trim().replace(/\s+/g, ' ');
+    }
+
+    function setupSet(key, ready, detail) {
+        const node = setupNodes[key];
+        if (!node) return;
+        node.classList.toggle('setup-ready', ready);
+        node.classList.toggle('setup-missing', !ready);
+        const mark = node.querySelector('.setup-mark');
+        if (mark) mark.textContent = ready ? '✓' : '○';
+        const detailNode = node.querySelector('.setup-item-detail');
+        if (detailNode) detailNode.textContent = detail;
+        const link = node.querySelector('a');
+        if (link) link.textContent = ready ? 'Review' : 'Fix';
+    }
+
+    function setupMonitor(selectId) {
+        const select = document.getElementById(selectId);
+        if (!select || !select.value) {
+            return {ready: false, detail: 'Not assigned'};
+        }
+        const parts = String(select.value).split(':');
+        const device = parts[0];
+        const channel = parts[1];
+        const sourceId = device === 'secondary'
+            ? 'shelly_secondary_url'
+            : 'shelly_url';
+        const source = document.getElementById(sourceId);
+        const url = source ? String(source.value || '').trim() : '';
+        const inUse = document.getElementById(
+            `${device}_ch${channel}_in_use`
+        );
+        const label = device === 'secondary' ? 'Shelly 2' : 'Shelly 1';
+        const connection = source ? source.dataset.connection : '';
+        if (!url) {
+            return {
+                ready: false,
+                detail: `${label} · Ch ${channel} · no address`
+            };
+        }
+        if (inUse && !inUse.checked) {
+            return {
+                ready: false,
+                detail: `${label} · Ch ${channel} · channel not in use`
+            };
+        }
+        if (connection === 'failed') {
+            return {
+                ready: false,
+                detail: `${label} · Ch ${channel} · test failed`
+            };
+        }
+        if (connection === 'ok') {
+            return {
+                ready: true,
+                detail: `${label} · Ch ${channel} · tested`
+            };
+        }
+        return {ready: true, detail: `${label} · Ch ${channel}`};
+    }
+
+    function setupUpdate() {
+        if (!Object.keys(setupNodes).length) return;
+
+        const wallbox = setupValue('wallbox_url');
+        const wallboxNode = document.getElementById('wallbox_url');
+        const wallboxState = wallboxNode
+            ? wallboxNode.dataset.connection
+            : '';
+        const simulator = wallbox.toLowerCase() === 'simulator';
+        if (!wallbox) {
+            setupSet('wallbox', false, 'Enter the Wallbox address');
+        } else if (wallboxState === 'failed') {
+            setupSet(
+                'wallbox',
+                false,
+                'Wallbox test failed — check the address'
+            );
+        } else if (simulator) {
+            setupSet('wallbox', true, 'Simulator (testing)');
+        } else if (wallboxState === 'ok') {
+            setupSet(
+                'wallbox',
+                true,
+                'Wallbox address set — connection tested'
+            );
+        } else {
+            setupSet('wallbox', true, 'Wallbox address set — not tested');
+        }
+
+        const primary = setupValue('shelly_url');
+        const secondary = setupValue('shelly_secondary_url');
+        if (primary && secondary) {
+            setupSet('shelly', true, 'Shelly 1 and Shelly 2 configured');
+        } else if (primary) {
+            setupSet('shelly', true, 'Shelly 1 configured');
+        } else if (secondary) {
+            setupSet('shelly', true, 'Shelly 2 configured');
+        } else {
+            setupSet('shelly', false, 'Enter a Shelly address');
+        }
+
+        const grid = setupMonitor('grid_monitor');
+        setupSet('grid', grid.ready, grid.detail);
+        const evse = setupMonitor('evse_monitor');
+        setupSet('evse', evse.ready, evse.detail);
+
+        const preset = setupOptionText('tariff_preset');
+        setupSet(
+            'tariff',
+            !!preset,
+            preset || 'Choose a tariff preset'
+        );
+
+        const hardText = setupValue('hard_floor_soc');
+        const bufferText = setupValue('buffer_floor_soc');
+        const bulkText = setupValue('bulk_floor_soc');
+        const hard = Number(hardText);
+        const buffer = Number(bufferText);
+        const bulk = Number(bulkText);
+        const floorsReady = (
+            hardText !== '' &&
+            bufferText !== '' &&
+            bulkText !== '' &&
+            Number.isFinite(hard) &&
+            Number.isFinite(buffer) &&
+            Number.isFinite(bulk) &&
+            hard >= 0 &&
+            hard <= buffer &&
+            buffer <= bulk &&
+            bulk <= 100
+        );
+        setupSet(
+            'floors',
+            floorsReady,
+            floorsReady
+                ? `Hard ${hard}% · buffer ${buffer}% · bulk ${bulk}%`
+                : 'Hard ≤ buffer ≤ bulk, each within 0–100%'
+        );
+
+        const mode = setupOptionText('learning_mode');
+        setupSet('control', !!mode, mode || 'Choose a control mode');
+
+        if (setupSummary) {
+            const missing = Object.values(setupNodes).filter(
+                node => node.classList.contains('setup-missing')
+            ).length;
+            setupSummary.textContent = missing
+                ? `${missing} item${missing === 1 ? '' : 's'} need attention.`
+                : 'All setup items are ready.';
+        }
+    }
+
+    const configForm = document.getElementById('configForm');
+    if (configForm) {
+        configForm.querySelectorAll('input, select').forEach(element => {
+            element.addEventListener('input', setupUpdate);
+            element.addEventListener('change', setupUpdate);
+        });
+    }
+    setupUpdate();
 </script>
 {% endblock %}

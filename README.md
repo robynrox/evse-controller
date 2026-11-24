@@ -278,6 +278,13 @@ to the relevant configuration sections. It also offers review links for the
 tariff and prices, the SoC floors and the control mode. The card disappears
 once the blocking hardware items are ready and the review values are valid.
 
+The configuration page itself carries a live **Setup checklist** in a sticky
+right-hand column (above the form on narrow screens). Each item is red until
+the relevant fields are valid and turns green with new wording when they are.
+Connection-test success or failure is reflected in the Wallbox and monitor
+items, and the summary line reports how many items still need attention. This
+is the working checklist; the dashboard card is the reminder.
+
 ### Configuration Options
 
 Detailed explanation of each configuration option:

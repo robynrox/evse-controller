@@ -3,6 +3,7 @@
 import copy
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import Flask, render_template
 import pytest
@@ -24,7 +25,7 @@ def app():
     return Flask(__name__, template_folder=str(TEMPLATES))
 
 
-def _render(app, preset, export_source=None):
+def _render(app, preset, export_source=None, setup_checklist=None):
     _ = config.WALLBOX_URL
     config_dict = copy.deepcopy(config.as_dict())
     config_dict["tariffs"]["preset"] = preset
@@ -34,6 +35,7 @@ def _render(app, preset, export_source=None):
             "config.html",
             config=config_dict,
             price_presets=PRESETS,
+            setup_checklist=setup_checklist or [],
         )
 
 
@@ -68,6 +70,26 @@ def test_config_sections_have_checklist_anchors(app):
         "learning-mode",
     ):
         assert f'id="{anchor}"' in body
+
+
+def test_config_page_embeds_the_live_setup_checklist(app):
+    item = SimpleNamespace(
+        key="wallbox",
+        label="Wallbox address",
+        detail="Enter the Wallbox address",
+        ready=False,
+        anchor="#wallbox",
+    )
+
+    body = _render(
+        app, "iog_agile", setup_checklist=[item]
+    )
+
+    assert 'id="config-setup-checklist"' in body
+    assert 'id="setup-summary"' in body
+    assert 'data-setup-key="wallbox"' in body
+    assert "Enter the Wallbox address" in body
+    assert 'href="#wallbox"' in body
 
 
 def test_soc_floors_are_visible_and_populated(app):

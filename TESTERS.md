@@ -129,7 +129,9 @@ connection. Shelly results show each meter channel separately in whole watts;
 the Wallbox may need a second scan if it was busy. Then save the configuration.
 On a fresh install the dashboard also shows a **Finish setting up your
 controller** checklist; use its links and confirm it disappears once the
-hardware items are ready.
+hardware items are ready. The configuration page has the live version in a
+sticky right-hand column: fields turn red/green as you type, and a successful
+connection test is reflected in the Wallbox and monitor items.
 
 1. **Start in FREERUN.** Confirm the dashboard, prices and decision line load.
 2. **Preview the DP.** Compare `Would: …` with the heuristic decision for a
