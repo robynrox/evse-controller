@@ -92,6 +92,19 @@
         gap: 10px;
         margin-top: 10px;
     }
+    .price-grid-three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .price-heading {
+        margin: 16px 0 0;
+        font-size: 14px;
+        color: #333;
+    }
+    @media (max-width: 560px) {
+        .price-grid-three {
+            grid-template-columns: 1fr;
+        }
+    }
     .price-grid label {
         display: block;
         font-weight: 600;
@@ -417,9 +430,12 @@
                 </div>
                 <div>
                     <label for="octopus_region">Octopus region</label>
-                    <input type="text" id="octopus_region" name="octopus_region"
-                           value="{{ values.octopus_region }}" maxlength="1">
-                    <small>Single-letter region code, e.g. K for London.</small>
+                    <select id="octopus_region" name="octopus_region" required>
+                        {% for code, name in octopus_regions %}
+                        <option value="{{ code }}" {% if values.octopus_region == code %}selected{% endif %}>{{ name }} ({{ code }})</option>
+                        {% endfor %}
+                    </select>
+                    <small>Used for Agile import and Agile Outgoing export rates.</small>
                 </div>
                 <div>
                     <label for="agile_product">Agile import product</label>
@@ -431,10 +447,23 @@
 
             <button type="button" id="apply-preset-prices">Use preset default prices</button>
 
-            <div class="price-grid">
-                {% for key, label, _attribute in price_fields %}
+            <h3 class="price-heading">Import prices (p/kWh)</h3>
+            <div class="price-grid price-grid-three">
+                {% for key, label, _attribute in price_fields[:3] %}
                 <div>
-                    <label for="{{ key }}">{{ label }} (p/kWh)</label>
+                    <label for="{{ key }}">{{ label }}</label>
+                    <input type="number" step="0.01" min="0"
+                           id="{{ key }}" name="{{ key }}"
+                           value="{{ values[key] }}">
+                </div>
+                {% endfor %}
+            </div>
+
+            <h3 class="price-heading">Export prices (p/kWh)</h3>
+            <div class="price-grid price-grid-three">
+                {% for key, label, _attribute in price_fields[3:] %}
+                <div>
+                    <label for="{{ key }}">{{ label }}</label>
                     <input type="number" step="0.01" min="0"
                            id="{{ key }}" name="{{ key }}"
                            value="{{ values[key] }}">
@@ -625,6 +654,9 @@
             if (!setupValue('tariff_preset')) {
                 return 'Choose a tariff preset.';
             }
+            if (!setupValue('octopus_region')) {
+                return 'Choose an Octopus region.';
+            }
             for (const key of [
                 'import_standard', 'import_cheap', 'import_peak',
                 'export_standard', 'export_cheap', 'export_peak'
@@ -701,6 +733,11 @@
         add(
             'Tariff',
             preset ? preset.options[preset.selectedIndex].textContent.trim() : ''
+        );
+        const region = document.getElementById('octopus_region');
+        add(
+            'Octopus region',
+            region ? region.options[region.selectedIndex].textContent.trim() : ''
         );
         for (const [key, label] of [
             ['import_standard', 'Import standard'],

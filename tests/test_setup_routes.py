@@ -94,6 +94,10 @@ def test_setup_page_renders_the_steps(isolated_config):
     assert "5 · Review" in body
     assert 'id="wallbox_url"' in body
     assert 'id="tariff_preset"' in body
+    assert '<select id="octopus_region"' in body
+    assert "Southern Wales (K)" in body
+    assert "Import prices (p/kWh)" in body
+    assert "Export prices (p/kWh)" in body
 
 
 def test_setup_page_saves_the_essentials(isolated_config):
@@ -115,6 +119,7 @@ def test_setup_page_saves_the_essentials(isolated_config):
     assert isolated_config.SHELLY_EVSE_CHANNEL == 2
     assert isolated_config.is_channel_in_use("primary", 2) is True
     assert isolated_config.TARIFF_PRESET == "iog_agile"
+    assert isolated_config.OCTOPUS_REGION == "K"
     assert isolated_config.IMPORT_CHEAP_P == 10
     assert isolated_config.EXPORT_STANDARD_P == 8
     assert isolated_config.MAX_CHARGE_PERCENT == 90
@@ -176,6 +181,18 @@ def test_setup_page_rejects_a_missing_wallbox(isolated_config):
     assert response.status_code == 200
     assert "Wallbox address" in response.get_data(as_text=True)
     assert isolated_config.WALLBOX_URL == "10.0.0.5"
+
+
+def test_setup_page_rejects_an_unknown_region(isolated_config):
+    app = _app()
+
+    with app.test_client() as client:
+        response = client.post(
+            "/setup", data=_form(octopus_region="Z")
+        )
+
+    assert response.status_code == 200
+    assert "Choose an Octopus region." in response.get_data(as_text=True)
 
 
 def test_setup_page_uses_the_simulator(isolated_config):

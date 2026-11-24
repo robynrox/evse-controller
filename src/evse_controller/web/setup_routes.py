@@ -18,6 +18,24 @@ CONTROL_MODES = {
     "freerun": "Free run — no smart tariff control",
 }
 
+#: Octopus distribution regions used by Agile import and Agile Outgoing.
+OCTOPUS_REGIONS = (
+    ("A", "Eastern England"),
+    ("B", "East Midlands"),
+    ("C", "London"),
+    ("D", "Merseyside & Northern Wales"),
+    ("E", "West Midlands"),
+    ("F", "North Eastern England"),
+    ("G", "North Western England"),
+    ("H", "Southern England"),
+    ("J", "South Eastern England"),
+    ("K", "Southern Wales"),
+    ("L", "Southern Scotland"),
+    ("M", "South Western England"),
+    ("N", "North Wales (part)"),
+    ("P", "Northern Ireland"),
+)
+
 PRICE_FIELDS = (
     ("import_standard", "Import standard rate", "IMPORT_STANDARD_P"),
     ("import_cheap", "Import cheap rate", "IMPORT_CHEAP_P"),
@@ -70,7 +88,7 @@ def _current_values() -> dict[str, str]:
             else ""
         ),
         "tariff_preset": str(config.TARIFF_PRESET or ""),
-        "octopus_region": str(config.OCTOPUS_REGION or ""),
+        "octopus_region": str(config.OCTOPUS_REGION or "K").upper(),
         "agile_product": str(config.OCTOPUS_AGILE_IMPORT_PRODUCT or ""),
         "max_charge_percent": str(config.MAX_CHARGE_PERCENT),
         "control_mode": control,
@@ -148,6 +166,10 @@ def _validate(
 
     if values["tariff_preset"] not in PRESETS:
         errors.append((2, "Choose a tariff preset."))
+    region = values["octopus_region"].strip().upper()
+    if region not in dict(OCTOPUS_REGIONS):
+        errors.append((2, "Choose an Octopus region."))
+    parsed["octopus_region"] = region
     for key, label, _attribute in PRICE_FIELDS:
         try:
             price = float(values[key])
@@ -235,7 +257,7 @@ def _save(values: dict[str, str], parsed: dict[str, Any]) -> None:
         config.SHELLY_EVSE_CHANNEL = None
 
     config.TARIFF_PRESET = values["tariff_preset"]
-    config.OCTOPUS_REGION = values["octopus_region"] or "K"
+    config.OCTOPUS_REGION = parsed["octopus_region"]
     config.OCTOPUS_AGILE_IMPORT_PRODUCT = values["agile_product"]
     for key, _label, attribute in PRICE_FIELDS:
         setattr(config, attribute, parsed[key])
@@ -281,6 +303,7 @@ def register_setup_routes(app) -> None:
             price_presets=PRESETS,
             price_fields=PRICE_FIELDS,
             floor_fields=FLOOR_FIELDS,
+            octopus_regions=OCTOPUS_REGIONS,
             preset_data={
                 key: {
                     "import": dict(preset.default_import_prices),
