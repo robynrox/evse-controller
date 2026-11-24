@@ -349,6 +349,26 @@
             </label>
             <span id="idle-load-override-status" class="mode-status"></span>
         </div>
+        {% if setup_incomplete %}
+        <div class="setup-checklist" id="setup-checklist">
+            <h2>Finish setting up your controller</h2>
+            <p>
+                A few essentials are still missing. Each link opens the
+                relevant configuration section.
+            </p>
+            <ul>
+                {% for item in setup_checklist %}
+                <li class="{% if item.ready %}setup-ready{% else %}setup-missing{% endif %}">
+                    <span class="setup-mark">{{ "✓" if item.ready else "○" }}</span>
+                    <span class="setup-item-label">{{ item.label }}</span>
+                    <span class="setup-item-detail">{{ item.detail }}</span>
+                    <a href="{{ url_for('config_page') }}{{ item.anchor }}">{{ "Review" if item.ready else "Fix" }}</a>
+                </li>
+                {% endfor %}
+            </ul>
+            <a class="setup-open" href="{{ url_for('config_page') }}">Open configuration →</a>
+        </div>
+        {% endif %}
         <div id="link-health" class="link-health" hidden></div>
         <div class="nav-links">
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
@@ -582,6 +602,63 @@
     .mode-status {
         font-size: 12px;
         color: #6c757d;
+    }
+
+    .setup-checklist {
+        border: 1px solid #e6c36a;
+        background: #fff9e8;
+        border-radius: 6px;
+        padding: 14px 16px;
+        margin: 10px 0 12px;
+    }
+    .setup-checklist h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+    }
+    .setup-checklist p {
+        margin: 4px 0 8px;
+        color: #5c4a1a;
+        font-size: 13px;
+    }
+    .setup-checklist ul {
+        list-style: none;
+        padding: 0;
+        margin: 8px 0;
+    }
+    .setup-checklist li {
+        margin: 6px 0;
+        font-size: 13px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: baseline;
+    }
+    .setup-mark {
+        width: 16px;
+        font-weight: 700;
+    }
+    .setup-item-label {
+        font-weight: 600;
+    }
+    .setup-item-detail {
+        color: #6c5a2a;
+    }
+    .setup-checklist a {
+        color: #0b5cad;
+    }
+    .setup-ready .setup-mark {
+        color: #2e7d32;
+    }
+    .setup-missing .setup-mark {
+        color: #b26a00;
+    }
+    .setup-missing .setup-item-label {
+        color: #8a4b00;
+    }
+    .setup-open {
+        display: inline-block;
+        margin-top: 4px;
+        font-weight: 600;
     }
 
     .idle-override-toggle {

@@ -150,7 +150,7 @@
 </div>
 
 <form id="configForm" method="POST">
-    <div class="config-section">
+    <div class="config-section" id="wallbox">
         <h2>Wallbox Configuration</h2>
         <div class="form-group">
             <label for="wallbox_url">Wallbox URL:</label>
@@ -209,7 +209,7 @@
         </div>
     </div>
 
-    <div class="config-section">
+    <div class="config-section" id="shelly">
         <h2>Shelly Configuration</h2>
         <div class="form-group">
             <label for="shelly_url">Shelly 1 URL:</label>
@@ -331,7 +331,7 @@
         {% endif %}
 
         <!-- Device Assignment -->
-        <h3>Device Assignment</h3>
+        <h3 id="device-assignment">Device Assignment</h3>
         <p>
             Each monitored channel can be assigned once. Shelly 1 and Shelly 2
             refer to the two configured Shelly EM URLs above.
@@ -556,7 +556,7 @@
 
     {% endif %}
 
-    <div class="config-section">
+    <div class="config-section" id="soc-floors">
         <h2>Battery and SoC floors</h2>
         <p>These floors apply to the shared smart-tariff controller.</p>
         <div class="form-group">
@@ -664,7 +664,7 @@
     </div>
     {% endif %}
 
-    <div class="config-section">
+    <div class="config-section" id="tariff-prices">
         <h2>Tariff prices</h2>
         <p>
             Choose the preset that matches your supplier product. The preset
@@ -885,7 +885,7 @@
     </div>
     {% endif %}
 
-    <div class="config-section">
+    <div class="config-section" id="learning-mode">
         <h2>Learning mode</h2>
         <p>
             Learning mode uses dynamic programming (DP) to plan from measured

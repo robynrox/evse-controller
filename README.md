@@ -271,6 +271,13 @@ the `emeters` this build expects. A busy Wallbox may need a second scan. The
 scan and tests are local-network tools; they are not exposed as a remote
 service.
 
+When the dashboard can see that a blocking hardware item is still missing, it
+shows a **Finish setting up your controller** checklist. It covers the Wallbox
+address, the Shelly address and the grid/EVSE monitor assignments, with links
+to the relevant configuration sections. It also offers review links for the
+tariff and prices, the SoC floors and the control mode. The card disappears
+once the blocking hardware items are ready and the review values are valid.
+
 ### Configuration Options
 
 Detailed explanation of each configuration option:

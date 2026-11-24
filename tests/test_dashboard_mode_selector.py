@@ -1,6 +1,7 @@
 """Dashboard control-mode selector."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from flask import Flask, render_template
 
@@ -17,6 +18,8 @@ def _render(
     learning_mode="preview",
     label="Heuristic",
     live_load_spike_override=True,
+    setup_checklist=None,
+    setup_incomplete=False,
 ):
     app = Flask(__name__, template_folder=str(TEMPLATES))
     app.config.update(SERVER_NAME="localhost", PREFERRED_URL_SCHEME="http")
@@ -46,6 +49,8 @@ def _render(
             learning_mode_label=label,
             learning_preview="Would: Charge 11A",
             live_load_spike_override=live_load_spike_override,
+            setup_checklist=setup_checklist or [],
+            setup_incomplete=setup_incomplete,
             ev_target="No target",
             use_icon_buttons=True,
         )
@@ -87,3 +92,29 @@ def test_idle_load_override_toggle_reflects_the_setting():
     assert 'id="idle-load-override"' in body
     markup = body.split('id="idle-load-override"', 1)[1].split(">", 1)[0]
     assert "checked" not in markup
+
+
+def test_setup_checklist_shows_missing_items():
+    items = [
+        SimpleNamespace(
+            label="Wallbox address",
+            detail="No address yet",
+            ready=False,
+            anchor="#wallbox",
+        )
+    ]
+
+    body = _render(
+        setup_checklist=items, setup_incomplete=True
+    )
+
+    assert "Finish setting up your controller" in body
+    assert "Wallbox address" in body
+    assert "No address yet" in body
+    assert "#wallbox" in body
+
+
+def test_setup_checklist_is_hidden_when_complete():
+    body = _render(setup_checklist=[], setup_incomplete=False)
+
+    assert "Finish setting up your controller" not in body

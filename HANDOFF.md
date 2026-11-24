@@ -413,6 +413,13 @@ completed fixes.
   disappear from the results. Shelly results include each meter channel's
   power, rounded to the nearest watt, and an integer total; the config page
   shows them in a separate Power column.
+- **Dashboard quick-start checklist.** `web/setup_checklist.py` inspects the
+  config and returns the Wallbox address, Shelly address, grid/EVSE monitor
+  assignments, tariff/prices, SoC floors and control mode as status items.
+  The four hardware items always block the dashboard card; the review items
+  block only when their value is invalid. The card disappears when everything
+  blocking is ready. `index()` wraps the check so a configuration error can
+  never stop the dashboard rendering.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

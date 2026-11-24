@@ -71,6 +71,10 @@ from evse_controller.web.policy_report_routes import (
 from evse_controller.web.discovery_routes import (
     register_discovery_routes,
 )
+from evse_controller.web.setup_checklist import (
+    build_setup_checklist,
+    setup_is_incomplete,
+)
 from evse_controller.energy_sessions import (
     BIDIRECTIONAL,
     CONTROL_SESSION_KINDS,
@@ -1323,6 +1327,13 @@ def index():
         and callable(getattr(evseController.evse, "request_reset", None))
     )
     learning_mode, learning_preview = _learning_status()
+    try:
+        setup_checklist = build_setup_checklist(config)
+        setup_incomplete = setup_is_incomplete(setup_checklist)
+    except Exception as exc:
+        debug(f"Could not build setup checklist: {exc}")
+        setup_checklist = []
+        setup_incomplete = False
     return render_template('index.html',
                          scheduled_events=scheduled_events,
                          current_state=current_state,
@@ -1335,6 +1346,8 @@ def index():
                          live_load_spike_override=(
                              config.LIVE_LOAD_SPIKE_OVERRIDE
                          ),
+                         setup_checklist=setup_checklist,
+                         setup_incomplete=setup_incomplete,
                          ev_target=_ev_readiness_status(),
                          use_icon_buttons=config.UI_USE_ICON_BUTTONS)
 

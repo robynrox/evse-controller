@@ -56,6 +56,20 @@ def test_discovery_and_connection_tests_are_on_the_config_page(app):
     assert body.count('data-kind="shelly"') >= 2
 
 
+def test_config_sections_have_checklist_anchors(app):
+    body = _render(app, "iog_agile")
+
+    for anchor in (
+        "wallbox",
+        "shelly",
+        "device-assignment",
+        "soc-floors",
+        "tariff-prices",
+        "learning-mode",
+    ):
+        assert f'id="{anchor}"' in body
+
+
 def test_soc_floors_are_visible_and_populated(app):
     body = _render(app, "iog_agile")
 
