@@ -299,7 +299,11 @@ completed fixes.
   click/drag across half-hour cells. Sessions only apply in smart mode and a
   manual command still outranks them; overlapping windows are rejected.
   Free-import slots are excluded from the export plan. The tariff strip marks
-  each session slot with a coloured bar and a legend entry.
+  each session slot with a coloured bar and a legend entry. `ev_away` forces
+  those slots idle; it currently assumes no SoC change during the trip. A
+  proposed estimate (config miles/kWh plus per-session miles, applied as an
+  exogenous SoC loss to the DP and the 23:30 projection) is in
+  [`reports/dp/EV_AWAY_ENERGY.md`](reports/dp/EV_AWAY_ENERGY.md).
 - **Tariffs observe behind temporary overrides.** Dashboard and schedule
   commands no longer call `stop_tariff()`; they arm a `ControlOverride` above
   the tariff. The configured tariff keeps running its decision path, so SoC
