@@ -22,8 +22,11 @@ class DeviceInfo:
 
 class DeviceDiscovery:
     """Main discovery class for EVSE devices."""
-    def __init__(self):
+    def __init__(self, extra_networks=None):
         self.devices: Dict[str, DeviceInfo] = {}
+        self.extra_networks = [
+            str(network) for network in (extra_networks or ())
+        ]
         self._zeroconf = Zeroconf()
     
     async def discover_devices(self) -> List[DeviceInfo]:
@@ -99,6 +102,7 @@ class DeviceDiscovery:
     def _get_local_networks(self) -> List[ipaddress.IPv4Network]:
         """Get list of local networks to scan."""
         networks = []
+        seen = set()
         for interface in netifaces.interfaces():
             addrs = netifaces.ifaddresses(interface)
             if netifaces.AF_INET in addrs:
@@ -111,8 +115,21 @@ class DeviceDiscovery:
                             f"{ip}/{addr['netmask']}", 
                             strict=False
                         )
-                        networks.append(network)
+                        if network not in seen:
+                            networks.append(network)
+                            seen.add(network)
                         logger.info(f"Found network: {network} on interface {interface}")
+        for text in self.extra_networks:
+            try:
+                network = ipaddress.IPv4Network(text, strict=False)
+            except ValueError:
+                logger.warning("Ignoring invalid scan network %s", text)
+                continue
+            if network in seen:
+                continue
+            networks.append(network)
+            seen.add(network)
+            logger.info("Added configured scan network: %s", network)
         return networks
 
     async def _check_wallbox(self, ip: str):

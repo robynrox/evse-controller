@@ -401,7 +401,13 @@ completed fixes.
   Wallbox Modbus status register and `check_shelly` fetches the Shelly
   `/status` endpoint; `/api/connection-test` dispatches to them. The config
   page fills the address fields from discovery results and tests unsaved
-  values before the form is submitted.
+  values before the form is submitted. `start()` accepts an explicit
+  `extra_networks` list and always adds /24s derived from the configured
+  Wallbox and Shelly addresses. This is what makes discovery work in a dev
+  container: the process only sees the Docker bridge, but the configured
+  Shelly hostnames resolve to the real LAN and seed that subnet. The config
+  page also exposes an **Extra networks** field for a fresh install or a
+  VLAN. The scanner still skips any network with more than 1024 hosts.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

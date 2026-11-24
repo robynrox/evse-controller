@@ -14,9 +14,10 @@ from evse_controller.discovery_service import (
 
 
 class _FakeDiscovery:
-    def __init__(self, devices=None, error=None):
+    def __init__(self, devices=None, error=None, **kwargs):
         self.devices = devices or []
         self.error = error
+        self.extra_networks = kwargs.get("extra_networks") or []
         self.closed = False
 
     async def discover_devices(self):
@@ -66,7 +67,13 @@ def test_discovery_service_reports_wallbox_and_shelly(monkeypatch):
     monkeypatch.setattr(
         service_module,
         "_load_discovery",
-        lambda: (lambda: _FakeDiscovery(devices), SimpleNamespace),
+        lambda: (
+            lambda **kwargs: _FakeDiscovery(devices, **kwargs),
+            SimpleNamespace,
+        ),
+    )
+    monkeypatch.setattr(
+        service_module, "_configured_networks", lambda: []
     )
 
     service = DiscoveryService()
@@ -88,9 +95,14 @@ def test_discovery_service_reports_failure(monkeypatch):
         service_module,
         "_load_discovery",
         lambda: (
-            lambda: _FakeDiscovery(error=RuntimeError("network unavailable")),
+            lambda **kwargs: _FakeDiscovery(
+                error=RuntimeError("network unavailable"), **kwargs
+            ),
             SimpleNamespace,
         ),
+    )
+    monkeypatch.setattr(
+        service_module, "_configured_networks", lambda: []
     )
 
     service = DiscoveryService()
@@ -99,6 +111,63 @@ def test_discovery_service_reports_failure(monkeypatch):
 
     assert state["status"] == "error"
     assert "network unavailable" in state["error"]
+
+
+def test_explicit_networks_are_passed_to_the_scanner(monkeypatch):
+    captured = {}
+
+    class _CaptureDiscovery(_FakeDiscovery):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            captured["networks"] = self.extra_networks
+
+    monkeypatch.setattr(
+        service_module,
+        "_load_discovery",
+        lambda: (
+            lambda **kwargs: _CaptureDiscovery(**kwargs),
+            SimpleNamespace,
+        ),
+    )
+    monkeypatch.setattr(
+        service_module, "_configured_networks", lambda: ["10.0.0.0/24"]
+    )
+
+    service = DiscoveryService()
+    started = service.start(["192.168.1.0/24"])
+    state = _wait(service)
+
+    assert started["networks"] == ["10.0.0.0/24", "192.168.1.0/24"]
+    assert state["networks"] == ["10.0.0.0/24", "192.168.1.0/24"]
+    assert captured["networks"] == ["10.0.0.0/24", "192.168.1.0/24"]
+
+
+def test_configured_networks_follow_resolved_device_addresses(monkeypatch):
+    class _FakeConfig:
+        WALLBOX_URL = "WB123456.ultrahub"
+        SHELLY_PRIMARY_URL = "192.168.1.118"
+        SHELLY_SECONDARY_URL = "simulator"
+
+    monkeypatch.setattr(service_module, "config", _FakeConfig)
+    monkeypatch.setattr(
+        service_module.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (None, None, None, None, ("192.168.1.180", 0))
+        ],
+    )
+
+    assert service_module._configured_networks() == ["192.168.1.0/24"]
+
+
+def test_network_validation_rejects_invalid_and_large_networks():
+    from evse_controller.discovery_service import _normalise_networks
+
+    assert _normalise_networks("192.168.1.0/24") == ["192.168.1.0/24"]
+    with pytest.raises(ValueError):
+        _normalise_networks("not-a-network")
+    with pytest.raises(ValueError):
+        _normalise_networks("10.0.0.0/8")
 
 
 class _ModbusResult:

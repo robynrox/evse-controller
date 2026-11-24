@@ -8,7 +8,9 @@ quick connection checks that do not require a full network scan.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
 import sys
 import threading
 import time
@@ -18,6 +20,8 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
+
+from evse_controller.utils.config import config
 
 
 def _load_discovery():
@@ -76,6 +80,82 @@ def _device_payload(device: Any) -> dict:
     }
 
 
+def _extract_host(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"simulator", "localhost"}:
+        return ""
+    if "://" not in text:
+        text = "//" + text
+    host = urlparse(text).hostname
+    return host or ""
+
+
+def _configured_networks() -> list[str]:
+    """Derive scan networks from the configured device addresses.
+
+    In a container the process only sees the Docker bridge, so the real LAN
+    subnet is not on a local interface.  The configured Wallbox and Shelly
+    hostnames/IPs still resolve and tell us where the devices live.
+    """
+    values = []
+    for name in (
+        "WALLBOX_URL",
+        "SHELLY_PRIMARY_URL",
+        "SHELLY_SECONDARY_URL",
+    ):
+        try:
+            values.append(getattr(config, name, ""))
+        except Exception:
+            continue
+    networks = set()
+    for value in values:
+        host = _extract_host(value)
+        if not host or host.lower() in {"simulator", "localhost"}:
+            continue
+        addresses = []
+        try:
+            addresses = [str(ipaddress.IPv4Address(host))]
+        except ValueError:
+            try:
+                infos = socket.getaddrinfo(
+                    host, None, socket.AF_INET
+                )
+            except OSError:
+                continue
+            addresses = sorted({info[4][0] for info in infos})
+        for address in addresses:
+            try:
+                ip = ipaddress.IPv4Address(address)
+            except ValueError:
+                continue
+            if ip.is_loopback or ip.is_link_local:
+                continue
+            networks.add(
+                str(ipaddress.IPv4Network(f"{ip}/24", strict=False))
+            )
+    return sorted(networks)
+
+
+def _normalise_networks(values) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    networks = []
+    for value in values:
+        for part in str(value).replace(",", " ").split():
+            try:
+                network = ipaddress.IPv4Network(part, strict=False)
+            except ValueError:
+                raise ValueError(f"Invalid network: {part}") from None
+            if network.num_addresses > 1025:
+                raise ValueError(
+                    f"{network} is too large; use /22 or smaller"
+                )
+            networks.append(str(network))
+    return sorted(set(networks))
+
+
 class DiscoveryService:
     """Run one network scan at a time and expose its progress."""
 
@@ -86,10 +166,14 @@ class DiscoveryService:
         self._finished_at: Optional[str] = None
         self._error: Optional[str] = None
         self._devices: list[dict] = []
+        self._networks: list[str] = []
         self._thread: Optional[threading.Thread] = None
         self._started_monotonic: Optional[float] = None
 
-    def start(self) -> dict:
+    def start(self, networks=None) -> dict:
+        requested = _normalise_networks(networks)
+        configured = _configured_networks()
+        combined = sorted(set(requested) | set(configured))
         with self._lock:
             if self._status == "running":
                 return self._snapshot_locked()
@@ -98,9 +182,13 @@ class DiscoveryService:
             self._finished_at = None
             self._error = None
             self._devices = []
+            self._networks = combined
             self._started_monotonic = time.monotonic()
             self._thread = threading.Thread(
-                target=self._run, name="device-discovery", daemon=True
+                target=self._run,
+                args=(combined,),
+                name="device-discovery",
+                daemon=True,
             )
             self._thread.start()
             return self._snapshot_locked()
@@ -120,12 +208,13 @@ class DiscoveryService:
             "elapsed_s": elapsed,
             "error": self._error,
             "devices": list(self._devices),
+            "networks": list(self._networks),
         }
 
-    def _run(self) -> None:
+    def _run(self, networks: list[str]) -> None:
         try:
             DeviceDiscovery, _DeviceInfo = _load_discovery()
-            discovery = DeviceDiscovery()
+            discovery = DeviceDiscovery(extra_networks=networks)
 
             async def _scan():
                 try:

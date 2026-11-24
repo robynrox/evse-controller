@@ -256,10 +256,18 @@ Every address field also has a **Test** button:
 - the Shelly test fetches `/status` and reports the number of meters and the
   total power if the device is a Shelly EM.
 
+The scan uses the local interfaces **plus the network of any Wallbox or Shelly
+address already in the config**. That auto-seed matters in a container, where
+the only visible interface is often the Docker bridge: the controller can
+still reach `192.168.1.x`, but it has no reason to scan that subnet unless the
+configured device addresses point there. If the config is empty, enter the LAN
+subnet (for example `192.168.1.0/24`) in the **Extra networks** field.
+
 Use the test before saving. A discovered address can still be the wrong device,
 and a valid Shelly that is not an EM will be reported as reachable but without
-the `emeters` this build expects. The scan and tests are local-network tools;
-they are not exposed as a remote service.
+the `emeters` this build expects. A device in OCPP mode may not answer Modbus
+on every scan; run the scan again if the Wallbox is missing. The scan and tests
+are local-network tools; they are not exposed as a remote service.
 
 ### Configuration Options
 

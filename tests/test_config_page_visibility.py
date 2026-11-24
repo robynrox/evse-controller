@@ -51,6 +51,7 @@ def test_discovery_and_connection_tests_are_on_the_config_page(app):
 
     assert 'id="discovery-start"' in body
     assert 'id="discovery-results"' in body
+    assert 'id="discovery-networks"' in body
     assert 'data-kind="wallbox"' in body
     assert body.count('data-kind="shelly"') >= 2
 

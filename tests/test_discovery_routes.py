@@ -8,10 +8,19 @@ from evse_controller.web import discovery_routes
 class _FakeService:
     def __init__(self):
         self.started = False
+        self.networks = None
 
-    def start(self):
+    def start(self, networks=None):
         self.started = True
-        return {"status": "running", "devices": [], "error": None}
+        self.networks = networks
+        if networks == "bad":
+            raise ValueError("Invalid network")
+        return {
+            "status": "running",
+            "devices": [],
+            "error": None,
+            "networks": [networks] if networks else [],
+        }
 
     def status(self):
         return {"status": "idle", "devices": [], "error": None}
@@ -41,12 +50,28 @@ def test_discovery_routes_start_and_report(monkeypatch):
     app, service = _app(monkeypatch)
 
     with app.test_client() as client:
-        started = client.post("/api/discovery/start")
+        started = client.post(
+            "/api/discovery/start",
+            json={"networks": "192.168.1.0/24"},
+        )
         status = client.get("/api/discovery/status")
 
     assert service.started is True
+    assert service.networks == "192.168.1.0/24"
     assert started.get_json()["status"] == "running"
     assert status.get_json()["status"] == "idle"
+
+
+def test_discovery_routes_reject_an_invalid_network(monkeypatch):
+    app, _service = _app(monkeypatch)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/discovery/start", json={"networks": "bad"}
+        )
+
+    assert response.status_code == 400
+    assert "Invalid network" in response.get_json()["error"]
 
 
 def test_connection_test_routes_dispatch_by_kind(monkeypatch):

@@ -15,7 +15,13 @@ def register_discovery_routes(app) -> None:
     @app.route("/api/discovery/start", methods=["POST"])
     def start_device_discovery():
         """Start a background scan, or return the running scan."""
-        return jsonify(discovery_service.start())
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(
+                discovery_service.start(payload.get("networks"))
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     @app.route("/api/discovery/status")
     def device_discovery_status():

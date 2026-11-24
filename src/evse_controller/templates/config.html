@@ -133,6 +133,19 @@
         <button type="button" id="discovery-start">Scan network</button>
         <span id="discovery-status" class="discovery-status">Not started.</span>
     </div>
+    <div class="form-row">
+        <div>
+            <label for="discovery-networks">Extra networks (optional)</label>
+            <input type="text" id="discovery-networks"
+                   placeholder="192.168.1.0/24">
+            <small>
+                Leave blank to scan the local interfaces plus the networks of
+                the configured Wallbox and Shelly addresses. Useful in a
+                container or on a VLAN. A device in OCPP mode may not answer
+                Modbus on every pass; scan again if it is missing.
+            </small>
+        </div>
+    </div>
     <div id="discovery-results" class="discovery-results"></div>
 </div>
 
@@ -1146,6 +1159,7 @@
     const discoveryStart = document.getElementById('discovery-start');
     const discoveryStatus = document.getElementById('discovery-status');
     const discoveryResults = document.getElementById('discovery-results');
+    const discoveryNetworks = document.getElementById('discovery-networks');
 
     function setFieldValue(fieldId, value) {
         const field = document.getElementById(fieldId);
@@ -1251,15 +1265,17 @@
 
     function discoveryStatusText(state) {
         if (!state) return 'Not started.';
+        const nets = (state.networks || []).join(', ');
+        const suffix = nets ? ` · ${nets}` : '';
         if (state.status === 'running') {
             const elapsed = state.elapsed_s == null
                 ? 0
                 : Math.round(state.elapsed_s);
-            return `Scanning… ${elapsed} s`;
+            return `Scanning… ${elapsed} s${suffix}`;
         }
         if (state.status === 'done') {
             const count = (state.devices || []).length;
-            return `Scan finished: ${count} device${count === 1 ? '' : 's'} found.`;
+            return `Scan finished: ${count} device${count === 1 ? '' : 's'} found${suffix}.`;
         }
         if (state.status === 'error') {
             return state.error || 'Scan failed.';
@@ -1295,7 +1311,13 @@
         if (discoveryStatus) discoveryStatus.textContent = 'Starting…';
         try {
             const response = await fetch('/api/discovery/start', {
-                method: 'POST'
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    networks: discoveryNetworks
+                        ? discoveryNetworks.value.trim()
+                        : ''
+                })
             });
             const state = await response.json();
             if (!response.ok) {
