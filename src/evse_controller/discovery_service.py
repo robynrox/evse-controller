@@ -8,6 +8,7 @@ quick connection checks that do not require a full network scan.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import ipaddress
 import logging
 import socket
@@ -40,8 +41,8 @@ def _load_discovery():
         # A namespace-package import from the enclosing directory can shadow
         # the real package in this repository layout.
         del sys.modules["evse_discovery"]
-    from evse_discovery import DeviceDiscovery, DeviceInfo
-    return DeviceDiscovery, DeviceInfo
+    module = importlib.import_module("evse_discovery")
+    return module.DeviceDiscovery, module.DeviceInfo
 
 
 def _now() -> str:

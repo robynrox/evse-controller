@@ -9,7 +9,8 @@ from evse_controller.live_model_fit import live_model_fit
 import logging
 import threading
 from datetime import date, datetime, timedelta
-from evse_controller.utils.logging_config import info, error, debug
+from typing import Any, cast
+from evse_controller.utils.logging_config import info, error, debug, exception
 from evse_controller.web.form_values import (
     form_float as _form_float,
     form_int as _form_int,
@@ -120,7 +121,7 @@ def _slot_rates_for_day(day: date) -> list[dict]:
     """
     tariff = tariffManager.get_tariff()
     rates = getattr(tariff, "agile_rates", None) if tariff else None
-    by_slot: dict[int, float] = {}
+    by_slot: dict[int, float | None] = {}
     for entry in rates or []:
         start = entry.get("start")
         if isinstance(start, str):
@@ -178,8 +179,11 @@ def _session_from_payload(data: dict, now: datetime | None = None) -> EnergySess
             day = date.fromisoformat(str(data["day"]))
         except ValueError:
             raise ValueError("Invalid session day") from None
+    kind = data.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise ValueError("Choose a session type")
     return session_from_slots(
-        data.get("kind"),
+        kind,
         data.get("start_slot"),
         data.get("end_slot"),
         day=day,
@@ -223,7 +227,7 @@ class CustomWSGIRequestHandler(WSGIRequestHandler):
 
     def log_error(self, format, *args):
         """Keep error logging"""
-        error(f"Flask error: {format % args}", exc_info=True)
+        error(f"Flask error: {format % args}")
         
     def log_message(self, format, *args):
         """Catch any other logging"""
@@ -616,8 +620,9 @@ def config_page():
                 config.WALLBOX_USERNAME = request.form.get('wallbox[username]')
             if request.form.get('wallbox[password]'):  # Only update if provided
                 config.WALLBOX_PASSWORD = request.form.get('wallbox[password]')
-            if request.form.get('wallbox[serial]'):
-                config.WALLBOX_SERIAL = int(request.form.get('wallbox[serial]'))
+            serial = request.form.get('wallbox[serial]')
+            if serial:
+                config.WALLBOX_SERIAL = int(serial)
             
             # Update Wallbox current limits
             max_charge_current = request.form.get('wallbox[max_charge_current]')
@@ -949,8 +954,18 @@ def config_page():
                     config.set_channel_in_use(device, channel, in_use)
                     
                     if in_use:
-                        name = request.form.get(f'shelly[channels][{device}][{channel_key}][name]')
-                        abbr = request.form.get(f'shelly[channels][{device}][{channel_key}][abbreviation]')
+                        name = (
+                            request.form.get(
+                                f'shelly[channels][{device}][{channel_key}][name]'
+                            )
+                            or ""
+                        )
+                        abbr = (
+                            request.form.get(
+                                f'shelly[channels][{device}][{channel_key}][abbreviation]'
+                            )
+                            or ""
+                        )
                         config.set_channel_name(device, channel, name)
                         config.set_channel_abbreviation(device, channel, abbr)
 
@@ -1166,10 +1181,9 @@ def config_page():
                     )
                 config.LEARNING_MODE = learning_mode
                 tariff = tariffManager.get_tariff()
-                if tariff is not None and hasattr(
-                    tariff, 'set_learning_mode'
-                ):
-                    tariff.set_learning_mode(learning_mode)
+                setter = getattr(tariff, 'set_learning_mode', None)
+                if callable(setter):
+                    setter(learning_mode)
 
             hybrid_discharge = request.form.get(
                 'learning[hybrid_discharge]'
@@ -1182,10 +1196,11 @@ def config_page():
                     )
                 config.LEARNING_HYBRID_DISCHARGE = hybrid_discharge
                 tariff = tariffManager.get_tariff()
-                if tariff is not None and hasattr(
-                    tariff, 'set_hybrid_discharge_mode'
-                ):
-                    tariff.set_hybrid_discharge_mode(hybrid_discharge)
+                setter = getattr(
+                    tariff, 'set_hybrid_discharge_mode', None
+                )
+                if callable(setter):
+                    setter(hybrid_discharge)
 
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
@@ -1266,9 +1281,10 @@ def _learning_status() -> tuple[str, str]:
     # or no tariff, show Off rather than borrowing the configured IOctGo mode.
     mode = getattr(tariff, "_learning_mode", "off")
     preview = ""
-    if tariff is not None and hasattr(tariff, "learning_preview_label"):
+    preview_label = getattr(tariff, "learning_preview_label", None)
+    if callable(preview_label):
         try:
-            preview = tariff.learning_preview_label() or ""
+            preview = str(preview_label() or "")
         except Exception:
             preview = ""
     return str(mode).lower(), preview
@@ -1335,24 +1351,27 @@ def set_learning_mode():
             )
         }), 400
     tariff = tariffManager.get_tariff()
-    if tariff is None or not hasattr(tariff, 'set_learning_mode'):
+    setter = getattr(tariff, 'set_learning_mode', None)
+    if tariff is None or not callable(setter):
         return jsonify({
             'error': (
                 'Learning mode is only available on the IOctGo controller'
             )
         }), 409
     try:
-        effective = tariff.set_learning_mode(mode)
+        effective = str(setter(mode))
         config.LEARNING_MODE = effective
         config.save()
     except Exception as error:
         logging.error(f"Could not set Learning mode: {error}")
         return jsonify({'error': str(error)}), 500
     preview = ""
-    try:
-        preview = tariff.learning_preview_label() or ""
-    except Exception:
-        preview = ""
+    preview_label = getattr(tariff, "learning_preview_label", None)
+    if callable(preview_label):
+        try:
+            preview = str(preview_label() or "")
+        except Exception:
+            preview = ""
     return jsonify({
         'mode': effective,
         'label': _learning_mode_label(effective),
@@ -1384,18 +1403,19 @@ def decision_page():
     There is deliberately no auto-refresh: the reader may need time to study
     the reasoning.
     """
-    explanation = {
+    explanation: dict[str, Any] = {
         "available": False,
         "message": "No tariff is active, so there is no decision to explain.",
     }
     try:
         tariff = tariffManager.get_tariff()
+        explain = getattr(tariff, "get_decision_explanation", None)
         if tariff is None:
             explanation["message"] = (
                 "No tariff is active, so there is no decision to explain."
             )
-        elif hasattr(tariff, "get_decision_explanation"):
-            explanation = tariff.get_decision_explanation()
+        elif callable(explain):
+            explanation = cast(dict[str, Any], explain())
         else:
             explanation["message"] = (
                 f"The {tariff.__class__.__name__} tariff does not record a "
@@ -1702,7 +1722,7 @@ def run_flask(max_restarts=3):
             # If we reach here, the server exited normally
             break
         except Exception as e:
-            error(f"Flask server crashed: {str(e)}", exc_info=True)
+            exception(f"Flask server crashed: {str(e)}")
             restarts += 1
             if restarts <= max_restarts:
                 error(f"Attempting to restart Flask server ({restarts}/{max_restarts})...")
