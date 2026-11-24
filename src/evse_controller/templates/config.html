@@ -141,8 +141,8 @@
             <small>
                 Leave blank to scan the local interfaces plus the networks of
                 the configured Wallbox and Shelly addresses. Useful in a
-                container or on a VLAN. A device in OCPP mode may not answer
-                Modbus on every pass; scan again if it is missing.
+                container or on a VLAN. A busy Wallbox may need a second scan
+                if it is missing.
             </small>
         </div>
     </div>
@@ -1195,7 +1195,7 @@
         const table = document.createElement('table');
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
-        ['Type', 'Address', 'Name', 'Details', 'Use'].forEach(label => {
+        ['Type', 'Address', 'Name', 'Details', 'Power', 'Use'].forEach(label => {
             const th = document.createElement('th');
             th.textContent = label;
             headRow.appendChild(th);
@@ -1210,13 +1210,23 @@
             addTextCell(row, device.name || '');
             const details = device.details || {};
             let detailText = '';
+            let powerText = '';
             const deviceType = String(device.type || '');
             if (deviceType.indexOf('Shelly') === 0) {
                 if (details.emeters != null) {
-                    detailText += `${details.emeters} meter(s)`;
+                    detailText = `${details.emeters} meter(s)`;
+                }
+                const channels = details.channels || [];
+                if (channels.length) {
+                    powerText = channels.map(channel => {
+                        const value = channel.power_w == null
+                            ? '—'
+                            : `${channel.power_w} W`;
+                        return `Ch ${channel.channel}: ${value}`;
+                    }).join(' · ');
                 }
                 if (details.total_power_w != null) {
-                    detailText += `; total ${details.total_power_w} W`;
+                    powerText += `${powerText ? ' · ' : ''}total ${details.total_power_w} W`;
                 }
             } else if (deviceType === 'Wallbox') {
                 if (details.register) {
@@ -1227,6 +1237,7 @@
                 }
             }
             addTextCell(row, detailText);
+            addTextCell(row, powerText || '—');
             const actionCell = document.createElement('td');
             if (deviceType.indexOf('Wallbox') !== -1) {
                 const button = document.createElement('button');

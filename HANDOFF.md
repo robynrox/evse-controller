@@ -407,7 +407,12 @@ completed fixes.
   container: the process only sees the Docker bridge, but the configured
   Shelly hostnames resolve to the real LAN and seed that subnet. The config
   page also exposes an **Extra networks** field for a fresh install or a
-  VLAN. The scanner still skips any network with more than 1024 hosts.
+  VLAN. The scanner still skips any network with more than 1024 hosts. The
+  Wallbox probe first checks TCP 502 and retries a host that accepts it, so a
+  busy controller or a transient Modbus close does not make the Wallbox
+  disappear from the results. Shelly results include each meter channel's
+  power, rounded to the nearest watt, and an integer total; the config page
+  shows them in a separate Power column.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

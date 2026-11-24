@@ -61,7 +61,13 @@ def test_discovery_service_reports_wallbox_and_shelly(monkeypatch):
             "192.168.1.60",
             "Shelly EM",
             "Shelly EM at 192.168.1.60",
-            {"emeters": [{}, {}], "total_power": 123.4},
+            {
+                "emeters": [
+                    {"power": 123.4},
+                    {"power": 456.6},
+                ],
+                "total_power": 580.0,
+            },
         ),
     ]
     monkeypatch.setattr(
@@ -87,7 +93,11 @@ def test_discovery_service_reports_wallbox_and_shelly(monkeypatch):
     assert state["devices"][0]["details"]["register"] == "0x51"
     assert state["devices"][1]["type"] == "Shelly EM"
     assert state["devices"][1]["details"]["emeters"] == 2
-    assert state["devices"][1]["details"]["total_power_w"] == 123.4
+    assert state["devices"][1]["details"]["channels"] == [
+        {"channel": 1, "power_w": 123},
+        {"channel": 2, "power_w": 457},
+    ]
+    assert state["devices"][1]["details"]["total_power_w"] == 580
 
 
 def test_discovery_service_reports_failure(monkeypatch):
@@ -246,7 +256,13 @@ def test_shelly_connection_reports_meters(monkeypatch):
     monkeypatch.setattr(
         "requests.get",
         lambda url, timeout: _Response(
-            {"emeters": [{}, {}], "total_power": 456.7}
+            {
+                "emeters": [
+                    {"power": 123.4},
+                    {"power": 456.6},
+                ],
+                "total_power": 580.0,
+            }
         ),
     )
 
@@ -254,7 +270,14 @@ def test_shelly_connection_reports_meters(monkeypatch):
 
     assert result["ok"] is True
     assert result["details"]["emeters"] == 2
-    assert result["details"]["total_power_w"] == 456.7
+    assert result["details"]["channels"] == [
+        {"channel": 1, "power_w": 123},
+        {"channel": 2, "power_w": 457},
+    ]
+    assert result["details"]["total_power_w"] == 580
+    assert "Ch 1 123 W" in result["message"]
+    assert "Ch 2 457 W" in result["message"]
+    assert "total 580 W" in result["message"]
 
 
 def test_shelly_connection_warns_without_emeters(monkeypatch):

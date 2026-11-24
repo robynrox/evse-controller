@@ -247,8 +247,10 @@ For container-based deployments, see [CONTAINER_GUIDE.md](CONTAINER_GUIDE.md).
 The configuration page starts with a **Find devices on your network** card.
 It scans the local network for a Wallbox Quasar (Modbus port 502) and Shelly EM
 devices (HTTP `/status`) and lists anything it finds. The scan runs in the
-background and can take up to a minute. Use the **Use as Wallbox / Shelly 1 /
-Shelly 2** buttons to fill the address fields.
+background and can take up to a minute. Shelly results show each meter
+channel's power separately, rounded to the nearest watt, plus an integer
+total. Use the **Use as Wallbox / Shelly 1 / Shelly 2** buttons to fill the
+address fields.
 
 Every address field also has a **Test** button:
 
@@ -265,9 +267,9 @@ subnet (for example `192.168.1.0/24`) in the **Extra networks** field.
 
 Use the test before saving. A discovered address can still be the wrong device,
 and a valid Shelly that is not an EM will be reported as reachable but without
-the `emeters` this build expects. A device in OCPP mode may not answer Modbus
-on every scan; run the scan again if the Wallbox is missing. The scan and tests
-are local-network tools; they are not exposed as a remote service.
+the `emeters` this build expects. A busy Wallbox may need a second scan. The
+scan and tests are local-network tools; they are not exposed as a remote
+service.
 
 ### Configuration Options
 

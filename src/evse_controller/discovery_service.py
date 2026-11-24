@@ -54,15 +54,28 @@ def _device_payload(device: Any) -> dict:
     raw = getattr(device, "details", None) or {}
     if isinstance(raw, dict) and device_type.startswith("Shelly"):
         emeters = raw.get("emeters") or []
-        total_power = raw.get("total_power")
-        if total_power is None and isinstance(emeters, list):
-            total_power = sum(
-                float(item.get("power", 0) or 0)
-                for item in emeters
-                if isinstance(item, dict)
-            )
+        channels = []
+        for index, item in enumerate(emeters):
+            if not isinstance(item, dict):
+                continue
+            power = item.get("power")
+            channels.append({
+                "channel": index + 1,
+                "power_w": (
+                    None if power is None else int(round(float(power)))
+                ),
+            })
+        rounded = [
+            channel["power_w"]
+            for channel in channels
+            if channel["power_w"] is not None
+        ]
+        total_power = sum(rounded) if rounded else None
+        if total_power is None and raw.get("total_power") is not None:
+            total_power = int(round(float(raw["total_power"])))
         details = {
             "emeters": len(emeters),
+            "channels": channels,
             "total_power_w": total_power,
         }
     elif isinstance(raw, dict) and device_type == "Wallbox":
@@ -355,18 +368,46 @@ def check_shelly(value: str) -> dict:
         }
     emeters = data.get("emeters") if isinstance(data, dict) else None
     if emeters:
-        total_power = data.get("total_power")
-        if total_power is None and isinstance(emeters, list):
-            total_power = sum(
-                float(item.get("power", 0) or 0)
-                for item in emeters
-                if isinstance(item, dict)
+        channels = []
+        for index, item in enumerate(emeters):
+            if not isinstance(item, dict):
+                continue
+            power = item.get("power")
+            channels.append({
+                "channel": index + 1,
+                "power_w": (
+                    None if power is None else int(round(float(power)))
+                ),
+            })
+        rounded = [
+            channel["power_w"]
+            for channel in channels
+            if channel["power_w"] is not None
+        ]
+        total_power = sum(rounded) if rounded else None
+        if total_power is None and data.get("total_power") is not None:
+            total_power = int(round(float(data["total_power"])))
+        parts = [
+            f"Ch {channel['channel']} "
+            f"{'—' if channel['power_w'] is None else str(channel['power_w']) + ' W'}"
+            for channel in channels
+        ]
+        message = (
+            f"Shelly EM responded with {len(emeters)} meter(s)"
+            + (f": {', '.join(parts)}" if parts else "")
+            + (
+                f" (total {total_power} W)"
+                if total_power is not None
+                else ""
             )
+            + "."
+        )
         return {
             "ok": True,
-            "message": f"Shelly EM responded with {len(emeters)} meter(s).",
+            "message": message,
             "details": {
                 "emeters": len(emeters),
+                "channels": channels,
                 "total_power_w": total_power,
             },
         }

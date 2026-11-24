@@ -125,7 +125,8 @@ configuration, so it survives a restart.
 Before starting, open **Configuration** and use the **Find devices on your
 network** card. Confirm the Wallbox and Shelly addresses are discovered (or
 enter them manually) and that each **Test** button reports a successful
-connection. Then save the configuration.
+connection. Shelly results show each meter channel separately in whole watts;
+the Wallbox may need a second scan if it was busy. Then save the configuration.
 
 1. **Start in FREERUN.** Confirm the dashboard, prices and decision line load.
 2. **Preview the DP.** Compare `Would: …` with the heuristic decision for a

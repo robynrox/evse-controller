@@ -133,43 +133,70 @@ class DeviceDiscovery:
         return networks
 
     async def _check_wallbox(self, ip: str):
-        """Check if IP belongs to a Wallbox device."""
-        # Common Wallbox registers to check
+        """Check if IP belongs to a Wallbox device.
+
+        A fast TCP probe first avoids paying a Modbus timeout on every host
+        that has no port 502.  Hosts that do accept a connection get a retry,
+        because the Wallbox can close a Modbus read while the local controller
+        or OCPP is talking to it.
+        """
         registers = [
             (0x51, 1),  # Common status register
             (0x300, 1), # Another common register
         ]
-        
+
         try:
-            client = ModbusTcpClient(ip, port=502, timeout=1)
-            
-            for address, count in registers:
-                logger.debug(f"Trying register {hex(address)} at {ip}")
-                try:
-                    result = await asyncio.to_thread(
-                        client.read_holding_registers,
-                        address=address,
-                        count=count
-                    )
-                    
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, 502), timeout=0.5
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+        except (OSError, asyncio.TimeoutError):
+            return
+
+        for attempt in range(2):
+            client = ModbusTcpClient(ip, port=502, timeout=2)
+            try:
+                for address, count in registers:
+                    logger.debug(f"Trying register {hex(address)} at {ip}")
+                    try:
+                        result = await asyncio.to_thread(
+                            client.read_holding_registers,
+                            address=address,
+                            count=count
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Wallbox register %s at %s failed: %s",
+                            hex(address),
+                            ip,
+                            exc,
+                        )
+                        continue
+
                     if result and not result.isError():
-                        logger.info(f"Success reading register {hex(address)} at {ip}: {result.registers}")
-                        device = DeviceInfo(ip, "Wallbox", f"Wallbox at {ip}")
+                        logger.info(
+                            "Success reading register %s at %s: %s",
+                            hex(address),
+                            ip,
+                            result.registers,
+                        )
+                        device = DeviceInfo(
+                            ip, "Wallbox", f"Wallbox at {ip}"
+                        )
                         device.verified = True
                         device.details["modbus_port"] = 502
                         device.details["register"] = hex(address)
                         device.details["value"] = result.registers[0]
                         self.devices[ip] = device
-                        client.close()
                         return
-                        
-                except Exception as e:
-                    logger.info(f"Failed to connect for register {hex(address)}")
-                    
-            client.close()
-            
-        except Exception as e:
-            logger.debug(f"Error checking Wallbox at {ip}: {str(e)}")
+            finally:
+                client.close()
+            if attempt == 0:
+                await asyncio.sleep(0.25)
 
     async def _check_shelly(self, ip: str):
         """Check if IP belongs to a Shelly device."""
