@@ -36,6 +36,7 @@ def _render(
         "policy_report_page",
         "schedule_page",
         "sessions_page",
+        "setup_page",
         "value_report_page",
     ):
         app.add_url_rule("/" + name, name, lambda: "")

@@ -22,7 +22,9 @@ TEMPLATES = (
 
 @pytest.fixture
 def app():
-    return Flask(__name__, template_folder=str(TEMPLATES))
+    app = Flask(__name__, template_folder=str(TEMPLATES))
+    app.add_url_rule("/setup", "setup_page", lambda: "")
+    return app
 
 
 def _render(app, preset, export_source=None, setup_checklist=None):

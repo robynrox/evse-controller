@@ -14,8 +14,6 @@
       default, with a per-slot convex penalty outside a comfort band and a
       backtest before enabling. Design note:
       [`reports/dp/SOFT_SOC_BAND.md`](reports/dp/SOFT_SOC_BAND.md)
-- [ ] First-run onboarding: add the guided setup wizard for hardware,
-      tariff, SoC floors and control mode
 - [ ] Document the "external controller / backend" setup path (learning mode
       off, MQTT/REST command contract, and what the scheduler may still do)
 - [ ] Dual device addressing: store the IP and hostname together, prefer the
@@ -37,6 +35,8 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Guided first-run setup wizard: hardware discovery/tests, tariff and
+      prices, SoC floors, control mode and review
 - [x] Dashboard quick-start checklist for missing hardware and review links
 - [x] Network discovery and Wallbox/Shelly connection tests on the config page
 - [x] Recurring EV readiness schedule: weekday timer, automatic release after

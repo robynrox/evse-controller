@@ -285,6 +285,38 @@ Connection-test success or failure is reflected in the Wallbox and monitor
 items, and the summary line reports how many items still need attention. This
 is the working checklist; the dashboard card is the reminder.
 
+### First-run setup wizard
+
+The dashboard links to **Setup Wizard** (`/setup`), a single guided form for a
+new installation. It has five steps:
+
+1. **Hardware** — scan the LAN, test each address, and assign the Wallbox,
+   Shelly 1/Shelly 2, grid monitor and EVSE monitor. Enter `simulator` instead
+   of a Wallbox address for a dry run; the wizard stores that as a simulator
+   flag rather than trying to open a connection to a host called "simulator".
+   The EVSE monitor is required because load-following and the DP need to know
+   the Wallbox AC power.
+2. **Tariff and prices** — choose the supplier preset, region and optional
+   Agile product, then review the six import/export starter prices.
+   **Use preset default prices** fills those fields; the preset still supplies
+   the time windows. Check the prices against your current statement.
+3. **Battery and SoC floors** — charge cap plus the hard, buffer and bulk
+   floors, with the ordering rule `hard ≤ buffer ≤ bulk` and the bulk floor
+   below the charge cap.
+4. **Control** — Preview, `control_hist`, `control_comp` or Free run. Preview
+   is the safe default: the heuristic keeps control while the DP records its
+   plan for comparison.
+5. **Review** — a read-only summary before saving.
+
+Each step validates before **Next**, and the server repeats the validation on
+submit so a direct POST cannot bypass it. The wizard writes only the settings
+it presents; it leaves credentials, current limits, channel names and readiness
+schedules alone. Saving returns a completion page with links to the dashboard,
+the configuration page and EV Readiness. The optional EV readiness target is
+offered there but is not part of the wizard. A controller process that is
+already running may need a restart to pick up the new hardware addresses and
+learning mode.
+
 ### Configuration Options
 
 Detailed explanation of each configuration option:

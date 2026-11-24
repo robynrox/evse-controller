@@ -75,6 +75,7 @@ from evse_controller.web.setup_checklist import (
     build_setup_checklist,
     setup_is_incomplete,
 )
+from evse_controller.web.setup_routes import register_setup_routes
 from evse_controller.energy_sessions import (
     BIDIRECTIONAL,
     CONTROL_SESSION_KINDS,
@@ -1706,6 +1707,7 @@ register_data_quality_routes(app)
 register_backtest_routes(app)
 register_policy_report_routes(app)
 register_discovery_routes(app)
+register_setup_routes(app)
 
 
 # Run the Flask app in a separate thread

@@ -367,10 +367,12 @@
                 {% endfor %}
             </ul>
             <a class="setup-open" href="{{ url_for('config_page') }}">Open configuration →</a>
+            <a class="setup-open" href="{{ url_for('setup_page') }}">Open setup wizard →</a>
         </div>
         {% endif %}
         <div id="link-health" class="link-health" hidden></div>
         <div class="nav-links">
+            <a href="{{ url_for('setup_page') }}">Setup Wizard →</a>
             <a href="{{ url_for('decision_page') }}">Explanation →</a>
             <a href="{{ url_for('daily_report_today') }}">Energy Report →</a>
             <a href="{{ url_for('plan_report_today') }}">Plan vs Actual →</a>

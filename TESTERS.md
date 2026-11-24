@@ -133,6 +133,14 @@ hardware items are ready. The configuration page has the live version in a
 sticky right-hand column: fields turn red/green as you type, and a successful
 connection test is reflected in the Wallbox and monitor items.
 
+Alternatively, use **Setup Wizard** on the dashboard for the guided path. Walk
+the five steps: scan and test the hardware, pick the tariff preset and prices,
+set the charge cap and three SoC floors, leave control in Preview, then review
+and save. Check that **Next** refuses an invalid step, that `simulator` works in
+the Wallbox field without a real device, and that the completion page links to
+the dashboard, configuration and EV Readiness. A running controller may need a
+restart before it uses the new addresses or learning mode.
+
 1. **Start in FREERUN.** Confirm the dashboard, prices and decision line load.
 2. **Preview the DP.** Compare `Would: …` with the heuristic decision for a
    few slots.

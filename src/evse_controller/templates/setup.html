@@ -1,0 +1,985 @@
+{% extends "base.html" %}
+
+{% block head %}
+<title>First-run setup</title>
+<style>
+    .setup-shell {
+        max-width: 1040px;
+        margin: 0 auto;
+    }
+    .setup-shell h1 {
+        margin-bottom: 6px;
+    }
+    .setup-intro {
+        color: #444;
+        line-height: 1.5;
+        margin: 4px 0 12px;
+    }
+    .setup-progress {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 0;
+    }
+    .setup-progress-step {
+        padding: 4px 10px;
+        border: 1px solid #ccd2d8;
+        border-radius: 12px;
+        font-size: 12px;
+        color: #555;
+        background: #fff;
+    }
+    .setup-progress-step.active {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+        font-weight: 600;
+    }
+    .setup-step {
+        border: 1px solid #d8dde3;
+        border-radius: 6px;
+        padding: 16px;
+        margin: 12px 0;
+        background: #fff;
+    }
+    .setup-js .setup-step {
+        display: none;
+    }
+    .setup-js .setup-step.active {
+        display: block;
+    }
+    .setup-step h2 {
+        margin-top: 0;
+        font-size: 20px;
+    }
+    .setup-step p {
+        line-height: 1.45;
+    }
+    .form-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 10px;
+    }
+    .form-row > div {
+        flex: 1 1 230px;
+        min-width: 210px;
+    }
+    .form-row label {
+        display: block;
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+    }
+    .form-row input,
+    .form-row select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 8px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .form-row small {
+        display: block;
+        color: #666;
+        font-size: 12px;
+        margin-top: 3px;
+    }
+    .price-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+    }
+    .price-grid label {
+        display: block;
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+    }
+    .price-grid input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 8px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+    }
+    .test-connection {
+        padding: 4px 8px;
+        margin-top: 5px;
+        font-size: 12px;
+    }
+    .connection-result {
+        display: inline-block;
+        margin-left: 8px;
+        font-size: 12px;
+    }
+    .connection-ok {
+        color: #1e5b2a;
+    }
+    .connection-fail {
+        color: #8a1c1c;
+    }
+    .setup-discovery {
+        border: 1px solid #d8dde3;
+        border-radius: 6px;
+        padding: 12px;
+        margin: 10px 0;
+        background: #f8fafc;
+    }
+    .setup-discovery h3 {
+        margin: 0 0 6px;
+        font-size: 15px;
+    }
+    .discovery-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+    }
+    .discovery-status {
+        color: #555;
+        font-size: 13px;
+    }
+    .discovery-results {
+        margin-top: 8px;
+    }
+    .discovery-results table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background: #fff;
+    }
+    .discovery-results th,
+    .discovery-results td {
+        text-align: left;
+        padding: 5px 7px;
+        border-bottom: 1px solid #e5e8ec;
+    }
+    .discovery-use {
+        padding: 3px 7px;
+        margin-right: 4px;
+        font-size: 12px;
+    }
+    .setup-choice {
+        display: block;
+        border: 1px solid #e0e4e8;
+        border-radius: 6px;
+        padding: 10px;
+        margin: 8px 0;
+        background: #fff;
+    }
+    .setup-choice input {
+        margin-right: 8px;
+    }
+    .setup-choice strong {
+        display: inline-block;
+        margin-bottom: 3px;
+    }
+    .setup-choice small {
+        display: block;
+        color: #666;
+        font-size: 12px;
+        margin-left: 22px;
+    }
+    .setup-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+    }
+    .setup-nav button {
+        padding: 8px 14px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .setup-nav button.primary {
+        background: #0b5cad;
+        border-color: #0b5cad;
+        color: #fff;
+    }
+    .setup-nav button:disabled {
+        opacity: 0.55;
+        cursor: default;
+    }
+    .setup-error {
+        background: #fdecea;
+        border: 1px solid #f5c2bd;
+        border-radius: 4px;
+        color: #8a1c1c;
+        padding: 10px 12px;
+        margin: 10px 0;
+        font-size: 13px;
+    }
+    .setup-review dl {
+        display: grid;
+        grid-template-columns: 170px 1fr;
+        gap: 6px 12px;
+        font-size: 13px;
+    }
+    .setup-review dt {
+        color: #555;
+        font-weight: 600;
+    }
+    .setup-review dd {
+        margin: 0;
+    }
+    .setup-complete {
+        border: 1px solid #b7dfc0;
+        background: #eef9f0;
+        border-radius: 6px;
+        padding: 18px;
+        margin-top: 16px;
+    }
+    .setup-complete h2 {
+        margin-top: 0;
+    }
+    .setup-complete a {
+        display: inline-block;
+        margin: 8px 12px 0 0;
+        color: #0b5cad;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="setup-shell">
+    <div class="nav-links">
+        <a href="{{ url_for('index') }}">← Back to dashboard</a>
+    </div>
+    <h1>First-run setup</h1>
+
+    {% if done %}
+    <div class="setup-complete">
+        <h2>Setup saved</h2>
+        <p>
+            The controller now has the hardware addresses, tariff, SoC floors
+            and control mode it needs. The dashboard setup checklist should be
+            green.
+        </p>
+        <p>
+            The recommended first step is to leave the controller observing in
+            <strong>Preview</strong> for a day, then review the DP reports
+            before switching to DP control. You can set an EV readiness target
+            whenever you need one. If the controller is already running,
+            restart it so it uses the new addresses and control mode.
+        </p>
+        <a href="{{ url_for('index') }}">Go to dashboard →</a>
+        <a href="{{ url_for('ev_readiness_page') }}">Set an EV readiness target →</a>
+        <a href="{{ url_for('config_page') }}">Review all settings →</a>
+    </div>
+    {% else %}
+    <p class="setup-intro">
+        A short guided path through the essentials: hardware, tariff, battery
+        limits and control mode. You can change everything later on the
+        configuration page.
+    </p>
+
+    {% if error %}
+    <div class="setup-error">{{ error }}</div>
+    {% endif %}
+
+    <div class="setup-progress" id="setup-progress">
+        <span class="setup-progress-step" data-progress="1">1 · Hardware</span>
+        <span class="setup-progress-step" data-progress="2">2 · Tariff</span>
+        <span class="setup-progress-step" data-progress="3">3 · Battery</span>
+        <span class="setup-progress-step" data-progress="4">4 · Control</span>
+        <span class="setup-progress-step" data-progress="5">5 · Review</span>
+    </div>
+
+    <form id="setupForm" method="post" action="{{ url_for('setup_page') }}">
+        <section class="setup-step" data-step="1">
+            <h2>1. Hardware</h2>
+            <p>
+                Find the Wallbox and Shelly EMs, then test the addresses before
+                continuing. A busy Wallbox may need a second scan.
+            </p>
+
+            <div class="setup-discovery">
+                <h3>Find devices on your network</h3>
+                <div class="discovery-actions">
+                    <button type="button" id="setup-discovery-start">Scan network</button>
+                    <span id="setup-discovery-status" class="discovery-status">Not started.</span>
+                </div>
+                <div class="form-row">
+                    <div>
+                        <label for="setup-discovery-networks">Extra networks (optional)</label>
+                        <input type="text" id="setup-discovery-networks"
+                               placeholder="192.168.1.0/24">
+                        <small>
+                            Leave blank to scan local interfaces plus the
+                            networks of the configured device addresses.
+                        </small>
+                    </div>
+                </div>
+                <div id="setup-discovery-results" class="discovery-results"></div>
+            </div>
+
+            <div class="form-row">
+                <div>
+                    <label for="wallbox_url">Wallbox address</label>
+                    <input type="text" id="wallbox_url" name="wallbox_url"
+                           value="{{ values.wallbox_url }}" required
+                           placeholder="192.168.1.180 or WB123456.local">
+                    <button type="button" class="test-connection"
+                            data-kind="wallbox" data-source="wallbox_url"
+                            data-result="wallbox-test-result">Test</button>
+                    <span id="wallbox-test-result" class="connection-result"></span>
+                    <small>Use <code>simulator</code> for a dry run.</small>
+                </div>
+                <div>
+                    <label for="wallbox_serial">Wallbox serial (optional)</label>
+                    <input type="text" id="wallbox_serial" name="wallbox_serial"
+                           value="{{ values.wallbox_serial }}"
+                           placeholder="For OCPP/cloud features">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div>
+                    <label for="shelly_url">Shelly 1 address</label>
+                    <input type="text" id="shelly_url" name="shelly_url"
+                           value="{{ values.shelly_url }}"
+                           placeholder="shellyem-.... or 192.168.1.118">
+                    <button type="button" class="test-connection"
+                            data-kind="shelly" data-source="shelly_url"
+                            data-result="shelly1-test-result">Test</button>
+                    <span id="shelly1-test-result" class="connection-result"></span>
+                </div>
+                <div>
+                    <label for="shelly_secondary_url">Shelly 2 address (optional)</label>
+                    <input type="text" id="shelly_secondary_url" name="shelly_secondary_url"
+                           value="{{ values.shelly_secondary_url }}">
+                    <button type="button" class="test-connection"
+                            data-kind="shelly" data-source="shelly_secondary_url"
+                            data-result="shelly2-test-result">Test</button>
+                    <span id="shelly2-test-result" class="connection-result"></span>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div>
+                    <label for="grid_monitor">Grid monitoring</label>
+                    <select id="grid_monitor" name="grid_monitor">
+                        {% for value, label in [
+                            ('primary:1', 'Shelly 1 · Channel 1'),
+                            ('primary:2', 'Shelly 1 · Channel 2'),
+                            ('secondary:1', 'Shelly 2 · Channel 1'),
+                            ('secondary:2', 'Shelly 2 · Channel 2')
+                        ] %}
+                        <option value="{{ value }}" {% if values.grid_monitor == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <small>Choose the channel measuring grid import/export.</small>
+                </div>
+                <div>
+                    <label for="evse_monitor">EVSE monitoring</label>
+                    <select id="evse_monitor" name="evse_monitor">
+                        <option value="" {% if not values.evse_monitor %}selected{% endif %}>Choose a channel…</option>
+                        {% for value, label in [
+                            ('primary:1', 'Shelly 1 · Channel 1'),
+                            ('primary:2', 'Shelly 1 · Channel 2'),
+                            ('secondary:1', 'Shelly 2 · Channel 1'),
+                            ('secondary:2', 'Shelly 2 · Channel 2')
+                        ] %}
+                        <option value="{{ value }}" {% if values.evse_monitor == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <small>
+                        Choose the channel measuring the Wallbox AC power.
+                        This is required for load-following and DP control.
+                    </small>
+                </div>
+            </div>
+        </section>
+
+        <section class="setup-step" data-step="2">
+            <h2>2. Tariff and prices</h2>
+            <p>
+                Choose the preset that matches your supplier product. The
+                preset supplies the time windows; these are starter prices, so
+                check your supplier's current rates.
+            </p>
+            <div class="form-row">
+                <div>
+                    <label for="tariff_preset">Tariff preset</label>
+                    <select id="tariff_preset" name="tariff_preset">
+                        {% for key, preset in price_presets.items() %}
+                        <option value="{{ key }}" {% if values.tariff_preset == key %}selected{% endif %}>{{ preset.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="octopus_region">Octopus region</label>
+                    <input type="text" id="octopus_region" name="octopus_region"
+                           value="{{ values.octopus_region }}" maxlength="1">
+                    <small>Single-letter region code, e.g. K for London.</small>
+                </div>
+                <div>
+                    <label for="agile_product">Agile import product</label>
+                    <input type="text" id="agile_product" name="agile_product"
+                           value="{{ values.agile_product }}">
+                    <small>Leave blank for the built-in default.</small>
+                </div>
+            </div>
+
+            <button type="button" id="apply-preset-prices">Use preset default prices</button>
+
+            <div class="price-grid">
+                {% for key, label, _attribute in price_fields %}
+                <div>
+                    <label for="{{ key }}">{{ label }} (p/kWh)</label>
+                    <input type="number" step="0.01" min="0"
+                           id="{{ key }}" name="{{ key }}"
+                           value="{{ values[key] }}">
+                </div>
+                {% endfor %}
+            </div>
+            <p><small>
+                The preset's windows are applied automatically. Peak and cheap
+                fields are used where the preset defines those periods; standard
+                is the fallback.
+            </small></p>
+        </section>
+
+        <section class="setup-step" data-step="3">
+            <h2>3. Battery and SoC floors</h2>
+            <p>
+                These are the limits the controller must respect. The hard
+                floor protects the pack; the buffer floor is where normal house
+                coverage stops; the bulk floor is where planned exports stop.
+            </p>
+            <div class="form-row">
+                <div>
+                    <label for="max_charge_percent">Charge cap (%)</label>
+                    <input type="number" id="max_charge_percent"
+                           name="max_charge_percent" min="1" max="100"
+                           value="{{ values.max_charge_percent }}">
+                    <small>The tariff controller also hard-limits the top to 97%.</small>
+                </div>
+                {% for key, label, _attribute in floor_fields %}
+                <div>
+                    <label for="{{ key }}">{{ label }} (%)</label>
+                    <input type="number" id="{{ key }}" name="{{ key }}"
+                           min="{% if key == 'hard_floor_soc' %}25{% else %}0{% endif %}" max="100"
+                           value="{{ values[key] }}">
+                </div>
+                {% endfor %}
+            </div>
+            <p><small>
+                Example: hard 25% (protection), buffer 45% (house coverage),
+                bulk 50% (planned export). The hard floor has a 25% minimum.
+                They must be ordered hard ≤ buffer ≤ bulk, and the bulk floor
+                cannot exceed the charge cap.
+            </small></p>
+        </section>
+
+        <section class="setup-step" data-step="4">
+            <h2>4. Control</h2>
+            <p>
+                Start in Preview if this is a new installation: the heuristic
+                keeps control while the DP records its plan, so you can compare
+                them before handing over control.
+            </p>
+            {% for key, label in control_modes.items() %}
+            <label class="setup-choice">
+                <input type="radio" name="control_mode" value="{{ key }}"
+                       {% if values.control_mode == key %}checked{% endif %}>
+                <strong>{{ label }}</strong>
+                <small>
+                    {% if key == 'preview' %}
+                    Recommended for the first day. The heuristic controls and
+                    the DP observes; switch later when the reports look right.
+                    {% elif key == 'control_hist' %}
+                    The DP controls using the measured grid-load profile. Choose
+                    this after reviewing the preview and backtests.
+                    {% elif key == 'control_comp' %}
+                    The DP controls using the weather-driven component forecast.
+                    Choose this only after the component forecast has been
+                    checked.
+                    {% else %}
+                    No smart tariff control. Useful for commissioning or when an
+                    external controller is driving the system.
+                    {% endif %}
+                </small>
+            </label>
+            {% endfor %}
+        </section>
+
+        <section class="setup-step" data-step="5">
+            <h2>5. Review and save</h2>
+            <div id="setup-review" class="setup-review"></div>
+            <p><small>
+                After saving, the dashboard checklist should be green. You can
+                set an EV readiness target at any time from EV Readiness, and
+                every setting remains editable on the configuration page.
+            </small></p>
+        </section>
+
+        <div id="step-error" class="setup-error" hidden></div>
+
+        <div class="setup-nav">
+            <button type="button" id="setup-back">Back</button>
+            <button type="button" id="setup-next">Next</button>
+            <button type="submit" id="setup-save" class="primary">Save setup</button>
+        </div>
+    </form>
+    {% endif %}
+</div>
+
+<script>
+    document.body.classList.add('setup-js');
+
+    const setupForm = document.getElementById('setupForm');
+    const setupSteps = Array.from(document.querySelectorAll('.setup-step'));
+    const setupProgress = Array.from(
+        document.querySelectorAll('.setup-progress-step')
+    );
+    const setupBack = document.getElementById('setup-back');
+    const setupNext = document.getElementById('setup-next');
+    const setupSave = document.getElementById('setup-save');
+    const setupError = document.getElementById('step-error');
+    let setupStep = {{ initial_step|int }};
+
+    function setupValue(id) {
+        const element = document.getElementById(id);
+        return element ? String(element.value || '').trim() : '';
+    }
+
+    function setupNumber(id) {
+        const text = setupValue(id);
+        if (text === '') return NaN;
+        return Number(text);
+    }
+
+    function showSetupStep(step) {
+        setupStep = Math.max(1, Math.min(5, step));
+        setupSteps.forEach(section => {
+            section.classList.toggle(
+                'active', Number(section.dataset.step) === setupStep
+            );
+        });
+        setupProgress.forEach(item => {
+            item.classList.toggle(
+                'active', Number(item.dataset.progress) === setupStep
+            );
+        });
+        if (setupBack) setupBack.hidden = setupStep === 1;
+        if (setupNext) setupNext.hidden = setupStep === 5;
+        if (setupSave) setupSave.hidden = setupStep !== 5;
+        if (setupError) {
+            setupError.hidden = true;
+            setupError.textContent = '';
+        }
+        if (setupStep === 5) renderSetupReview();
+        window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+
+    function setupMessage(message) {
+        if (!setupError) return;
+        setupError.textContent = message;
+        setupError.hidden = false;
+        setupError.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+
+    function monitorError(selectId) {
+        const select = document.getElementById(selectId);
+        if (!select || !select.value) {
+            return 'Choose a monitoring channel.';
+        }
+        const parts = String(select.value).split(':');
+        const device = parts[0];
+        const url = setupValue(
+            device === 'secondary' ? 'shelly_secondary_url' : 'shelly_url'
+        );
+        if (!url) {
+            return (
+                'The selected monitor uses Shelly ' +
+                (device === 'secondary' ? '2' : '1') +
+                ', but that address is blank.'
+            );
+        }
+        return '';
+    }
+
+    function validateSetupStep(step) {
+        if (step === 1) {
+            if (!setupValue('wallbox_url')) {
+                return 'Enter the Wallbox address, or use "simulator" for a dry run.';
+            }
+            if (
+                !setupValue('shelly_url') &&
+                !setupValue('shelly_secondary_url')
+            ) {
+                return 'Enter at least one Shelly address.';
+            }
+            return monitorError('grid_monitor') || monitorError('evse_monitor');
+        }
+        if (step === 2) {
+            if (!setupValue('tariff_preset')) {
+                return 'Choose a tariff preset.';
+            }
+            for (const key of [
+                'import_standard', 'import_cheap', 'import_peak',
+                'export_standard', 'export_cheap', 'export_peak'
+            ]) {
+                const value = setupNumber(key);
+                if (!Number.isFinite(value) || value < 0) {
+                    return 'Enter valid non-negative prices for every rate.';
+                }
+            }
+        }
+        if (step === 3) {
+            const cap = setupNumber('max_charge_percent');
+            const hard = setupNumber('hard_floor_soc');
+            const buffer = setupNumber('buffer_floor_soc');
+            const bulk = setupNumber('bulk_floor_soc');
+            if (![cap, hard, buffer, bulk].every(Number.isFinite)) {
+                return 'Enter the charge cap and all three floors.';
+            }
+            if (!(1 <= cap && cap <= 100)) {
+                return 'The charge cap must be between 1 and 100%.';
+            }
+            if (!(25 <= hard && hard <= buffer && buffer <= bulk && bulk <= 100)) {
+                return 'The floors must be ordered hard ≤ buffer ≤ bulk, with hard at least 25% and bulk at most 100%.';
+            }
+            if (bulk > cap) {
+                return 'The bulk floor cannot be above the charge cap.';
+            }
+        }
+        if (step === 4) {
+            const selected = document.querySelector(
+                'input[name="control_mode"]:checked'
+            );
+            if (!selected) return 'Choose a control mode.';
+        }
+        return '';
+    }
+
+    function nextSetupStep() {
+        const message = validateSetupStep(setupStep);
+        if (message) {
+            setupMessage(message);
+            return;
+        }
+        showSetupStep(setupStep + 1);
+    }
+
+    function renderSetupReview() {
+        const review = document.getElementById('setup-review');
+        if (!review) return;
+        review.replaceChildren();
+        const list = document.createElement('dl');
+        const add = (label, value) => {
+            const dt = document.createElement('dt');
+            dt.textContent = label;
+            const dd = document.createElement('dd');
+            dd.textContent = value || '—';
+            list.appendChild(dt);
+            list.appendChild(dd);
+        };
+        add('Wallbox', setupValue('wallbox_url'));
+        if (setupValue('wallbox_serial')) {
+            add('Wallbox serial', setupValue('wallbox_serial'));
+        }
+        add('Shelly 1', setupValue('shelly_url'));
+        add('Shelly 2', setupValue('shelly_secondary_url'));
+        const monitorText = id => {
+            const select = document.getElementById(id);
+            if (!select || !select.value) return 'None';
+            return select.options[select.selectedIndex].textContent.trim();
+        };
+        add('Grid monitor', monitorText('grid_monitor'));
+        add('EVSE monitor', monitorText('evse_monitor'));
+        const preset = document.getElementById('tariff_preset');
+        add(
+            'Tariff',
+            preset ? preset.options[preset.selectedIndex].textContent.trim() : ''
+        );
+        for (const [key, label] of [
+            ['import_standard', 'Import standard'],
+            ['import_cheap', 'Import cheap'],
+            ['import_peak', 'Import peak'],
+            ['export_standard', 'Export standard'],
+            ['export_cheap', 'Export cheap'],
+            ['export_peak', 'Export peak']
+        ]) {
+            const value = setupValue(key);
+            add(label, value !== '' ? `${value}p/kWh` : '');
+        }
+        add('Charge cap', `${setupValue('max_charge_percent')}%`);
+        add('Hard floor', `${setupValue('hard_floor_soc')}%`);
+        add('Buffer floor', `${setupValue('buffer_floor_soc')}%`);
+        add('Bulk floor', `${setupValue('bulk_floor_soc')}%`);
+        const selectedMode = document.querySelector(
+            'input[name="control_mode"]:checked'
+        );
+        const modeLabel = selectedMode
+            ? selectedMode.closest('.setup-choice').querySelector('strong').textContent
+            : '';
+        add('Control', modeLabel);
+        review.appendChild(list);
+    }
+
+    if (setupForm) {
+        showSetupStep(setupStep);
+        if (setupBack) {
+            setupBack.addEventListener('click', () => {
+                showSetupStep(setupStep - 1);
+            });
+        }
+        if (setupNext) {
+            setupNext.addEventListener('click', nextSetupStep);
+        }
+        setupForm.addEventListener('input', () => {
+            if (setupError) {
+                setupError.hidden = true;
+                setupError.textContent = '';
+            }
+        });
+        setupForm.addEventListener('change', () => {
+            if (setupError) {
+                setupError.hidden = true;
+                setupError.textContent = '';
+            }
+        });
+    }
+
+    // Preset defaults.
+    const setupPresetData = {{ preset_data|tojson }};
+    const applyPreset = document.getElementById('apply-preset-prices');
+    if (applyPreset) {
+        applyPreset.addEventListener('click', () => {
+            const key = setupValue('tariff_preset');
+            const data = setupPresetData[key];
+            if (!data) return;
+            const fields = [
+                ['import_standard', data.import.standard],
+                ['import_cheap', data.import.cheap],
+                ['import_peak', data.import.peak],
+                ['export_standard', data.export.standard],
+                ['export_cheap', data.export.cheap],
+                ['export_peak', data.export.peak]
+            ];
+            fields.forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element && value != null) {
+                    element.value = Number(value).toFixed(2);
+                }
+            });
+        });
+    }
+
+    // Device discovery and connection tests.
+    const setupDiscoveryStart = document.getElementById('setup-discovery-start');
+    const setupDiscoveryStatus = document.getElementById('setup-discovery-status');
+    const setupDiscoveryResults = document.getElementById('setup-discovery-results');
+    const setupDiscoveryNetworks = document.getElementById('setup-discovery-networks');
+
+    function setupSetField(id, value) {
+        const field = document.getElementById(id);
+        if (!field) return;
+        field.value = value;
+        field.focus();
+    }
+
+    function setupAddCell(row, value) {
+        const cell = document.createElement('td');
+        cell.textContent = value == null ? '' : String(value);
+        row.appendChild(cell);
+        return cell;
+    }
+
+    function renderSetupDiscovery(state) {
+        if (!setupDiscoveryResults) return;
+        setupDiscoveryResults.replaceChildren();
+        const devices = state.devices || [];
+        if (!devices.length) {
+            if (state.status === 'running') {
+                setupDiscoveryResults.textContent = 'Searching the local network…';
+            } else if (state.status === 'done') {
+                setupDiscoveryResults.textContent =
+                    'No devices found. Check the network or enter the addresses manually.';
+            } else if (state.status === 'error') {
+                setupDiscoveryResults.textContent = state.error || 'Discovery failed.';
+            }
+            return;
+        }
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['Type', 'Address', 'Details', 'Power', 'Use'].forEach(label => {
+            const th = document.createElement('th');
+            th.textContent = label;
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        devices.forEach(device => {
+            const row = document.createElement('tr');
+            const type = String(device.type || 'Device');
+            const details = device.details || {};
+            setupAddCell(row, type);
+            setupAddCell(row, device.ip || '');
+            setupAddCell(
+                row,
+                type.indexOf('Shelly') === 0
+                    ? `${details.emeters ?? 0} meter(s)`
+                    : (details.register || '')
+            );
+            let power = '';
+            if (type.indexOf('Shelly') === 0) {
+                const channels = details.channels || [];
+                power = channels.map(channel => {
+                    const value = channel.power_w == null
+                        ? '—'
+                        : `${channel.power_w} W`;
+                    return `Ch ${channel.channel}: ${value}`;
+                }).join(' · ');
+                if (details.total_power_w != null) {
+                    power += `${power ? ' · ' : ''}total ${details.total_power_w} W`;
+                }
+            }
+            setupAddCell(row, power || '—');
+            const actions = document.createElement('td');
+            if (type.indexOf('Wallbox') !== -1) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'discovery-use';
+                button.textContent = 'Use as Wallbox';
+                button.addEventListener('click', () => {
+                    setupSetField('wallbox_url', device.ip);
+                });
+                actions.appendChild(button);
+            }
+            if (type.indexOf('Shelly') !== -1) {
+                const primary = document.createElement('button');
+                primary.type = 'button';
+                primary.className = 'discovery-use';
+                primary.textContent = 'Use as Shelly 1';
+                primary.addEventListener('click', () => {
+                    setupSetField('shelly_url', device.ip);
+                });
+                actions.appendChild(primary);
+                const secondary = document.createElement('button');
+                secondary.type = 'button';
+                secondary.className = 'discovery-use';
+                secondary.textContent = 'Use as Shelly 2';
+                secondary.addEventListener('click', () => {
+                    setupSetField('shelly_secondary_url', device.ip);
+                });
+                actions.appendChild(secondary);
+            }
+            row.appendChild(actions);
+            tbody.appendChild(row);
+        });
+        table.appendChild(tbody);
+        setupDiscoveryResults.appendChild(table);
+    }
+
+    function setupDiscoveryText(state) {
+        if (!state) return 'Not started.';
+        const nets = (state.networks || []).join(', ');
+        const suffix = nets ? ` · ${nets}` : '';
+        if (state.status === 'running') {
+            return `Scanning… ${Math.round(state.elapsed_s || 0)} s${suffix}`;
+        }
+        if (state.status === 'done') {
+            const count = (state.devices || []).length;
+            return `Scan finished: ${count} device${count === 1 ? '' : 's'} found${suffix}.`;
+        }
+        if (state.status === 'error') return state.error || 'Scan failed.';
+        return 'Not started.';
+    }
+
+    async function pollSetupDiscovery() {
+        try {
+            const response = await fetch('/api/discovery/status');
+            const state = await response.json();
+            if (setupDiscoveryStatus) {
+                setupDiscoveryStatus.textContent = setupDiscoveryText(state);
+            }
+            renderSetupDiscovery(state);
+            if (state.status === 'running') {
+                window.setTimeout(pollSetupDiscovery, 2000);
+            } else if (setupDiscoveryStart) {
+                setupDiscoveryStart.disabled = false;
+            }
+        } catch (error) {
+            if (setupDiscoveryStatus) {
+                setupDiscoveryStatus.textContent =
+                    `Could not check discovery: ${error.message}`;
+            }
+            if (setupDiscoveryStart) setupDiscoveryStart.disabled = false;
+        }
+    }
+
+    async function startSetupDiscovery() {
+        if (!setupDiscoveryStart) return;
+        setupDiscoveryStart.disabled = true;
+        if (setupDiscoveryStatus) setupDiscoveryStatus.textContent = 'Starting…';
+        try {
+            const response = await fetch('/api/discovery/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    networks: setupDiscoveryNetworks
+                        ? setupDiscoveryNetworks.value.trim()
+                        : ''
+                })
+            });
+            const state = await response.json();
+            if (!response.ok) {
+                throw new Error(state.error || 'Could not start discovery');
+            }
+            if (setupDiscoveryStatus) {
+                setupDiscoveryStatus.textContent = setupDiscoveryText(state);
+            }
+            renderSetupDiscovery(state);
+            window.setTimeout(pollSetupDiscovery, 1000);
+        } catch (error) {
+            if (setupDiscoveryStatus) setupDiscoveryStatus.textContent = error.message;
+            setupDiscoveryStart.disabled = false;
+        }
+    }
+
+    async function setupTestConnection(button) {
+        const kind = button.dataset.kind;
+        const source = document.getElementById(button.dataset.source);
+        const result = document.getElementById(button.dataset.result);
+        if (!source || !result) return;
+        button.disabled = true;
+        result.className = 'connection-result';
+        result.textContent = 'Testing…';
+        try {
+            const response = await fetch('/api/connection-test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({kind: kind, url: source.value.trim()})
+            });
+            const data = await response.json();
+            result.textContent = data.message || (data.ok ? 'Connected.' : 'Failed.');
+            result.classList.add(data.ok ? 'connection-ok' : 'connection-fail');
+        } catch (error) {
+            result.textContent = `Test failed: ${error.message}`;
+            result.classList.add('connection-fail');
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    if (setupDiscoveryStart) {
+        setupDiscoveryStart.addEventListener('click', startSetupDiscovery);
+        pollSetupDiscovery();
+    }
+    document.querySelectorAll('.test-connection').forEach(button => {
+        button.addEventListener('click', () => setupTestConnection(button));
+    });
+</script>
+{% endblock %}

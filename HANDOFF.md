@@ -425,6 +425,20 @@ completed fixes.
   item red or green with a summary count. The config page anchors are
   `#wallbox`, `#shelly`, `#device-assignment`, `#soc-floors`,
   `#tariff-prices` and `#learning-mode`.
+- **Guided first-run setup wizard.** `web/setup_routes.py` serves `/setup` and
+  the five-step `templates/setup.html` form: hardware (discovery, connection
+  tests, monitor assignments), tariff/prices, battery floors, control mode and
+  review. It reads the current settings as defaults, validates each step in the
+  browser, repeats the validation on POST (including `hard ≤ buffer ≤ bulk`,
+  the charge cap and the monitor/address pairing), and saves through the
+  normal `Config` properties and `config.save()`. It writes only the fields it
+  presents. `simulator` in the Wallbox field is stored as
+  `wallbox.use_simulator` with an empty URL, so the driver really uses the
+  simulator. The wizard deliberately defaults to Preview and treats the EVSE
+  monitor as required, matching the dashboard checklist. The completion page
+  links to the dashboard, configuration and EV Readiness; the running
+  controller may need a restart to use the new addresses and learning mode.
+  Tests: `tests/test_setup_routes.py`.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

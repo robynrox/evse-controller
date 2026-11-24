@@ -1207,6 +1207,7 @@
             </li>
             {% endfor %}
         </ul>
+        <a href="{{ url_for('setup_page') }}">Open setup wizard →</a>
     </div>
 </aside>
 </div>
@@ -1626,24 +1627,29 @@
         const hard = Number(hardText);
         const buffer = Number(bufferText);
         const bulk = Number(bulkText);
+        const capText = setupValue('max_charge_percent');
+        const cap = Number(capText);
         const floorsReady = (
             hardText !== '' &&
             bufferText !== '' &&
             bulkText !== '' &&
+            capText !== '' &&
             Number.isFinite(hard) &&
             Number.isFinite(buffer) &&
             Number.isFinite(bulk) &&
-            hard >= 0 &&
+            Number.isFinite(cap) &&
+            hard >= 25 &&
             hard <= buffer &&
             buffer <= bulk &&
-            bulk <= 100
+            bulk <= 100 &&
+            bulk <= cap
         );
         setupSet(
             'floors',
             floorsReady,
             floorsReady
                 ? `Hard ${hard}% · buffer ${buffer}% · bulk ${bulk}%`
-                : 'Hard ≤ buffer ≤ bulk, each within 0–100%'
+                : 'Hard ≥ 25%, hard ≤ buffer ≤ bulk ≤ charge cap'
         );
 
         const mode = setupOptionText('learning_mode');
