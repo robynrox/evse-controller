@@ -31,7 +31,24 @@ class ModbusClientWrapper(ModbusClientInterface):
     """Wrapper for pyModbusTCP.client.ModbusClient"""
     def __init__(self, host: str, auto_open: bool = True, timeout: int = 2):
         from pyModbusTCP.client import ModbusClient
+        self._auto_open = auto_open
+        self._timeout = timeout
+        self._host = host
         self._client = ModbusClient(host=host, auto_open=auto_open, timeout=timeout)
+
+    def set_host(self, host: str) -> None:
+        """Reconnect the client to a newly verified address."""
+        from pyModbusTCP.client import ModbusClient
+        try:
+            self._client.close()
+        except Exception:
+            pass
+        self._host = host
+        self._client = ModbusClient(
+            host=host,
+            auto_open=self._auto_open,
+            timeout=self._timeout,
+        )
 
     def open(self) -> bool:
         return self._client.open()

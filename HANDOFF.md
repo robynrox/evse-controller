@@ -455,12 +455,15 @@ completed fixes.
   last-300-point response when called without parameters. On shutdown the
   store is written to `data/state/history_graph.json.gz` and restored on the
   next start, dropping samples outside the retention windows.
-- **Proposed dual device addressing.** Store a last-known IP and a hostname
-  per device, prefer the IP while healthy, and resolve the hostname after
-  link-health failures. The Wallbox hostname contains its `WB`+serial and the
-  Shelly hostname contains the 12-hex MAC; a successful fallback checks those
-  identities against the stored value and the device response before the new
-  IP is persisted. The design, safety rules and tests are in
+- **Dual device addressing.** `device_address.py` keeps the last known IP in
+  the legacy URL fields and a stable hostname beside it. Shelly and Wallbox
+  pollers resolve the hostname only after a failure threshold, verify the
+  Wallbox `WBxxxxxx` serial or Shelly MAC against the stored identity and
+  device response, then update and persist the new IP. The
+  `FallbackThrottle` prevents a DNS lookup on every failed poll; IP-only
+  installs do no DNS. The configuration page exposes the fallback hostname,
+  identity and prefer-IP control, and discovery fills them from reverse DNS.
+  Design and limits are in
   [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md).
 - **Daily half-hour energy report.** `daily_report.py` keeps one JSON file per
   local day in `data/reports/daily/`, fed from `EvseController.update()` on

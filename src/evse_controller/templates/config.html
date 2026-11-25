@@ -233,11 +233,37 @@
     <div class="config-section" id="wallbox">
         <h2>Wallbox Configuration</h2>
         <div class="form-group">
-            <label for="wallbox_url">Wallbox URL:</label>
+            <label for="wallbox_url">Wallbox address (IP or hostname):</label>
             <input type="text" id="wallbox_url" name="wallbox[url]" value="{{ config.wallbox.url }}" required>
             <button type="button" class="test-connection" data-kind="wallbox"
                     data-source="wallbox_url" data-result="wallbox-test-result">Test</button>
             <span id="wallbox-test-result" class="connection-result"></span>
+        </div>
+        <div class="form-group">
+            <label for="wallbox_hostname">Fallback hostname (optional):</label>
+            <input type="text" id="wallbox_hostname" name="wallbox[address][hostname]"
+                   value="{{ config.wallbox.address.hostname }}"
+                   placeholder="WB123456.local">
+            <small>
+                The stable name to resolve if the IP above stops responding.
+                The IP is preferred while it works; a verified fallback updates
+                the stored address.
+            </small>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="wallbox_prefer_ip"
+                       name="wallbox[address][prefer_ip]"
+                       {% if config.wallbox.address.prefer_ip %}checked{% endif %}>
+                Prefer the IP address while it is healthy
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="wallbox_identity">Wallbox serial/identity (optional):</label>
+            <input type="text" id="wallbox_identity" name="wallbox[address][identity]"
+                   value="{{ config.wallbox.address.identity }}"
+                   placeholder="123456">
+            <small>Used to verify a fallback address; derived from the hostname when possible.</small>
         </div>
         <div class="form-group">
             <label for="wallbox_username">Username (for auto-restart and OCPP state read/write functions):</label>
@@ -325,12 +351,35 @@
     <div class="config-section" id="shelly">
         <h2>Shelly Configuration</h2>
         <div class="form-group">
-            <label for="shelly_url">Shelly 1 URL:</label>
+            <label for="shelly_url">Shelly 1 address (IP or hostname):</label>
             <input type="text" id="shelly_url" name="shelly[primary_url]" value="{{ config.shelly.primary_url }}"
                 required>
             <button type="button" class="test-connection" data-kind="shelly"
                     data-source="shelly_url" data-result="shelly1-test-result">Test</button>
             <span id="shelly1-test-result" class="connection-result"></span>
+        </div>
+        <div class="form-group">
+            <label for="shelly_primary_hostname">Shelly 1 fallback hostname (optional):</label>
+            <input type="text" id="shelly_primary_hostname"
+                   name="shelly[primary_address][hostname]"
+                   value="{{ config.shelly.primary_address.hostname }}"
+                   placeholder="shellyem-98cdac123456.local">
+            <small>Preferred IP first; resolve this name after repeated failures.</small>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="shelly_primary_prefer_ip"
+                       name="shelly[primary_address][prefer_ip]"
+                       {% if config.shelly.primary_address.prefer_ip %}checked{% endif %}>
+                Prefer Shelly 1's IP while it is healthy
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="shelly_primary_identity">Shelly 1 MAC identity (optional):</label>
+            <input type="text" id="shelly_primary_identity"
+                   name="shelly[primary_address][identity]"
+                   value="{{ config.shelly.primary_address.identity }}"
+                   placeholder="98CDAC123456">
         </div>
         <div class="form-group">
             <label for="shelly_secondary_url">Shelly 2 URL (optional):</label>
@@ -339,6 +388,28 @@
             <button type="button" class="test-connection" data-kind="shelly"
                     data-source="shelly_secondary_url" data-result="shelly2-test-result">Test</button>
             <span id="shelly2-test-result" class="connection-result"></span>
+        </div>
+        <div class="form-group">
+            <label for="shelly_secondary_hostname">Shelly 2 fallback hostname (optional):</label>
+            <input type="text" id="shelly_secondary_hostname"
+                   name="shelly[secondary_address][hostname]"
+                   value="{{ config.shelly.secondary_address.hostname }}"
+                   placeholder="shellyem-aabbccddeeff.local">
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="shelly_secondary_prefer_ip"
+                       name="shelly[secondary_address][prefer_ip]"
+                       {% if config.shelly.secondary_address.prefer_ip %}checked{% endif %}>
+                Prefer Shelly 2's IP while it is healthy
+            </label>
+        </div>
+        <div class="form-group">
+            <label for="shelly_secondary_identity">Shelly 2 MAC identity (optional):</label>
+            <input type="text" id="shelly_secondary_identity"
+                   name="shelly[secondary_address][identity]"
+                   value="{{ config.shelly.secondary_address.identity }}"
+                   placeholder="AABBCCDDEEFF">
         </div>
 
         <!-- Shelly 1 Channel Configuration -->
@@ -1379,6 +1450,12 @@
                 button.textContent = 'Use as Wallbox';
                 button.addEventListener('click', () => {
                     setFieldValue('wallbox_url', device.ip);
+                    if (device.hostname) {
+                        setFieldValue('wallbox_hostname', device.hostname);
+                    }
+                    if (device.identity) {
+                        setFieldValue('wallbox_identity', device.identity);
+                    }
                 });
                 actionCell.appendChild(button);
             }
@@ -1389,6 +1466,12 @@
                 primary.textContent = 'Use as Shelly 1';
                 primary.addEventListener('click', () => {
                     setFieldValue('shelly_url', device.ip);
+                    if (device.hostname) {
+                        setFieldValue('shelly_primary_hostname', device.hostname);
+                    }
+                    if (device.identity) {
+                        setFieldValue('shelly_primary_identity', device.identity);
+                    }
                 });
                 actionCell.appendChild(primary);
                 const secondary = document.createElement('button');
@@ -1397,6 +1480,12 @@
                 secondary.textContent = 'Use as Shelly 2';
                 secondary.addEventListener('click', () => {
                     setFieldValue('shelly_secondary_url', device.ip);
+                    if (device.hostname) {
+                        setFieldValue('shelly_secondary_hostname', device.hostname);
+                    }
+                    if (device.identity) {
+                        setFieldValue('shelly_secondary_identity', device.identity);
+                    }
                 });
                 actionCell.appendChild(secondary);
             }

@@ -3,6 +3,10 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 from evse_controller.utils.paths import get_data_dir, get_config_file
+from evse_controller.device_address import (
+    is_ipv4,
+    normalize_identity,
+)
 
 class Config:
     _instance = None
@@ -762,10 +766,127 @@ class Config:
         lambda self, value: self._set_config_value("logging", "console_level", value)
     )
 
+    # -- Dual addressing helpers ----------------------------------------
+
+    def _device_ip(self, address_section: str, raw_url: str) -> str:
+        stored = self._get_config_value(address_section, "ip", "")
+        if stored:
+            return str(stored).strip()
+        return str(raw_url).strip() if is_ipv4(raw_url) else ""
+
+    def _device_hostname(self, address_section: str, raw_url: str) -> str:
+        stored = self._get_config_value(address_section, "hostname", "")
+        if stored:
+            return str(stored).strip()
+        text = str(raw_url or "").strip()
+        if text and not is_ipv4(text) and text.lower() not in (
+            "simulator",
+            "localhost",
+        ):
+            return text
+        return ""
+
+    def _device_identity(
+        self,
+        address_section: str,
+        kind: str,
+        hostname: str,
+        serial: str = "",
+    ) -> str:
+        stored = self._get_config_value(address_section, "identity", "")
+        if stored:
+            return normalize_identity(kind, stored)
+        if serial:
+            return normalize_identity(kind, serial)
+        return normalize_identity(kind, hostname)
+
+    def _device_prefer_ip(self, address_section: str) -> bool:
+        return bool(
+            self._get_config_value(address_section, "prefer_ip", True)
+        )
+
+    def _device_current_url(
+        self, address_section: str, raw_url: str
+    ) -> str:
+        ip = self._device_ip(address_section, raw_url)
+        hostname = self._device_hostname(address_section, raw_url)
+        if self._device_prefer_ip(address_section) and ip:
+            return ip
+        if hostname:
+            return hostname
+        return ip or str(raw_url or "").strip()
+
+    def _set_device_url(
+        self,
+        address_section: str,
+        section: str,
+        url_key: str,
+        value,
+    ) -> str:
+        text = str(value or "").strip()
+        self._set_config_value(section, url_key, text)
+        if not text:
+            self._set_config_value(address_section, "ip", "")
+            self._set_config_value(address_section, "hostname", "")
+            return text
+        if text.lower() in ("simulator", "localhost"):
+            return text
+        if is_ipv4(text):
+            self._set_config_value(address_section, "ip", text)
+        else:
+            self._set_config_value(address_section, "hostname", text)
+            self._set_config_value(address_section, "ip", "")
+        return text
+
     # Wallbox section properties
-    WALLBOX_URL = property(
-        lambda self: self._get_config_value("wallbox", "url", ""),
-        lambda self, value: self._set_config_value("wallbox", "url", value)
+    def _get_wallbox_url(self) -> str:
+        raw = self._get_config_value("wallbox", "url", "")
+        return self._device_current_url("wallbox.address", raw)
+
+    def _set_wallbox_url(self, value) -> str:
+        return self._set_device_url(
+            "wallbox.address", "wallbox", "url", value
+        )
+
+    WALLBOX_URL = property(_get_wallbox_url, _set_wallbox_url)
+
+    WALLBOX_IP = property(
+        lambda self: self._device_ip(
+            "wallbox.address", self._get_config_value("wallbox", "url", "")
+        ),
+        lambda self, value: self._set_config_value(
+            "wallbox.address", "ip", str(value or "").strip()
+        ),
+    )
+
+    WALLBOX_HOSTNAME = property(
+        lambda self: self._device_hostname(
+            "wallbox.address", self._get_config_value("wallbox", "url", "")
+        ),
+        lambda self, value: self._set_config_value(
+            "wallbox.address", "hostname", str(value or "").strip()
+        ),
+    )
+
+    WALLBOX_IDENTITY = property(
+        lambda self: self._device_identity(
+            "wallbox.address",
+            "wallbox",
+            self.WALLBOX_HOSTNAME,
+            str(self.WALLBOX_SERIAL or ""),
+        ),
+        lambda self, value: self._set_config_value(
+            "wallbox.address",
+            "identity",
+            normalize_identity("wallbox", value),
+        ),
+    )
+
+    WALLBOX_PREFER_IP = property(
+        lambda self: self._device_prefer_ip("wallbox.address"),
+        lambda self, value: self._set_config_value(
+            "wallbox.address", "prefer_ip", bool(value)
+        ),
     )
 
     WALLBOX_USERNAME = property(
@@ -1118,14 +1239,103 @@ class Config:
     )
 
     # Shelly section properties
+    def _get_shelly_primary_url(self) -> str:
+        raw = self._get_config_value("shelly", "primary_url", "")
+        return self._device_current_url("shelly.primary_address", raw)
+
+    def _set_shelly_primary_url(self, value) -> str:
+        return self._set_device_url(
+            "shelly.primary_address", "shelly", "primary_url", value
+        )
+
+    def _get_shelly_secondary_url(self) -> str:
+        raw = self._get_config_value("shelly", "secondary_url", "")
+        return self._device_current_url("shelly.secondary_address", raw)
+
+    def _set_shelly_secondary_url(self, value) -> str:
+        return self._set_device_url(
+            "shelly.secondary_address", "shelly", "secondary_url", value
+        )
+
     SHELLY_PRIMARY_URL = property(
-        lambda self: self._get_config_value("shelly", "primary_url", ""),
-        lambda self, value: self._set_config_value("shelly", "primary_url", value)
+        _get_shelly_primary_url, _set_shelly_primary_url
+    )
+    SHELLY_SECONDARY_URL = property(
+        _get_shelly_secondary_url, _set_shelly_secondary_url
     )
 
-    SHELLY_SECONDARY_URL = property(
-        lambda self: self._get_config_value("shelly", "secondary_url", ""),
-        lambda self, value: self._set_config_value("shelly", "secondary_url", value)
+    SHELLY_PRIMARY_IP = property(
+        lambda self: self._device_ip(
+            "shelly.primary_address",
+            self._get_config_value("shelly", "primary_url", ""),
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.primary_address", "ip", str(value or "").strip()
+        ),
+    )
+    SHELLY_PRIMARY_HOSTNAME = property(
+        lambda self: self._device_hostname(
+            "shelly.primary_address",
+            self._get_config_value("shelly", "primary_url", ""),
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.primary_address", "hostname", str(value or "").strip()
+        ),
+    )
+    SHELLY_PRIMARY_IDENTITY = property(
+        lambda self: self._device_identity(
+            "shelly.primary_address",
+            "shelly",
+            self.SHELLY_PRIMARY_HOSTNAME,
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.primary_address",
+            "identity",
+            normalize_identity("shelly", value),
+        ),
+    )
+    SHELLY_PRIMARY_PREFER_IP = property(
+        lambda self: self._device_prefer_ip("shelly.primary_address"),
+        lambda self, value: self._set_config_value(
+            "shelly.primary_address", "prefer_ip", bool(value)
+        ),
+    )
+
+    SHELLY_SECONDARY_IP = property(
+        lambda self: self._device_ip(
+            "shelly.secondary_address",
+            self._get_config_value("shelly", "secondary_url", ""),
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.secondary_address", "ip", str(value or "").strip()
+        ),
+    )
+    SHELLY_SECONDARY_HOSTNAME = property(
+        lambda self: self._device_hostname(
+            "shelly.secondary_address",
+            self._get_config_value("shelly", "secondary_url", ""),
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.secondary_address", "hostname", str(value or "").strip()
+        ),
+    )
+    SHELLY_SECONDARY_IDENTITY = property(
+        lambda self: self._device_identity(
+            "shelly.secondary_address",
+            "shelly",
+            self.SHELLY_SECONDARY_HOSTNAME,
+        ),
+        lambda self, value: self._set_config_value(
+            "shelly.secondary_address",
+            "identity",
+            normalize_identity("shelly", value),
+        ),
+    )
+    SHELLY_SECONDARY_PREFER_IP = property(
+        lambda self: self._device_prefer_ip("shelly.secondary_address"),
+        lambda self, value: self._set_config_value(
+            "shelly.secondary_address", "prefer_ip", bool(value)
+        ),
     )
 
     SHELLY_GRID_DEVICE = property(
@@ -1531,7 +1741,13 @@ class Config:
                 'max_discharge_current': self.WALLBOX_MAX_DISCHARGE_CURRENT,
                 'min_charge_current': self.WALLBOX_MIN_CHARGE_CURRENT,
                 'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT,
-                'nominal_voltage': self.WALLBOX_NOMINAL_VOLTAGE
+                'nominal_voltage': self.WALLBOX_NOMINAL_VOLTAGE,
+                'address': {
+                    'ip': self.WALLBOX_IP,
+                    'hostname': self.WALLBOX_HOSTNAME,
+                    'identity': self.WALLBOX_IDENTITY,
+                    'prefer_ip': self.WALLBOX_PREFER_IP,
+                },
             },
             'ev': {
                 'miles_per_kwh': self.EV_MILES_PER_KWH,
@@ -1540,6 +1756,18 @@ class Config:
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,
                 'secondary_url': self.SHELLY_SECONDARY_URL,
+                'primary_address': {
+                    'ip': self.SHELLY_PRIMARY_IP,
+                    'hostname': self.SHELLY_PRIMARY_HOSTNAME,
+                    'identity': self.SHELLY_PRIMARY_IDENTITY,
+                    'prefer_ip': self.SHELLY_PRIMARY_PREFER_IP,
+                },
+                'secondary_address': {
+                    'ip': self.SHELLY_SECONDARY_IP,
+                    'hostname': self.SHELLY_SECONDARY_HOSTNAME,
+                    'identity': self.SHELLY_SECONDARY_IDENTITY,
+                    'prefer_ip': self.SHELLY_SECONDARY_PREFER_IP,
+                },
                 'grid': {
                     'device': self.SHELLY_GRID_DEVICE,
                     'channel': self.SHELLY_GRID_CHANNEL

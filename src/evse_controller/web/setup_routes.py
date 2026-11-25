@@ -75,8 +75,11 @@ def _current_values() -> dict[str, str]:
         "wallbox_serial": (
             "" if config.WALLBOX_SERIAL in (None, "") else str(config.WALLBOX_SERIAL)
         ),
+        "wallbox_hostname": str(config.WALLBOX_HOSTNAME or ""),
         "shelly_url": str(config.SHELLY_PRIMARY_URL or ""),
+        "shelly_hostname": str(config.SHELLY_PRIMARY_HOSTNAME or ""),
         "shelly_secondary_url": str(config.SHELLY_SECONDARY_URL or ""),
+        "shelly_secondary_hostname": str(config.SHELLY_SECONDARY_HOSTNAME or ""),
         "grid_monitor": (
             f"{grid_device}:{grid_channel}"
             if grid_device and grid_channel is not None
@@ -236,13 +239,17 @@ def _save(values: dict[str, str], parsed: dict[str, Any]) -> None:
     if wallbox.lower() in ("simulator", "simulated"):
         config.USE_WALLBOX_SIMULATOR = True
         config.WALLBOX_URL = ""
+        config.WALLBOX_HOSTNAME = ""
     else:
         config.USE_WALLBOX_SIMULATOR = False
         config.WALLBOX_URL = wallbox
+        config.WALLBOX_HOSTNAME = values["wallbox_hostname"]
     if "wallbox_serial" in parsed:
         config.WALLBOX_SERIAL = parsed["wallbox_serial"]
     config.SHELLY_PRIMARY_URL = values["shelly_url"]
+    config.SHELLY_PRIMARY_HOSTNAME = values["shelly_hostname"]
     config.SHELLY_SECONDARY_URL = values["shelly_secondary_url"]
+    config.SHELLY_SECONDARY_HOSTNAME = values["shelly_secondary_hostname"]
 
     grid = _parse_monitor(values["grid_monitor"])
     evse = _parse_monitor(values["evse_monitor"])

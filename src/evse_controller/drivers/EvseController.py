@@ -8,6 +8,7 @@ from evse_controller.drivers.Power import Power
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.utils.config import config
+from evse_controller.device_address import DeviceAddress, FallbackThrottle, verify_identity
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.utils.config import config
 from evse_controller.history_store import HistoryStore
@@ -99,14 +100,21 @@ class EvseController(PowerMonitorObserver):
         # Add MAX_HISTORY_POINTS constant
         self.MAX_HISTORY_POINTS = 300
         self.history_store = HistoryStore()
+        self._address_save_lock = threading.Lock()
 
         # Initialize power monitors
         # Initialize primary Shelly
-        self.pmon = PowerMonitorShelly(lambda: config.SHELLY_PRIMARY_URL)
+        self.pmon = PowerMonitorShelly(
+            lambda: config.SHELLY_PRIMARY_URL,
+            fallback=self._make_shelly_fallback("primary"),
+        )
         debug(f"Initializing primary Shelly with URL: {config.SHELLY_PRIMARY_URL}")
 
         # Initialize secondary Shelly
-        self.pmon2 = PowerMonitorShelly(lambda: config.SHELLY_SECONDARY_URL)
+        self.pmon2 = PowerMonitorShelly(
+            lambda: config.SHELLY_SECONDARY_URL,
+            fallback=self._make_shelly_fallback("secondary"),
+        )
         debug(f"Initializing secondary Shelly with URL: {config.SHELLY_SECONDARY_URL}")
 
         # Initialize power tracking attributes
@@ -1046,6 +1054,81 @@ class EvseController(PowerMonitorObserver):
     def _channel_watts(power: Power, channel) -> float:
         """Read the configured channel from a Shelly reading."""
         return power.ch1Watts if channel == 1 else power.ch2Watts
+
+    def _shelly_address(self, slot: str) -> DeviceAddress:
+        if slot == "primary":
+            return DeviceAddress(
+                "shelly",
+                ip=config.SHELLY_PRIMARY_IP,
+                hostname=config.SHELLY_PRIMARY_HOSTNAME,
+                identity=config.SHELLY_PRIMARY_IDENTITY,
+                prefer_ip=config.SHELLY_PRIMARY_PREFER_IP,
+            )
+        return DeviceAddress(
+            "shelly",
+            ip=config.SHELLY_SECONDARY_IP,
+            hostname=config.SHELLY_SECONDARY_HOSTNAME,
+            identity=config.SHELLY_SECONDARY_IDENTITY,
+            prefer_ip=config.SHELLY_SECONDARY_PREFER_IP,
+        )
+
+    def _make_shelly_fallback(self, slot: str):
+        """Build the verified hostname fallback used by a Shelly poller."""
+
+        def fallback():
+            import requests
+
+            address = self._shelly_address(slot)
+            if not address.hostname:
+                return None
+            for candidate in address.fallback_candidates():
+                if candidate == address.ip:
+                    continue
+                try:
+                    response = requests.get(
+                        f"http://{candidate}/status", timeout=2
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except Exception as exc:
+                    debug(
+                        f"SHELLY fallback {slot}: {candidate} did not respond: "
+                        f"{exc}"
+                    )
+                    continue
+                mac = payload.get("mac") if isinstance(payload, dict) else None
+                if not mac:
+                    warning(
+                        f"SHELLY fallback {slot}: {candidate} returned no MAC; "
+                        "refusing to adopt it"
+                    )
+                    continue
+                ok, identity = verify_identity("shelly", address, mac)
+                if not ok:
+                    warning(
+                        f"SHELLY fallback {slot}: rejected {candidate}: "
+                        f"{identity}"
+                    )
+                    continue
+                with self._address_save_lock:
+                    setattr(
+                        config, f"SHELLY_{slot.upper()}_IP", candidate
+                    )
+                    if identity:
+                        setattr(
+                            config,
+                            f"SHELLY_{slot.upper()}_IDENTITY",
+                            identity,
+                        )
+                    config.save()
+                info(
+                    f"SHELLY fallback {slot}: switched to {candidate} "
+                    f"after hostname resolution"
+                )
+                return candidate
+            return None
+
+        return fallback
 
     def _resolve_evse_watts(self, grid_power: Power) -> float:
         """EVSE AC power from the configured channel, or the power model.

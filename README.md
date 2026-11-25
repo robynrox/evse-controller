@@ -271,6 +271,18 @@ the `emeters` this build expects. A busy Wallbox may need a second scan. The
 scan and tests are local-network tools; they are not exposed as a remote
 service.
 
+### DHCP resilience: IP plus hostname
+
+Each device address has an optional **fallback hostname** beside the IP. The
+controller prefers the last working IP and does not perform DNS lookups while
+it is healthy. After repeated failures it resolves the hostname, verifies that
+the candidate belongs to the expected device (Wallbox `WBxxxxxx` serial or
+Shelly MAC), then updates the stored IP. The configuration page shows the
+hostname, optional identity and a **Prefer the IP while healthy** control.
+Static-IP installs can leave the hostname blank and keep the original IP-only
+behaviour. Discovery fills the hostname and identity when reverse DNS provides
+a usable name.
+
 When the dashboard can see that a blocking hardware item is still missing, it
 shows a **Finish setting up your controller** checklist. It covers the Wallbox
 address, the Shelly address and the grid/EVSE monitor assignments, with links

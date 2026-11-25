@@ -6,6 +6,7 @@ from typing import Optional
 from pyModbusTCP.client import ModbusClient
 from evse_controller.drivers.evse.async_interface import EvseThreadInterface, EvseAsyncState, EvseCommand, EvseCommandData
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
+from evse_controller.utils.config import config
 from .modbus_interface import ModbusClientInterface, ModbusClientWrapper
 from evse_controller.drivers.evse.async_interface import (
     DISCONNECTED_STATES,
@@ -15,6 +16,11 @@ from .wallbox_api_with_ocpp import WallboxAPIWithOCPP as Wallbox
 from evse_controller.event_bus import EventBus, EventType
 from evse_controller.drivers.evse.SimpleEvseModel import SimpleEvseModel
 from evse_controller.drivers.Power import Power
+from evse_controller.device_address import (
+    DeviceAddress,
+    FallbackThrottle,
+    verify_identity,
+)
 from evse_controller.poll_health import PollHealth
 
 class WallboxThread(threading.Thread, EvseThreadInterface):
@@ -73,6 +79,8 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
         self._state = EvseAsyncState()
         self.poll_health = PollHealth()
         self._client = modbus_client if modbus_client else ModbusClientWrapper(host=host)
+        self._fallback_throttle = FallbackThrottle()
+        self._address_lock = threading.Lock()
         
         # Initialize power model
         self._power_model = SimpleEvseModel()
@@ -552,6 +560,76 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
             message += f" ({last_error})"
         raise ConnectionError(message)
 
+    def _maybe_fallback_address(self) -> Optional[str]:
+        """Resolve and verify the Wallbox hostname after repeated failures."""
+        hostname = config.WALLBOX_HOSTNAME
+        if not hostname:
+            return None
+        with self._state_lock:
+            failures = self._state.consecutive_connection_errors
+        if not self._fallback_throttle.should_try(failures):
+            return None
+        self._fallback_throttle.mark_attempt()
+
+        address = DeviceAddress(
+            "wallbox",
+            ip=config.WALLBOX_IP,
+            hostname=hostname,
+            identity=config.WALLBOX_IDENTITY,
+            prefer_ip=config.WALLBOX_PREFER_IP,
+        )
+        ok, _identity = verify_identity("wallbox", address, None)
+        if not ok:
+            warning(
+                "WALLBOX address fallback refused: hostname does not match "
+                "the stored serial/identity"
+            )
+            return None
+
+        for candidate in address.fallback_candidates():
+            if candidate == self._host:
+                continue
+            probe = ModbusClientWrapper(host=candidate)
+            try:
+                alive = False
+                for register in (0x51, 0x300):
+                    try:
+                        if probe.read_holding_registers(register) is not None:
+                            alive = True
+                            break
+                    except Exception:
+                        continue
+                if not alive:
+                    continue
+            finally:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+
+            with self._address_lock:
+                config.WALLBOX_IP = candidate
+                if _identity:
+                    config.WALLBOX_IDENTITY = _identity
+                config.save()
+            set_host = getattr(self._client, "set_host", None)
+            if callable(set_host):
+                set_host(candidate)
+            else:
+                warning(
+                    "WALLBOX address fallback verified, but the Modbus client "
+                    "cannot change host in place; restart required"
+                )
+            self._host = candidate
+            with self._state_lock:
+                self._state.consecutive_connection_errors = 0
+            info(
+                f"WALLBOX address fallback: switched to {candidate} after "
+                "hostname resolution"
+            )
+            return candidate
+        return None
+
     def _log_connection_error(self, exc: ConnectionError) -> None:
         """Log a Modbus read failure at a rate that matches its severity."""
         self._last_modbus_error = str(exc)
@@ -778,6 +856,10 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     # Only set to COMMS_FAILURE if we're not in FREERUN state
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
+            try:
+                self._maybe_fallback_address()
+            except Exception as exc:
+                debug(f"WALLBOX address fallback failed: {exc}")
             raise  # Re-raise ConnectionError to be caught by the controller
         except Exception as e:
             with self._state_lock:
@@ -787,6 +869,10 @@ class WallboxThread(threading.Thread, EvseThreadInterface):
                     # Only set to COMMS_FAILURE if we're not in FREERUN state
                     if self._state.consecutive_connection_errors >= self._reset_attempt_threshold:
                         self._state.evse_state = EvseState.COMMS_FAILURE
+            try:
+                self._maybe_fallback_address()
+            except Exception as exc:
+                debug(f"WALLBOX address fallback failed: {exc}")
             error(f"Error reading EVSE state: {str(e)}")
             debug(traceback.format_exc())
             raise ConnectionError(f"Communication error: {str(e)}")

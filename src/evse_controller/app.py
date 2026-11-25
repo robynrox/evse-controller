@@ -630,6 +630,18 @@ def config_page():
             serial = request.form.get('wallbox[serial]')
             if serial:
                 config.WALLBOX_SERIAL = int(serial)
+            if 'wallbox[address][hostname]' in request.form:
+                config.WALLBOX_HOSTNAME = request.form.get(
+                    'wallbox[address][hostname]', ''
+                )
+            if 'wallbox[address][identity]' in request.form:
+                config.WALLBOX_IDENTITY = request.form.get(
+                    'wallbox[address][identity]', ''
+                )
+            if 'wallbox[address][prefer_ip]' in request.form:
+                config.WALLBOX_PREFER_IP = (
+                    request.form.get('wallbox[address][prefer_ip]') == 'on'
+                )
             
             # Update Wallbox current limits
             max_charge_current = request.form.get('wallbox[max_charge_current]')
@@ -696,6 +708,31 @@ def config_page():
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')
             config.SHELLY_SECONDARY_URL = request.form.get('shelly[secondary_url]')
+            for slot, label in (
+                ("primary", "Shelly 1"),
+                ("secondary", "Shelly 2"),
+            ):
+                hostname_key = f"shelly[{slot}_address][hostname]"
+                identity_key = f"shelly[{slot}_address][identity]"
+                prefer_key = f"shelly[{slot}_address][prefer_ip]"
+                if hostname_key in request.form:
+                    setattr(
+                        config,
+                        f"SHELLY_{slot.upper()}_HOSTNAME",
+                        request.form.get(hostname_key, ""),
+                    )
+                if identity_key in request.form:
+                    setattr(
+                        config,
+                        f"SHELLY_{slot.upper()}_IDENTITY",
+                        request.form.get(identity_key, ""),
+                    )
+                if prefer_key in request.form:
+                    setattr(
+                        config,
+                        f"SHELLY_{slot.upper()}_PREFER_IP",
+                        request.form.get(prefer_key) == "on",
+                    )
 
             # Device assignments.  The form uses one combined
             # "device:channel" value per role; the old separate fields are

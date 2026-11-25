@@ -12,11 +12,6 @@
       [`reports/dp/SOFT_SOC_BAND.md`](reports/dp/SOFT_SOC_BAND.md)
 - [ ] Document the "external controller / backend" setup path (learning mode
       off, MQTT/REST command contract, and what the scheduler may still do)
-- [ ] Dual device addressing: store the IP and hostname together, prefer the
-      IP, fall back to the hostname after link-health failures, verify the
-      serial/MAC identity embedded in the hostname, and update the stored IP.
-      Design note:
-      [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
 - [ ] Daily graph/data export at the end of each day (HTML, PNG or CSV;
@@ -40,6 +35,8 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Dual device addressing: IP plus verified hostname fallback for the
+      Wallbox and both Shelly devices, with identity checks and persistence
 - [x] Ignore updates from unconfigured Shelly devices, avoiding duplicate
       update work and phantom secondary Influx fields when only the primary
      Shelly is used

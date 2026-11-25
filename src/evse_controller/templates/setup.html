@@ -352,6 +352,12 @@
                            value="{{ values.wallbox_serial }}"
                            placeholder="For OCPP/cloud features">
                 </div>
+                <div>
+                    <label for="wallbox_hostname">Fallback hostname (optional)</label>
+                    <input type="text" id="wallbox_hostname" name="wallbox_hostname"
+                           value="{{ values.wallbox_hostname }}"
+                           placeholder="WB123456.local">
+                </div>
             </div>
 
             <div class="form-row">
@@ -366,6 +372,12 @@
                     <span id="shelly1-test-result" class="connection-result"></span>
                 </div>
                 <div>
+                    <label for="shelly_hostname">Shelly 1 fallback hostname (optional)</label>
+                    <input type="text" id="shelly_hostname" name="shelly_hostname"
+                           value="{{ values.shelly_hostname }}"
+                           placeholder="shellyem-98cdac123456.local">
+                </div>
+                <div>
                     <label for="shelly_secondary_url">Shelly 2 address (optional)</label>
                     <input type="text" id="shelly_secondary_url" name="shelly_secondary_url"
                            value="{{ values.shelly_secondary_url }}">
@@ -373,6 +385,13 @@
                             data-kind="shelly" data-source="shelly_secondary_url"
                             data-result="shelly2-test-result">Test</button>
                     <span id="shelly2-test-result" class="connection-result"></span>
+                </div>
+                <div>
+                    <label for="shelly_secondary_hostname">Shelly 2 fallback hostname (optional)</label>
+                    <input type="text" id="shelly_secondary_hostname"
+                           name="shelly_secondary_hostname"
+                           value="{{ values.shelly_secondary_hostname }}"
+                           placeholder="shellyem-aabbccddeeff.local">
                 </div>
             </div>
 
@@ -893,6 +912,9 @@
                 button.textContent = 'Use as Wallbox';
                 button.addEventListener('click', () => {
                     setupSetField('wallbox_url', device.ip);
+                    if (device.hostname) {
+                        setupSetField('wallbox_hostname', device.hostname);
+                    }
                 });
                 actions.appendChild(button);
             }
@@ -903,6 +925,9 @@
                 primary.textContent = 'Use as Shelly 1';
                 primary.addEventListener('click', () => {
                     setupSetField('shelly_url', device.ip);
+                    if (device.hostname) {
+                        setupSetField('shelly_hostname', device.hostname);
+                    }
                 });
                 actions.appendChild(primary);
                 const secondary = document.createElement('button');
@@ -911,6 +936,9 @@
                 secondary.textContent = 'Use as Shelly 2';
                 secondary.addEventListener('click', () => {
                     setupSetField('shelly_secondary_url', device.ip);
+                    if (device.hostname) {
+                        setupSetField('shelly_secondary_hostname', device.hostname);
+                    }
                 });
                 actions.appendChild(secondary);
             }

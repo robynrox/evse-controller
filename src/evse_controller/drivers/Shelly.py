@@ -4,19 +4,23 @@ from typing import Callable
 
 from evse_controller.drivers.Power import Power
 from evse_controller.drivers.PowerMonitorInterface import PowerMonitorInterface
+from evse_controller.device_address import FallbackThrottle
 from evse_controller.poll_health import PollHealth
 from evse_controller.utils.logging_config import debug, info, warning, error, critical
 
 
 class PowerMonitorShelly(PowerMonitorInterface):
-    def __init__(self, url_getter: Callable[[], str]):
+    def __init__(self, url_getter: Callable[[], str], fallback=None):
         """
         Initialize Shelly power monitor
         
         Args:
             url_getter: Callable that returns the current URL
+            fallback: Optional callable that resolves and verifies a new host
         """
         self._url_getter = url_getter
+        self._fallback = fallback
+        self._fallback_throttle = FallbackThrottle()
         self._had_config_error = False
         
         # Initialize all the attributes
@@ -72,6 +76,7 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 self.unixtime = reqJson["unixtime"]
                 self.lastUpdate = time.time()
                 self._consecutive_failures = 0  # Reset on success
+                self._fallback_throttle.reset()
                 ok = True
                 break  # Exit the loop if the request is successful
             except ValueError as e:
@@ -87,6 +92,24 @@ class PowerMonitorShelly(PowerMonitorInterface):
                 else:
                     debug(f"Attempt {attempt + 1} failed (timeout={timeout:.2f}s), retrying immediately")
         self.poll_health.record(ok)
+        if (
+            not ok
+            and self._fallback is not None
+            and self._fallback_throttle.should_try(self._consecutive_failures)
+        ):
+            self._fallback_throttle.mark_attempt()
+            try:
+                resolved = self._fallback()
+            except Exception as exc:
+                warning(f"Shelly address fallback failed: {exc}")
+                resolved = None
+            if resolved:
+                # The getter now returns the verified address; force the next
+                # poll to fetch immediately rather than waiting for the old
+                # lastUpdate timestamp.
+                self.lastUpdate = 0
+                self._consecutive_failures = 0
+                info(f"Shelly address fallback using {resolved}")
 
     def last_power(self) -> Power:
         """The most recent reading without touching the network.

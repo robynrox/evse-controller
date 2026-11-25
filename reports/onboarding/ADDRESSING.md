@@ -1,7 +1,10 @@
 # Dual device addressing: stored IP plus hostname fallback
 
-**Status:** idea/backlog. Not implemented. The discovery results fill IP
-addresses today; the CLI scanner also reports hostnames.
+**Status:** v1 implemented. The configuration keeps the last known IPv4
+address in the existing device URL fields and an optional stable hostname
+beside it. Shelly and Wallbox drivers resolve and verify the hostname after
+repeated failures, then persist the new IP. Discovery fills the hostname and
+identity when reverse DNS provides them.
 
 ## Why
 
@@ -159,6 +162,32 @@ changed, for example `Wallbox · 192.168.1.180 (fallback, updated 2 min ago)`.
 - IPv6 and multiple-address results are handled safely;
 - discovery fills hostname and IP together;
 - link-health events show the fallback and the updated address.
+
+## Implementation
+
+- `device_address.py` normalises Wallbox `WBxxxxxx` serials and 12-hex Shelly
+  MACs, resolves IPv4 candidates, verifies identity agreement, and provides the
+  shared fallback throttle.
+- `wallbox.url`, `shelly.primary_url` and `shelly.secondary_url` remain the
+  compatibility and current-address fields. `WALLBOX_IP`/`HOSTNAME`/`IDENTITY`
+  and the Shelly equivalents live under `wallbox.address` and
+  `shelly.primary_address` / `shelly.secondary_address`. Existing URL-only
+  configs migrate automatically; an IP in `url` is the IP, a hostname in `url`
+  is the hostname.
+- The configuration page exposes fallback hostname, optional identity and
+  prefer-IP controls. Discovery reverse-DNS results fill the hostname and
+  identity alongside the IP.
+- Shelly: after repeated fetch failures the polling thread resolves the
+  hostname, fetches `/status` from each candidate, checks the reported MAC, and
+  updates `shelly.*_address.ip` only after verification.
+- Wallbox: after repeated Modbus failures the poll thread resolves the
+  hostname, verifies the `WBxxxxxx` identity against the stored serial, probes
+  the Modbus status register on each candidate, swaps the client host and
+  persists the new IP. The Wallbox does not expose a serial in the register
+  probe used here, so the hostname/stored serial plus a successful status read
+  are the available identity checks.
+- A `FallbackThrottle` prevents a DNS lookup on every failed poll. Static
+  IP-only installs never resolve anything.
 
 ## Non-goals
 

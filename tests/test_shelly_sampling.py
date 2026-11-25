@@ -38,6 +38,25 @@ def test_is_configured_tracks_the_url():
     assert not PowerMonitorShelly(lambda: "   ").is_configured()
 
 
+def test_fallback_runs_after_repeated_fetch_failures():
+    calls = []
+
+    def fallback():
+        calls.append(True)
+        return "new.local"
+
+    monitor = PowerMonitorShelly(lambda: "old.local", fallback=fallback)
+    with patch(
+        "evse_controller.drivers.Shelly.requests.get",
+        side_effect=requests.exceptions.ConnectTimeout("slow"),
+    ) as get:
+        for _ in range(2):
+            monitor.fetch_data()
+
+    assert calls
+    assert get.call_count >= 3
+
+
 def test_fetch_data_stops_after_one_retry():
     monitor = _monitor()
 

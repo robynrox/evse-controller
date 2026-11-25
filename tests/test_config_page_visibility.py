@@ -94,6 +94,22 @@ def test_config_page_embeds_the_live_setup_checklist(app):
     assert 'href="#wallbox"' in body
 
 
+def test_dual_address_fields_are_visible(app):
+    body = _render(app, "iog_agile")
+
+    for field in (
+        "wallbox_hostname",
+        "wallbox_identity",
+        "shelly_primary_hostname",
+        "shelly_primary_identity",
+        "shelly_secondary_hostname",
+        "shelly_secondary_identity",
+    ):
+        assert f'id="{field}"' in body
+    assert 'name="wallbox[address][prefer_ip]"' in body
+    assert 'name="shelly[primary_address][prefer_ip]"' in body
+
+
 def test_ev_consumption_fields_are_visible(app):
     body = _render(app, "iog_agile")
 

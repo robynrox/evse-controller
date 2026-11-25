@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import requests
 
 from evse_controller.utils.config import config
+from evse_controller.device_address import normalize_identity
 
 
 def _load_discovery():
@@ -49,10 +50,20 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _reverse_hostname(ip: str) -> str:
+    try:
+        return socket.gethostbyaddr(str(ip))[0].strip()
+    except (socket.herror, socket.gaierror, OSError):
+        return ""
+
+
 def _device_payload(device: Any) -> dict:
     details = {}
     device_type = str(getattr(device, "device_type", "") or "")
     raw = getattr(device, "details", None) or {}
+    ip = str(getattr(device, "ip", "") or "")
+    hostname = _reverse_hostname(ip)
+    identity = ""
     if isinstance(raw, dict) and device_type.startswith("Shelly"):
         emeters = raw.get("emeters") or []
         channels = []
@@ -74,10 +85,14 @@ def _device_payload(device: Any) -> dict:
         total_power = sum(rounded) if rounded else None
         if total_power is None and raw.get("total_power") is not None:
             total_power = int(round(float(raw["total_power"])))
+        identity = normalize_identity(
+            "shelly", hostname or str(raw.get("mac") or "")
+        )
         details = {
             "emeters": len(emeters),
             "channels": channels,
             "total_power_w": total_power,
+            "mac": str(raw.get("mac") or ""),
         }
     elif isinstance(raw, dict) and device_type == "Wallbox":
         details = {
@@ -85,8 +100,11 @@ def _device_payload(device: Any) -> dict:
             "register": raw.get("register"),
             "value": raw.get("value"),
         }
+        identity = normalize_identity("wallbox", hostname)
     return {
-        "ip": str(getattr(device, "ip", "") or ""),
+        "ip": ip,
+        "hostname": hostname,
+        "identity": identity,
         "type": device_type,
         "name": str(getattr(device, "name", "") or ""),
         "verified": bool(getattr(device, "verified", False)),

@@ -488,6 +488,37 @@ class TestConfig:
         assert ev["miles_per_kwh"] == pytest.approx(3.5)
         assert ev["away_margin_percent"] == pytest.approx(100.0)
 
+    def test_dual_address_defaults_and_migration(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        config.WALLBOX_URL = "192.168.1.180"
+        assert config.WALLBOX_IP == "192.168.1.180"
+        assert config.WALLBOX_HOSTNAME == ""
+        assert config.WALLBOX_URL == "192.168.1.180"
+
+        config.WALLBOX_HOSTNAME = "WB123456.local"
+        assert config.WALLBOX_URL == "192.168.1.180"
+        assert config.WALLBOX_IDENTITY == "123456"
+
+        config.WALLBOX_IP = "192.168.1.181"
+        assert config.WALLBOX_URL == "192.168.1.181"
+        assert config.WALLBOX_HOSTNAME == "WB123456.local"
+
+        config.SHELLY_PRIMARY_URL = "shellyem-98cdac123456.local"
+        assert config.SHELLY_PRIMARY_IP == ""
+        assert config.SHELLY_PRIMARY_HOSTNAME == "shellyem-98cdac123456.local"
+        assert config.SHELLY_PRIMARY_IDENTITY == "98CDAC123456"
+        assert config.SHELLY_PRIMARY_URL == "shellyem-98cdac123456.local"
+
+        config.SHELLY_PRIMARY_IP = "192.168.1.118"
+        assert config.SHELLY_PRIMARY_URL == "192.168.1.118"
+        assert config.SHELLY_PRIMARY_HOSTNAME == "shellyem-98cdac123456.local"
+
+        address = config.as_dict()["wallbox"]["address"]
+        assert address["ip"] == "192.168.1.181"
+        assert address["hostname"] == "WB123456.local"
+
     def test_backward_compatibility_for_use_simulator_flag(self):
         """Test that missing use_simulator flag is handled correctly"""
         # Save original state
