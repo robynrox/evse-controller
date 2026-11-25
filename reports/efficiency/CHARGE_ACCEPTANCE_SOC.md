@@ -16,15 +16,18 @@ delta is 0% or 1%.
 `data/analysis/charge_acceptance.csv.gz` (10 s resolution, 2024-11-25 to
 2026-11-25):
 
-- `batteryChargeLevel` for the whole period;
-- `ac_power`, `dc_power`, `dc_voltage`, `dc_current`,
-  `evseTargetCurrent` and `evseDesiredCurrent` from 2026-03-28;
+- `batteryChargeLevel`, `evse`, `evseTargetCurrent` and
+  `evseDesiredCurrent` for the whole period;
+- `ac_power`, `dc_power`, `dc_voltage` and `dc_current` from 2026-03-28;
 - one Leaf e+ / Wallbox installation, derated to 16 A;
-- 271 max-current charging sessions after splitting on gaps over 60 s.
+- 789 max-current charging sessions after splitting on gaps over 60 s, of
+  which 485 are long enough for a steady-state fit.
 
-The Wallbox reports `evseTargetCurrent` = 16 A for the useful sessions. DC
-current is almost constant at 7.9 A, so the AC and DC power changes are mostly
-pack-voltage changes.
+`evse` is the Shelly CT clamp between the grid and the Wallbox, in watts. It
+tracks the Wallbox's own `ac_power` closely: across the overlap,
+`evse ≈ 1.008 × ac_power + 11 W` with a 61 W residual, and during max-current
+charging `evse ≈ 0.992 × ac_power + 65 W` with a 32 W residual. The CT clamp is
+therefore a valid AC-power source, but it has its own offset and noise.
 
 ## Results
 
@@ -59,6 +62,26 @@ AC power follows the same curve at about **+7 W per 1% SoC**, but the
 between-session SD is about **45 W**, equivalent to roughly 6% SoC. DC voltage
 is the better feature.
 
+### The longer `evse` AC-power series is weaker and seasonal
+
+With the full two-year AC-power record, 485 long max-current sessions give a
+median slope of **7.9 W per 1% SoC**, a median residual of **9 W**, and a
+median R² of **0.98** in most months. At a fixed SoC, the between-session SD is
+**32–42 W**, equivalent to roughly **4–6% SoC**.
+
+The winter months are materially worse:
+
+| period | median residual | median R² |
+|---|---:|---:|
+| Mar–Oct 2025 | 7.5–15 W | 0.94–0.99 |
+| Nov 2025–Feb 2026 | 47–73 W | 0.18–0.74 |
+| Nov 2026 | 17 W | 0.94 |
+
+The earlier months also contain more variable work: battery heating, different
+charge-power limits and longer idle periods at the start. AC power is
+therefore a much weaker SoC signal than DC voltage, and it is not reliable
+enough on its own for a control measurement in winter.
+
 ### A 10–30 s burst is too short
 
 For each session, the first 10, 20, 30, 60, 120, 300 and 600 s of
@@ -78,10 +101,55 @@ The initial voltage and power changes over the first 10–120 s have no
 correlation with SoC (R² ≈ 0). The signal is not a transient ramp effect: the
 first samples are simply not yet a reliable voltage measurement.
 
+For the `evse` AC-power series, the short-window result is even worse:
+
+| window | R² | residual |
+|---:|---:|---:|
+| 10 s | 0.05 | 651 W |
+| 30 s | 0.04 | 216 W |
+| 60 s | 0.30 | 122 W |
+| 120 s | 0.47 | 94 W |
+| 300 s | 0.50 | 92 W |
+| 600 s | 0.47 | 97 W |
+
+AC power never becomes a precise SoC signal from a short sample. Even after
+several minutes the residual is around 90 W, or several percent SoC.
+
 So the proposed 10–30 s max-power probe cannot replace the 3 A probe. A
 max-current sample needs roughly **2–5 minutes** of stable charging before the
 voltage is useful, by which point it has delivered about 0.1–0.3 kWh at this
 installation's power.
+
+## Daily energy balance: the promising use
+
+The long nightly charge is a better measurement than a short pulse. There were
+493 charging days and **420 days with exactly one long max-current session**.
+For each long session, the AC energy is the integral of the 10 s `evse` series,
+and the pack energy change is `ΔSoC × 48.292 kWh`.
+
+Across 592 long sessions:
+
+- median pack/AC energy ratio: **0.860**;
+- the measured 16 A charge-efficiency model is **0.883**;
+- monthly means range from **0.81 to 0.96**, with the widest spread in winter
+  (SD 0.12–0.17) and the tightest in summer/autumn (SD 0.03–0.06);
+- using the fixed 0.883 model to predict `ΔSoC`, the residual against the BMS
+  is **mean +0.65 percentage points, SD 1.80 points**. Monthly means show a
+  seasonal bias (summer around +1.5 points, winter around 0).
+
+This is more useful than a 10–30 s probe: on a one-trip day, the charge-energy
+integral measures the size of the hole with far more samples than a BMS step.
+With a seasonal efficiency calibration it should be possible to estimate the
+post-trip SoC to roughly **1–2 percentage points**, which is competitive with
+the integer BMS report and does not need a special charge pulse. The trade-off
+is complexity: the balance needs the charge/discharge energy, the endpoint
+SoC, a capacity/efficiency model and a way to handle days with more than one
+session or V2G discharge.
+
+A Kalman filter could consume a stable charge-voltage observation, but the AC
+power from `evse` is too noisy and seasonal to be a strong observation on its
+own. A 2–5 minute DC-voltage sample would be better; a long-session charge
+energy total is better still for the daily hole.
 
 ## Interpretation and limits
 
@@ -107,8 +175,11 @@ installation's power.
 3. Test a relative voltage-delta estimator on pairs of sessions separated by a
    trip, using the measured BMS delta as the baseline and the voltage change as
    the candidate improvement.
-4. Re-run the analysis with winter data and, if the BMS can expose it, pack
+4. Prototype the daily energy balance on one-session days: integrate `evse`,
+   subtract the known endpoint SoC change and fit a seasonal efficiency curve.
+   Validate it on held-out days before using it for EV Away learning.
+5. Re-run the analysis with winter data and, if the BMS can expose it, pack
    temperature.
-5. If a dedicated probe is still justified, make it opt-in, gate it on SoC and
+6. If a dedicated probe is still justified, make it opt-in, gate it on SoC and
    temperature, log the sample, and validate it against the BMS before using it
    in control.
