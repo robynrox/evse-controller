@@ -8,7 +8,7 @@ changes is the solver generation, not the historical forecast.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -72,6 +72,9 @@ def slots_from_run(
                 max_discharge_current_a=max_discharge or 32.0,
                 forced=item.get("forced"),
                 session=item.get("session"),
+                exogenous_soc_delta_percent=_number(
+                    item.get("exogenous_soc_delta_percent")
+                ) or 0.0,
                 load_samples=load_samples,
                 load_source=item.get("load_source") or "",
                 load_days=int(item.get("load_days", 0) or 0),
@@ -295,6 +298,22 @@ def apply_soc_delta(
     return max(low, min(high, float(soc_percent) + float(delta)))
 
 
+def clear_away_estimate_from(
+    slots: Sequence[PlannerSlot], start_slot: int
+) -> tuple[PlannerSlot, ...]:
+    """Drop the forward away estimate once a measured delta is authoritative.
+
+    The measured reconnect delta covers the whole trip.  Applying the session's
+    estimated loss to the same slot as well would count the trip twice.
+    """
+    return tuple(
+        replace(slot, exogenous_soc_delta_percent=0.0)
+        if slot.session == "ev_away" and slot.slot >= start_slot
+        else slot
+        for slot in slots
+    )
+
+
 def _actions_by_slot(run: Mapping[str, Any]) -> dict[int, dict]:
     actions = {}
     for action in run.get("actions") or []:
@@ -463,6 +482,7 @@ def rolling_resolve(
         if cancel_check is not None and cancel_check():
             raise RollingCancelled()
         used_recorded_soc = False
+        measured_delta_slot = None
         if state_source == "recorded" and soc_by_slot:
             recorded_soc = soc_by_slot.get(slot)
             if recorded_soc is not None:
@@ -471,6 +491,7 @@ def rolling_resolve(
         if not used_recorded_soc:
             for delta in reconnect_deltas.get(slot, ()):
                 simulated_soc = apply_soc_delta(simulated_soc, delta)
+                measured_delta_slot = slot
         if slot in away:
             actions.append(
                 _idle_action(
@@ -502,6 +523,10 @@ def rolling_resolve(
                 for item in slots_from_run(source, planner_params)
                 if item.start.date() == day and item.slot >= slot
             )
+            if measured_delta_slot is not None:
+                slots = clear_away_estimate_from(
+                    slots, measured_delta_slot
+                )
             if not slots:
                 raise ValueError("No slots remain in the source plan")
             result = planner.plan(slots, simulated_soc)

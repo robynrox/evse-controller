@@ -88,14 +88,14 @@ class FakeProfile:
         return self.loads
 
 
-def _session(kind, start_slot, end_slot):
+def _session(kind, start_slot, end_slot, **kwargs):
     start = datetime.combine(DAY, time()) + timedelta(
         minutes=30 * start_slot
     )
     end = datetime.combine(DAY, time()) + timedelta(
         minutes=30 * end_slot
     )
-    return EnergySession(kind, start, end)
+    return EnergySession(kind, start, end, **kwargs)
 
 
 def test_keeps_negative_net_load_for_solar_follow():
@@ -273,6 +273,43 @@ def test_ev_away_forces_idle():
 
     assert result.slots[0].session == "ev_away"
     assert result.slots[0].forced == "idle"
+    assert result.slots[0].exogenous_soc_delta_percent == 0.0
+
+
+def test_ev_away_estimate_becomes_an_exogenous_soc_loss():
+    session = _session(
+        "ev_away",
+        24,
+        28,
+        energy_kwh=24.0,
+        margin_percent=0.0,
+    )
+    result = build_planner_input(
+        FakeSource(
+            import_p=20.0,
+            export_p=10.0,
+            sessions=[session],
+        ),
+        FakeProfile([]),
+        DAY,
+        current_slot=24,
+        current_soc=60,
+        target_soc=50,
+        max_charge_current_a=16,
+        max_discharge_current_a=16,
+        soc_capacity_kwh=48.292,
+    )
+
+    per_slot = 24.0 / 48.292 * 100 / 4
+    away = result.slots[:4]
+    assert all(slot.forced == "idle" for slot in away)
+    assert all(
+        slot.exogenous_soc_delta_percent == pytest.approx(-per_slot)
+        for slot in away
+    )
+    assert sum(
+        slot.exogenous_soc_delta_percent for slot in away
+    ) == pytest.approx(-24.0 / 48.292 * 100)
 
 
 def test_unknown_export_uses_the_configured_fallback_for_a_fixed_tariff():

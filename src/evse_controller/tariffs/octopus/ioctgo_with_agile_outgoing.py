@@ -4,6 +4,7 @@ from .battery_efficiency import BatteryEfficiencyModel, DASHBOARD_SOC_CAPACITY_K
 from evse_controller.drivers.EvseController import ControlState
 from evse_controller.utils.config import config
 from evse_controller.energy_sessions import (
+    EV_AWAY,
     FREE_IMPORT,
     GRID_SUPPORT,
     SLOT_MINUTES,
@@ -2606,6 +2607,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     load_prior=uniform_load_prior(),
                     unknown_export_p=0.0,
                     horizon_end=horizon_end,
+                    soc_capacity_kwh=self.SOC_CAPACITY_KWH,
                 )
 
             planner_input = build_input()
@@ -2853,6 +2855,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                     ),
                     "session": slot.session,
                     "forced": slot.forced,
+                    "exogenous_soc_delta_percent": (
+                        slot.exogenous_soc_delta_percent
+                    ),
                     "follow_conservative_gate_w": (
                         slot.follow_conservative_gate_w
                     ),
@@ -2927,6 +2932,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         export_loss: float,
         non_export_loss: float,
         slot_actions: dict[int, str] | None = None,
+        away_loss_by_slot: dict[int, float] | None = None,
     ) -> tuple[float, str]:
         """Return the SoC change and the reason for one planning slot.
 
@@ -2943,7 +2949,8 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         """
         charge_cap = self.charge_cap_percent(slot * 30)
         if slot in away_slots:
-            return 0.0, "away"
+            loss = (away_loss_by_slot or {}).get(slot, 0.0)
+            return -loss, "away"
         if slot in free_import_slots:
             if projected_soc < charge_cap:
                 return (
@@ -3000,6 +3007,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
         away_slots = self._away_slots_today()
+        away_loss_by_slot = self._away_loss_by_slot_today()
         planned_export_slots = set(export_slots or ())
         non_export_loss = self.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
         export_loss = self._export_slot_soc_loss_percent()
@@ -3019,8 +3027,9 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
                 slot_actions=slot_actions,
+                away_loss_by_slot=away_loss_by_slot,
             )
-            projected += delta
+            projected = max(0.0, projected + delta)
             path.append((slot, projected, kind))
         return path
 
@@ -5015,6 +5024,29 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             return set()
         return store.away_slots(self.get_current_datetime().date())
 
+    def _away_loss_by_slot_today(self) -> dict[int, float]:
+        """Expected SoC loss for each away slot today, in percentage points.
+
+        The trip's total estimated energy is spread evenly across the away
+        slots.  The exact position within the window does not change the
+        return SoC, but spreading it keeps the 23:30 projection sensible when
+        a trip spans that time.
+        """
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return {}
+        day = self.get_current_datetime().date()
+        losses: dict[int, float] = {}
+        for session in store.sessions:
+            if session.kind != EV_AWAY or not session.enabled:
+                continue
+            loss = session.slot_soc_loss_percent(self.SOC_CAPACITY_KWH)
+            if loss <= 0:
+                continue
+            for slot in session.slot_indices(day):
+                losses[slot] = loss
+        return losses
+
     def _current_import_rate_p(self, day_minute: int) -> float:
         """Import price in force at *day_minute*, in p/kWh.
 
@@ -6833,6 +6865,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         free_import_slots = self._free_import_slots_today()
         grid_support_slots = self._grid_support_slots_today()
         away_slots = self._away_slots_today()
+        away_loss_by_slot = self._away_loss_by_slot_today()
         planned_export_slots = set(
             snap.planned_export_slots
             if snap.planned_export_slots is not None
@@ -6937,9 +6970,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 export_loss=export_loss,
                 non_export_loss=non_export_loss,
                 slot_actions=planned_slot_actions,
+                away_loss_by_slot=away_loss_by_slot,
             )
             if projected is not None:
-                projected += delta
+                projected = max(0.0, projected + delta)
 
             rate = rate_by_slot.get(slot)
             import_price_p = self._current_import_rate_p(slot * 30)

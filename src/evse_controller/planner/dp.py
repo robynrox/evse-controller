@@ -102,6 +102,10 @@ class PlannerSlot:
     #: Unique position in the planning horizon.  Day slots repeat across a
     #: midnight crossing, so reports use this key for multi-day runs.
     horizon_index: int = -1
+    #: Expected SoC change for reasons outside the Wallbox action, in
+    #: percentage points.  Negative for an EV Away trip.  Applied to the next
+    #: state for every action in the slot, including forced idle.
+    exogenous_soc_delta_percent: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,8 @@ class _ActionTemplate:
     follow: bool = False
     floor_current_a: Optional[float] = None
     gate_w: Optional[float] = None
+    #: SoC steps lost or gained outside the Wallbox action in this slot.
+    exogenous_steps: int = 0
 
 
 class DpPlanner:
@@ -982,11 +988,37 @@ class DpPlanner:
             and not template.follow
         ):
             return None
+        if template.exogenous_steps:
+            # The EV can be driven below the normal protection floor or charge
+            # cap while it is away; only the physical 0–100% range applies.
+            next_state = self._clamp_state(
+                next_state + template.exogenous_steps
+            )
         return next_state
 
     # -- action construction -------------------------------------------
 
     def _action_templates(self, slot: PlannerSlot) -> list[_ActionTemplate]:
+        """Every action for a slot, carrying the slot's exogenous SoC change."""
+        templates = self._base_action_templates(slot)
+        steps = self._exogenous_steps(slot)
+        if steps == 0:
+            return templates
+        return [
+            replace(template, exogenous_steps=steps)
+            for template in templates
+        ]
+
+    def _exogenous_steps(self, slot: PlannerSlot) -> int:
+        """Whole SoC steps consumed by non-Wallbox activity in this slot."""
+        delta = float(slot.exogenous_soc_delta_percent or 0.0)
+        if delta == 0.0:
+            return 0
+        return int(round(delta / self.soc_step_percent))
+
+    def _base_action_templates(
+        self, slot: PlannerSlot
+    ) -> list[_ActionTemplate]:
         idle = _ActionTemplate(
             kind="idle",
             current_a=0.0,

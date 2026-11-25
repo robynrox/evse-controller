@@ -98,6 +98,7 @@ def build_planner_input(
     unknown_import_p: Optional[float] = None,
     unknown_export_p: Optional[float] = 0.0,
     horizon_end: Optional[datetime] = None,
+    soc_capacity_kwh: Optional[float] = None,
 ) -> PlannerInput:
     """Build the planner horizon.
 
@@ -266,6 +267,7 @@ def build_planner_input(
             session = _session_for(rate.start, sessions)
             forced = None
             session_name = None
+            exogenous_soc = 0.0
             if session is not None:
                 session_name = session.kind
                 if session.kind == "free_import":
@@ -274,6 +276,10 @@ def build_planner_input(
                     forced = "discharge_max"
                 elif session.kind == "ev_away":
                     forced = "idle"
+                    if soc_capacity_kwh:
+                        exogenous_soc = -session.slot_soc_loss_percent(
+                            soc_capacity_kwh
+                        )
 
             slots.append(
                 PlannerSlot(
@@ -290,6 +296,7 @@ def build_planner_input(
                     load_source=load_source,
                     load_days=load_days,
                     horizon_index=len(slots),
+                    exogenous_soc_delta_percent=exogenous_soc,
                 )
             )
 

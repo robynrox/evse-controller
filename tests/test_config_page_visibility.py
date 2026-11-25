@@ -94,6 +94,14 @@ def test_config_page_embeds_the_live_setup_checklist(app):
     assert 'href="#wallbox"' in body
 
 
+def test_ev_consumption_fields_are_visible(app):
+    body = _render(app, "iog_agile")
+
+    assert 'id="ev_miles_per_kwh"' in body
+    assert 'id="ev_away_margin_percent"' in body
+    assert "miles/kWh" in body
+
+
 def test_soc_floors_are_visible_and_populated(app):
     body = _render(app, "iog_agile")
 

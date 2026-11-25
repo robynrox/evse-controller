@@ -1177,6 +1177,37 @@ class TestSessionAwareSocProjection:
         assert agile_tariff._discharge_policy == "buffer"
         assert agile_tariff._projected_soc_at_2330 == pytest.approx(expected)
 
+    def test_away_estimate_reduces_the_projection(
+        self, agile_tariff, tmp_path
+    ):
+        store = self._store(agile_tariff, tmp_path)
+        start = self._set_time(agile_tariff, 12, 0)
+        session = EnergySession(
+            EV_AWAY,
+            start.replace(hour=18, minute=0),
+            start.replace(hour=19, minute=0),
+            energy_kwh=24.0,
+            margin_percent=0.0,
+        )
+        store.add(session)
+
+        loss = session.soc_loss_percent(agile_tariff.SOC_CAPACITY_KWH)
+        expected = (
+            77
+            - 21 * agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+            - loss
+        )
+
+        path = agile_tariff._soc_projection_path(77, 24)
+        away = [entry for entry in path if entry[2] == "away"]
+        assert len(away) == 2
+        first_away = 77 - 12 * agile_tariff.NON_EXPORT_SLOT_SOC_LOSS_PERCENT
+        assert away[0][1] == pytest.approx(first_away - loss / 2)
+        assert away[1][1] == pytest.approx(first_away - loss)
+        assert agile_tariff._project_soc_at_2330(77, 24) == pytest.approx(
+            expected
+        )
+
     def test_away_slots_are_not_export_targets(self, agile_tariff, tmp_path):
         store = self._store(agile_tariff, tmp_path)
         start = self._set_time(agile_tariff, 12, 0)

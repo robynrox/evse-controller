@@ -1,8 +1,11 @@
 # EV Away energy consumption
 
-**Status:** idea/backlog. Not implemented. An `ev_away` session currently
-forces `idle` in the planner but assumes the pack's SoC is unchanged during
-the window.
+**Status:** v1 implemented. An `ev_away` session can carry an expected distance
+or a direct energy figure. The estimate is stored on the session, becomes an
+exogenous SoC loss in the DP, and reduces the 23:30 projection. The measured
+reconnect delta and the session estimate are both recorded so effective
+consumption can be learned later. Climate control is deliberately not a
+separate input.
 
 ## Why
 
@@ -57,6 +60,24 @@ Underestimating trip consumption is worse than overestimating it: the car can
 arrive with less charge than planned. Consider a configurable reserve, for
 example "assume 10% more energy than entered", or an explicit extra kWh/miles
 field. Default it conservatively but make it visible.
+
+### Climate and parasitic loads
+
+Climate control, battery conditioning, heated seats and other hotel loads are
+real, but they are not a separate interface input. Asking for a setpoint or an
+ambient temperature would add friction and false precision. The safety margin
+(absorbs them for planning) and the measured reconnect delta (captures them for
+learning) cover the effect without a temperature field.
+
+Open-window drag and heated seats are part of the same effective consumption:
+they show up as a lower miles/kWh in the measured result, so a learned
+effective rate naturally includes them.
+
+The first pass records measured energy against the estimated trip energy and
+distance. A later refinement can learn an effective miles/kWh from completed
+away trips, optionally bucketed by season or outside temperature from the
+existing weather data, and offer it as a suggested default. Do not silently
+apply a learned rate until there are enough samples and it has been backtested.
 
 ## How the planner should use it
 
@@ -140,6 +161,27 @@ or at least clearly labelled as part of the EV Away estimate.
 - no double-counting with measured reconnect deltas in replay;
 - sessions with no miles keep the current zero-loss behaviour;
 - API and page validation for blank/zero/negative miles and a missing config.
+
+## Implementation
+
+- Config: `ev.miles_per_kwh` (default 3.5) and
+  `ev.away_margin_percent` (default 10). Both are editable on the
+  configuration page.
+- Session fields: `miles`, `energy_kwh` (canonical, before margin),
+  `miles_per_kwh` (conversion used) and `margin_percent`. The session keeps
+  these when reloaded, so changing the config later does not rewrite it.
+- `/sessions` shows the optional miles/direct-kWh fields only for EV Away and
+  displays the planned kWh and approximated SoC loss. The API accepts the same
+  values and persists the canonical energy.
+- `PlannerSlot.exogenous_soc_delta_percent` carries the distributed loss; the
+  DP applies it to every action, including forced idle, and may cross the
+  protection floor because the car is physically away.
+- The 23:30 projection spreads the loss across the away slots and clamps the
+  pack at 0%.
+- On reconnect, the vehicle event records the measured `soc_delta`, duration,
+  `away_session_id`, miles, conversion, raw and planned energy and margin. Replay
+  drops a recorded forward estimate once a measured reconnect delta is applied,
+  avoiding double counting.
 
 ## Non-goals
 

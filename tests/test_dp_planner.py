@@ -44,6 +44,7 @@ def slot(
     max_discharge: float = 10.0,
     forced: str | None = None,
     session: str | None = None,
+    exogenous_soc_delta_percent: float = 0.0,
 ) -> PlannerSlot:
     return PlannerSlot(
         start=DAY + timedelta(minutes=30 * index),
@@ -55,6 +56,7 @@ def slot(
         max_discharge_current_a=max_discharge,
         forced=forced,
         session=session,
+        exogenous_soc_delta_percent=exogenous_soc_delta_percent,
     )
 
 
@@ -865,6 +867,49 @@ def test_forced_idle_wins_over_a_good_export_price():
 
     assert result.actions[0].kind == "idle"
     assert result.actions[0].session == "ev_away"
+
+
+def test_ev_away_exogenous_loss_reduces_the_return_soc():
+    result = planner().plan(
+        [
+            slot(
+                0,
+                forced="idle",
+                session="ev_away",
+                exogenous_soc_delta_percent=-2.0,
+            ),
+            slot(
+                1,
+                forced="idle",
+                session="ev_away",
+                exogenous_soc_delta_percent=-3.0,
+            ),
+        ],
+        initial_soc_percent=60,
+    )
+
+    assert result.success
+    assert [action.kind for action in result.actions] == ["idle", "idle"]
+    assert result.final_soc == pytest.approx(55.0)
+    assert result.actions[-1].soc_after == pytest.approx(55.0)
+
+
+def test_ev_away_loss_may_cross_the_protection_floor():
+    result = planner(target_soc_percent=None).plan(
+        [
+            slot(
+                0,
+                forced="idle",
+                session="ev_away",
+                exogenous_soc_delta_percent=-3.0,
+            )
+        ],
+        initial_soc_percent=26,
+    )
+
+    assert result.success
+    assert result.actions[0].kind == "idle"
+    assert result.final_soc == pytest.approx(23.0)
 
 
 def test_forced_max_discharge_uses_the_maximum_current():

@@ -359,8 +359,38 @@ def _finalize_vehicle_reconnect(soc, source: str) -> None:
         ),
         "duration_s": duration,
     }
+    _attach_away_estimate(event, disconnect_ts, reconnect_ts)
     _record_vehicle_event(event)
     _pending_vehicle_reconnect = None
+
+
+def _attach_away_estimate(event: dict, disconnect_ts, reconnect_ts) -> None:
+    """Attach the EV Away plan that covered this trip, for later learning.
+
+    The measured ``soc_delta`` is already on the event.  Keeping the session's
+    distance, canonical energy, conversion and margin lets an offline report
+    compare the estimate with the outcome without depending on today's
+    configuration or on a session that may since have been deleted.
+    """
+    try:
+        reconnect = datetime.fromisoformat(str(reconnect_ts))
+    except (TypeError, ValueError):
+        return
+    try:
+        disconnect = datetime.fromisoformat(str(disconnect_ts))
+    except (TypeError, ValueError):
+        disconnect = None
+    away = {}
+    if disconnect is not None and disconnect < reconnect:
+        away = session_store.away_estimate_for_interval(
+            disconnect, reconnect
+        )
+    if not away:
+        away = session_store.away_estimate_for_interval(
+            reconnect, reconnect + timedelta(seconds=1)
+        )
+    if away:
+        event.update(away)
 
 
 def _begin_soc_probe() -> None:

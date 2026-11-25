@@ -18,6 +18,7 @@ from evse_controller.energy_sessions import (
     SessionStore,
     ceil_to_slot,
     floor_to_slot,
+    session_from_payload,
     session_from_slots,
 )
 
@@ -100,6 +101,88 @@ class TestEnergySession:
         assert session.label == "EV Away"
         assert session.slot_indices(at(18).date()) == [36, 37]
 
+    def test_away_distance_is_converted_and_kept(self):
+        session = EnergySession(
+            EV_AWAY,
+            at(18),
+            at(20),
+            miles=105.0,
+            miles_per_kwh=3.5,
+            margin_percent=10.0,
+        )
+
+        assert session.energy_kwh == pytest.approx(30.0)
+        assert session.planned_energy_kwh == pytest.approx(33.0)
+        assert session.slot_count == 4
+        assert session.soc_loss_percent(48.292) == pytest.approx(
+            33.0 / 48.292 * 100
+        )
+        assert session.slot_soc_loss_percent(48.292) == pytest.approx(
+            33.0 / 48.292 * 100 / 4
+        )
+
+        restored = EnergySession.from_dict(session.to_dict())
+        assert restored.miles == pytest.approx(105.0)
+        assert restored.energy_kwh == pytest.approx(30.0)
+        assert restored.miles_per_kwh == pytest.approx(3.5)
+        assert restored.margin_percent == pytest.approx(10.0)
+
+    def test_direct_away_energy_overrides_the_distance(self):
+        session = EnergySession(
+            EV_AWAY,
+            at(18),
+            at(19),
+            miles=70.0,
+            energy_kwh=20.0,
+            margin_percent=0.0,
+        )
+
+        assert session.energy_kwh == pytest.approx(20.0)
+        assert session.miles_per_kwh == pytest.approx(3.5)
+
+    def test_away_without_an_estimate_has_no_soc_loss(self):
+        session = EnergySession(EV_AWAY, at(18), at(19))
+
+        assert session.energy_kwh is None
+        assert session.planned_energy_kwh is None
+        assert session.soc_loss_percent(48.292) == 0.0
+
+    @pytest.mark.parametrize("miles,energy", [(0, None), (-1, None), (None, 0), (None, -2)])
+    def test_away_estimate_rejects_non_positive_values(self, miles, energy):
+        with pytest.raises(ValueError, match="greater than zero"):
+            EnergySession(
+                EV_AWAY,
+                at(18),
+                at(19),
+                miles=miles,
+                energy_kwh=energy,
+                miles_per_kwh=3.5,
+            )
+
+    def test_away_distance_needs_a_conversion(self):
+        with pytest.raises(ValueError, match="miles per kWh"):
+            EnergySession(
+                EV_AWAY,
+                at(18),
+                at(19),
+                miles=100.0,
+                miles_per_kwh=None,
+            )
+
+    def test_non_away_sessions_do_not_keep_an_estimate(self):
+        session = EnergySession(
+            FREE_IMPORT,
+            at(18),
+            at(19),
+            miles=100.0,
+            energy_kwh=30.0,
+            miles_per_kwh=3.5,
+            margin_percent=10.0,
+        )
+
+        assert session.miles is None
+        assert session.energy_kwh is None
+
 
 class TestSessionStore:
     def test_add_and_query(self, tmp_path):
@@ -150,6 +233,38 @@ class TestSessionStore:
         session = store.add(EnergySession(FREE_IMPORT, at(18), at(19)))
         store.set_enabled(session.id, False)
         assert store.free_import_slots(at(18).date()) == set()
+
+    def test_away_estimate_is_captured_for_a_reconnect(self, tmp_path):
+        store = SessionStore(tmp_path / "sessions.json")
+        session = store.add(
+            EnergySession(
+                EV_AWAY,
+                at(18),
+                at(20),
+                miles=105.0,
+                miles_per_kwh=3.5,
+                margin_percent=10.0,
+            )
+        )
+
+        estimate = store.away_estimate_for_interval(
+            at(18, 5), at(19, 55)
+        )
+
+        assert estimate["away_session_id"] == session.id
+        assert estimate["away_miles"] == pytest.approx(105.0)
+        assert estimate["away_energy_kwh"] == pytest.approx(30.0)
+        assert estimate["away_planned_energy_kwh"] == pytest.approx(33.0)
+        assert estimate["away_miles_per_kwh"] == pytest.approx(3.5)
+        assert estimate["away_margin_percent"] == pytest.approx(10.0)
+
+    def test_away_estimate_is_empty_without_an_overlapping_window(
+        self, tmp_path
+    ):
+        store = SessionStore(tmp_path / "sessions.json")
+        store.add(EnergySession(EV_AWAY, at(18), at(19)))
+
+        assert store.away_estimate_for_interval(at(20), at(21)) == {}
 
     def test_persists_and_reloads(self, tmp_path):
         path = tmp_path / "sessions.json"
@@ -259,6 +374,69 @@ class TestSessionFromSlots:
     def test_window_ending_exactly_now_is_rejected(self):
         with pytest.raises(ValueError, match="already ended"):
             self.build(start=16, end=18, now=at(9, 0))
+
+
+class TestSessionPayload:
+    NOW = at(9, 0)
+
+    def payload(self, **overrides):
+        data = {
+            "kind": EV_AWAY,
+            "day": at(9).date().isoformat(),
+            "start_slot": 24,
+            "end_slot": 28,
+        }
+        data.update(overrides)
+        return data
+
+    def test_away_payload_converts_miles_with_the_configured_rate(
+        self, monkeypatch
+    ):
+        from evse_controller.utils.config import config
+
+        monkeypatch.setattr(config, "EV_MILES_PER_KWH", 3.5)
+        monkeypatch.setattr(config, "EV_AWAY_MARGIN_PERCENT", 10.0)
+
+        session = session_from_payload(
+            self.payload(miles=105.0), now=self.NOW
+        )
+
+        assert session.energy_kwh == pytest.approx(30.0)
+        assert session.miles_per_kwh == pytest.approx(3.5)
+        assert session.margin_percent == pytest.approx(10.0)
+        assert session.planned_energy_kwh == pytest.approx(33.0)
+
+    def test_direct_kwh_is_kept_as_the_canonical_energy(self, monkeypatch):
+        from evse_controller.utils.config import config
+
+        monkeypatch.setattr(config, "EV_MILES_PER_KWH", 4.0)
+        monkeypatch.setattr(config, "EV_AWAY_MARGIN_PERCENT", 0.0)
+
+        session = session_from_payload(
+            self.payload(miles=70.0, energy_kwh=20.0), now=self.NOW
+        )
+
+        assert session.energy_kwh == pytest.approx(20.0)
+        assert session.miles == pytest.approx(70.0)
+        assert session.miles_per_kwh == pytest.approx(3.5)
+
+    def test_blank_away_payload_keeps_zero_loss(self):
+        session = session_from_payload(self.payload(), now=self.NOW)
+
+        assert session.energy_kwh is None
+        assert session.soc_loss_percent(48.292) == 0.0
+
+    def test_non_away_payload_ignores_estimates(self):
+        session = session_from_payload(
+            self.payload(kind=FREE_IMPORT, miles=100.0, energy_kwh=30.0),
+            now=self.NOW,
+        )
+
+        assert session.energy_kwh is None
+
+    def test_invalid_day_is_rejected(self):
+        with pytest.raises(ValueError, match="Invalid session day"):
+            session_from_payload(self.payload(day="not-a-date"), now=self.NOW)
 
 
 class TestSlotsForKind:

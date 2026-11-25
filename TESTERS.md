@@ -151,14 +151,21 @@ restart before it uses the new addresses or learning mode.
    the active target, holds until target time + hold, and releases
    automatically. Try disabling the event, pausing the schedule and
    cancelling one occurrence.
-4. **Check the cheap windows.** Confirm charging starts and stops at the
+4. **Try an EV Away estimate.** On `/sessions`, select EV Away for a window,
+   enter expected miles, and confirm the live kWh/SoC estimate appears and the
+   saved session shows it. Check that the 23:30 projection and the decision
+   line reflect the lower return SoC. Leave a second away window blank and
+   confirm it keeps the old zero-loss behaviour. Reconnect the car and check
+   `data/state/planner_history/*.vehicle.jsonl` for the session estimate and
+   measured `soc_delta`.
+5. **Check the cheap windows.** Confirm charging starts and stops at the
    expected times for your preset.
-5. **Check peak behaviour.** Confirm the house is covered during peak import
+6. **Check peak behaviour.** Confirm the house is covered during peak import
    and that any bulk export follows the expected price/efficiency decision.
-6. **Try an export choice.** Test Agile Outgoing, Fixed, Zero and None where
+7. **Try an export choice.** Test Agile Outgoing, Fixed, Zero and None where
    your account allows them. Flux should ignore the selector.
-7. **Unplug and replug.** Confirm the plan and decision line recover.
-8. **Negative Agile import prices.** If you see one, confirm the controller
+8. **Unplug and replug.** Confirm the plan and decision line recover.
+9. **Negative Agile import prices.** If you see one, confirm the controller
    charges rather than exports.
 9. **OCPP.** Only Intelligent Octopus Go should auto-trigger it.
 10. **Review the logs and daily report.** Look for stale plans, repeated

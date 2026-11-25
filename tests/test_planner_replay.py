@@ -5,10 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from evse_controller.planner.dp import PlannerAction
+from evse_controller.planner.dp import PlannerAction, PlannerSlot
 from evse_controller.planner.replay import (
     RollingCancelled,
     apply_soc_delta,
+    clear_away_estimate_from,
     disconnected_slots,
     plan_in_force_run,
     rolling_resolve,
@@ -296,3 +297,23 @@ def test_rolling_can_be_cancelled_between_slots():
             solver_version="dp-test",
             cancel_check=cancel_check,
         )
+
+
+def test_measured_reconnect_delta_replaces_the_away_estimate():
+    slots = tuple(
+        PlannerSlot(
+            start=START + timedelta(minutes=30 * slot),
+            slot=slot,
+            import_p=20.0,
+            export_p=5.0,
+            session="ev_away",
+            exogenous_soc_delta_percent=-2.0,
+        )
+        for slot in (10, 11, 12)
+    )
+
+    cleared = clear_away_estimate_from(slots, 11)
+
+    assert cleared[0].exogenous_soc_delta_percent == -2.0
+    assert cleared[1].exogenous_soc_delta_percent == 0.0
+    assert cleared[2].exogenous_soc_delta_percent == 0.0

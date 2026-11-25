@@ -296,6 +296,9 @@ def _build_context(run: dict) -> RunContext:
                 max_discharge_current_a=max_discharge,
                 forced=item.get("forced"),
                 session=item.get("session"),
+                exogenous_soc_delta_percent=_number(
+                    item.get("exogenous_soc_delta_percent")
+                ) or 0.0,
                 load_samples=load_samples,
                 load_source=item.get("load_source") or "",
                 load_days=int(item.get("load_days", 0) or 0),

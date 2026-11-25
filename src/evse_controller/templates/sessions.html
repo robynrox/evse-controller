@@ -91,6 +91,59 @@
         margin-top: 2px;
     }
 
+    .away-energy {
+        margin: 0 0 16px;
+        padding: 14px;
+        background: #fff;
+        border: 1px solid #d8dde3;
+        border-radius: 4px;
+    }
+
+    .away-energy h3 {
+        margin: 0 0 6px;
+        font-size: 15px;
+    }
+
+    .away-energy p {
+        margin: 0 0 10px;
+        color: #555;
+        font-size: 13px;
+    }
+
+    .away-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-end;
+    }
+
+    .away-fields > div {
+        flex: 1 1 180px;
+    }
+
+    .away-fields label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 4px;
+    }
+
+    .away-fields input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 8px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+    }
+
+    .away-estimate {
+        flex: 2 1 240px;
+        font-size: 13px;
+        color: #1f5b2a;
+        font-weight: 600;
+        padding-bottom: 8px;
+    }
+
     /* Rate strip: all 48 half-hour cells, wrapped into rows that fit the
        available width so no slot can be clipped out of view. */
     .strip-wrap {
@@ -457,6 +510,41 @@
         {% endfor %}
     </div>
 
+    <div id="away-energy" class="away-energy" hidden
+         data-miles-per-kwh="{{ ev_miles_per_kwh }}"
+         data-margin-percent="{{ ev_away_margin_percent }}"
+         data-capacity-kwh="{{ soc_capacity_kwh }}">
+        <h3>EV Away energy estimate (optional)</h3>
+        <p>
+            Without a distance or energy figure the plan assumes the pack SoC
+            is unchanged while the EV is away. Add expected miles, or a direct
+            kWh figure if you know it better.
+        </p>
+        <div class="away-fields">
+            <div>
+                <label for="away_miles">Expected miles</label>
+                <input type="number" id="away_miles" min="0.1" step="0.1"
+                       placeholder="e.g. 120">
+            </div>
+            <div>
+                <label for="away_kwh">Or expected energy (kWh)</label>
+                <input type="number" id="away_kwh" min="0.1" step="0.1"
+                       placeholder="overrides miles">
+            </div>
+            <div id="away-estimate" class="away-estimate">
+                Enter a distance to see the estimated SoC loss.
+            </div>
+        </div>
+        <p>
+            <small>
+                Using {{ '%.1f'|format(ev_miles_per_kwh) }} miles/kWh and a
+                {{ '%.0f'|format(ev_away_margin_percent) }}% safety margin for
+                climate control and other unknowns. This is an estimate; the
+                measured SoC on reconnect is recorded for later learning.
+            </small>
+        </p>
+    </div>
+
     <div class="strip-wrap">
         <div id="strip" class="strip"
              data-day="{{ selected_day.isoformat() }}">
@@ -512,6 +600,13 @@
                     {{ ((session.end - session.start).total_seconds() // 1800)|int }}
                     slot{{ '' if (session.end - session.start).total_seconds() == 1800 else 's' }}
                 </span>
+                {% if session.energy_kwh is not none %}
+                <span class="muted">
+                    ≈ {{ '%.1f'|format(session.planned_energy_kwh) }} kWh planned
+                    {%- if session.miles is not none %} · {{ '%.0f'|format(session.miles) }} mi{% endif %}
+                    · ≈ {{ '%.0f'|format(session.soc_loss_percent(soc_capacity_kwh)) }}% SoC
+                </span>
+                {% endif %}
                 {% if not session.enabled %}
                 <span class="muted">(disabled)</span>
                 {% endif %}
@@ -544,6 +639,76 @@
     const errorBox = document.getElementById('error');
     const addButton = document.getElementById('add');
     const clearButton = document.getElementById('clear');
+    const awayPanel = document.getElementById('away-energy');
+    const awayMiles = document.getElementById('away_miles');
+    const awayKwh = document.getElementById('away_kwh');
+    const awayEstimate = document.getElementById('away-estimate');
+    const awayKind = {{ away_kind|tojson }};
+
+    function selectedKind() {
+        const checked = document.querySelector(
+            'input[name="kind"]:checked'
+        );
+        return checked ? checked.value : '';
+    }
+
+    function optionalPositive(input) {
+        const text = input.value.trim();
+        if (text === '') {
+            return null;
+        }
+        const value = Number(text);
+        return Number.isFinite(value) && value > 0 ? value : NaN;
+    }
+
+    function updateAwayEstimate() {
+        if (!awayEstimate) {
+            return;
+        }
+        const miles = optionalPositive(awayMiles);
+        const kwh = optionalPositive(awayKwh);
+        if (Number.isNaN(miles) || Number.isNaN(kwh)) {
+            awayEstimate.textContent =
+                'Enter a positive number, or leave the field blank.';
+            return;
+        }
+        const rate = Number(awayPanel.dataset.milesPerKwh);
+        const margin = Number(awayPanel.dataset.marginPercent);
+        const capacity = Number(awayPanel.dataset.capacityKwh);
+        let raw = kwh;
+        if (raw === null && miles !== null && rate > 0) {
+            raw = miles / rate;
+        }
+        if (raw === null) {
+            awayEstimate.textContent =
+                'Enter a distance to see the estimated SoC loss.';
+            return;
+        }
+        const planned = raw * (1 + margin / 100);
+        const soc = Math.min(100, planned / capacity * 100);
+        let text = '≈ ' + planned.toFixed(1) + ' kWh planned · ≈ ' +
+            soc.toFixed(0) + '% SoC';
+        if (kwh !== null && miles !== null) {
+            text += ' · direct kWh used';
+        }
+        awayEstimate.textContent = text;
+    }
+
+    function updateAwayPanel() {
+        if (!awayPanel) {
+            return;
+        }
+        awayPanel.hidden = selectedKind() !== awayKind;
+        if (!awayPanel.hidden) {
+            updateAwayEstimate();
+        }
+    }
+
+    [awayMiles, awayKwh].forEach(function (input) {
+        if (input) {
+            input.addEventListener('input', updateAwayEstimate);
+        }
+    });
 
     let anchor = null;
     let focus = null;
@@ -675,6 +840,7 @@
                 const choice = label.querySelector('input[name="kind"]');
                 label.classList.toggle('checked', choice && choice.checked);
             });
+            updateAwayPanel();
         });
     });
 
@@ -699,15 +865,33 @@
             showError('Select one or more half-hour slots first.');
             return;
         }
+        const kind = selectedKind();
+        const payload = {
+            kind: kind,
+            day: day,
+            start_slot: range[0],
+            end_slot: range[1] + 1
+        };
+        if (kind === awayKind) {
+            const miles = optionalPositive(awayMiles);
+            const kwh = optionalPositive(awayKwh);
+            if (Number.isNaN(miles) || Number.isNaN(kwh)) {
+                showError(
+                    'Enter a positive distance or energy, or leave both blank.'
+                );
+                return;
+            }
+            if (miles !== null) {
+                payload.miles = miles;
+            }
+            if (kwh !== null) {
+                payload.energy_kwh = kwh;
+            }
+        }
         clearError();
         addButton.disabled = true;
         try {
-            await post('/api/sessions', {
-                kind: document.querySelector('input[name="kind"]:checked').value,
-                day: day,
-                start_slot: range[0],
-                end_slot: range[1] + 1
-            });
+            await post('/api/sessions', payload);
             window.location.href = '/sessions?day=' +
                 encodeURIComponent(day);
         } catch (error) {
@@ -763,6 +947,7 @@
     }
 
     paint();
+    updateAwayPanel();
 })();
 </script>
 {% endblock %}

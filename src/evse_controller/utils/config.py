@@ -1049,6 +1049,53 @@ class Config:
         )
     )
 
+    # EV consumption estimate for EV Away windows.  The value is the car's
+    # typical miles per kWh; the margin covers climate control, wind, terrain
+    # and other effects we do not ask the user to model.
+    def _ev_miles_per_kwh(self) -> float:
+        raw = self._get_config_value("ev", "miles_per_kwh", 3.5)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 3.5
+        return value if value > 0 else 3.5
+
+    def _set_ev_miles_per_kwh(self, value) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 3.5
+        if number <= 0:
+            number = 3.5
+        number = round(number, 3)
+        self._set_config_value("ev", "miles_per_kwh", number)
+        return number
+
+    EV_MILES_PER_KWH = property(
+        _ev_miles_per_kwh, _set_ev_miles_per_kwh
+    )
+
+    def _ev_away_margin_percent(self) -> float:
+        raw = self._get_config_value("ev", "away_margin_percent", 10.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 10.0
+        return max(0.0, min(100.0, value))
+
+    def _set_ev_away_margin_percent(self, value) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = 10.0
+        number = max(0.0, min(100.0, number))
+        self._set_config_value("ev", "away_margin_percent", number)
+        return number
+
+    EV_AWAY_MARGIN_PERCENT = property(
+        _ev_away_margin_percent, _set_ev_away_margin_percent
+    )
+
     # Wallbox simulator properties
     USE_WALLBOX_SIMULATOR = property(
         lambda self: self._get_config_value("wallbox", "use_simulator", False),
@@ -1485,6 +1532,10 @@ class Config:
                 'min_charge_current': self.WALLBOX_MIN_CHARGE_CURRENT,
                 'min_discharge_current': self.WALLBOX_MIN_DISCHARGE_CURRENT,
                 'nominal_voltage': self.WALLBOX_NOMINAL_VOLTAGE
+            },
+            'ev': {
+                'miles_per_kwh': self.EV_MILES_PER_KWH,
+                'away_margin_percent': self.EV_AWAY_MARGIN_PERCENT,
             },
             'shelly': {
                 'primary_url': self.SHELLY_PRIMARY_URL,

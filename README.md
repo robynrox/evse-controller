@@ -330,6 +330,14 @@ Detailed explanation of each configuration option:
 - `max_discharge_current`: Maximum discharging current, integer between 3-32 (amperes). Set this to the unit's real limit; if the Wallbox is derated, use the derated value
 - `nominal_voltage`: Nominal grid voltage used by the planner's load-to-current model and as the fallback when no live sample is available, 200-260V. Default 240V; set 220V or 230V where that is the served nominal. Live activation thresholds still use the measured voltage.
 
+#### EV Consumption Section
+- `miles_per_kwh`: typical EV consumption (default 3.5). Used only to turn an
+  EV Away distance into an energy estimate. If your car shows kWh/100 mi,
+  divide 100 by that figure (30 kWh/100 mi = 3.3 mi/kWh).
+- `away_margin_percent`: safety margin added to the EV Away estimate (default
+  10%). It covers climate control, heated seats, wind, terrain and other
+  effects that are not modelled separately. Raise it for winter trips.
+
 #### Shelly Section
 - `primary_url`: IP address or hostname of Shelly 1 (the internal key stays `primary` for history compatibility)
 - `secondary_url`: IP address or hostname of Shelly 2 (optional; internal key `secondary`)
@@ -956,7 +964,15 @@ marketing:
   are left out of the 23:30 SoC projection and the export plan, because the
   pack cannot supply the house or charge. This is a planning assumption only:
   if the EV is still connected, the normal heuristic keeps running and may
-  charge or discharge it until the plug is removed or the slot ends.
+  charge or discharge it until the plug is removed or the slot ends. An away
+  session can optionally carry expected miles or a direct kWh figure. The
+  planner subtracts the estimated SoC from the pack for the away window, so a
+  readiness target after the return and the 23:30 projection see the lower
+  return SoC. The estimate uses `ev.miles_per_kwh` (default 3.5) plus
+  `ev.away_margin_percent` (default 10%) for climate control and other
+  unknowns. Leaving the fields blank keeps the old zero-loss behaviour. The
+  measured reconnect SoC is recorded with the session's estimate so effective
+  consumption can be learned later; there is no temperature input.
 
 Five further kinds are temporary control sessions rather than price overlays:
 
@@ -1026,7 +1042,9 @@ rather than resolved. Windows persist in `data/state/sessions.json`. Price and
 availability sessions only apply while the controller is in smart mode, and a
 manual command still takes priority. Sessions may be conceptually related (for
 example, two saving sessions earning a free hour), but nothing links them
-automatically.
+automatically. Choosing **EV Away** reveals optional **Expected miles** and
+**Expected energy** fields and a live planned-kWh/SoC estimate; the upcoming
+session list shows the same figures.
 
 On the tariff strip, supplier session slots carry a blue bar (free import), an
 amber bar (grid support) or a grey bar (EV away); control sessions carry a

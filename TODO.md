@@ -21,10 +21,6 @@
       serial/MAC identity embedded in the hostname, and update the stored IP.
       Design note:
       [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
-- [ ] EV Away energy estimate: config miles/kWh plus per-session miles (or
-      direct kWh), applied as an exogenous SoC loss to the DP and the 23:30
-      projection. Design note:
-      [`reports/dp/EV_AWAY_ENERGY.md`](reports/dp/EV_AWAY_ENERGY.md)
 
 ## Low Priority
 - [ ] Improve Docker container support and testing
@@ -35,6 +31,9 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] EV Away energy estimate: miles/kWh plus per-session miles or direct
+      kWh, applied as an exogenous SoC loss to the DP and the 23:30 projection,
+      with reconnect data captured for later learning
 - [x] Guided first-run setup wizard: hardware discovery/tests, tariff and
       prices, SoC floors, control mode and review
 - [x] Dashboard quick-start checklist for missing hardware and review links

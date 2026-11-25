@@ -89,12 +89,15 @@ from evse_controller.energy_sessions import (
     SESSION_LABELS,
     SOLAR_ONLY,
     EnergySession,
-    session_from_slots,
+    session_from_payload,
     session_store,
 )
 from evse_controller.ev_readiness import ev_readiness_store
 from evse_controller.price_tiers import PRESETS
 from evse_controller.planner.version import SOLVER_VERSION
+from evse_controller.tariffs.octopus.battery_efficiency import (
+    DASHBOARD_SOC_CAPACITY_KWH,
+)
 from evse_controller.poll_health import poll_health_payload
 
 VALID_COMMANDS = {
@@ -172,28 +175,8 @@ def _rate_colour(rate, all_rates) -> str:
 
 
 def _session_from_payload(data: dict, now: datetime | None = None) -> EnergySession:
-    """Validate an API payload into a snapped session.
-
-    Slots are indices into the selected day's 48 half-hours.  ``end_slot`` is
-    exclusive, so selecting the last slot of the day gives 48 and ends at
-    midnight.
-    """
-    day = None
-    if data.get("day"):
-        try:
-            day = date.fromisoformat(str(data["day"]))
-        except ValueError:
-            raise ValueError("Invalid session day") from None
-    kind = data.get("kind")
-    if not isinstance(kind, str) or not kind:
-        raise ValueError("Choose a session type")
-    return session_from_slots(
-        kind,
-        data.get("start_slot"),
-        data.get("end_slot"),
-        day=day,
-        now=now,
-    )
+    """Compatibility wrapper for the session payload parser."""
+    return session_from_payload(data, now=now)
 
 
 def _parse_window_list(value):
@@ -503,6 +486,9 @@ def sessions_page():
         free_kind=FREE_IMPORT,
         grid_kind=GRID_SUPPORT,
         away_kind=EV_AWAY,
+        ev_miles_per_kwh=config.EV_MILES_PER_KWH,
+        ev_away_margin_percent=config.EV_AWAY_MARGIN_PERCENT,
+        soc_capacity_kwh=DASHBOARD_SOC_CAPACITY_KWH,
         free_slots=session_store.slots_for_kind(selected_day, FREE_IMPORT),
         grid_slots=session_store.slots_for_kind(
             selected_day, GRID_SUPPORT
@@ -672,6 +658,24 @@ def config_page():
                     raise ValueError(
                         "Nominal grid voltage must be between 200 and 260V"
                     )
+
+            # EV consumption estimate for EV Away windows.
+            miles_per_kwh = request.form.get('ev[miles_per_kwh]')
+            if miles_per_kwh is not None and miles_per_kwh.strip():
+                value = float(miles_per_kwh)
+                if not 0.1 <= value <= 20:
+                    raise ValueError(
+                        "EV consumption must be between 0.1 and 20 mi/kWh"
+                    )
+                config.EV_MILES_PER_KWH = value
+            away_margin = request.form.get('ev[away_margin_percent]')
+            if away_margin is not None and away_margin.strip():
+                value = float(away_margin)
+                if not 0 <= value <= 100:
+                    raise ValueError(
+                        "EV Away safety margin must be between 0 and 100%"
+                    )
+                config.EV_AWAY_MARGIN_PERCENT = value
 
             # Update Shelly settings
             config.SHELLY_PRIMARY_URL = request.form.get('shelly[primary_url]')

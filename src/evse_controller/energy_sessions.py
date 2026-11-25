@@ -56,6 +56,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date as date_type, datetime, time, timedelta
 import json
+import math
 import threading
 import uuid
 
@@ -93,6 +94,32 @@ SLOT_MINUTES = 30
 SLOTS_PER_DAY = 48
 
 
+def _optional_positive(value, label: str) -> float | None:
+    """Return a strictly positive number, or ``None`` when blank."""
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a number") from None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{label} must be greater than zero")
+    return number
+
+
+def _optional_percent(value, label: str) -> float | None:
+    """Return a percentage in 0–100, or ``None`` when blank."""
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a number") from None
+    if not math.isfinite(number) or not 0 <= number <= 100:
+        raise ValueError(f"{label} must be between 0 and 100%")
+    return number
+
+
 def floor_to_slot(when: datetime) -> datetime:
     """Start of the half-hour slot containing *when*."""
     minute = (when.minute // SLOT_MINUTES) * SLOT_MINUTES
@@ -113,6 +140,11 @@ def session_from_slots(
     end_slot,
     day: date_type | None = None,
     now: datetime | None = None,
+    *,
+    miles: float | None = None,
+    energy_kwh: float | None = None,
+    miles_per_kwh: float | None = None,
+    margin_percent: float | None = None,
 ) -> "EnergySession":
     """Build a session from half-hour slot indices.
 
@@ -140,7 +172,52 @@ def session_from_slots(
     end = midnight + timedelta(minutes=SLOT_MINUTES * last)
     if end <= now:
         raise ValueError("That window has already ended")
-    return EnergySession(kind, start, end)
+    return EnergySession(
+        kind,
+        start,
+        end,
+        miles=miles,
+        energy_kwh=energy_kwh,
+        miles_per_kwh=miles_per_kwh,
+        margin_percent=margin_percent,
+    )
+
+
+def session_from_payload(data: dict, now: datetime | None = None) -> "EnergySession":
+    """Validate an API payload into a snapped session.
+
+    Slots are indices into the selected day's 48 half-hours.  ``end_slot`` is
+    exclusive, so selecting the last slot of the day gives 48 and ends at
+    midnight.  EV Away payloads may also carry ``miles`` or ``energy_kwh``;
+    the configured consumption and safety margin are applied here.
+    """
+    day = None
+    if data.get("day"):
+        try:
+            day = date_type.fromisoformat(str(data["day"]))
+        except ValueError:
+            raise ValueError("Invalid session day") from None
+    kind = data.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise ValueError("Choose a session type")
+    away = kind == EV_AWAY
+    energy_kwh = data.get("energy_kwh") if away else None
+    has_direct_energy = energy_kwh not in (None, "")
+    return session_from_slots(
+        kind,
+        data.get("start_slot"),
+        data.get("end_slot"),
+        day=day,
+        now=now,
+        miles=data.get("miles") if away else None,
+        energy_kwh=energy_kwh,
+        miles_per_kwh=(
+            config.EV_MILES_PER_KWH
+            if away and not has_direct_energy
+            else None
+        ),
+        margin_percent=config.EV_AWAY_MARGIN_PERCENT if away else None,
+    )
 
 
 @dataclass
@@ -154,6 +231,15 @@ class EnergySession:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     #: True when the automatic OCPP scheduler created this window.
     auto: bool = False
+    #: EV Away only: distance entered for the trip.
+    miles: float | None = None
+    #: EV Away only: canonical trip energy before the safety margin.  Stored
+    #: so a later change to the configured mi/kWh does not rewrite the trip.
+    energy_kwh: float | None = None
+    #: EV Away only: the conversion used when the energy was calculated.
+    miles_per_kwh: float | None = None
+    #: EV Away only: safety margin applied on top of ``energy_kwh``.
+    margin_percent: float | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in SESSION_LABELS:
@@ -171,10 +257,83 @@ class EnergySession:
             # past midnight, matching how the scheduler reads overnight
             # windows.
             self.end += timedelta(days=1)
+        self._normalise_away_estimate()
+
+    def _normalise_away_estimate(self) -> None:
+        """Validate and canonicalise the EV Away energy estimate."""
+        if self.kind != EV_AWAY:
+            self.miles = None
+            self.energy_kwh = None
+            self.miles_per_kwh = None
+            self.margin_percent = None
+            return
+
+        self.miles = _optional_positive(self.miles, "Expected miles")
+        self.energy_kwh = _optional_positive(
+            self.energy_kwh, "Expected energy"
+        )
+        self.miles_per_kwh = _optional_positive(
+            self.miles_per_kwh, "Miles per kWh"
+        )
+        self.margin_percent = _optional_percent(
+            self.margin_percent, "Safety margin"
+        )
+
+        if self.energy_kwh is None and self.miles is not None:
+            if self.miles_per_kwh is None:
+                raise ValueError(
+                    "Set the EV consumption in miles per kWh before adding "
+                    "an EV Away distance"
+                )
+            self.energy_kwh = self.miles / self.miles_per_kwh
+        elif (
+            self.energy_kwh is not None
+            and self.miles is not None
+            and self.miles_per_kwh is None
+            and self.energy_kwh > 0
+        ):
+            self.miles_per_kwh = self.miles / self.energy_kwh
+
+        if self.energy_kwh is None:
+            self.margin_percent = None
+        elif self.margin_percent is None:
+            self.margin_percent = 0.0
 
     @property
     def label(self) -> str:
         return SESSION_LABELS[self.kind]
+
+    @property
+    def planned_energy_kwh(self) -> float | None:
+        """Trip energy including the safety margin, or ``None``."""
+        if self.energy_kwh is None:
+            return None
+        margin = max(0.0, float(self.margin_percent or 0.0))
+        return self.energy_kwh * (1.0 + margin / 100.0)
+
+    @property
+    def slot_count(self) -> int:
+        """Number of half-hour slots covered by the window."""
+        return max(
+            1,
+            int(
+                round(
+                    (self.end - self.start).total_seconds()
+                    / (SLOT_MINUTES * 60)
+                )
+            ),
+        )
+
+    def soc_loss_percent(self, capacity_kwh: float) -> float:
+        """Estimated SoC loss over the whole trip, in percentage points."""
+        planned = self.planned_energy_kwh
+        if planned is None or capacity_kwh <= 0:
+            return 0.0
+        return min(100.0, planned / float(capacity_kwh) * 100.0)
+
+    def slot_soc_loss_percent(self, capacity_kwh: float) -> float:
+        """Estimated SoC loss attributed to each half-hour away slot."""
+        return self.soc_loss_percent(capacity_kwh) / self.slot_count
 
     def covers(self, when: datetime) -> bool:
         return self.enabled and self.start <= when < self.end
@@ -192,7 +351,7 @@ class EnergySession:
         return self.start < other.end and other.start < self.end
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "id": self.id,
             "kind": self.kind,
             "start": self.start.isoformat(),
@@ -200,6 +359,11 @@ class EnergySession:
             "enabled": self.enabled,
             "auto": self.auto,
         }
+        for key in ("miles", "energy_kwh", "miles_per_kwh", "margin_percent"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "EnergySession":
@@ -210,6 +374,10 @@ class EnergySession:
             enabled=data.get("enabled", True),
             id=data.get("id") or uuid.uuid4().hex[:12],
             auto=bool(data.get("auto", False)),
+            miles=data.get("miles"),
+            energy_kwh=data.get("energy_kwh"),
+            miles_per_kwh=data.get("miles_per_kwh"),
+            margin_percent=data.get("margin_percent"),
         )
 
 
@@ -264,6 +432,36 @@ class SessionStore:
     def away_slots(self, day: date_type) -> set[int]:
         """Slots of *day* during which the EV is planned to be away."""
         return self.slots_for_kind(day, EV_AWAY)
+
+    def away_session_for_interval(
+        self, start: datetime, end: datetime
+    ) -> "EnergySession | None":
+        """The enabled EV Away window overlapping ``[start, end)``."""
+        for session in self.sessions:
+            if (
+                session.kind == EV_AWAY
+                and session.enabled
+                and session.start < end
+                and start < session.end
+            ):
+                return session
+        return None
+
+    def away_estimate_for_interval(
+        self, start: datetime, end: datetime
+    ) -> dict:
+        """Session metadata to attach to a reconnect event, for learning."""
+        session = self.away_session_for_interval(start, end)
+        if session is None:
+            return {}
+        return {
+            "away_session_id": session.id,
+            "away_miles": session.miles,
+            "away_miles_per_kwh": session.miles_per_kwh,
+            "away_energy_kwh": session.energy_kwh,
+            "away_planned_energy_kwh": session.planned_energy_kwh,
+            "away_margin_percent": session.margin_percent,
+        }
 
     def is_free_import(self, when: datetime) -> bool:
         session = self.active(when)

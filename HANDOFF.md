@@ -300,9 +300,15 @@ completed fixes.
   manual command still outranks them; overlapping windows are rejected.
   Free-import slots are excluded from the export plan. The tariff strip marks
   each session slot with a coloured bar and a legend entry. `ev_away` forces
-  those slots idle; it currently assumes no SoC change during the trip. A
-  proposed estimate (config miles/kWh plus per-session miles, applied as an
-  exogenous SoC loss to the DP and the 23:30 projection) is in
+  those slots idle and can carry an expected distance or direct energy figure.
+  The estimate is stored on the session (`miles`, `energy_kwh`,
+  `miles_per_kwh`, `margin_percent`), distributed as an exogenous SoC loss in
+  the DP and subtracted from the 23:30 projection. Config keys are
+  `ev.miles_per_kwh` (default 3.5) and `ev.away_margin_percent` (default 10);
+  the margin covers climate and other unknowns rather than asking for a
+  temperature. Reconnect events record the measured `soc_delta` together with
+  the session estimate for later learning, and replay drops the forward
+  estimate once a measured delta is applied. Design and limits are in
   [`reports/dp/EV_AWAY_ENERGY.md`](reports/dp/EV_AWAY_ENERGY.md).
 - **Tariffs observe behind temporary overrides.** Dashboard and schedule
   commands no longer call `stop_tariff()`; they arm a `ControlOverride` above

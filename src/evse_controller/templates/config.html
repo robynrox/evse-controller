@@ -289,6 +289,39 @@
         </div>
     </div>
 
+    <div class="config-section" id="ev-consumption">
+        <h2>EV Consumption</h2>
+        <p>
+            Used to estimate how much battery energy an EV Away trip will use.
+            The safety margin covers climate control, wind, terrain and other
+            effects that are not modelled separately.
+        </p>
+        <div class="form-group">
+            <label for="ev_miles_per_kwh">Typical consumption (miles/kWh):</label>
+            <input type="number" id="ev_miles_per_kwh"
+                   name="ev[miles_per_kwh]"
+                   value="{{ config.ev.miles_per_kwh }}"
+                   min="0.1" max="20" step="0.1" required>
+            <small>
+                Your car's trip meter may show mi/kWh; 3.5 is a typical value.
+                If it shows kWh/100 mi, divide 100 by that figure. For example,
+                30 kWh/100 mi is 3.3 mi/kWh.
+            </small>
+        </div>
+        <div class="form-group">
+            <label for="ev_away_margin_percent">EV Away safety margin (%):</label>
+            <input type="number" id="ev_away_margin_percent"
+                   name="ev[away_margin_percent]"
+                   value="{{ config.ev.away_margin_percent }}"
+                   min="0" max="100" step="1" required>
+            <small>
+                Added to the distance-based estimate. 10% is a cautious
+                starting point; raise it for winter trips or if you use
+                climate control heavily.
+            </small>
+        </div>
+    </div>
+
     <div class="config-section" id="shelly">
         <h2>Shelly Configuration</h2>
         <div class="form-group">

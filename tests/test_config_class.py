@@ -469,6 +469,25 @@ class TestConfig:
         assert channels["secondary"]["channel1"]["in_use"] is True
         assert channels["secondary"]["channel2"]["abbreviation"] == "Ch2"
 
+    def test_ev_consumption_defaults_and_clamping(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        assert config.EV_MILES_PER_KWH == pytest.approx(3.5)
+        assert config.EV_AWAY_MARGIN_PERCENT == pytest.approx(10.0)
+
+        config.EV_MILES_PER_KWH = 4.2
+        config.EV_AWAY_MARGIN_PERCENT = 150
+        assert config.EV_MILES_PER_KWH == pytest.approx(4.2)
+        assert config.EV_AWAY_MARGIN_PERCENT == pytest.approx(100.0)
+
+        config.EV_MILES_PER_KWH = 0
+        assert config.EV_MILES_PER_KWH == pytest.approx(3.5)
+
+        ev = config.as_dict()["ev"]
+        assert ev["miles_per_kwh"] == pytest.approx(3.5)
+        assert ev["away_margin_percent"] == pytest.approx(100.0)
+
     def test_backward_compatibility_for_use_simulator_flag(self):
         """Test that missing use_simulator flag is handled correctly"""
         # Save original state
