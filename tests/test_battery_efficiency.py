@@ -25,8 +25,12 @@ def test_efficiency_is_monotonic_with_current(model):
     charge = [model.charge_efficiency(p.current_a) for p in POINTS]
     discharge = [model.discharge_efficiency(p.current_a) for p in POINTS]
 
-    assert charge == sorted(charge)
-    assert discharge == sorted(discharge)
+    assert all(
+        later > earlier for earlier, later in zip(charge, charge[1:])
+    )
+    assert all(
+        later > earlier for earlier, later in zip(discharge, discharge[1:])
+    )
     assert charge[0] == pytest.approx(0.580)
     assert charge[-1] == pytest.approx(0.883)
     assert discharge[0] == pytest.approx(0.734)

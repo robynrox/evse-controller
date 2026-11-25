@@ -172,6 +172,35 @@ adds a long-run AC↔pack cross-check (the ~0.86 median long-session ratio,
 including seasonal variation), but it does not replace the AC↔DC measurement
 from the Wallbox.
 
+### Using max-current efficiency as an anchor
+
+The 16 A point is the best-sampled and most stable part of the curve, so it is
+a plausible daily condition indicator. Grouping the 60 s analysis windows by
+day and comparing the daily median at 16 A with the daily median at lower
+currents gives:
+
+| direction | lower current | days | R² | slope (pp per pp at 16 A) |
+|---|---:|---:|---:|---:|
+| charge | 3 A | 68 | 0.53 | 3.4 |
+| charge | 4 A | 64 | 0.72 | 4.1 |
+| charge | 10 A | 26 | 0.89 | 1.4 |
+| charge | 12 A | 35 | 0.79 | 1.4 |
+| discharge | 3 A | 168 | 0.76 | 3.1 |
+| discharge | 6 A | 12 | 0.97 | 2.0 |
+| discharge | 9 A | 16 | 0.80 | 1.4 |
+
+A day with a lower 16 A efficiency also tends to have a lower efficiency at
+the other currents, but the sensitivity is **larger at low current**. That
+argues for an additive loss or current-dependent anchor correction, not a
+simple multiplicative efficiency factor. It is promising, but the daily
+medians are observational and correlated through SoC/session mix, so it needs
+held-out-day validation before it changes the planner model.
+
+If an anchor correction is added, enforce monotonicity after it: efficiency
+should remain non-decreasing with current in both directions, or the point
+should be rejected. The shipped model already has a monotonicity test in
+`tests/test_battery_efficiency.py`.
+
 ## Interpretation and limits
 
 - The steady-state voltage curve is repeatable enough to be worth further
