@@ -23,6 +23,10 @@
       [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
+- [ ] Add the `evse` CT clamp as an independent AC channel in the efficiency
+      analysis and use long-session integrals for a seasonal AC↔pack
+      cross-check; keep the current-based model for max charge/discharge and
+      avoid a dense SoC surface until pack temperature is available
 - [ ] Charge-acceptance / daily-balance SoC study: a 10–30 s max-current probe
       is not enough; test a 2–5 minute stable sample, the relative voltage delta
       between trips, and a seasonal-efficiency daily energy balance on

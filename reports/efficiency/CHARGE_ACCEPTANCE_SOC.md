@@ -151,6 +151,27 @@ power from `evse` is too noisy and seasonal to be a strong observation on its
 own. A 2–5 minute DC-voltage sample would be better; a long-session charge
 energy total is better still for the daily hole.
 
+## Efficiency metrics
+
+`evse` is a useful **independent AC energy meter**, especially for long
+sessions where its ~30–60 W offset and noise average out. It is not a good
+instantaneous efficiency probe at low currents: at 3 A the AC power is only
+~0.7 kW, so a 40 W CT error is already 5–6%.
+
+The existing 180-day efficiency report already found that AC↔DC efficiency is
+flat with SoC at a fixed current; the current table is the dominant effect.
+A full current × SoC efficiency surface would therefore be mostly a
+current effect plus a seasonal/temperature term, and the data is too
+collinear to identify much more without pack temperature and designed
+low-current experiments. A regularised surface fitted on long segments and
+validated on held-out days is defensible; a dense matrix solution is not.
+
+For the max charge/discharge cycles that dominate this installation, the
+existing current-based efficiency table is the right level of model. `evse`
+adds a long-run AC↔pack cross-check (the ~0.86 median long-session ratio,
+including seasonal variation), but it does not replace the AC↔DC measurement
+from the Wallbox.
+
 ## Interpretation and limits
 
 - The steady-state voltage curve is repeatable enough to be worth further
