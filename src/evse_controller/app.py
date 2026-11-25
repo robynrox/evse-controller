@@ -295,12 +295,20 @@ history_entry_model = api.model('HistoryEntry', {
             'channel1': fields.Float(description='Secondary channel 1 power'),
             'channel2': fields.Float(description='Secondary channel 2 power')
         }))
-    }))
+    })),
+    'min': fields.Raw(description='Per-channel minimum in this bucket'),
+    'max': fields.Raw(description='Per-channel maximum in this bucket'),
+    'counts': fields.Raw(description='Samples per channel in this bucket')
 })
 
 history_model = api.model('History', {
     'entries': fields.List(fields.Nested(history_entry_model)),
-    'channel_metadata': fields.Nested(channel_metadata_model)
+    'channel_metadata': fields.Nested(channel_metadata_model),
+    'window_s': fields.Float(description='Requested window in seconds'),
+    'resolution_s': fields.Float(description='Bucket size in seconds'),
+    'from': fields.Float(description='Start of the requested window'),
+    'to': fields.Float(description='End of the requested window'),
+    'last_sample': fields.Float(description='Timestamp of the newest raw sample')
 })
 
 # No legacy model needed
@@ -404,8 +412,16 @@ class StatusResource(Resource):
 class HistoryResource(Resource):
     @status_ns.marshal_with(history_model)
     def get(self):
-        """Retrieve historical data from the EVSE controller"""
-        return evseController.getHistory()
+        """Retrieve historical data from the EVSE controller.
+
+        Optional ``window`` is seconds (default 300 when ``since`` is used)
+        and ``since`` is a Unix timestamp for incremental polling.
+        """
+        window = request.args.get('window', type=int)
+        since = request.args.get('since', type=float)
+        if window is not None:
+            window = max(60, min(86400, window))
+        return evseController.getHistory(window_s=window, since=since)
 
 
 

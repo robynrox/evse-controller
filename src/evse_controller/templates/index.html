@@ -283,6 +283,30 @@
         max-height: 500px;
     }
 
+    .chart-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0 4px;
+        font-size: 13px;
+        color: #444;
+    }
+
+    .chart-toolbar select {
+        padding: 5px 8px;
+        border: 1px solid #b8c0c8;
+        border-radius: 4px;
+        background: #fff;
+        font-size: 13px;
+    }
+
+    .chart-toolbar .chart-status {
+        margin-left: auto;
+        color: #666;
+        font-size: 12px;
+    }
+
     .svg-button-container {
         margin-top: 15px;
         display: flex;
@@ -531,6 +555,27 @@
 
 <!-- Tariff dashboard display area -->
 <div id="tariff-dashboard-area" style="min-height:90px;margin:10px 0;"></div>
+
+<div class="chart-toolbar">
+    <label for="chart-window">Graph period:</label>
+    <select id="chart-window">
+        <option value="300" selected>5 minutes</option>
+        <option value="900">15 minutes</option>
+        <option value="1800">30 minutes</option>
+        <option value="3600">1 hour</option>
+        <option value="7200">2 hours</option>
+        <option value="10800">3 hours</option>
+        <option value="14400">4 hours</option>
+        <option value="21600">6 hours</option>
+        <option value="28800">8 hours</option>
+        <option value="36000">10 hours</option>
+        <option value="43200">12 hours</option>
+        <option value="54000">15 hours</option>
+        <option value="64800">18 hours</option>
+        <option value="86400">24 hours</option>
+    </select>
+    <span id="chart-status" class="chart-status"></span>
+</div>
 
 <div id="chart" style="width:100%;height:550px;"></div>
 
@@ -968,10 +1013,33 @@
         }
     }
 
-    async function fetchHistory() {
-        const response = await fetch('/api/status/history');
-        const data = await response.json();
-        return processHistoryData(data.entries, data.channel_metadata);
+    let chartWindowSeconds = 300;
+    let chartEntries = [];
+    let chartMetadata = null;
+    let chartRange = null;
+    let chartLastTimestamp = null;
+
+    async function fetchHistory(windowSeconds, since) {
+        const params = new URLSearchParams({
+            window: String(windowSeconds)
+        });
+        if (since !== null && since !== undefined) {
+            params.set('since', String(since));
+        }
+        const response = await fetch('/api/status/history?' + params.toString());
+        if (!response.ok) {
+            throw new Error('History request failed');
+        }
+        return response.json();
+    }
+
+    function mergeHistoryEntries(existing, incoming) {
+        const byTimestamp = new Map();
+        existing.forEach(entry => byTimestamp.set(entry.timestamp, entry));
+        incoming.forEach(entry => byTimestamp.set(entry.timestamp, entry));
+        return Array.from(byTimestamp.values()).sort(
+            (left, right) => left.timestamp - right.timestamp
+        );
     }
 
     function processHistoryData(entries, metadata) {
@@ -984,7 +1052,7 @@
             for (const channelKey in channelConfigs[device]) {
                 const channelConfig = channelConfigs[device][channelKey];
                 if (channelConfig.in_use) {
-                    channels[channelConfig.name] = new Array(entries.length).fill(0);
+                    channels[channelConfig.name] = new Array(entries.length).fill(null);
                 }
             }
         }
@@ -996,11 +1064,10 @@
         const gridName = gridDevice && gridChannel ?
             metadata.channels[gridDevice][`channel${gridChannel}`]?.name : null;
 
-        // Process each entry
+        // Missing values stay null so a comms gap is a gap.
         entries.forEach((entry, index) => {
             const entryChannels = entry.channels || {};
 
-            // Process each configured channel
             for (const device in channelConfigs) {
                 const deviceData = entryChannels[device] || {};
 
@@ -1008,25 +1075,35 @@
                     const channelConfig = channelConfigs[device][channelKey];
                     if (channelConfig.in_use) {
                         const channelNum = parseInt(channelKey.replace('channel', ''));
-                        const power = deviceData[`channel${channelNum}`] || 0;
-                        channels[channelConfig.name][index] = power;
+                        const power = deviceData[`channel${channelNum}`];
+                        channels[channelConfig.name][index] =
+                            (power === undefined || power === null) ? null : power;
                     }
                 }
             }
         });
 
-        // Calculate home power only if we have grid and at least one other channel
+        // Calculate home power only where every contributing channel is present.
         let homePower = null;
         if (gridName && Object.keys(channels).length > 1) {
-            homePower = new Array(entries.length).fill(0);
+            homePower = new Array(entries.length).fill(null);
             for (let i = 0; i < entries.length; i++) {
                 let total = channels[gridName][i];
-                for (const [channelName, values] of Object.entries(channels)) {
-                    if (channelName !== gridName) {
-                        total -= values[i];
-                    }
+                if (total === null) {
+                    continue;
                 }
-                homePower[i] = total;
+                let complete = true;
+                for (const [channelName, values] of Object.entries(channels)) {
+                    if (channelName === gridName) {
+                        continue;
+                    }
+                    if (values[i] === null) {
+                        complete = false;
+                        break;
+                    }
+                    total -= values[i];
+                }
+                homePower[i] = complete ? total : null;
             }
         }
 
@@ -1049,6 +1126,7 @@
                 title: 'Time',
                 tickmode: 'auto',
                 nticks: 10,
+                range: chartRange || undefined,
                 titlefont: { size: isMobileDevice ? 12 : 14 },
                 tickfont: { size: isMobileDevice ? 10 : 12 }
             },
@@ -1080,33 +1158,76 @@
 
         let firstLoad = true;
 
-        async function updateChart() {
-            try {
-                const history = await fetchHistory();
-                const traces = [];
+        const windowSelect = document.getElementById('chart-window');
+        const chartStatus = document.getElementById('chart-status');
+        let chartRequestSeq = 0;
 
-                // Add a trace for each active channel
+        function formatSampleAge(seconds) {
+            if (seconds < 90) {
+                return Math.round(seconds) + 's';
+            }
+            if (seconds < 5400) {
+                return Math.round(seconds / 60) + ' min';
+            }
+            return (seconds / 3600).toFixed(1) + ' h';
+        }
+
+        async function refreshChart(reset) {
+            const requestSeq = ++chartRequestSeq;
+            try {
+                const since = reset ? null : chartLastTimestamp;
+                const data = await fetchHistory(chartWindowSeconds, since);
+                if (requestSeq !== chartRequestSeq) {
+                    return;
+                }
+                chartMetadata = data.channel_metadata || chartMetadata;
+                if (chartMetadata && !channelMetadata) {
+                    channelMetadata = chartMetadata;
+                }
+
+                const incoming = Array.isArray(data.entries) ? data.entries : [];
+                chartEntries = reset
+                    ? incoming.slice()
+                    : mergeHistoryEntries(chartEntries, incoming);
+
+                const from = data.from !== undefined
+                    ? data.from
+                    : (Date.now() / 1000 - chartWindowSeconds);
+                const to = data.to !== undefined
+                    ? data.to
+                    : Date.now() / 1000;
+                chartEntries = chartEntries.filter(
+                    entry => entry.timestamp >= from
+                );
+                chartLastTimestamp = chartEntries.length
+                    ? chartEntries[chartEntries.length - 1].timestamp
+                    : null;
+                chartRange = [new Date(from * 1000), new Date(to * 1000)];
+
+                const history = processHistoryData(
+                    chartEntries, chartMetadata || {}
+                );
+                const traces = [];
                 for (const [channelName, values] of Object.entries(history.channels)) {
                     traces.push({
                         x: history.timestamps,
                         y: values,
                         name: channelName,
-                        type: 'scatter'
+                        type: 'scatter',
+                        connectgaps: false
                     });
                 }
-
-                // Add home power trace if available
                 if (history.homePower) {
                     traces.push({
                         x: history.timestamps,
                         y: history.homePower,
                         name: 'Home',
-                        type: 'scatter'
+                        type: 'scatter',
+                        connectgaps: false
                     });
                 }
 
                 const layout = getLayout();
-
                 if (firstLoad) {
                     Plotly.newPlot('chart', traces, layout, {
                         displayModeBar: false,
@@ -1119,9 +1240,38 @@
                         staticPlot: true
                     });
                 }
+
+                if (chartStatus) {
+                    const lastSample = data.last_sample !== undefined
+                        ? data.last_sample
+                        : chartLastTimestamp;
+                    if (lastSample === null || lastSample === undefined) {
+                        chartStatus.textContent = 'No samples in this period';
+                    } else {
+                        const age = Math.max(
+                            0, Date.now() / 1000 - lastSample
+                        );
+                        chartStatus.textContent =
+                            'Last sample ' + formatSampleAge(age) + ' ago';
+                    }
+                }
             } catch (error) {
                 console.error('Error updating chart:', error);
+                if (chartStatus) {
+                    chartStatus.textContent = 'Could not load history';
+                }
             }
+        }
+
+        if (windowSelect) {
+            chartWindowSeconds = Number(windowSelect.value) || 300;
+            windowSelect.addEventListener('change', function () {
+                chartWindowSeconds = Number(windowSelect.value) || 300;
+                chartEntries = [];
+                chartLastTimestamp = null;
+                firstLoad = true;
+                refreshChart(true);
+            });
         }
 
         // Load channel metadata on initial page load
@@ -1447,13 +1597,13 @@
         }
 
         // Set up update intervals
-        setInterval(updateChart, 5000);  // Every 5 seconds; Plotly re-render is the heaviest request
+        setInterval(() => refreshChart(false), 5000);  // Incremental history poll
         setInterval(updateStatus, 1000); // Every 1 second to match measurement updates
         setInterval(updateTariffDisplay, 10000); // Every 10 seconds for tariff display
 
         // Initial calls
         loadChannelMetadata(); // Load metadata first
-        updateChart();
+        refreshChart(true);
         updateStatus();
         updateTariffDisplay();
 

@@ -598,6 +598,25 @@ target reachable without guessing tomorrow’s prices; after 16:00 the next plan
 can use the published series.
 
 
+##### Power history graph
+
+The dashboard graph has a **Graph period** selector: 5, 15 or 30 minutes; 1,
+2, 3, 4, 6, 8, 10, 12, 15, 18 or 24 hours. The selected period is a real
+wall-clock window, so a communications gap appears as a gap on the time axis
+rather than being compressed into the line.
+
+The server keeps a one-hour raw buffer and a 24-hour 10-second bucket buffer.
+Each request is downsampled to roughly 240–360 points; the API also returns
+per-channel minimum and maximum for each bucket so spikes can be shown later.
+The first request for a period returns the whole window. Subsequent polls send
+only the buckets since the last one received, and the browser merges them into
+the existing trace. `/api/status/history` keeps its original last-300-point
+response when called without parameters; `window` is seconds and `since` is the
+last bucket timestamp for incremental polling.
+
+The 24-hour buffer is in memory and starts filling when the controller starts;
+the short buffer is persisted with the existing history file.
+
 ##### Link health
 
 The dashboard status panel carries a compact **Link health** row, fed by the

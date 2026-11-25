@@ -57,6 +57,24 @@ def _render(
         )
 
 
+def test_dashboard_chart_has_selectable_periods():
+    body = _render()
+
+    assert 'id="chart-window"' in body
+    for seconds, label in (
+        ("300", "5 minutes"),
+        ("900", "15 minutes"),
+        ("1800", "30 minutes"),
+        ("3600", "1 hour"),
+        ("21600", "6 hours"),
+        ("43200", "12 hours"),
+        ("86400", "24 hours"),
+    ):
+        assert f'value="{seconds}"' in body
+        assert label in body
+    assert 'id="chart-status"' in body
+
+
 def test_dashboard_shows_the_three_control_modes():
     body = _render()
 

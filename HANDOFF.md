@@ -445,6 +445,14 @@ completed fixes.
   links to the dashboard, configuration and EV Readiness; the running
   controller may need a restart to use the new addresses and learning mode.
   Tests: `tests/test_setup_routes.py`.
+- **Dashboard power history.** `history_store.py` keeps a one-hour raw ring
+  and a 24-hour 10-second bucket ring. The dashboard's **Graph period**
+  selector covers 5 min–24 h; the server downsamples each request to roughly
+  240–360 points with per-channel min/max, and the browser keeps a fixed
+  wall-clock x-axis so a poll gap is visible. The first request returns the
+  whole window; later polls pass the last bucket timestamp as `since` and
+  receive only updated/new buckets. `/api/status/history` keeps its original
+  last-300-point response when called without parameters.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

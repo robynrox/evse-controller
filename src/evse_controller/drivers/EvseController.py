@@ -10,6 +10,7 @@ from evse_controller.utils.logging_config import debug, info, warning, error
 from evse_controller.utils.config import config
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.utils.config import config
+from evse_controller.history_store import HistoryStore
 from evse_controller.drivers.evse.wallbox.wallbox_api_with_ocpp import WallboxAPIWithOCPP
 from evse_controller.event_bus import EventBus, EventType
             
@@ -20,6 +21,7 @@ except ImportError:
     pass
 
 from collections import deque
+from typing import Optional
 import json
 import threading
 
@@ -95,6 +97,7 @@ class EvseController(PowerMonitorObserver):
         """
         # Add MAX_HISTORY_POINTS constant
         self.MAX_HISTORY_POINTS = 300
+        self.history_store = HistoryStore()
 
         # Initialize power monitors
         # Initialize primary Shelly
@@ -410,6 +413,15 @@ class EvseController(PowerMonitorObserver):
                     "entries": deque(data["entries"], maxlen=self.MAX_HISTORY_POINTS),
                     "channel_metadata": {}
                 }
+
+                # Seed the multi-resolution store from the saved short history.
+                store = getattr(self, "history_store", None)
+                if store is not None:
+                    for entry in self.history["entries"]:
+                        timestamp = entry.get("timestamp")
+                        channels = entry.get("channels")
+                        if timestamp is not None and isinstance(channels, dict):
+                            store.record(timestamp, channels)
 
                 # Update the metadata (will be overwritten anyway)
                 self._update_channel_metadata()
@@ -1201,6 +1213,11 @@ class EvseController(PowerMonitorObserver):
             while len(self.history["entries"]) > self.MAX_HISTORY_POINTS:
                 self.history["entries"].popleft()
 
+            store = getattr(self, "history_store", None)
+            if store is not None:
+                entry_timestamp = self.history["entries"][-1]["timestamp"]
+                store.record(entry_timestamp, channels_data)
+
         if not is_grid_monitor:
             # Update auxiliary power readings and return
             self.auxpower = power
@@ -1524,13 +1541,30 @@ class EvseController(PowerMonitorObserver):
         """
         self.dischargeCurrentBias = dischargeCurrentBias
 
-    def getHistory(self) -> dict:
+    def getHistory(
+        self,
+        window_s: Optional[int] = None,
+        since: Optional[float] = None,
+    ) -> dict:
         """
-        Returns the last 300 points (nominally 5 minutes) of historical data.
-        :return: A dictionary containing history entries and channel metadata.
+        Return dashboard power history.
+
+        With no arguments this preserves the original last-300-point response.
+        With ``window_s`` (and optionally ``since``) it returns a downsampled
+        time window from the multi-resolution store.  ``since`` includes the
+        current partial bucket so an incremental poll can replace it.
         """
         # Update metadata (in the future, this could be called only when config changes)
         self._update_channel_metadata()
+
+        store = getattr(self, "history_store", None)
+        if store is not None and (window_s is not None or since is not None):
+            result = store.query(
+                int(window_s or 300),
+                since=since,
+            )
+            result["channel_metadata"] = self.history["channel_metadata"]
+            return result
 
         # Create a new dictionary with the entries converted to a list for JSON serialization
         result = {

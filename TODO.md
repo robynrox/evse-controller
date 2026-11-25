@@ -8,10 +8,6 @@
 - [ ] Fix double running of EvseController's update function per second
 
 ## Medium Priority
-- [ ] Dashboard graph: selectable 5 min–24 h windows, server-side
-      downsampling (mean plus min/max envelope), a fixed time axis so comms
-      gaps are visible, and incremental polling from the last received sample
-      instead of resending the whole 300-point buffer each time
 - [ ] Make the is_empty SoC configurable
 - [ ] Soft SoC band / goldilocks penalty for the DP: configurable, off by
       default, with a per-slot convex penalty outside a comfort band and a
@@ -45,6 +41,8 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Dashboard graph: selectable 5 min–24 h windows, server-side
+      downsampling, a fixed time axis for comms gaps, and incremental polling
 - [x] Octopus Agile import and Agile Outgoing export presets, including
       region/product selection and per-slot prices
 - [x] EV Away energy estimate: miles/kWh plus per-session miles or direct
