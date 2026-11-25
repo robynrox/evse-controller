@@ -303,7 +303,10 @@ completed fixes.
   those slots idle and can carry an expected distance or direct energy figure.
   The estimate is stored on the session (`miles`, `energy_kwh`,
   `miles_per_kwh`, `margin_percent`), distributed as an exogenous SoC loss in
-  the DP and subtracted from the 23:30 projection. Config keys are
+  the DP and subtracted from the 23:30 projection. The DP rejects a transition
+  whose post-away SoC would fall below the configured discharge/export floor,
+  so it must reserve the trip energy before the run instead of spending down to
+  the hard protection floor. Config keys are
   `ev.miles_per_kwh` (default 3.5) and `ev.away_margin_percent` (default 10);
   the margin covers climate and other unknowns rather than asking for a
   temperature. Reconnect events record the measured `soc_delta` together with

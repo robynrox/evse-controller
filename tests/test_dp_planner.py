@@ -894,22 +894,26 @@ def test_ev_away_exogenous_loss_reduces_the_return_soc():
     assert result.actions[-1].soc_after == pytest.approx(55.0)
 
 
-def test_ev_away_loss_may_cross_the_protection_floor():
-    result = planner(target_soc_percent=None).plan(
+def test_ev_away_loss_reserves_the_discharge_floor():
+    result = planner(
+        target_soc_percent=None,
+        discharge_floor_percent=30.0,
+    ).plan(
         [
+            slot(0, import_p=10.0, export_p=5.0, load_kw=0.0),
             slot(
-                0,
+                1,
                 forced="idle",
                 session="ev_away",
-                exogenous_soc_delta_percent=-3.0,
-            )
+                exogenous_soc_delta_percent=-2.0,
+            ),
         ],
-        initial_soc_percent=26,
+        initial_soc_percent=30,
     )
 
     assert result.success
-    assert result.actions[0].kind == "idle"
-    assert result.final_soc == pytest.approx(23.0)
+    assert result.actions[0].kind == "charge"
+    assert result.final_soc >= 30.0
 
 
 def test_forced_max_discharge_uses_the_maximum_current():

@@ -989,11 +989,16 @@ class DpPlanner:
         ):
             return None
         if template.exogenous_steps:
-            # The EV can be driven below the normal protection floor or charge
-            # cap while it is away; only the physical 0–100% range applies.
+            # The EV can be driven below the normal protection floor while it
+            # is away, but the plan must still return with the pack at or above
+            # the configured export/buffer floor.  Otherwise a discharge before
+            # the trip could reserve nothing for the expected away energy.
             next_state = self._clamp_state(
                 next_state + template.exogenous_steps
             )
+            next_soc = next_state * self.soc_step_percent
+            if next_soc < self.discharge_floor_percent - 1e-9:
+                return None
         return next_state
 
     # -- action construction -------------------------------------------

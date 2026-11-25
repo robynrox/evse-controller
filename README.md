@@ -995,18 +995,18 @@ marketing:
   price the tariff can see, so it is deliberately not modelled or booked; the
   dashboard says the request is the reason for exporting.
 - **EV Away** (`ev_away`): the EV is expected to be disconnected. These slots
-  are left out of the 23:30 SoC projection and the export plan, because the
-  pack cannot supply the house or charge. This is a planning assumption only:
-  if the EV is still connected, the normal heuristic keeps running and may
-  charge or discharge it until the plug is removed or the slot ends. An away
-  session can optionally carry expected miles or a direct kWh figure. The
-  planner subtracts the estimated SoC from the pack for the away window, so a
-  readiness target after the return and the 23:30 projection see the lower
-  return SoC. The estimate uses `ev.miles_per_kwh` (default 3.5) plus
-  `ev.away_margin_percent` (default 10%) for climate control and other
-  unknowns. Leaving the fields blank keeps the old zero-loss behaviour. The
-  measured reconnect SoC is recorded with the session's estimate so effective
-  consumption can be learned later; there is no temperature input.
+  are forced idle, and an optional expected distance or direct kWh figure is
+  subtracted from the pack as an exogenous SoC loss. The DP must leave enough
+  energy before the run to return at or above the configured discharge/export
+  floor, and a readiness target after the return and the 23:30 projection see
+  the lower return SoC. This is a planning assumption only: if the EV is still
+  connected, the normal heuristic keeps running and may charge or discharge it
+  until the plug is removed or the slot ends. The estimate uses
+  `ev.miles_per_kwh` (default 3.5) plus `ev.away_margin_percent` (default 10%)
+  for climate control and other unknowns. Leaving the fields blank keeps the
+  old zero-loss behaviour. The measured reconnect SoC is recorded with the
+  session's estimate so effective consumption can be learned later; there is
+  no temperature input.
 
 Five further kinds are temporary control sessions rather than price overlays:
 

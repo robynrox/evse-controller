@@ -174,8 +174,10 @@ or at least clearly labelled as part of the EV Away estimate.
   displays the planned kWh and approximated SoC loss. The API accepts the same
   values and persists the canonical energy.
 - `PlannerSlot.exogenous_soc_delta_percent` carries the distributed loss; the
-  DP applies it to every action, including forced idle, and may cross the
-  protection floor because the car is physically away.
+  DP applies it to every action, including forced idle. The transition is
+  rejected if the post-away state falls below the configured discharge/export
+  floor, so the planner must reserve enough energy before the trip rather than
+  silently spending down to the hard protection floor.
 - The 23:30 projection spreads the loss across the away slots and clamps the
   pack at 0%.
 - On reconnect, the vehicle event records the measured `soc_delta`, duration,
