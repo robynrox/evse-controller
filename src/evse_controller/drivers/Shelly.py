@@ -108,6 +108,10 @@ class PowerMonitorShelly(PowerMonitorInterface):
             self.negEnergyJoulesCh1,
         )
 
+    def is_configured(self) -> bool:
+        """Whether this device has an address to poll."""
+        return bool(str(self._url_getter() or "").strip())
+
     def getPowerLevels(self):
         if (time.time() - self.lastUpdate) > 0.9:
             lastUnixtime = self.unixtime

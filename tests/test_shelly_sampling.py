@@ -32,6 +32,12 @@ def test_last_power_is_cached_and_does_not_fetch():
     assert power.voltage == 241.0
 
 
+def test_is_configured_tracks_the_url():
+    assert PowerMonitorShelly(lambda: "shelly.local").is_configured()
+    assert not PowerMonitorShelly(lambda: "").is_configured()
+    assert not PowerMonitorShelly(lambda: "   ").is_configured()
+
+
 def test_fetch_data_stops_after_one_retry():
     monitor = _monitor()
 

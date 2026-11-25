@@ -43,6 +43,14 @@ class PowerMonitorPollingThread(threading.Thread):
                     debug(f"PowerMonitor thread heartbeat - {self.name} - Thread alive and running")
                     last_heartbeat = current_time
                 
+                # A configured monitor is polled and notified.  A Shelly slot
+                # with no URL still has a thread, but it must not call the
+                # controller update path every second.
+                configured = getattr(self.powerMonitor, "is_configured", None)
+                if callable(configured) and not configured():
+                    time.sleep(1)
+                    continue
+
                 # Calculate next second boundary by rounding up to next second
                 start_of_next_second = (now + datetime.timedelta(seconds=1)).replace(microsecond=0)
                 # Do the work
