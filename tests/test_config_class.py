@@ -445,6 +445,30 @@ class TestConfig:
         assert config.get_channel_abbreviation("primary", 1) == "SP1"
         assert config.is_channel_in_use("primary", 1) is False
 
+    def test_channel_dict_fills_a_partial_configuration(self):
+        """A wizard-created partial channel map must still render fully."""
+        config = Config()
+        _ = config.WALLBOX_URL
+        config._config_data["shelly"] = {
+            "secondary_url": "192.168.1.186",
+            "channels": {
+                "primary": {
+                    "channel1": {
+                        "name": "Grid",
+                        "abbreviation": "Grid",
+                        "in_use": True,
+                    }
+                }
+            },
+        }
+
+        channels = config.as_dict()["shelly"]["channels"]
+
+        assert channels["primary"]["channel1"]["name"] == "Grid"
+        assert channels["primary"]["channel2"]["name"] == "Channel 2"
+        assert channels["secondary"]["channel1"]["in_use"] is True
+        assert channels["secondary"]["channel2"]["abbreviation"] == "Ch2"
+
     def test_backward_compatibility_for_use_simulator_flag(self):
         """Test that missing use_simulator flag is handled correctly"""
         # Save original state

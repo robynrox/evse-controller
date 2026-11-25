@@ -1629,41 +1629,42 @@ class Config:
 
     # Channel-related methods
     def _get_channels_dict(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """Get the channels configuration as a dictionary.
+        """Get a complete channel configuration.
 
-        Returns:
-            A dictionary containing the channel configuration
+        The configured file can contain only the devices or channels that have
+        been touched (the setup wizard, for example, creates just the assigned
+        grid/EVSE channel).  The configuration page renders both Shelly
+        devices, so fill the missing entries with defaults instead of
+        returning a partial dict that makes the template fail.
         """
         self._ensure_initialized()
-        if "channels" not in self._config_data.get("shelly", {}):
-            # Create default channel structure for backward compatibility
-            return {
-                "primary": {
-                    "channel1": {
-                        "name": "Channel 1",
-                        "abbreviation": "Ch1",
-                        "in_use": True
-                    },
-                    "channel2": {
-                        "name": "Channel 2",
-                        "abbreviation": "Ch2",
-                        "in_use": True
-                    }
-                },
-                "secondary": {
-                    "channel1": {
-                        "name": "Channel 1",
-                        "abbreviation": "Ch1",
-                        "in_use": True
-                    },
-                    "channel2": {
-                        "name": "Channel 2",
-                        "abbreviation": "Ch2",
-                        "in_use": True
-                    }
+        defaults = {
+            "channel1": {
+                "name": "Channel 1",
+                "abbreviation": "Ch1",
+                "in_use": True,
+            },
+            "channel2": {
+                "name": "Channel 2",
+                "abbreviation": "Ch2",
+                "in_use": True,
+            },
+        }
+        shelly = self._config_data.get("shelly", {})
+        configured = (
+            shelly.get("channels", {}) if isinstance(shelly, dict) else {}
+        )
+        channels: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for device in ("primary", "secondary"):
+            device_config = configured.get(device) or {}
+            channels[device] = {}
+            for channel_key, channel_default in defaults.items():
+                channel_config = device_config.get(channel_key) or {}
+                channels[device][channel_key] = {
+                    **channel_default,
+                    **channel_config,
                 }
-            }
-        return self._config_data["shelly"]["channels"]
+        return channels
 
     def get_channel_name(self, device: str, channel: int) -> str:
         """Get the name for a specific channel.
