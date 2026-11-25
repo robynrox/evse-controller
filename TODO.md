@@ -23,6 +23,10 @@
       [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
+- [ ] Charge-acceptance SoC study: a 10–30 s max-current probe is not enough;
+      test a 2–5 minute stable sample or a relative voltage delta between trips,
+      and repeat with winter data. Report:
+      [`reports/efficiency/CHARGE_ACCEPTANCE_SOC.md`](reports/efficiency/CHARGE_ACCEPTANCE_SOC.md)
 - [ ] Improve Docker container support and testing
 - [ ] Add authentication to web interface for remote access security
 - [ ] Improve accessibility features in web interface
