@@ -10846,9 +10846,6 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         mode uses the same break-even floor as the normal self-use branch, so
         a high export price can close it instead of accepting a 3 A trickle.
         """
-        if self.SMART_OCPP_OPERATION:
-            self._ocpp_check_turn_on(state, dayMinute)
-
         if not hasattr(self, 'evseController'):
             self.evseController = evseController
             self.original_calculation_method = evseController.use_new_current_calculation
@@ -11219,7 +11216,52 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             self.evseController.use_new_current_calculation = self.original_calculation_method
 
     # === OCPP Management Methods (copied from IOCTGO) ===
-    
+
+    def idle_ocpp_window(self, now: datetime | None = None):
+        """Return the current contiguous planned-idle run, if enabled.
+
+        The run is bounded by the current plan's known slots.  Free-import,
+        grid-support and EV-away sessions, off-peak charging and any planned
+        charge/export/follow action all break the run.
+        """
+        if not config.OCPP_IDLE_ENABLED or not self.AUTO_OCPP_SUPPORTED:
+            return None
+        actions = dict(self._planned_slot_actions)
+        if not actions:
+            return None
+        now = now or self.get_current_datetime()
+        slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        plan_start = min(actions)
+        horizon = max(actions)
+        if slot < plan_start or slot > horizon:
+            return None
+
+        free = self._free_import_slots_today()
+        grid = self._grid_support_slots_today()
+        away = self._away_slots_today()
+
+        def planned_idle(index: int) -> bool:
+            if index in free or index in grid or index in away:
+                return False
+            if self.is_off_peak(index * 30):
+                return False
+            return actions.get(index) in (None, "idle")
+
+        if not planned_idle(slot):
+            return None
+        start_slot = slot
+        while start_slot > plan_start and planned_idle(start_slot - 1):
+            start_slot -= 1
+        end_slot = slot + 1
+        while end_slot <= horizon and planned_idle(end_slot):
+            end_slot += 1
+
+        midnight = datetime.combine(now.date(), time())
+        return (
+            midnight + timedelta(minutes=30 * start_slot),
+            midnight + timedelta(minutes=30 * end_slot),
+        )
+
     def should_enable_ocpp_due_to_soc(self, state):
         """Check if OCPP should be enabled due to low SoC."""
         if not self.AUTO_OCPP_SUPPORTED:

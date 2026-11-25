@@ -1041,6 +1041,25 @@ plugged back in, a temporary 3 A SoC probe runs until the reported charge
 level changes (or a 90-second timeout), then control returns to SMART. Every
 other override also names itself in the dashboard state line.
 
+##### Idle OCPP handoff
+
+An Intelligent Octopus Go installation can hand the Wallbox to OCPP during a
+planned run of idle slots. The switch happens at a random point 0–120 seconds
+after the run starts and 60–180 seconds before it ends; contiguous idle slots
+stay in OCPP through the middle, so a multi-slot run is one handoff rather than
+one per slot. The randomness avoids a fleet of controllers switching in
+lockstep.
+
+```yaml
+ocpp:
+  idle_enabled: true
+```
+
+A slot counts as idle only when the current plan has no charge, export,
+free-import, grid-support or EV-away action for it and it is not off-peak.
+A manual command or a scheduled control session outranks the idle handoff.
+The setting replaces the old SoC/time Smart OCPP trigger.
+
 ##### Automatic OCPP handoff
 
 The `ocpp` section can schedule supplier handoffs without manual session
@@ -1054,11 +1073,16 @@ ocpp:
   duration_slots: 2      # one hour
   window_start: "23:30"
   window_end: "05:30"
+  auto_randomise: false  # optional 0-120 s / 60-180 s switch window
 ```
 
 When a handoff is due, the scheduler picks the cheapest contiguous block of
 the requested length inside the window, skips blocks that overlap any existing
 session, and adds a normal OCPP session marked **Auto** on the sessions page.
+`auto_randomise` is independent of `idle_enabled`: when enabled, an automatic
+session also uses the randomised switch-in and switch-out times. If an idle
+handoff already owns OCPP when a session starts, the session adopts it rather
+than switching OCPP off and on again.
 The interval is measured from the last handoff's start date and is clamped to
 30 days, so a handoff happens at least monthly even if a longer interval is
 entered. Manual OCPP sessions count towards the interval. Deleting or disabling

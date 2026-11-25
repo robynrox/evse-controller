@@ -7243,6 +7243,11 @@ class TestStandardOctopusGo:
                 side, {}
             )
             monkeypatch.setitem(prices, tier, value)
+        # Keep this class independent of floor values another test left in
+        # the shared config.
+        monkeypatch.setattr(config, "HARD_FLOOR_SOC", 25)
+        monkeypatch.setattr(config, "BUFFER_FLOOR_SOC", 45)
+        monkeypatch.setattr(config, "BULK_FLOOR_SOC", 50)
 
     def test_cheap_window_is_0030_to_0530(self):
         tariff = _build_tariff()
@@ -7849,3 +7854,54 @@ class TestJustInTimeExportRecharge:
             + tariff.EXPORT_RECHARGE_BUFFER_SOC
             - 1e-9
         )
+
+
+class TestIdleOcppWindow:
+    def test_contiguous_idle_slots_form_one_run(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._planned_slot_actions = {
+            24: "idle",
+            25: "idle",
+            26: "export",
+        }
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        window = agile_tariff.idle_ocpp_window(now)
+
+        assert window is not None
+        assert window[0].strftime("%H:%M") == "12:00"
+        assert window[1].strftime("%H:%M") == "13:00"
+
+    def test_a_planned_action_breaks_the_idle_run(self, agile_tariff, monkeypatch):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._planned_slot_actions = {
+            24: "idle",
+            25: "charge",
+            26: "idle",
+        }
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        window = agile_tariff.idle_ocpp_window(now)
+
+        assert window is not None
+        assert window[0].strftime("%H:%M") == "12:00"
+        assert window[1].strftime("%H:%M") == "12:30"
+
+    def test_disabled_or_unplanned_idle_handoff_returns_none(
+        self, agile_tariff, monkeypatch
+    ):
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+        agile_tariff._planned_slot_actions = {24: "idle"}
+
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", False)
+        assert agile_tariff.idle_ocpp_window(now) is None
+
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._planned_slot_actions = {}
+        assert agile_tariff.idle_ocpp_window(now) is None

@@ -13,6 +13,7 @@ from evse_controller.drivers.EvseController import ControlState, EvseController,
 from evse_controller.drivers.Shelly import PowerMonitorShelly
 from evse_controller.tariffs.manager import TariffManager
 import time
+import random
 import math
 import queue
 import threading
@@ -46,6 +47,7 @@ from evse_controller.energy_sessions import (
 )
 from evse_controller.ev_readiness_schedule import ev_readiness_scheduler
 from evse_controller.ocpp_auto import maybe_schedule_auto_ocpp
+from evse_controller.ocpp_timing import OcppSwitchWindow, switch_window
 from evse_controller.ocpp_slot import (
     OcppChargeTracker,
     should_flag_ocpp_slot,
@@ -66,6 +68,12 @@ active_override: Optional[ControlOverride] = None
 #: A control session the user explicitly dismissed by choosing SMART.  It is
 #: skipped until its window ends, so the manual command really does win.
 _dismissed_session_id: Optional[str] = None
+_idle_ocpp_window: Optional[OcppSwitchWindow] = None
+_idle_ocpp_key: Optional[tuple[datetime, datetime]] = None
+_idle_ocpp_rng = random.Random()
+_idle_ocpp_retry_after: Optional[datetime] = None
+_idle_ocpp_dismissed_key: Optional[tuple[datetime, datetime]] = None
+_session_ocpp_windows: dict[str, OcppSwitchWindow] = {}
 
 #: Last Wallbox state seen by the 1-second transition watcher.
 _last_evse_state: Optional[EvseState] = None
@@ -572,6 +580,97 @@ def _enter_ocpp_override(
     return True
 
 
+def _release_idle_ocpp(reason: str) -> None:
+    """Release an idle-slot OCPP handoff and return control to smart."""
+    if active_override is None or active_override.source != "idle_ocpp":
+        return
+    _clear_override(reason)
+    _ensure_tariff_active()
+    _set_exec_state(ExecState.SMART)
+    try:
+        ensure_ocpp_disabled()
+    except Exception as exc:
+        error(f"Failed to disable OCPP after idle handoff: {exc}")
+    _apply_exec_state(ExecState.SMART)
+
+
+def _session_ocpp_window(session) -> Optional[OcppSwitchWindow]:
+    """Randomised switch window for an automatic OCPP session."""
+    if (
+        not config.OCPP_AUTO_RANDOMISE
+        or not getattr(session, "auto", False)
+        or session.kind != OCPP_SESSION
+    ):
+        return None
+    window = _session_ocpp_windows.get(session.id)
+    if (
+        window is None
+        or window.start != session.start
+        or window.end != session.end
+    ):
+        window = switch_window(
+            session.start, session.end, rng=_idle_ocpp_rng
+        )
+        _session_ocpp_windows[session.id] = window
+    return window
+
+
+def _dismiss_idle_ocpp() -> None:
+    """Let a manual SMART command suppress the current idle run."""
+    global _idle_ocpp_dismissed_key
+    _idle_ocpp_dismissed_key = _idle_ocpp_key
+
+
+def _check_idle_ocpp(now: Optional[datetime] = None) -> None:
+    """Arm or release OCPP for the current planned-idle run."""
+    global _idle_ocpp_window, _idle_ocpp_key, _idle_ocpp_retry_after
+
+    now = now or datetime.now()
+    tariff = tariffManager.get_tariff()
+    window = tariff.idle_ocpp_window(now) if tariff is not None else None
+    if window is None:
+        _idle_ocpp_window = None
+        _idle_ocpp_key = None
+        _idle_ocpp_retry_after = None
+        _release_idle_ocpp("idle slot window ended")
+        return
+    if _idle_ocpp_retry_after is not None and now < _idle_ocpp_retry_after:
+        return
+
+    key = (window[0], window[1])
+    if key != _idle_ocpp_key:
+        _idle_ocpp_key = key
+        if _idle_ocpp_dismissed_key != key:
+            _idle_ocpp_dismissed_key = None
+        _idle_ocpp_window = switch_window(
+            window[0], window[1], rng=_idle_ocpp_rng
+        )
+    if _idle_ocpp_dismissed_key == key:
+        if active_override is not None and active_override.source == "idle_ocpp":
+            _release_idle_ocpp("idle OCPP dismissed")
+        return
+
+    if active_override is not None and active_override.source != "idle_ocpp":
+        return
+    if _idle_ocpp_window is None:
+        return
+    if active_override is not None:
+        if not _idle_ocpp_window.active(now):
+            _release_idle_ocpp("idle OCPP switch-out")
+        return
+    if session_store.control_session(now) is not None:
+        return
+    if _idle_ocpp_window.active(now):
+        if _enter_ocpp_override(
+            "idle slot OCPP handoff",
+            source="idle_ocpp",
+            expires_at=_idle_ocpp_window.switch_out,
+        ):
+            _idle_ocpp_retry_after = None
+        else:
+            _idle_ocpp_retry_after = now + timedelta(minutes=1)
+
+
 def _sync_session_override(now: datetime) -> None:
     """Arm or release a scheduled control session.
 
@@ -585,42 +684,78 @@ def _sync_session_override(now: datetime) -> None:
     if session is not None:
         if _dismissed_session_id == session.id:
             return
-        if active_override is not None and active_override.source != "session":
+        if active_override is not None and active_override.source not in (
+            "session", "idle_ocpp"
+        ):
             return
 
         desired = _SESSION_CONTROL_MODES.get(session.kind)
         if desired is None:
             return
         reason = f"session {session.id} {session.label}"
+        window = _session_ocpp_window(session)
+        expiry = window.switch_out if window is not None else session.end
+        if window is not None and not window.active(now):
+            if (
+                active_override is not None
+                and active_override.source == "session"
+                and active_override.reason == reason
+            ):
+                info("CONTROL SESSION OCPP SWITCH-OUT, resuming smart control")
+                _clear_override("session OCPP switch-out")
+                _ensure_tariff_active()
+                _set_exec_state(ExecState.SMART)
+                ensure_ocpp_disabled()
+                _apply_exec_state(ExecState.SMART)
+            return
         if (
             active_override is not None
             and active_override.mode == desired
             and active_override.reason == reason
-            and active_override.expires_at == session.end
+            and active_override.expires_at == expiry
         ):
             return
 
         if desired == ExecState.OCPP:
+            if (
+                active_override is not None
+                and active_override.source == "idle_ocpp"
+                and active_override.mode == ExecState.OCPP
+            ):
+                # Idle OCPP already owns the hardware.  Adopt the session
+                # rather than switching OCPP off and on again.
+                active_override.source = "session"
+                active_override.reason = reason
+                active_override.expires_at = expiry
+                info("CONTROL Idle OCPP absorbed by scheduled session")
+                return
             _enter_ocpp_override(
-                reason, source="session", expires_at=session.end
+                reason, source="session", expires_at=expiry
             )
         else:
+            if (
+                active_override is not None
+                and active_override.source == "idle_ocpp"
+            ):
+                ensure_ocpp_disabled()
             _set_override(
                 desired,
                 reason,
                 source="session",
-                expires_at=session.end,
+                expires_at=expiry,
             )
         return
 
     if _dismissed_session_id is not None:
         _dismissed_session_id = None
+    _session_ocpp_windows.clear()
 
     if active_override is not None and active_override.source == "session":
         info("CONTROL SESSION ENDED, resuming smart tariff control")
         _clear_override("session ended")
         _ensure_tariff_active()
         _set_exec_state(ExecState.SMART)
+        ensure_ocpp_disabled()
         _apply_exec_state(ExecState.SMART)
 
 
@@ -1114,6 +1249,7 @@ def main():
                 case "s" | "smart":
                     ensure_ocpp_disabled()
                     _dismiss_active_session()
+                    _dismiss_idle_ocpp()
                     _clear_override("smart mode")
                     info("Entering smart tariff controller state")
                     tariffManager.start_tariff()
@@ -1238,6 +1374,7 @@ def main():
         # Watch unplug/reconnect once a second.  A short unplug can fall
         # entirely between two 20-second control ticks.
         _check_evse_transition()
+        _check_idle_ocpp()
 
         now = time.localtime()
         nowInSeconds = time.time()

@@ -148,10 +148,11 @@ def test_ocpp_is_only_shown_for_intelligent_go(app):
     go = _render(app, "octopus_go")
     agile = _render(app, "agile_import")
 
-    assert 'id="ioctgo_smart_ocpp_operation"' in iog
-    assert 'id="ioctgo_smart_ocpp_operation"' not in cosy
-    assert 'id="ioctgo_smart_ocpp_operation"' not in go
-    assert 'id="ioctgo_smart_ocpp_operation"' not in agile
+    assert 'id="ocpp_idle_enabled"' in iog
+    assert 'name="ocpp[auto_randomise]"' in iog
+    assert 'id="ocpp_idle_enabled"' not in cosy
+    assert 'id="ocpp_idle_enabled"' not in go
+    assert 'id="ocpp_idle_enabled"' not in agile
 
 
 def test_cosy_solar_cap_is_cosy_only(app):

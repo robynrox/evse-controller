@@ -806,43 +806,32 @@
 
     {% if is_iog %}
     <div class="config-section">
-        <h2>Intelligent Octopus Go OCPP Configuration</h2>
-        <p>Only Intelligent Octopus Go uses OCPP mode. Standard Octopus Go, Cosy Octopus and Flux use the same controller family but never auto-trigger OCPP.</p>
+        <h2>Idle OCPP handoff</h2>
+        <p>
+            When the plan has a run of idle slots, hand the Wallbox to the
+            supplier's OCPP schedule for that run. The switch happens at a
+            random point 0–120 seconds after the run starts and 60–180 seconds
+            before it ends, so a fleet of controllers does not switch in
+            lockstep. Contiguous idle slots stay in OCPP through the middle.
+        </p>
         <div class="form-group">
             <label class="checkbox-label">
-                <input type="checkbox" id="ioctgo_smart_ocpp_operation" name="tariffs.ioctgo[smart_ocpp_operation]" 
-                    {% if config.tariffs.ioctgo.smart_ocpp_operation %}checked{% endif %}>
-                Enable Smart OCPP Operation
+                <input type="checkbox" id="ocpp_idle_enabled"
+                       name="ocpp[idle_enabled]"
+                       {% if config.ocpp.get('idle_enabled') %}checked{% endif %}>
+                Enable OCPP in idle slots
             </label>
-            <small>Flag to enable intelligent OCPP management based on SoC and time</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_ocpp_enable_soc_threshold">OCPP Enable SoC Threshold (%):</label>
-            <input type="number" id="ioctgo_ocpp_enable_soc_threshold" name="tariffs.ioctgo[ocpp_enable_soc_threshold]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_enable_soc_threshold }}" min="0" max="100" step="1">
-            <small>Enable OCPP when SoC drops below this level</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_ocpp_disable_soc_threshold">OCPP Disable SoC Threshold (%):</label>
-            <input type="number" id="ioctgo_ocpp_disable_soc_threshold" name="tariffs.ioctgo[ocpp_disable_soc_threshold]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_disable_soc_threshold }}" min="0" max="100" step="1">
-            <small>Disable OCPP in the next half hour slot when SoC rises to this level</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_ocpp_enable_time">OCPP Enable Time (HH:MM):</label>
-            <input type="text" id="ioctgo_ocpp_enable_time" name="tariffs.ioctgo[ocpp_enable_time]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_enable_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to enable OCPP if SoC does not fall to the lower limit. Default is 23:30</small>
-        </div>
-        <div class="form-group">
-            <label for="ioctgo_ocpp_disable_time">OCPP Disable Time (HH:MM):</label>
-            <input type="text" id="ioctgo_ocpp_disable_time" name="tariffs.ioctgo[ocpp_disable_time]" 
-                   value="{{ config.tariffs.ioctgo.ocpp_disable_time }}" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="HH:MM">
-            <small>Time to disable OCPP even if the SoC does not rise to the desired level.</small>
+            <small>
+                This replaces the old SoC/time Smart OCPP trigger. It only
+                applies to Intelligent Octopus Go. A manual command or a
+                scheduled control session still outranks it.
+            </small>
         </div>
         <div class="form-group">
             <div class="notification">
-                <strong>Note:</strong> After changing any of these parameters, you must switch away from the Intelligent Octopus Go tariff and back to it (e.g., go to PAUSE mode and then back to the tariff) for changes to take effect.
+                The idle switch uses the current planner/export plan. A slot
+                with a planned charge, export, free-import, grid-support or
+                EV-away action is not idle.
             </div>
         </div>
     </div>
@@ -1041,6 +1030,18 @@
                 Enable automatic OCPP handoff
             </label>
             <small>Only Intelligent Octopus Go uses OCPP. Standard Go, Cosy and Flux do not auto-trigger it.</small>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="ocpp[auto_randomise]"
+                    {% if config.ocpp.get('auto_randomise') %}checked{% endif %}>
+                Randomise automatic handoff switch times
+            </label>
+            <small>
+                Separate from the idle-slot setting. Applies the same
+                0–120 s start and 60–180 s end delays to automatic OCPP
+                sessions.
+            </small>
         </div>
         <div class="form-group">
             <label for="ocpp_frequency_days">Interval in days (1 = daily, 7 = weekly, maximum 30):</label>

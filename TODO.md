@@ -35,6 +35,9 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Idle OCPP handoff with randomised switch-in/out timings, replacing the
+      old SoC/time Smart OCPP trigger; automatic handoff timing is separately
+      configurable
 - [x] Dual device addressing: IP plus verified hostname fallback for the
       Wallbox and both Shelly devices, with identity checks and persistence
 - [x] Ignore updates from unconfigured Shelly devices, avoiding duplicate

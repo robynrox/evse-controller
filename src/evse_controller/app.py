@@ -897,17 +897,6 @@ def config_page():
                 request.form.get('tariffs.ioctgo[battery_capacity_kwh]'),
                 config.IOCTGO_BATTERY_CAPACITY_KWH,
             )
-            config.IOCTGO_SMART_OCPP_OPERATION = bool(request.form.get('tariffs.ioctgo[smart_ocpp_operation]'))
-            config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD = _form_int(
-                request.form.get('tariffs.ioctgo[ocpp_enable_soc_threshold]'),
-                config.IOCTGO_OCPP_ENABLE_SOC_THRESHOLD,
-            )
-            config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD = _form_int(
-                request.form.get('tariffs.ioctgo[ocpp_disable_soc_threshold]'),
-                config.IOCTGO_OCPP_DISABLE_SOC_THRESHOLD,
-            )
-            config.IOCTGO_OCPP_ENABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_enable_time]', '23:30')
-            config.IOCTGO_OCPP_DISABLE_TIME = request.form.get('tariffs.ioctgo[ocpp_disable_time]', '11:00')
 
             # Update Octopus Agile Outgoing settings
             max_export_power = request.form.get('tariffs.ioctgo[max_export_power_kw]')
@@ -1179,6 +1168,12 @@ def config_page():
             # Automatic supplier OCPP handoff.
             config.OCPP_AUTO_ENABLED = (
                 request.form.get('ocpp[auto_enabled]') == 'on'
+            )
+            config.OCPP_IDLE_ENABLED = (
+                request.form.get('ocpp[idle_enabled]') == 'on'
+            )
+            config.OCPP_AUTO_RANDOMISE = (
+                request.form.get('ocpp[auto_randomise]') == 'on'
             )
             frequency = request.form.get('ocpp[frequency_days]')
             if frequency is not None:

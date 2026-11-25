@@ -696,6 +696,28 @@ class Config:
         )
     )
 
+    #: Hand the Wallbox to OCPP during planned idle slots.  The switch times
+    #: are randomised inside the slot run; this replaces the old SoC/time
+    #: smart-OCPP trigger.
+    OCPP_IDLE_ENABLED = property(
+        lambda self: bool(
+            self._get_config_value("ocpp", "idle_enabled", False)
+        ),
+        lambda self, value: self._set_config_value(
+            "ocpp", "idle_enabled", bool(value)
+        ),
+    )
+
+    #: Apply the same randomised switch window to automatic OCPP sessions.
+    OCPP_AUTO_RANDOMISE = property(
+        lambda self: bool(
+            self._get_config_value("ocpp", "auto_randomise", False)
+        ),
+        lambda self, value: self._set_config_value(
+            "ocpp", "auto_randomise", bool(value)
+        ),
+    )
+
     #: Learning mode: ``off`` disables the planner, ``preview`` records the
     #: dynamic-programming plan without changing control, and
     #: ``control_hist``/``control_comp`` put the DP in control.
@@ -1893,6 +1915,8 @@ class Config:
                 'duration_slots': self.OCPP_AUTO_DURATION_SLOTS,
                 'window_start': self.OCPP_AUTO_WINDOW_START,
                 'window_end': self.OCPP_AUTO_WINDOW_END,
+                'idle_enabled': self.OCPP_IDLE_ENABLED,
+                'auto_randomise': self.OCPP_AUTO_RANDOMISE,
             },
             'learning': {
                 'mode': self.LEARNING_MODE,

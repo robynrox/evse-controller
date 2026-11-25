@@ -342,6 +342,14 @@ completed fixes.
   marked `auto`. The interval is measured from the last handoff's start date
   and clamped to 30 days; manual OCPP sessions count towards it. The schedule
   is re-evaluated on the 20-second control tick and only does work when due.
+- **Idle OCPP handoff.** `ocpp_timing.py` supplies a randomised switch window
+  (0–120 s in, 60–180 s out). The tariff's `idle_ocpp_window()` finds the
+  current contiguous planned-idle run from `_planned_slot_actions`, excluding
+  off-peak, free-import, grid-support and EV-away slots. The one-second
+  controller watcher arms an `idle_ocpp` override inside that window and
+  releases it at switch-out; an automatic OCPP session adopts an existing idle
+  handoff instead of toggling OCPP again. The optional `ocpp.auto_randomise`
+  switch applies the same timing to automatic sessions independently.
 - **Link health.** `poll_health.py` keeps a bounded rolling history of
   successful/failed polls for each Shelly and the Wallbox. `/api/ext_status`
   returns 1/5/60-minute success rates and the age of the last success, so the

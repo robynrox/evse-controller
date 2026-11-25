@@ -519,6 +519,18 @@ class TestConfig:
         assert address["ip"] == "192.168.1.181"
         assert address["hostname"] == "WB123456.local"
 
+    def test_idle_ocpp_settings_default_and_persist(self):
+        config = Config()
+        _ = config.WALLBOX_URL
+
+        assert config.OCPP_IDLE_ENABLED is False
+        assert config.OCPP_AUTO_RANDOMISE is False
+        config.OCPP_IDLE_ENABLED = True
+        config.OCPP_AUTO_RANDOMISE = True
+        ocpp = config.as_dict()["ocpp"]
+        assert ocpp["idle_enabled"] is True
+        assert ocpp["auto_randomise"] is True
+
     def test_backward_compatibility_for_use_simulator_flag(self):
         """Test that missing use_simulator flag is handled correctly"""
         # Save original state
