@@ -28,6 +28,8 @@ def _controller() -> EvseController:
 
 def _config(**overrides) -> SimpleNamespace:
     values = {
+        "SHELLY_PRIMARY_URL": "primary.local",
+        "SHELLY_SECONDARY_URL": "secondary.local",
         "SHELLY_GRID_DEVICE": "primary",
         "SHELLY_GRID_CHANNEL": 1,
         "SHELLY_EVSE_DEVICE": "primary",
@@ -138,6 +140,64 @@ class TestConfiguredChannels:
 
 
 class TestControllerUpdate:
+    def test_unconfigured_secondary_monitor_is_ignored(self, monkeypatch):
+        """Only a configured Shelly should run the update path."""
+        controller = _controller()
+        controller.pmon, controller.pmon2 = object(), object()
+        controller._feed_daily_report = Mock()
+        monkeypatch.setattr(
+            evse_module,
+            "config",
+            _config(SHELLY_SECONDARY_URL=""),
+        )
+
+        controller.update(controller.pmon2, Power(ch1Watts=0, ch2Watts=0))
+
+        controller._feed_daily_report.assert_not_called()
+
+    def test_measurements_omit_an_unconfigured_secondary_device(
+        self, monkeypatch
+    ):
+        class MeasurementConfig:
+            SHELLY_PRIMARY_URL = "primary.local"
+            SHELLY_SECONDARY_URL = ""
+            SHELLY_GRID_DEVICE = "primary"
+            SHELLY_GRID_CHANNEL = 1
+            SHELLY_EVSE_DEVICE = ""
+            SHELLY_EVSE_CHANNEL = None
+
+            @staticmethod
+            def is_channel_in_use(device, channel):
+                return True
+
+            @staticmethod
+            def get_channel_abbreviation(device, channel):
+                return f"{device[0]}{channel}"
+
+        monkeypatch.setattr(evse_module, "config", MeasurementConfig())
+        controller = _controller()
+        controller.evseCurrent = 0
+        controller.get_wallbox_state_label = Mock(return_value="STANDBY")
+        controller.evse = Mock()
+        controller.evse.get_state.return_value = SimpleNamespace(
+            ac_power=0,
+            ac_voltage=0,
+            ac_current=0,
+            dc_voltage=0,
+            dc_current=0,
+            efficiency=0,
+        )
+
+        data = controller._build_measurements_data(
+            Power(ch1Watts=500, ch2Watts=1000),
+            primary_power=Power(ch1Watts=500, ch2Watts=1000),
+            secondary_power=Power(ch1Watts=999, ch2Watts=999),
+        )
+
+        assert data["grid_power"] == 500
+        assert data["channel_powers"] == {"p2": 1000, "p1": 500}
+        assert data["home_power"] == -500
+
     def test_update_exposes_and_controls_on_the_normalised_view(
         self, monkeypatch
     ):

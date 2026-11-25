@@ -3,9 +3,6 @@
 ## High Priority
 - [ ] Increase unit test coverage (ongoing)
 - [ ] Allow naming of channels not being used for grid and EVSE power selection
-- [ ] Fix reporting of values to the database when only primary Shelly is used
-- [ ] Test functionality that models the EVSE power when not being monitored
-- [ ] Fix double running of EvseController's update function per second
 
 ## Medium Priority
 - [ ] Make the is_empty SoC configurable
@@ -43,6 +40,10 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Ignore updates from unconfigured Shelly devices, avoiding duplicate
+      update work and phantom secondary Influx fields when only the primary
+     Shelly is used
+- [x] Cover the unmonitored-EVSE power model in the controller tests
 - [x] Dashboard graph: selectable 5 min–24 h windows, server-side
       downsampling, a fixed time axis for comms gaps, incremental polling and
       a Ctrl-C snapshot of the in-memory history

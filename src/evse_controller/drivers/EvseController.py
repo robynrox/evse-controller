@@ -892,9 +892,17 @@ class EvseController(PowerMonitorObserver):
         grid_channel = config.SHELLY_GRID_CHANNEL
 
         # Use instantaneous values if available
-        if grid_device == "primary" and primary_power is not None:
+        if (
+            grid_device == "primary"
+            and primary_power is not None
+            and self._device_configured("primary")
+        ):
             grid_power = round(primary_power.ch1Watts if grid_channel == 1 else primary_power.ch2Watts)
-        elif grid_device == "secondary" and secondary_power is not None:
+        elif (
+            grid_device == "secondary"
+            and secondary_power is not None
+            and self._device_configured("secondary")
+        ):
             grid_power = round(secondary_power.ch1Watts if grid_channel == 1 else secondary_power.ch2Watts)
         else:
             # Fallback
@@ -908,9 +916,17 @@ class EvseController(PowerMonitorObserver):
             evse_channel = config.SHELLY_EVSE_CHANNEL
 
             # Use instantaneous values if available
-            if evse_device == "primary" and primary_power is not None:
+            if (
+                evse_device == "primary"
+                and primary_power is not None
+                and self._device_configured("primary")
+            ):
                 evse_power_value = round(primary_power.ch1Watts if evse_channel == 1 else primary_power.ch2Watts)
-            elif evse_device == "secondary" and secondary_power is not None:
+            elif (
+                evse_device == "secondary"
+                and secondary_power is not None
+                and self._device_configured("secondary")
+            ):
                 evse_power_value = round(secondary_power.ch1Watts if evse_channel == 1 else secondary_power.ch2Watts)
             else:
                 # Fallback
@@ -925,6 +941,8 @@ class EvseController(PowerMonitorObserver):
 
         # Process all channels
         for device in ["primary", "secondary"]:
+            if not self._device_configured(device):
+                continue
             device_power = primary_power if device == "primary" else secondary_power
 
             for ch_num in [1, 2]:
@@ -1008,6 +1026,21 @@ class EvseController(PowerMonitorObserver):
             A formatted string safe for use as an InfluxDB field name
         """
         return channel_name.lower().replace(' ', '_')
+
+    @staticmethod
+    def _device_configured(device: str) -> bool:
+        """True when a Shelly device has a configured address."""
+        if device == "primary":
+            if not hasattr(config, "SHELLY_PRIMARY_URL"):
+                return True
+            url = config.SHELLY_PRIMARY_URL
+        elif device == "secondary":
+            if not hasattr(config, "SHELLY_SECONDARY_URL"):
+                return True
+            url = config.SHELLY_SECONDARY_URL
+        else:
+            return False
+        return bool(str(url or "").strip())
 
     @staticmethod
     def _channel_watts(power: Power, channel) -> float:
@@ -1210,6 +1243,14 @@ class EvseController(PowerMonitorObserver):
             monitor: The Shelly power monitor that's reporting
             power: Power readings from the monitor
         """
+        # A Shelly with no configured URL still has a polling thread.  Ignore
+        # its empty readings so the grid path runs once per second and no
+        # phantom secondary fields reach InfluxDB or the daily report.
+        if monitor is self.pmon and not self._device_configured("primary"):
+            return
+        if monitor is self.pmon2 and not self._device_configured("secondary"):
+            return
+
         self._feed_daily_report(monitor, power)
 
         # Determine if this update is from the grid monitoring device
@@ -1288,15 +1329,18 @@ class EvseController(PowerMonitorObserver):
         # Get the current power values from both monitors
         if monitor == self.pmon:  # Primary Shelly update
             primary_power = power
-            secondary_power = self.auxpower if hasattr(self, 'auxpower') else None
+            secondary_power = (
+                self.auxpower
+                if self._device_configured("secondary")
+                else None
+            )
         else:  # Secondary Shelly update
-            primary_power = None
             secondary_power = power
-            if hasattr(self, 'pmon') and self.pmon:
-                try:
-                    primary_power = self.pmon.last_power()
-                except Exception as e:
-                    debug(f"Failed to get cached primary power values: {e}")
+            primary_power = (
+                self.pmon.last_power()
+                if self._device_configured("primary")
+                else None
+            )
 
         # Create a new history entry with all available data
         history_entry = {
@@ -1335,10 +1379,18 @@ class EvseController(PowerMonitorObserver):
         # We already have these from earlier in the method
         if monitor == self.pmon:  # Primary Shelly update
             primary_power = power
-            secondary_power = self.auxpower if hasattr(self, 'auxpower') else None
+            secondary_power = (
+                self.auxpower
+                if self._device_configured("secondary")
+                else None
+            )
         else:  # Secondary Shelly update
             secondary_power = power
-            primary_power = self.auxpower if hasattr(self, 'auxpower') else None
+            primary_power = (
+                self.pmon.last_power()
+                if self._device_configured("primary")
+                else None
+            )
 
         # Build the log message with power values
         log_msg, log_state = self._build_power_log_message(power, evse_power, desiredEvseCurrent, primary_power, secondary_power)
@@ -1388,7 +1440,7 @@ class EvseController(PowerMonitorObserver):
                 point = point.field("efficiency", float(efficiency))
 
                 # Add primary device channels if they exist and are enabled
-                if primary_power:
+                if primary_power and self._device_configured("primary"):
                     if config.is_channel_in_use("primary", 1):
                         name = self._format_influxdb_field_name(config.get_channel_name("primary", 1))
                         point = point.field(name, float(primary_power.ch1Watts))
@@ -1400,7 +1452,7 @@ class EvseController(PowerMonitorObserver):
                         point = point.field(f"{name}_pf", float(primary_power.ch2Pf))
 
                 # Add secondary device channels if they exist and are enabled
-                if secondary_power:
+                if secondary_power and self._device_configured("secondary"):
                     if config.is_channel_in_use("secondary", 1):
                         name = self._format_influxdb_field_name(config.get_channel_name("secondary", 1))
                         point = point.field(name, float(secondary_power.ch1Watts))
