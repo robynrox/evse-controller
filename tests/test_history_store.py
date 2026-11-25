@@ -95,6 +95,38 @@ def test_out_of_order_samples_are_ignored():
     assert result["entries"][0]["channels"]["primary"]["channel1"] == 200
 
 
+def test_snapshot_round_trip_and_stale_samples_are_dropped():
+    store = HistoryStore(recent_seconds=60, retention_seconds=120)
+    now = 1000.0
+    store.record(now - 10, _channels(10))
+    store.record(now, _channels(20))
+    snapshot = store.snapshot()
+
+    restored = HistoryStore(recent_seconds=60, retention_seconds=120)
+    restored.restore(snapshot, now=now + 200)
+
+    result = restored.query(300, now=now + 200)
+    assert result["entries"] == []
+
+
+def test_snapshot_restore_keeps_recent_and_long_data():
+    store = HistoryStore(recent_seconds=60, retention_seconds=120)
+    now = 1000.0
+    for offset in (0, 10, 20, 30, 40, 50):
+        store.record(now + offset, _channels(offset))
+    snapshot = store.snapshot()
+
+    restored = HistoryStore(recent_seconds=60, retention_seconds=120)
+    restored.restore(snapshot, now=now + 55)
+
+    result = restored.query(60, now=now + 55)
+    assert result["entries"]
+    assert all(
+        entry["timestamp"] >= now + 55 - 60
+        for entry in result["entries"]
+    )
+
+
 def test_controller_default_history_stays_backwards_compatible():
     controller = object.__new__(EvseController)
     controller.history = {
@@ -128,3 +160,26 @@ def test_controller_windowed_history_uses_the_store():
     assert result["resolution_s"] == 1
     assert [entry["timestamp"] for entry in result["entries"]] == [float(now)]
     assert result["channel_metadata"] == {"channels": {}}
+
+
+def test_controller_graph_history_round_trips(tmp_path):
+    import time
+
+    now = int(time.time())
+    controller = object.__new__(EvseController)
+    controller.history_store = HistoryStore()
+    controller.history_graph_file = tmp_path / "history_graph.json.gz"
+    controller.history_store.record(now - 5, _channels(10))
+    controller.history_store.record(now, _channels(20))
+    controller._save_graph_history()
+
+    restored = object.__new__(EvseController)
+    restored.history_store = HistoryStore()
+    restored.history_graph_file = controller.history_graph_file
+    restored._load_graph_history()
+
+    result = restored.history_store.query(300, now=now + 1)
+    assert [entry["timestamp"] for entry in result["entries"]] == [
+        float(now - 5), float(now)
+    ]
+    assert result["entries"][-1]["channels"]["primary"]["channel1"] == 20

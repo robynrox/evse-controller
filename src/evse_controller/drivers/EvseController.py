@@ -22,6 +22,7 @@ except ImportError:
 
 from collections import deque
 from typing import Optional
+import gzip
 import json
 import threading
 
@@ -190,6 +191,10 @@ class EvseController(PowerMonitorObserver):
         self._update_channel_metadata()
         self.tariffManager = tariffManager
         self.history_file = config.HISTORY_FILE
+        self.history_graph_file = self.history_file.with_name(
+            "history_graph.json.gz"
+        )
+        self._load_graph_history()
         self._load_history()
         self.state_file = config.EVSE_STATE_FILE
         self._load_persistent_state()
@@ -435,6 +440,41 @@ class EvseController(PowerMonitorObserver):
                     "channel_metadata": {}
                 }
                 self._update_channel_metadata()
+
+    def _save_graph_history(self):
+        """Persist the multi-resolution graph history on shutdown."""
+        store = getattr(self, "history_store", None)
+        path = getattr(self, "history_graph_file", None)
+        if store is None or path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+                json.dump(
+                    store.snapshot(),
+                    handle,
+                    default=str,
+                    separators=(",", ":"),
+                )
+            temporary.replace(path)
+            debug("Graph history saved successfully")
+        except Exception as e:
+            error(f"Failed to save graph history: {e}")
+
+    def _load_graph_history(self):
+        """Restore the multi-resolution graph history after a restart."""
+        store = getattr(self, "history_store", None)
+        path = getattr(self, "history_graph_file", None)
+        if store is None or path is None or not path.exists():
+            return
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+            store.restore(snapshot)
+            info("Graph history loaded successfully")
+        except Exception as e:
+            warning(f"Failed to load graph history: {e}")
 
     def setHysteresisWindow(self, window):
         """
@@ -1682,6 +1722,7 @@ class EvseController(PowerMonitorObserver):
         try:
             # Save both history and persistent state before stopping
             self._save_history()
+            self._save_graph_history()
             self._save_persistent_state()
             
             # Stop charging before cleanup, but only if not in FREERUN state or OCPP mode

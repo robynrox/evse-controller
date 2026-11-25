@@ -614,8 +614,11 @@ the existing trace. `/api/status/history` keeps its original last-300-point
 response when called without parameters; `window` is seconds and `since` is the
 last bucket timestamp for incremental polling.
 
-The 24-hour buffer is in memory and starts filling when the controller starts;
-the short buffer is persisted with the existing history file.
+The 24-hour buffer is in memory and starts filling when the controller starts.
+On a Ctrl-C or SIGTERM shutdown it is written to
+`data/state/history_graph.json.gz`; on restart, samples outside the one-hour
+raw and 24-hour retention windows are ignored. The short buffer is also
+persisted with the existing history file.
 
 ##### Link health
 

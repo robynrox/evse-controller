@@ -22,6 +22,8 @@
       [`reports/onboarding/ADDRESSING.md`](reports/onboarding/ADDRESSING.md)
 
 ## Low Priority
+- [ ] Daily graph/data export at the end of each day (HTML, PNG or CSV;
+      choose the format before implementing)
 - [ ] Add the `evse` CT clamp as an independent AC channel in the efficiency
       analysis and use long-session integrals for a seasonal AC↔pack
       cross-check; trial a max-current anchor correction for the lower-current
@@ -42,7 +44,8 @@
 
 ## Completed
 - [x] Dashboard graph: selectable 5 min–24 h windows, server-side
-      downsampling, a fixed time axis for comms gaps, and incremental polling
+      downsampling, a fixed time axis for comms gaps, incremental polling and
+      a Ctrl-C snapshot of the in-memory history
 - [x] Octopus Agile import and Agile Outgoing export presets, including
       region/product selection and per-slot prices
 - [x] EV Away energy estimate: miles/kWh plus per-session miles or direct

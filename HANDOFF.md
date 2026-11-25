@@ -452,7 +452,9 @@ completed fixes.
   wall-clock x-axis so a poll gap is visible. The first request returns the
   whole window; later polls pass the last bucket timestamp as `since` and
   receive only updated/new buckets. `/api/status/history` keeps its original
-  last-300-point response when called without parameters.
+  last-300-point response when called without parameters. On shutdown the
+  store is written to `data/state/history_graph.json.gz` and restored on the
+  next start, dropping samples outside the retention windows.
 - **Proposed dual device addressing.** Store a last-known IP and a hostname
   per device, prefer the IP while healthy, and resolve the hostname after
   link-health failures. The Wallbox hostname contains its `WB`+serial and the

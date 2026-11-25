@@ -14,7 +14,9 @@ outage at its true position on a fixed time axis.
 from __future__ import annotations
 
 from collections import deque
+import copy
 import math
+import threading
 import time
 from typing import Any, Optional
 
@@ -94,11 +96,16 @@ class HistoryStore:
         self._current_start: Optional[int] = None
         self._current: dict[str, dict[str, dict[str, float]]] = {}
         self._last_timestamp: Optional[float] = None
+        self._lock = threading.Lock()
 
     # -- recording ------------------------------------------------------
 
     def record(self, timestamp: float, channels: dict) -> None:
         """Append one grid-monitor sample to both resolutions."""
+        with self._lock:
+            self._record(timestamp, channels)
+
+    def _record(self, timestamp: float, channels: dict) -> None:
         ts = float(timestamp)
         if self._last_timestamp is not None and ts < self._last_timestamp:
             # Updates are chronological in normal operation.  Ignore a stale
@@ -190,6 +197,18 @@ class HistoryStore:
         ``since`` includes the bucket containing that timestamp so the client
         can replace a partial final bucket rather than appending a duplicate.
         """
+        with self._lock:
+            return self._query(
+                window_seconds, since=since, now=now
+            )
+
+    def _query(
+        self,
+        window_seconds: int,
+        *,
+        since: Optional[float] = None,
+        now: Optional[float] = None,
+    ) -> dict:
         window = max(1, min(int(window_seconds), MAX_WINDOW_SECONDS))
         current_time = time.time() if now is None else float(now)
         window_start = current_time - window
@@ -321,3 +340,72 @@ class HistoryStore:
 
     def __len__(self) -> int:
         return len(self._recent)
+
+    # -- persistence ----------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """Return the in-memory state for shutdown persistence."""
+        with self._lock:
+            return {
+                "saved_at": time.time(),
+                "recent": copy.deepcopy(list(self._recent)),
+                "long": copy.deepcopy(list(self._long)),
+                "current_start": self._current_start,
+                "current": copy.deepcopy(self._current),
+            }
+
+    def restore(self, snapshot: dict, *, now: Optional[float] = None) -> None:
+        """Load a snapshot, dropping samples outside the retention windows."""
+        with self._lock:
+            self._restore(snapshot, now=now)
+
+    def _restore(self, snapshot: dict, *, now: Optional[float] = None) -> None:
+        current_time = time.time() if now is None else float(now)
+        recent_cutoff = current_time - self.recent_seconds
+        long_cutoff = current_time - self.retention_seconds
+
+        recent = []
+        for entry in snapshot.get("recent") or []:
+            try:
+                if float(entry.get("timestamp", 0.0)) < recent_cutoff:
+                    continue
+                recent.append(
+                    {
+                        "timestamp": float(entry["timestamp"]),
+                        "channels": _clean_channels(
+                            entry.get("channels") or {}
+                        ),
+                    }
+                )
+            except (TypeError, ValueError, KeyError):
+                continue
+        long_entries = []
+        for entry in snapshot.get("long") or []:
+            try:
+                timestamp = float(entry.get("timestamp", 0.0))
+                if timestamp < long_cutoff:
+                    continue
+                long_entries.append(entry)
+            except (TypeError, ValueError):
+                continue
+
+        current_start = snapshot.get("current_start")
+        current = snapshot.get("current") or {}
+        if current_start is not None:
+            try:
+                current_start = int(current_start)
+            except (TypeError, ValueError):
+                current_start = None
+        if current_start is not None and current_start < long_cutoff:
+            current_start = None
+            current = {}
+
+        self._recent = deque(recent)
+        self._long = deque(long_entries)
+        self._current_start = current_start
+        self._current = current if current_start is not None else {}
+        timestamps = [entry["timestamp"] for entry in recent]
+        timestamps += [float(entry["timestamp"]) for entry in long_entries]
+        if current_start is not None:
+            timestamps.append(float(current_start))
+        self._last_timestamp = max(timestamps) if timestamps else None
