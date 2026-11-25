@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
     DecisionSnapshot,
@@ -39,9 +39,13 @@ def create_test_state(battery_level: int, current: float = 0.0) -> EvseAsyncStat
     return state
 
 
-def create_mock_agile_rates():
+def create_mock_agile_rates(base_date=None):
     """Create mock Agile Outgoing rates for testing.
-    
+
+    ``base_date`` keeps the generated series on the same local day as the
+    tariff's mocked clock.  It defaults to today so existing direct callers
+    keep working.
+
     Creates a realistic rate profile with:
     - Low rates overnight (00:00-05:30): 3-5p
     - Medium rates morning (05:30-16:00): 8-12p
@@ -49,7 +53,9 @@ def create_mock_agile_rates():
     - Medium rates night (19:00-23:30): 10-15p
     """
     rates = []
-    base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    base_date = (base_date or _fixed_test_now()).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     
     # Define rate profile (hour, minute, rate_p)
     rate_profile = [
@@ -83,16 +89,41 @@ def create_mock_agile_rates():
     return rates
 
 
-def _build_tariff(state_path=None) -> IOctGoWithAgileOutgoingTariff:
-    """Create a tariff instance with the Wallbox thread mocked out."""
+def _fixed_test_now(hour: int = 12, minute: int = 0) -> datetime:
+    """A deterministic local clock for tariff tests.
+
+    Tests must not depend on the wall-clock hour.  Values such as the
+    self-use threshold and export plans are based on the prices still ahead
+    today, so a late-evening test run would otherwise see the cheap window
+    already open and assert against different numbers.  Keeping today's date
+    preserves the tests that compare with ``datetime.now().date()``.
+    """
+    return datetime.now().replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    )
+
+
+def _build_tariff(state_path=None, now=None) -> IOctGoWithAgileOutgoingTariff:
+    """Create a tariff instance with the Wallbox thread and clock mocked out."""
+    fixed_now = now or _fixed_test_now()
     mock_thread = Mock()
     mock_thread.getBatteryChargeLevel = Mock(return_value=75)
     mock_thread.get_state = Mock(return_value={})
 
-    with patch('evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
-               return_value=mock_thread):
+    with patch(
+        'evse_controller.drivers.evse.wallbox.wallbox_thread.WallboxThread.get_instance',
+        return_value=mock_thread,
+    ), patch.object(
+        IOctGoWithAgileOutgoingTariff,
+        "get_current_datetime",
+        return_value=fixed_now,
+    ):
         tariff = IOctGoWithAgileOutgoingTariff(state_path=state_path)
-    tariff.agile_rates = create_mock_agile_rates()
+    # Tests that need another hour call set_time_functions afterwards.  This
+    # default keeps every other test on the same deterministic clock,
+    # including the values cached during construction.
+    tariff.set_time_functions(datetime_func=lambda: fixed_now)
+    tariff.agile_rates = create_mock_agile_rates(base_date=fixed_now)
     tariff._planned_export_slots = []  # No planned exports for these tests
     return tariff
 
@@ -319,7 +350,7 @@ class TestPlannedExportSlotExplanation:
     @staticmethod
     def _set_two_peak_rates(tariff, now_slot=24, now_rate=21.4, later_slot=32,
                             later_rate=30.5, default=5.0):
-        base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        base = _fixed_test_now().replace(hour=0, minute=0, second=0, microsecond=0)
         rates = []
         for slot in range(48):
             start = base + timedelta(minutes=30 * slot)
@@ -733,7 +764,7 @@ class TestEnergyShortfall:
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -943,7 +974,7 @@ class TestSessionAwareSocProjection:
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -1495,7 +1526,7 @@ class TestEdgeCases:
 
     def test_stale_rates_are_treated_as_zero_price(self, agile_tariff):
         """Yesterday's prices must not be used after a failed fetch."""
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = _fixed_test_now() - timedelta(days=1)
         for rate_data in agile_tariff.agile_rates:
             rate_data['start'] = rate_data['start'].replace(
                 year=yesterday.year, month=yesterday.month, day=yesterday.day
@@ -1519,7 +1550,7 @@ class TestEdgeCases:
 
     def test_no_rates_stores_instead_of_exporting(self, agile_tariff):
         """An API outage must not silently put the controller into export."""
-        fixed = datetime.now().replace(hour=22, minute=0, second=0, microsecond=0)
+        fixed = _fixed_test_now().replace(hour=22, minute=0, second=0, microsecond=0)
         agile_tariff.set_time_functions(datetime_func=lambda: fixed)
         agile_tariff.agile_rates = []
         state = create_test_state(80)
@@ -1584,7 +1615,7 @@ class TestDecisionSnapshot:
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -2033,7 +2064,7 @@ class TestStableDashboardMode:
     @staticmethod
     def _snapshot(**overrides):
         values = dict(
-            updated_at=datetime.now(),
+            updated_at=_fixed_test_now(),
             mode="Do not charge yet — will charge from ≥3 A surplus",
             reason="holding for export",
             soc_percent=60,
@@ -2472,7 +2503,7 @@ class TestDailySavings:
 
     @staticmethod
     def _start(tariff, hour, minute=0):
-        clock = [datetime.now().replace(
+        clock = [_fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )]
         tariff.set_time_functions(datetime_func=lambda: clock[0])
@@ -2891,7 +2922,7 @@ class TestDailySavings:
         )
 
     def test_slot_savings_reset_at_midnight(self, agile_tariff):
-        old_day = datetime.now().replace(
+        old_day = _fixed_test_now().replace(
             hour=23, minute=30, second=0, microsecond=0
         ) - timedelta(days=1)
         clock = [old_day]
@@ -2921,7 +2952,7 @@ class TestDailySavings:
         self, agile_tariff
     ):
         """The report closes the previous slot before the tariff resets."""
-        old_day = datetime.now().replace(
+        old_day = _fixed_test_now().replace(
             hour=23, minute=30, second=0, microsecond=0
         ) - timedelta(days=1)
         # The clock has just passed midnight, but the tariff has not run its
@@ -2940,7 +2971,7 @@ class TestDailySavings:
 
     def test_no_accumulation_yet_is_a_zero_for_today(self, agile_tariff):
         """An active tariff with no samples yet has saved nothing today."""
-        now = datetime.now()
+        now = _fixed_test_now()
         agile_tariff.set_time_functions(datetime_func=lambda: now)
         agile_tariff._savings_day = None
         agile_tariff._saved_by_slot_gbp = [0.0] * 48
@@ -3125,7 +3156,7 @@ class TestDecisionLog:
 
     @staticmethod
     def _set_time(tariff, hour, minute, second=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=second, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -3204,7 +3235,7 @@ class TestStatePersistence:
 
     def test_save_then_load_restores_ledger_and_saving(self, tmp_path):
         state_path = tmp_path / "tariff-state.json"
-        now = datetime.now().replace(microsecond=0)
+        now = _fixed_test_now().replace(microsecond=0)
         first = _build_tariff(state_path=state_path)
         self._populate(first, now)
 
@@ -3232,7 +3263,7 @@ class TestStatePersistence:
 
     def test_cleanup_saves_state(self, tmp_path):
         state_path = tmp_path / "tariff-state.json"
-        now = datetime.now().replace(microsecond=0)
+        now = _fixed_test_now().replace(microsecond=0)
         tariff = _build_tariff(state_path=state_path)
         self._populate(tariff, now)
 
@@ -3251,7 +3282,7 @@ class TestStatePersistence:
 
     def test_stale_saving_resets_but_the_ledger_survives(self, tmp_path):
         state_path = tmp_path / "tariff-state.json"
-        yesterday = datetime.now().date() - timedelta(days=1)
+        yesterday = _fixed_test_now().date() - timedelta(days=1)
         state_path.write_text(
             json.dumps(
                 {
@@ -3278,13 +3309,13 @@ class TestStatePersistence:
         assert tariff._bank_cost_gbp == pytest.approx(0.58)
         assert tariff._bank_seeded is True
         # Today's total and today's export markers start clean.
-        assert tariff._savings_day == datetime.now().date()
+        assert tariff._savings_day == _fixed_test_now().date()
         assert tariff._saved_today_gbp == 0.0
         assert tariff._exported_slots == []
 
     def test_restored_ledger_is_not_seeded_again(self, tmp_path):
         state_path = tmp_path / "tariff-state.json"
-        now = datetime.now().replace(microsecond=0)
+        now = _fixed_test_now().replace(microsecond=0)
         first = _build_tariff(state_path=state_path)
         self._populate(first, now)
         first.save_state()
@@ -3321,7 +3352,7 @@ class TestStatePersistence:
                         "seeded": True,
                     },
                     "savings": {
-                        "day": datetime.now().date().isoformat(),
+                        "day": _fixed_test_now().date().isoformat(),
                         "saved_today_gbp": 0.12,
                     },
                 }
@@ -3369,7 +3400,7 @@ class TestRateFetchState:
         tariff.agile_rates = create_mock_agile_rates()
 
         assert tariff._last_fetch_date is None
-        assert tariff._have_complete_rates_for_date(datetime.now().date()) is True
+        assert tariff._have_complete_rates_for_date(_fixed_test_now().date()) is True
 
     def test_fetch_rates_from_api_requests_today_and_tomorrow(
         self, monkeypatch
@@ -3387,12 +3418,12 @@ class TestRateFetchState:
 
         tariff._fetch_rates_from_api()
 
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         assert calls[0][1] == [today, today + timedelta(days=1)]
 
     def test_complete_rates_are_checked_per_date(self):
         tariff = _build_tariff()
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         tomorrow = today + timedelta(days=1)
 
         def rates_for(day):
@@ -3417,7 +3448,7 @@ class TestEnergySessions:
 
     @staticmethod
     def _fixed(hour, minute=0):
-        return datetime.now().replace(
+        return _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
 
@@ -3621,7 +3652,7 @@ class TestBreakEvenExportPriority:
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -3891,7 +3922,7 @@ class TestStageOneExportBudget:
 
     @staticmethod
     def _set_time(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -3900,7 +3931,7 @@ class TestStageOneExportBudget:
     @staticmethod
     def _set_rates(tariff, prices, default=8.0):
         """Replace the mock day with a slot -> export-price map."""
-        base = datetime.now().replace(
+        base = _fixed_test_now().replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         tariff.agile_rates = []
@@ -4372,7 +4403,7 @@ class TestAbsoluteMinimumSocControl:
 
     @staticmethod
     def _fixed(hour, minute=0):
-        return datetime.now().replace(
+        return _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
 
@@ -4947,7 +4978,7 @@ class TestLoadProfileIntegration:
     def test_tariff_uses_the_rolling_profile(
         self, agile_tariff, tmp_path
     ):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=12, minute=0, second=0, microsecond=0
         )
         agile_tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -5810,7 +5841,7 @@ class TestShadowPlannerAndEstimator:
         tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
-        now = datetime.now().replace(
+        now = _fixed_test_now().replace(
             hour=12, minute=0, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: now)
@@ -5840,7 +5871,7 @@ class TestShadowPlannerAndEstimator:
         tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         profile_dir = tmp_path / "profiles"
         for offset in range(14):
             self._write_profile_day(
@@ -5898,7 +5929,7 @@ class TestShadowPlannerAndEstimator:
         tariff._bank_dc_kwh = 1.0
         tariff._bank_cost_gbp = 0.0
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         profile_dir = tmp_path / "profiles"
         for offset in range(14):
             self._write_profile_day(
@@ -5926,7 +5957,7 @@ class TestShadowPlannerAndEstimator:
             tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         profile_dir = tmp_path / "profiles"
         for offset in range(14):
             self._write_profile_day(
@@ -6049,7 +6080,7 @@ class TestShadowPlannerAndEstimator:
         tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         profile_dir = tmp_path / "profiles"
         for offset in range(14):
             self._write_profile_day(
@@ -6082,7 +6113,7 @@ class TestShadowPlannerAndEstimator:
         tariff = _build_tariff()
         tariff._shadow_enabled = True
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         profile_dir = tmp_path / "profiles"
         for offset in range(14):
             self._write_profile_day(
@@ -6273,7 +6304,7 @@ class TestShadowPlannerAndEstimator:
             ),
         )
         tariff._follow_gate_voltage = 240.0
-        start = datetime(2026, 6, 21, 12, 0)
+        start = datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)
         slot = PlannerSlot(
             start=start,
             slot=24,
@@ -6311,7 +6342,7 @@ class TestShadowPlannerAndEstimator:
         from evse_controller.planner.inputs import PlannerInput
 
         tariff = _build_tariff()
-        start = datetime(2026, 6, 21, 12, 0)
+        start = datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)
         slot = PlannerSlot(
             start=start,
             slot=24,
@@ -6341,7 +6372,7 @@ class TestShadowPlannerAndEstimator:
         from evse_controller.planner.inputs import PlannerInput
 
         tariff = _build_tariff()
-        start = datetime(2026, 6, 21, 12, 0)
+        start = datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)
         slot = PlannerSlot(
             start=start,
             slot=24,
@@ -6439,7 +6470,7 @@ class TestShadowPlannerAndEstimator:
 
     def test_learning_preview_label_uses_the_current_slot_action(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=12, minute=10, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -6459,7 +6490,7 @@ class TestShadowPlannerAndEstimator:
 
     def test_learning_preview_label_includes_the_component_action(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=12, minute=10, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -6667,7 +6698,7 @@ class TestShadowPlannerAndEstimator:
         tariff._learning_mode = "off"
         tariff._shadow_enabled = False
         tariff._last_shadow_run = {
-            "day": datetime.now().date().isoformat(),
+            "day": _fixed_test_now().date().isoformat(),
             "slot": 24,
             "actions": [{"slot": 24, "kind": "charge", "current_a": 11.0}],
             "inputs": [{"slot": 24}],
@@ -7036,7 +7067,7 @@ class TestShadowPlannerAndEstimator:
         self,
     ):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=12, minute=10, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7062,7 +7093,7 @@ class TestShadowPlannerAndEstimator:
     def test_disabled_shadow_planner_records_nothing(self, tmp_path):
         tariff = _build_tariff()
         tariff._history.set_directory(tmp_path / "history")
-        today = datetime.now().date()
+        today = _fixed_test_now().date()
         TestDecisionSnapshot._set_time(tariff, 12, 0)
 
         tariff.get_control_state(create_test_state(60), 12 * 60)
@@ -7211,7 +7242,7 @@ class TestStandardOctopusGo:
 
     def test_manual_ocpp_uses_the_actual_slot_price(self):
         tariff = _build_tariff()
-        day = datetime.now().date()
+        day = _fixed_test_now().date()
 
         assert tariff.ocpp_import_price_p(day, 2) == pytest.approx(
             tariff._import_cheap_p()
@@ -7270,7 +7301,7 @@ class TestCosyOctopusShared:
 
     @staticmethod
     def _at(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7358,7 +7389,7 @@ class TestCosyOctopusShared:
         queue.put.assert_not_called()
 
         # A manual OCPP slot is booked at its actual time-of-use price.
-        day = datetime.now().date()
+        day = _fixed_test_now().date()
         assert tariff.ocpp_import_price_p(day, 33) == pytest.approx(43.13)
 
     def test_zero_export_rate_can_be_selected(self, monkeypatch):
@@ -7401,7 +7432,7 @@ class TestFluxShared:
 
     @staticmethod
     def _at(tariff, hour, minute=0):
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7409,7 +7440,7 @@ class TestFluxShared:
 
     def test_import_and_export_windows_are_coupled(self):
         tariff = _build_tariff()
-        day = datetime.now().date()
+        day = _fixed_test_now().date()
 
         assert tariff.is_off_peak(2 * 60 + 30) is True
         assert tariff.is_expensive_period(16 * 60 + 30) is True
@@ -7421,7 +7452,7 @@ class TestFluxShared:
     def test_export_source_override_is_ignored(self, monkeypatch):
         monkeypatch.setattr(config, "EXPORT_SOURCE", "zero")
         tariff = _build_tariff()
-        day = datetime.now().date()
+        day = _fixed_test_now().date()
 
         assert tariff.export_price_p(day, 33) == pytest.approx(30.26)
         assert tariff.dynamic_export is False
@@ -7495,7 +7526,7 @@ class TestAgileImportShared:
 
     def test_dynamic_import_prices_drive_the_heuristic(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=10, minute=0, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7516,7 +7547,7 @@ class TestAgileImportShared:
 
     def test_negative_price_charges_at_max(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=9, minute=30, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7531,7 +7562,7 @@ class TestAgileImportShared:
 
     def test_missing_import_price_falls_back_to_standard(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=10, minute=0, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7544,7 +7575,7 @@ class TestAgileImportShared:
 
     def test_dashboard_shows_the_import_strip(self):
         tariff = _build_tariff()
-        fixed = datetime.now().replace(
+        fixed = _fixed_test_now().replace(
             hour=10, minute=0, second=0, microsecond=0
         )
         tariff.set_time_functions(datetime_func=lambda: fixed)
@@ -7630,8 +7661,8 @@ class TestTieredExportVariants:
             monkeypatch,
         )
 
-        assert tariff.export_price_p(datetime.now().date(), 0) == 12.0
-        assert tariff.export_price_p(datetime.now().date(), 34) == 12.0
+        assert tariff.export_price_p(_fixed_test_now().date(), 0) == 12.0
+        assert tariff.export_price_p(_fixed_test_now().date(), 34) == 12.0
         assert tariff.dynamic_export is False
 
     def test_prime_export_uses_the_peak_window(self, monkeypatch):
@@ -7641,8 +7672,8 @@ class TestTieredExportVariants:
             monkeypatch,
         )
 
-        assert tariff.export_price_p(datetime.now().date(), 32) == 16.0  # 16:00
-        assert tariff.export_price_p(datetime.now().date(), 20) == 9.0
+        assert tariff.export_price_p(_fixed_test_now().date(), 32) == 16.0  # 16:00
+        assert tariff.export_price_p(_fixed_test_now().date(), 20) == 9.0
 
     def test_no_export_tariff_returns_unknown(self, monkeypatch):
         tariff = self._tariff_with(
@@ -7651,7 +7682,7 @@ class TestTieredExportVariants:
             monkeypatch,
         )
 
-        assert tariff.export_price_p(datetime.now().date(), 32) is None
+        assert tariff.export_price_p(_fixed_test_now().date(), 32) is None
 
     def test_live_import_price_uses_the_table(self, monkeypatch):
         tariff = self._tariff_with(
@@ -7673,7 +7704,7 @@ class TestTieredExportVariants:
 
         assert tariff.resolved_price_table() is None
         assert tariff.dynamic_export is True
-        assert tariff.import_price_p(datetime.now().date(), 0) == pytest.approx(
+        assert tariff.import_price_p(_fixed_test_now().date(), 0) == pytest.approx(
             config.IMPORT_LOW
         )
 

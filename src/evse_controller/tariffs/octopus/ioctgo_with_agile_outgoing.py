@@ -5698,7 +5698,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         def fetch_thread():
             try:
-                now = datetime.now()
+                now = self.get_current_datetime()
                 today = now.date()
                 tomorrow = today + timedelta(days=1)
                 rates = fetch_import_rates(
@@ -5774,7 +5774,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
         def fetch_thread():
             try:
-                now = datetime.now()
+                now = self.get_current_datetime()
                 today = now.date()
                 tomorrow = today + timedelta(days=1)
 
@@ -5974,7 +5974,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     def _fetch_rates_from_api(self) -> list:
         """Fetch today's and tomorrow's Agile Outgoing rates."""
-        today = datetime.now()
+        today = self.get_current_datetime()
         day = today.date()
         rates = fetch_rates(
             self.region,

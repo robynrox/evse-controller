@@ -1149,6 +1149,14 @@ section 1 and re-run the static-model update described in REVIEW.md §8.
   Poetry project with its own lock, installed by its helper scripts.
   `influxdb-client ~= 1.36.0`.
 - `data/` is gitignored (config, logs, state). `reports/` is not ignored.
+- Tariff tests use a deterministic local clock: `_build_tariff()` in
+  `tests/test_octopus_ioctgo_agile_outgoing.py` sets the tariff's datetime
+  function to 12:00 today, and the rest of that module uses `_fixed_test_now()`
+  instead of the wall clock. Values such as the self-use threshold and export
+  plan depend on the prices still ahead today, so an un-frozen clock made them
+  change after the 23:30 cheap window opened. Tariff code must use
+  `self.get_current_datetime()` rather than `datetime.now()` so the same
+  function controls production and tests.
 - Production uses Poetry. The working invocation is
   `poetry run python -m evse_controller.tools.analyse_efficiency ...`.
 - `gh` is not authenticated locally (`HTTP 401`), so PRs must be created in the
