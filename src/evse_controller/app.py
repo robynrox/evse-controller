@@ -27,6 +27,8 @@ from evse_controller.smart_evse_controller import (
     scheduler,
     ScheduledEvent,
     get_system_state,
+    idle_ocpp_status,
+    cancel_idle_ocpp as cancel_idle_ocpp_handoff,
     tariffManager
 )
 
@@ -1467,6 +1469,22 @@ def set_idle_load_override():
     return jsonify({'enabled': enabled})
 
 
+@app.route('/api/ocpp/idle', methods=['GET'])
+def get_idle_ocpp():
+    """Return the current idle-OCPP plan and switch times."""
+    return jsonify(idle_ocpp_status())
+
+
+@app.route('/api/ocpp/idle/cancel', methods=['POST'])
+def cancel_idle_ocpp():
+    """Cancel the planned idle switch, or leave an active one early."""
+    try:
+        return jsonify(cancel_idle_ocpp_handoff())
+    except Exception as error:
+        logging.error(f"Could not cancel the idle OCPP handoff: {error}")
+        return jsonify({'error': str(error)}), 500
+
+
 @app.route('/decision')
 def decision_page():
     """Explain the last control decision in plain language.
@@ -1719,6 +1737,7 @@ def get_extended_status():
         } if next_event else None,
         'measurements': measurements,
         'ocpp_state': ocpp_state,
+        'idle_ocpp': idle_ocpp_status(),
         'poll_health': poll_health_payload(
             evseController,
             config.SHELLY_PRIMARY_URL,

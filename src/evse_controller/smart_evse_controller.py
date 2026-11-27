@@ -681,6 +681,67 @@ def _check_idle_ocpp(now: Optional[datetime] = None) -> None:
             _idle_ocpp_retry_after = now + timedelta(minutes=1)
 
 
+def idle_ocpp_status(now: Optional[datetime] = None) -> dict:
+    """Describe the current idle-OCPP intent for the dashboard.
+
+    ``planned`` means a handoff is armed for the current run; ``active`` means
+    OCPP already owns the Wallbox.  ``source`` says which plan produced the
+    run (``dp`` or ``heuristic``), and ``settling_seconds`` is the remaining
+    hold-off after a mode change.
+    """
+    now = now or datetime.now()
+    tariff = tariffManager.get_tariff()
+    enabled = bool(
+        config.OCPP_IDLE_ENABLED
+        and tariff is not None
+        and getattr(tariff, "AUTO_OCPP_SUPPORTED", False)
+    )
+    source = "heuristic"
+    settling = 0.0
+    if tariff is not None:
+        source = getattr(tariff, "idle_ocpp_source", lambda: "heuristic")()
+        remaining = getattr(tariff, "idle_ocpp_settle_remaining", None)
+        if callable(remaining):
+            try:
+                settling = float(remaining(now))
+            except Exception:
+                settling = 0.0
+
+    window = _idle_ocpp_window
+    dismissed = bool(
+        window is not None
+        and _idle_ocpp_key is not None
+        and _idle_ocpp_dismissed_key == _idle_ocpp_key
+    )
+    active = bool(
+        active_override is not None
+        and active_override.source == "idle_ocpp"
+    )
+    planned = window is not None and not dismissed and not active
+    return {
+        "enabled": enabled,
+        "source": source,
+        "settling_seconds": round(settling),
+        "planned": planned,
+        "active": active,
+        "dismissed": dismissed,
+        "run_start": window.start.isoformat() if window else None,
+        "run_end": window.end.isoformat() if window else None,
+        "switch_in": window.switch_in.isoformat() if window else None,
+        "switch_out": window.switch_out.isoformat() if window else None,
+    }
+
+
+def cancel_idle_ocpp() -> dict:
+    """Cancel the current idle-OCPP switch, or leave OCPP early."""
+    if _idle_ocpp_key is not None:
+        _dismiss_idle_ocpp()
+    if active_override is not None and active_override.source == "idle_ocpp":
+        info("CONTROL: idle OCPP cancelled from the dashboard")
+        _release_idle_ocpp("cancelled from dashboard")
+    return idle_ocpp_status()
+
+
 def _sync_session_override(now: datetime) -> None:
     """Arm or release a scheduled control session.
 

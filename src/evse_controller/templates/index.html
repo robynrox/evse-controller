@@ -313,6 +313,13 @@
         flex-wrap: wrap;
         gap: 10px;
     }
+
+    .idle-ocpp-cancel {
+        margin-left: 8px;
+        padding: 2px 9px;
+        font-size: 12px;
+        cursor: pointer;
+    }
 </style>
 {% endblock %}
 
@@ -347,6 +354,12 @@
             </div>
             <div class="status-item">
                 <strong>Next Scheduled Event:</strong> <span id="next-event">Loading...</span>
+            </div>
+            <div class="status-item" id="idle-ocpp-row" style="display:none;">
+                <strong>Idle OCPP:</strong>
+                <span id="idle-ocpp-detail"></span>
+                <button type="button" id="idle-ocpp-cancel"
+                        class="idle-ocpp-cancel">Cancel switch</button>
             </div>
         </div>
         <div class="mode-selector" id="learning-mode-selector"
@@ -1487,6 +1500,71 @@
             });
         }
 
+        const idleOcppCancel = document.getElementById('idle-ocpp-cancel');
+        if (idleOcppCancel) {
+            idleOcppCancel.addEventListener('click', async () => {
+                idleOcppCancel.disabled = true;
+                try {
+                    const response = await fetch('/api/ocpp/idle/cancel', {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(
+                            data.error || 'Could not cancel the idle switch'
+                        );
+                    }
+                    renderIdleOcpp(data);
+                } catch (error) {
+                    idleOcppCancel.textContent = error.message;
+                } finally {
+                    idleOcppCancel.disabled = false;
+                }
+            });
+        }
+
+        function renderIdleOcpp(info) {
+            const row = document.getElementById('idle-ocpp-row');
+            const detail = document.getElementById('idle-ocpp-detail');
+            const button = document.getElementById('idle-ocpp-cancel');
+            if (!row || !detail) return;
+            if (!info || (!info.planned && !info.active)) {
+                if (info && info.enabled && info.settling_seconds > 0) {
+                    row.style.display = '';
+                    detail.textContent =
+                        'settling after mode change (' +
+                        Math.ceil(info.settling_seconds / 60) + ' min)';
+                    if (button) button.style.display = 'none';
+                    return;
+                }
+                row.style.display = 'none';
+                return;
+            }
+            row.style.display = '';
+            if (button) {
+                button.style.display = '';
+                button.textContent = info.active
+                    ? 'Return to smart'
+                    : 'Cancel switch';
+            }
+            const fmt = (iso) => {
+                if (!iso) return '—';
+                return new Date(iso).toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            };
+            let text = info.active
+                ? `OCPP until ${fmt(info.switch_out)}`
+                : `planned ${fmt(info.switch_in)}–${fmt(info.switch_out)}`;
+            if (info.source) {
+                text += info.source === 'dp'
+                    ? ' · DP plan'
+                    : ' · heuristic plan';
+            }
+            detail.textContent = text;
+        }
+
         async function updateStatus() {
             try {
                 const response = await fetch('/api/ext_status');
@@ -1561,6 +1639,7 @@
 
                 renderLinkHealth(data.poll_health);
                 renderTransitionStatus(data.transition);
+                renderIdleOcpp(data.idle_ocpp);
 
                 // Update measurements display if available
                 if (data.measurements) {

@@ -35,6 +35,10 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Idle OCPP source follows the control selection: the selected DP run in
+      Learn history/forecast, the export plan in Heuristic; no handoff when
+      the DP falls back to the heuristic; five-minute settle after a mode
+      change; dashboard switch times and cancel/early-exit button
 - [x] Control-loop stall watchdog that dumps every thread's stack after 120 s
       without a tick, plus isolation of the 1 s watchers and session/scheduler
       calls so one failure cannot stop control

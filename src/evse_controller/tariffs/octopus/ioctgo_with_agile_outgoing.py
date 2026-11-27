@@ -288,6 +288,10 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     #: Tests disable this class-level switch by default.
     ENABLE_SHADOW_PLANNER = True
 
+    #: Keep idle OCPP out of the way for this long after a control-mode or
+    #: hybrid-mode change, so the new plan can settle before a handoff arms.
+    IDLE_OCPP_SETTLE_SECONDS = 5 * 60.0
+
     #: Allow peak-rate grid charging to meet later high-value exports.  The
     #: off-peak/session charging paths are unaffected; this only gates the
     #: extra pre-export top-up.
@@ -682,6 +686,7 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         self._component_model_path = None
         self._component_model_mtime = None
         self._learning_mode = self._resolve_learning_mode()
+        self._mode_changed_at: Optional[datetime] = None
         self._hybrid_discharge_mode = (
             self._resolve_hybrid_discharge_mode()
         )
@@ -806,10 +811,15 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
         value = str(mode or "").strip().lower()
         if value not in ("off", "aggressive"):
             raise ValueError(f"Unknown hybrid discharge mode: {mode!r}")
+        changed = value != self._hybrid_discharge_mode
         self._hybrid_discharge_mode = value
         self._last_shadow_slot = -1
         self._last_shadow_soc = None
         self._shadow_force_replan = True
+        if changed:
+            # A changed arc set changes the selected plan.  Give the control
+            # loop time to rebuild it before an idle OCPP handoff can arm.
+            self._mode_changed_at = self.get_current_datetime()
         info(f"IOCTGO_AGILEOUT: Hybrid discharge mode set to {value}")
         return value
 
@@ -824,7 +834,13 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
             value = "control_hist"
         if value not in ("off", "preview", "control_hist", "control_comp"):
             raise ValueError(f"Unknown Learning mode: {mode!r}")
+        changed = value != self._learning_mode
         self._learning_mode = value
+        if changed:
+            # The idle-OCPP source changes with the control selection, and
+            # the new plan needs a pass to replace the old one.  Hold off so
+            # a handoff cannot arm on a half-switched plan.
+            self._mode_changed_at = self.get_current_datetime()
         self._shadow_enabled = (
             self.ENABLE_SHADOW_PLANNER
             and value in ("preview", "control_hist", "control_comp")
@@ -11217,28 +11233,94 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
 
     # === OCPP Management Methods (copied from IOCTGO) ===
 
-    def idle_ocpp_window(self, now: datetime | None = None):
+    def idle_ocpp_source(self) -> str:
+        """Which plan defines idle slots under the current control selection."""
+        return "dp" if self._dp_control_enabled else "heuristic"
+
+    def idle_ocpp_settle_remaining(
+        self, now: Optional[datetime] = None
+    ) -> float:
+        """Seconds left in the post-mode-change settling period."""
+        if self._mode_changed_at is None:
+            return 0.0
+        now = now or self.get_current_datetime()
+        elapsed = (now - self._mode_changed_at).total_seconds()
+        return max(0.0, self.IDLE_OCPP_SETTLE_SECONDS - elapsed)
+
+    def idle_ocpp_window(
+        self, now: datetime | None = None
+    ) -> Optional[tuple[datetime, datetime]]:
         """Return the current contiguous planned-idle run, if enabled.
 
-        The run is bounded by the current plan's known slots.  Free-import,
-        grid-support and EV-away sessions, off-peak charging and any planned
-        charge/export/follow action all break the run.
+        The source follows the control selection:
+
+        * ``control_hist`` / ``control_comp`` use the selected DP run.  A
+          slot is idle only when the DP would actually leave the Wallbox
+          idle.  If the DP has no valid current-slot plan - it is being
+          recalculated, failed, or ``get_control_state()`` is falling back
+          to the heuristic - the window is ``None`` and no handoff arms.
+        * ``off`` / ``preview`` use the heuristic export plan, which is what
+          the live heuristic executes.
+
+        Free-import, grid-support and EV-away sessions, off-peak charging and
+        any planned charge/export/follow action all break the run.  A control
+        or hybrid-mode change also suppresses the handoff for
+        ``IDLE_OCPP_SETTLE_SECONDS`` so the new plan can settle.
         """
         if not config.OCPP_IDLE_ENABLED or not self.AUTO_OCPP_SUPPORTED:
             return None
+        now = now or self.get_current_datetime()
+        if self.idle_ocpp_settle_remaining(now) > 0:
+            return None
+        if self._dp_control_enabled:
+            return self._dp_idle_window(now)
+        return self._export_plan_idle_window(now)
+
+    @staticmethod
+    def _idle_run_window(
+        now: datetime,
+        slot: int,
+        is_idle,
+        plan_start: int,
+        horizon: int,
+    ) -> Optional[tuple[datetime, datetime]]:
+        """Expand the contiguous idle run containing *slot*."""
+        if slot < plan_start or slot > horizon or not is_idle(slot):
+            return None
+        start_slot = slot
+        while start_slot > plan_start and is_idle(start_slot - 1):
+            start_slot -= 1
+        end_slot = slot + 1
+        while end_slot <= horizon and is_idle(end_slot):
+            end_slot += 1
+        midnight = datetime.combine(now.date(), time())
+        return (
+            midnight + timedelta(minutes=30 * start_slot),
+            midnight + timedelta(minutes=30 * end_slot),
+        )
+
+    def _session_slots_for_day(
+        self, day
+    ) -> tuple[set[int], set[int], set[int]]:
+        """Free-import, grid-support and EV-away slots for *day*."""
+        store = getattr(self, "session_store", None)
+        if store is None:
+            return set(), set(), set()
+        return (
+            store.free_import_slots(day),
+            store.slots_for_kind(day, GRID_SUPPORT),
+            store.away_slots(day),
+        )
+
+    def _export_plan_idle_window(
+        self, now: datetime
+    ) -> Optional[tuple[datetime, datetime]]:
+        """Idle run from the heuristic's export plan."""
         actions = dict(self._planned_slot_actions)
         if not actions:
             return None
-        now = now or self.get_current_datetime()
         slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
-        plan_start = min(actions)
-        horizon = max(actions)
-        if slot < plan_start or slot > horizon:
-            return None
-
-        free = self._free_import_slots_today()
-        grid = self._grid_support_slots_today()
-        away = self._away_slots_today()
+        free, grid, away = self._session_slots_for_day(now.date())
 
         def planned_idle(index: int) -> bool:
             if index in free or index in grid or index in away:
@@ -11247,19 +11329,53 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
                 return False
             return actions.get(index) in (None, "idle")
 
-        if not planned_idle(slot):
-            return None
-        start_slot = slot
-        while start_slot > plan_start and planned_idle(start_slot - 1):
-            start_slot -= 1
-        end_slot = slot + 1
-        while end_slot <= horizon and planned_idle(end_slot):
-            end_slot += 1
+        return self._idle_run_window(
+            now, slot, planned_idle, min(actions), max(actions)
+        )
 
-        midnight = datetime.combine(now.date(), time())
-        return (
-            midnight + timedelta(minutes=30 * start_slot),
-            midnight + timedelta(minutes=30 * end_slot),
+    def _dp_idle_window(
+        self, now: datetime
+    ) -> Optional[tuple[datetime, datetime]]:
+        """Idle run from the DP run that is actually driving this slot."""
+        current_slot = now.hour * 2 + (1 if now.minute >= 30 else 0)
+        # ``get_control_state()`` only uses the DP when the selected run is
+        # current.  Mirror that test: a missing, stale or failed run means
+        # the heuristic is in control, so never hand off on it.
+        if self._last_shadow_slot != current_slot:
+            return None
+        run = self._selected_dp_run()
+        if run is None:
+            return None
+        if int(run.get("slot") or -1) != current_slot:
+            return None
+        if run.get("day") != now.date().isoformat():
+            return None
+
+        actions: dict[int, str] = {}
+        for item in run.get("actions") or []:
+            try:
+                when = datetime.fromisoformat(str(item.get("start")))
+            except (TypeError, ValueError):
+                continue
+            if when.date() != now.date():
+                continue
+            slot = item.get("slot")
+            if isinstance(slot, int) and 0 <= slot <= 47:
+                actions[slot] = str(item.get("kind") or "")
+        if not actions or actions.get(current_slot) != "idle":
+            return None
+
+        free, grid, away = self._session_slots_for_day(now.date())
+
+        def planned_idle(index: int) -> bool:
+            if index in free or index in grid or index in away:
+                return False
+            if self.is_off_peak(index * 30):
+                return False
+            return actions.get(index) == "idle"
+
+        return self._idle_run_window(
+            now, current_slot, planned_idle, min(actions), max(actions)
         )
 
     def should_enable_ocpp_due_to_soc(self, state):

@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 import json
 from evse_controller.tariffs.octopus.ioctgo_with_agile_outgoing import (
     DecisionSnapshot,
@@ -7865,6 +7865,7 @@ class TestJustInTimeExportRecharge:
 class TestIdleOcppWindow:
     def test_contiguous_idle_slots_form_one_run(self, agile_tariff, monkeypatch):
         monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "preview"
         agile_tariff._planned_slot_actions = {
             24: "idle",
             25: "idle",
@@ -7882,6 +7883,7 @@ class TestIdleOcppWindow:
 
     def test_a_planned_action_breaks_the_idle_run(self, agile_tariff, monkeypatch):
         monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "preview"
         agile_tariff._planned_slot_actions = {
             24: "idle",
             25: "charge",
@@ -7903,6 +7905,7 @@ class TestIdleOcppWindow:
         now = agile_tariff.get_current_datetime().replace(
             hour=12, minute=5, second=0, microsecond=0
         )
+        agile_tariff._learning_mode = "preview"
         agile_tariff._planned_slot_actions = {24: "idle"}
 
         monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", False)
@@ -7911,3 +7914,136 @@ class TestIdleOcppWindow:
         monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
         agile_tariff._planned_slot_actions = {}
         assert agile_tariff.idle_ocpp_window(now) is None
+
+    @staticmethod
+    def _dp_run(agile_tariff, start_slot, *, idle_slots, kinds=None, day=None):
+        when = agile_tariff.get_current_datetime()
+        day = day or when.date()
+        actions = []
+        for slot in range(start_slot, 48):
+            start = datetime.combine(day, time()) + timedelta(
+                minutes=30 * slot
+            )
+            kind = (
+                "idle" if slot in idle_slots else "follow_house_conservative"
+            )
+            if kinds and slot in kinds:
+                kind = kinds[slot]
+            actions.append(
+                {
+                    "slot": slot,
+                    "start": start.isoformat(),
+                    "kind": kind,
+                }
+            )
+        return {
+            "day": day.isoformat(),
+            "slot": start_slot,
+            "actions": actions,
+            "success": True,
+        }
+
+    def test_dp_mode_uses_the_selected_dp_actions(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "control_hist"
+        agile_tariff._last_shadow_slot = 24
+        agile_tariff._last_shadow_run = self._dp_run(
+            agile_tariff, 24, idle_slots={24, 25}
+        )
+        # The heuristic map deliberately disagrees; the DP must win.
+        agile_tariff._planned_slot_actions = {24: "export"}
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        window = agile_tariff.idle_ocpp_window(now)
+
+        assert window is not None
+        assert window[0].strftime("%H:%M") == "12:00"
+        assert window[1].strftime("%H:%M") == "13:00"
+        assert agile_tariff.idle_ocpp_source() == "dp"
+
+    def test_dp_mode_does_not_use_a_stale_plan(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "control_hist"
+        agile_tariff._planned_slot_actions = {24: "idle"}
+        # The plan belongs to the previous slot: get_control_state() is on
+        # the heuristic fallback, so no handoff may arm.
+        agile_tariff._last_shadow_slot = 23
+        agile_tariff._last_shadow_run = self._dp_run(
+            agile_tariff, 23, idle_slots={23, 24, 25}
+        )
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        assert agile_tariff.idle_ocpp_window(now) is None
+
+    def test_dp_mode_does_not_hand_off_a_non_idle_action(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "control_hist"
+        agile_tariff._last_shadow_slot = 24
+        agile_tariff._last_shadow_run = self._dp_run(
+            agile_tariff,
+            24,
+            idle_slots=set(),
+            kinds={24: "follow_house_conservative"},
+        )
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        assert agile_tariff.idle_ocpp_window(now) is None
+
+    def test_learn_forecast_uses_the_component_run(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._learning_mode = "control_comp"
+        agile_tariff._last_shadow_slot = 24
+        agile_tariff._last_shadow_run = self._dp_run(
+            agile_tariff, 24, idle_slots=set()
+        )
+        agile_tariff._last_component_shadow_run = self._dp_run(
+            agile_tariff, 24, idle_slots={24}
+        )
+        now = agile_tariff.get_current_datetime().replace(
+            hour=12, minute=5, second=0, microsecond=0
+        )
+
+        window = agile_tariff.idle_ocpp_window(now)
+
+        assert window is not None
+        assert window[0].strftime("%H:%M") == "12:00"
+        assert window[1].strftime("%H:%M") == "12:30"
+
+    def test_mode_change_holds_off_the_idle_handoff(
+        self, agile_tariff, monkeypatch
+    ):
+        monkeypatch.setattr(config, "OCPP_IDLE_ENABLED", True)
+        agile_tariff._planned_slot_actions = {24: "idle"}
+        # The tariff clock in _build_tariff is fixed at 12:00.
+        agile_tariff._learning_mode = "preview"
+        agile_tariff.set_learning_mode("off")
+        base = agile_tariff.get_current_datetime()
+
+        assert agile_tariff.idle_ocpp_window(
+            base.replace(minute=4, second=59)
+        ) is None
+        assert agile_tariff.idle_ocpp_window(
+            base.replace(minute=5, second=1)
+        ) is not None
+
+    def test_idle_source_follows_the_control_selection(self, agile_tariff):
+        agile_tariff._learning_mode = "preview"
+        assert agile_tariff.idle_ocpp_source() == "heuristic"
+        agile_tariff._learning_mode = "control_hist"
+        assert agile_tariff.idle_ocpp_source() == "dp"
+        agile_tariff._learning_mode = "control_comp"
+        assert agile_tariff.idle_ocpp_source() == "dp"

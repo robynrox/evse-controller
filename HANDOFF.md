@@ -347,12 +347,20 @@ completed fixes.
   is re-evaluated on the 20-second control tick and only does work when due.
 - **Idle OCPP handoff.** `ocpp_timing.py` supplies a randomised switch window
   (0–120 s in, 60–180 s out). The tariff's `idle_ocpp_window()` finds the
-  current contiguous planned-idle run from `_planned_slot_actions`, excluding
-  off-peak, free-import, grid-support and EV-away slots. The one-second
-  controller watcher arms an `idle_ocpp` override inside that window and
-  releases it at switch-out; an automatic OCPP session adopts an existing idle
-  handoff instead of toggling OCPP again. The optional `ocpp.auto_randomise`
-  switch applies the same timing to automatic sessions independently.
+  current contiguous planned-idle run: the DP run's actions under
+  `control_hist`/`control_comp`, or the heuristic export plan under
+  `off`/`preview`. In DP mode a missing, stale, failed or non-current run
+  returns no window, so a heuristic fallback never hands the car to OCPP.
+  Free-import, grid-support, EV-away, off-peak and any planned
+  charge/export/follow action break the run, and a control- or hybrid-mode
+  change holds the handoff off for five minutes. The one-second controller
+  watcher arms an `idle_ocpp` override inside that window and releases it at
+  switch-out; an automatic OCPP session adopts an existing idle handoff
+  instead of toggling OCPP again. `/api/ext_status` publishes the planned
+  switch-in/out and its source; the dashboard shows them with a button that
+  cancels a planned switch or leaves an active one early. The optional
+  `ocpp.auto_randomise` switch applies the same timing to automatic sessions
+  independently.
 - **Control-loop watchdog.** `control_watchdog.py` is a daemon thread that
   receives a heartbeat from every main-loop pass. If no pass completes for
   120 s it logs an error containing every live thread's stack, so a blocked

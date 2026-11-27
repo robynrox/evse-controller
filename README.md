@@ -1057,8 +1057,19 @@ ocpp:
 
 A slot counts as idle only when the current plan has no charge, export,
 free-import, grid-support or EV-away action for it and it is not off-peak.
+The plan it reads follows the **Control** selection: under **Heuristic** the
+export planner's actions are used, and under **Learn history** or **Learn
+forecast** the selected DP run is used. In DP mode, if there is no valid
+current-slot plan - because it is being recalculated, failed, or the
+controller has fallen back to the heuristic - no handoff arms. A change of
+control or hybrid mode suppresses the handoff for five minutes so the new
+plan can settle.
+
 A manual command or a scheduled control session outranks the idle handoff.
-The setting replaces the old SoC/time Smart OCPP trigger.
+The setting replaces the old SoC/time Smart OCPP trigger. When an idle
+handoff is planned or active, the dashboard shows the planned switch-in and
+switch-out times and their source, with a button that cancels a planned
+switch or leaves an active one early and returns to smart control.
 
 ##### Automatic OCPP handoff
 
