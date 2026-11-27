@@ -682,6 +682,7 @@ def _dismiss_idle_ocpp() -> None:
 def _check_idle_ocpp(now: Optional[datetime] = None) -> None:
     """Arm or release OCPP for the current planned-idle run."""
     global _idle_ocpp_window, _idle_ocpp_key, _idle_ocpp_retry_after
+    global _idle_ocpp_dismissed_key
 
     now = now or datetime.now()
     tariff = tariffManager.get_tariff()
@@ -1328,7 +1329,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Main loop for EVSE controller without web interface"""
-    global execState, previous_state  # Add this line to allow modification of execState and previous_state
+    global execState, previous_state, _fixed_current_amps  # Add this line to allow modification of execState and previous_state
     nextStateCheck = 0
     previous_state = None
     tariff = None
