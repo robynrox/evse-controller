@@ -226,6 +226,11 @@ def _set_override(mode: ExecState, reason: str, *, source: str = "dashboard",
                   expires_at: Optional[datetime] = None) -> ControlOverride:
     """Take temporary actuator ownership while the tariff keeps observing."""
     global active_override
+    if source == "dashboard":
+        # A dashboard command is an immediate override of the plan.  Cancel
+        # the current idle-OCPP run so the same run cannot re-arm when this
+        # override ends; a later, distinct idle run can still arm.
+        _dismiss_idle_ocpp()
     _ensure_tariff_active()
     active_override = ControlOverride(
         mode=mode,
@@ -1447,6 +1452,7 @@ def main():
                 case _:
                     try:
                         currentAmps = int(command)
+                        ensure_ocpp_disabled()
                         info(f"Setting fixed-current override to {currentAmps} A")
                         _fixed_current_amps = currentAmps
                         _set_override(

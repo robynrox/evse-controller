@@ -360,7 +360,9 @@ completed fixes.
   Wallbox, `/api/learning-mode` and the config form refuse a control-mode or
   hybrid-discharge change until the user cancels it (the dashboard's
   **Return to smart** button); a planned switch is cancelled by the mode
-  change instead. `/api/ext_status` publishes the planned
+  change instead. Any dashboard command immediately dismisses the current
+  idle run, so a manual override is not followed by the same handoff
+  re-arming when it ends. `/api/ext_status` publishes the planned
   switch-in/out and its source; the dashboard shows them with a button that
   cancels a planned switch or leaves an active one early. The optional
   `ocpp.auto_randomise` switch applies the same timing to automatic sessions

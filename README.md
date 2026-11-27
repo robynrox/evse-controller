@@ -1066,7 +1066,9 @@ control or hybrid mode suppresses the handoff for five minutes so the new
 plan can settle. While an active idle handoff owns the Wallbox, a
 control-mode or hybrid-discharge change is refused with a message asking the
 user to cancel the handoff first; a planned-but-not-yet-active switch is
-simply cancelled by the mode change.
+simply cancelled by the mode change. A dashboard command also dismisses the
+current idle run, so a temporary manual override is not followed by the same
+handoff re-arming when it ends.
 
 A manual command or a scheduled control session outranks the idle handoff.
 The setting replaces the old SoC/time Smart OCPP trigger. When an idle

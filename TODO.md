@@ -39,7 +39,8 @@
       Learn history/forecast, the export plan in Heuristic; no handoff when
       the DP falls back to the heuristic; five-minute settle after a mode
       change; dashboard switch times and cancel/early-exit button; control
-      and hybrid mode changes refused while an active idle handoff owns OCPP
+      and hybrid mode changes refused while an active idle handoff owns OCPP;
+      dashboard commands dismiss the current idle run
 - [x] Control-loop stall watchdog that dumps every thread's stack after 120 s
       without a tick, plus isolation of the 1 s watchers and session/scheduler
       calls so one failure cannot stop control
