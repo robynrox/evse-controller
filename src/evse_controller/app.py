@@ -28,9 +28,11 @@ from evse_controller.smart_evse_controller import (
     ScheduledEvent,
     get_system_state,
     idle_ocpp_status,
+    idle_ocpp_active,
     cancel_idle_ocpp as cancel_idle_ocpp_handoff,
     tariffManager
 )
+from evse_controller.execution_state import control_mode_change_blocked
 
 from evse_controller.event_bus import EventBus, EventType
 from evse_controller.web.daily_report_routes import (
@@ -1238,11 +1240,25 @@ def config_page():
                         "Learning mode must be 'off', 'preview', "
                         "'control_hist' or 'control_comp'"
                     )
-                config.LEARNING_MODE = learning_mode
                 tariff = tariffManager.get_tariff()
-                setter = getattr(tariff, 'set_learning_mode', None)
-                if callable(setter):
-                    setter(learning_mode)
+                current_mode = getattr(
+                    tariff, "learning_mode", config.LEARNING_MODE
+                )
+                if control_mode_change_blocked(
+                    learning_mode,
+                    current_mode,
+                    idle_ocpp_active=idle_ocpp_active(),
+                ):
+                    flash(
+                        'Control mode was not changed: cancel the idle '
+                        'OCPP handoff first.',
+                        'error',
+                    )
+                else:
+                    config.LEARNING_MODE = learning_mode
+                    setter = getattr(tariff, 'set_learning_mode', None)
+                    if callable(setter):
+                        setter(learning_mode)
 
             hybrid_discharge = request.form.get(
                 'learning[hybrid_discharge]'
@@ -1253,13 +1269,29 @@ def config_page():
                     raise ValueError(
                         "Hybrid discharge must be 'off' or 'aggressive'"
                     )
-                config.LEARNING_HYBRID_DISCHARGE = hybrid_discharge
                 tariff = tariffManager.get_tariff()
-                setter = getattr(
-                    tariff, 'set_hybrid_discharge_mode', None
+                current_hybrid = getattr(
+                    tariff,
+                    "hybrid_discharge_mode",
+                    config.LEARNING_HYBRID_DISCHARGE,
                 )
-                if callable(setter):
-                    setter(hybrid_discharge)
+                if control_mode_change_blocked(
+                    hybrid_discharge,
+                    current_hybrid,
+                    idle_ocpp_active=idle_ocpp_active(),
+                ):
+                    flash(
+                        'Hybrid discharge was not changed: cancel the idle '
+                        'OCPP handoff first.',
+                        'error',
+                    )
+                else:
+                    config.LEARNING_HYBRID_DISCHARGE = hybrid_discharge
+                    setter = getattr(
+                        tariff, 'set_hybrid_discharge_mode', None
+                    )
+                    if callable(setter):
+                        setter(hybrid_discharge)
 
             # Optional weather geometry.  Blank values clear the setting.
             for field, attribute in (
@@ -1344,7 +1376,7 @@ def _learning_status() -> tuple[str, str]:
     tariff = tariffManager.get_tariff()
     # Learning mode currently lives on the IOctGo controller.  Other tariffs,
     # or no tariff, show Off rather than borrowing the configured IOctGo mode.
-    mode = getattr(tariff, "_learning_mode", "off")
+    mode = getattr(tariff, "learning_mode", "off")
     preview = ""
     preview_label = getattr(tariff, "learning_preview_label", None)
     if callable(preview_label):
@@ -1431,6 +1463,19 @@ def set_learning_mode():
             'error': (
                 'Learning mode is only available on the IOctGo controller'
             )
+        }), 409
+    current_mode = getattr(tariff, "learning_mode", config.LEARNING_MODE)
+    if control_mode_change_blocked(
+        mode,
+        current_mode,
+        idle_ocpp_active=idle_ocpp_active(),
+    ):
+        return jsonify({
+            'error': (
+                'Cancel the idle OCPP handoff before changing the control '
+                'mode.'
+            ),
+            'code': 'idle_ocpp_active',
         }), 409
     try:
         effective = str(setter(mode))

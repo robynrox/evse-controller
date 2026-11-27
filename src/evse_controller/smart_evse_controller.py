@@ -681,6 +681,14 @@ def _check_idle_ocpp(now: Optional[datetime] = None) -> None:
             _idle_ocpp_retry_after = now + timedelta(minutes=1)
 
 
+def idle_ocpp_active() -> bool:
+    """True while an idle-slot handoff currently owns OCPP."""
+    return (
+        active_override is not None
+        and active_override.source == "idle_ocpp"
+    )
+
+
 def idle_ocpp_status(now: Optional[datetime] = None) -> dict:
     """Describe the current idle-OCPP intent for the dashboard.
 
@@ -713,10 +721,7 @@ def idle_ocpp_status(now: Optional[datetime] = None) -> dict:
         and _idle_ocpp_key is not None
         and _idle_ocpp_dismissed_key == _idle_ocpp_key
     )
-    active = bool(
-        active_override is not None
-        and active_override.source == "idle_ocpp"
-    )
+    active = idle_ocpp_active()
     planned = window is not None and not dismissed and not active
     return {
         "enabled": enabled,

@@ -827,6 +827,16 @@ class IOctGoWithAgileOutgoingTariff(Tariff):
     def _dp_control_enabled(self) -> bool:
         return self._learning_mode in ("control_hist", "control_comp")
 
+    @property
+    def learning_mode(self) -> str:
+        """The active control selection."""
+        return self._learning_mode
+
+    @property
+    def hybrid_discharge_mode(self) -> str:
+        """The active hybrid discharge setting."""
+        return self._hybrid_discharge_mode
+
     def set_learning_mode(self, mode: str) -> str:
         """Change the Learning mode at runtime and reset the next plan."""
         value = str(mode or "").strip().lower()

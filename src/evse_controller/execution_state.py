@@ -156,3 +156,21 @@ def override_release_reason(
     ):
         return "vehicle disconnected"
     return None
+
+
+def control_mode_change_blocked(
+    requested_mode: Optional[str],
+    current_mode: Optional[str],
+    *,
+    idle_ocpp_active: bool,
+) -> bool:
+    """Whether a control-mode change must wait for an idle OCPP handoff.
+
+    Swapping the control method while OCPP owns the Wallbox would otherwise
+    silently pull the car out of the supplier schedule.  Requiring an
+    explicit cancel gives the user one clear point where they see the
+    handoff end and choose the new mode afterwards.
+    """
+    if not idle_ocpp_active or not requested_mode:
+        return False
+    return str(requested_mode) != str(current_mode)

@@ -154,3 +154,35 @@ def test_soc_probe_times_out_if_the_soc_never_changes():
 
     assert soc_probe_complete(50, 50, 89, 90) is False
     assert soc_probe_complete(50, 50, 90, 90) is True
+
+
+def test_control_mode_change_is_allowed_without_an_idle_handoff():
+    from evse_controller.execution_state import control_mode_change_blocked
+
+    assert not control_mode_change_blocked(
+        "control_comp", "preview", idle_ocpp_active=False
+    )
+
+
+def test_control_mode_change_is_blocked_while_idle_ocpp_owns_the_wallbox():
+    from evse_controller.execution_state import control_mode_change_blocked
+
+    assert control_mode_change_blocked(
+        "control_comp", "preview", idle_ocpp_active=True
+    )
+
+
+def test_control_mode_change_to_the_same_mode_is_not_blocked():
+    from evse_controller.execution_state import control_mode_change_blocked
+
+    assert not control_mode_change_blocked(
+        "preview", "preview", idle_ocpp_active=True
+    )
+
+
+def test_control_mode_change_without_a_request_is_not_blocked():
+    from evse_controller.execution_state import control_mode_change_blocked
+
+    assert not control_mode_change_blocked(
+        None, "preview", idle_ocpp_active=True
+    )
