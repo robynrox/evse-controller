@@ -1328,7 +1328,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Main loop for EVSE controller without web interface"""
-    global execState, previous_state, _unplug_settle_until  # Add this line to allow modification of execState and previous_state
+    global execState, previous_state  # Add this line to allow modification of execState and previous_state
     nextStateCheck = 0
     previous_state = None
     tariff = None
@@ -1645,28 +1645,17 @@ def main():
                 evseController.setDischargeCurrentRange(3, config.WALLBOX_MAX_DISCHARGE_CURRENT)
             elif execState == ExecState.PAUSE_UNTIL_DISCONNECT:
                 # Legacy persisted state without an override record: behave
-                # like a pause and use the old disconnect transition.
+                # like a pause and use the old disconnect transition.  The
+                # post-OCPP settle lives with the override and is handled by
+                # the one-second watcher.
                 info("CONTROL PAUSE_UNTIL_DISCONNECT")
                 evseController.setControlState(ControlState.DORMANT)
-                if unplug_settle_active(
-                    _unplug_settle_until, datetime.now()
-                ):
-                    # The Wallbox may still be leaving OCPP; wait for the
-                    # settle before trusting a disconnect reading.
-                    pass
-                else:
-                    _unplug_settle_until = None
-                    evse_state = evseController.getEvseState()
-                    (
-                        new_exec_state,
-                        new_previous_state,
-                    ) = handle_pause_until_disconnect(
-                        previous_state, evse_state
-                    )
-                    if new_exec_state != execState:
-                        _set_exec_state(
-                            new_exec_state, new_previous_state
-                        )
+                evse_state = evseController.getEvseState()
+                new_exec_state, new_previous_state = handle_pause_until_disconnect(
+                    previous_state, evse_state
+                )
+                if new_exec_state != execState:
+                    _set_exec_state(new_exec_state, new_previous_state)
 
 if __name__ == '__main__':
     main()
