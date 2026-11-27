@@ -323,7 +323,11 @@ completed fixes.
   button/override, not a session. A one-second transition watcher releases it
   as soon as the cable leaves, records that the car is disconnected, and
   starts a temporary 3 A SoC probe when the car returns; the probe ends when
-  the reported SoC changes or after 90 seconds. The dashboard names every
+  the reported SoC changes or after 90 seconds. If OCPP was active when the
+  unplug button was pressed, the watcher first ignores transitional Wallbox
+  states for one minute; it resumes SMART only if the car is still
+  disconnected when that settle expires, otherwise it keeps waiting for the
+  unplug. The dashboard names every
   override, including "waiting for car to disconnect" and the probe.
   The pure ownership rules live in `execution_state.py` so they are testable
   without starting MQTT, OCPP or hardware threads.

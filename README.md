@@ -1036,7 +1036,11 @@ button rather than a session; it also keeps the tariff observing.
 The unplug transition is watched once a second, not only on the 20-second
 control tick, so a short unplug cannot be missed. The dashboard says
 `Remove plug — waiting for car to disconnect` while waiting, then
-`SMART (...) — car disconnected` once it sees the car leave. When the car is
+`SMART (...) — car disconnected` once it sees the car leave. If OCPP was
+active when the unplug button was pressed, the controller first waits one
+minute for the Wallbox to finish its OCPP transition before trusting a
+`DISCONNECTED` reading; if the car is still absent after that minute it
+returns to SMART, otherwise it keeps waiting for the unplug. When the car is
 plugged back in, a temporary 3 A SoC probe runs until the reported charge
 level changes (or a 90-second timeout), then control returns to SMART. Every
 other override also names itself in the dashboard state line.

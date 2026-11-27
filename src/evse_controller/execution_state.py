@@ -8,7 +8,7 @@ can be unit-tested without starting the controller, MQTT or OCPP threads.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
 
@@ -156,6 +156,30 @@ def override_release_reason(
     ):
         return "vehicle disconnected"
     return None
+
+
+#: After leaving OCPP, give the Wallbox time to finish its state transition
+#: before trusting a DISCONNECTED reading for the unplug hold.
+UNPLUG_OCPP_SETTLE_SECONDS = 60.0
+
+
+def unplug_settle_deadline(
+    now: datetime,
+    *,
+    ocpp_was_active: bool,
+) -> Optional[datetime]:
+    """Deadline for the post-OCPP unplug settle, or ``None`` if not needed."""
+    if not ocpp_was_active:
+        return None
+    return now + timedelta(seconds=UNPLUG_OCPP_SETTLE_SECONDS)
+
+
+def unplug_settle_active(
+    deadline: Optional[datetime],
+    now: datetime,
+) -> bool:
+    """Whether the post-OCPP unplug settle is still running."""
+    return deadline is not None and now < deadline
 
 
 def control_mode_change_blocked(

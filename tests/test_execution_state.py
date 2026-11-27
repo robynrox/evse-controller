@@ -186,3 +186,25 @@ def test_control_mode_change_without_a_request_is_not_blocked():
     assert not control_mode_change_blocked(
         None, "preview", idle_ocpp_active=True
     )
+
+
+def test_unplug_settle_only_applies_after_ocpp():
+    from evse_controller.execution_state import unplug_settle_deadline
+
+    now = datetime(2026, 11, 27, 23, 0, 0)
+    assert unplug_settle_deadline(now, ocpp_was_active=False) is None
+    assert unplug_settle_deadline(
+        now, ocpp_was_active=True
+    ) == now + timedelta(seconds=60)
+
+
+def test_unplug_settle_covers_the_transition_minute():
+    from evse_controller.execution_state import unplug_settle_active
+
+    now = datetime(2026, 11, 27, 23, 0, 0)
+    deadline = now + timedelta(seconds=60)
+
+    assert unplug_settle_active(deadline, now)
+    assert unplug_settle_active(deadline, now + timedelta(seconds=59))
+    assert not unplug_settle_active(deadline, now + timedelta(seconds=60))
+    assert not unplug_settle_active(None, now)

@@ -5,9 +5,12 @@ import threading
 from evse_controller.execution_state import (
     ControlOverride,
     ExecState,
+    UNPLUG_OCPP_SETTLE_SECONDS,
     describe_override,
     override_release_reason,
     soc_probe_complete,
+    unplug_settle_active,
+    unplug_settle_deadline,
 )
 from evse_controller.drivers.EvseController import ControlState, EvseController, EvseState
 from evse_controller.drivers.Shelly import PowerMonitorShelly
@@ -76,6 +79,10 @@ _idle_ocpp_retry_after: Optional[datetime] = None
 _idle_ocpp_dismissed_key: Optional[tuple[datetime, datetime]] = None
 _session_ocpp_windows: dict[str, OcppSwitchWindow] = {}
 
+#: Deadline for the post-OCPP unplug settle.  While set and in the future,
+#: the pause-until-disconnect hold ignores transitional Wallbox states.
+_unplug_settle_until: Optional[datetime] = None
+
 #: Last Wallbox state seen by the 1-second transition watcher.
 _last_evse_state: Optional[EvseState] = None
 #: True after a disconnect until the car is seen again.
@@ -110,6 +117,37 @@ def ensure_ocpp_disabled():
         error(f"Failed to send OCPP disable request: {e}")
         print("Failed to send OCPP disable request")
         return False
+
+
+def _ocpp_mode_active() -> bool:
+    """Whether OCPP currently owns the Wallbox.
+
+    Prefers the explicit override, then the manager's confirmed state.  Used
+    by the unplug hold to decide whether the Wallbox needs a transition
+    settle before its state can be trusted.
+    """
+    if active_override is not None and active_override.mode == ExecState.OCPP:
+        return True
+    try:
+        from evse_controller.drivers.evse.ocpp_manager import ocpp_manager
+
+        return ocpp_manager.get_state() is True
+    except Exception:
+        return False
+
+
+def _arm_unplug_settle(ocpp_was_active: bool) -> None:
+    """Start the post-OCPP settle before the unplug hold trusts the state."""
+    global _unplug_settle_until
+    _unplug_settle_until = unplug_settle_deadline(
+        datetime.now(), ocpp_was_active=ocpp_was_active
+    )
+    if _unplug_settle_until is not None:
+        info(
+            "CONTROL UNPLUG: waiting "
+            f"{UNPLUG_OCPP_SETTLE_SECONDS:.0f}s for the Wallbox to leave "
+            "OCPP before checking the cable"
+        )
 
 
 def enter_freerun_mode():
@@ -225,7 +263,8 @@ def _set_override(mode: ExecState, reason: str, *, source: str = "dashboard",
                   fixed_current: Optional[int] = None,
                   expires_at: Optional[datetime] = None) -> ControlOverride:
     """Take temporary actuator ownership while the tariff keeps observing."""
-    global active_override
+    global active_override, _unplug_settle_until
+    _unplug_settle_until = None
     if source == "dashboard":
         # A dashboard command is an immediate override of the plan.  Cancel
         # the current idle-OCPP run so the same run cannot re-arm when this
@@ -248,7 +287,8 @@ def _set_override(mode: ExecState, reason: str, *, source: str = "dashboard",
 
 
 def _clear_override(reason: str = "cleared") -> None:
-    global active_override
+    global active_override, _unplug_settle_until
+    _unplug_settle_until = None
     if active_override is None:
         return
     info(f"CONTROL OVERRIDE CLEARED: {reason}")
@@ -449,6 +489,7 @@ def _check_evse_transition() -> None:
     the 20 s loop only deals with tariff control and timed overrides.
     """
     global _last_evse_state, _awaiting_reconnect, _last_valid_vehicle_soc
+    global _unplug_settle_until
 
     try:
         state = evseController.getEvseState()
@@ -487,6 +528,17 @@ def _check_evse_transition() -> None:
         active_override is not None
         and active_override.mode == ExecState.PAUSE_UNTIL_DISCONNECT
     ):
+        now = datetime.now()
+        if unplug_settle_active(_unplug_settle_until, now):
+            # OCPP has just been switched off.  The Wallbox can briefly
+            # report a stale or transitional state; do not treat it as a
+            # cable event until it has had time to settle.
+            return
+        if _unplug_settle_until is not None:
+            info(
+                "CONTROL UNPLUG: OCPP settle finished; checking the cable"
+            )
+            _unplug_settle_until = None
         if disconnected:
             info("Vehicle disconnected; resuming smart tariff control")
             _clear_override("vehicle disconnected")
@@ -1276,7 +1328,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def main():
     """Main loop for EVSE controller without web interface"""
-    global execState, previous_state  # Add this line to allow modification of execState and previous_state
+    global execState, previous_state, _unplug_settle_until  # Add this line to allow modification of execState and previous_state
     nextStateCheck = 0
     previous_state = None
     tariff = None
@@ -1387,6 +1439,7 @@ def main():
                 case "list-schedule":
                     handle_list_schedule_command()
                 case "u" | "unplug":
+                    was_ocpp = _ocpp_mode_active()
                     ensure_ocpp_disabled()
                     if execState != ExecState.PAUSE_UNTIL_DISCONNECT:
                         info("Entering pause-until-disconnect override")
@@ -1394,6 +1447,7 @@ def main():
                             ExecState.PAUSE_UNTIL_DISCONNECT,
                             "unplug safety hold",
                         )
+                        _arm_unplug_settle(was_ocpp)
                         nextStateCheck = time.time()
                     else:
                         debug("Already in pause-until-disconnect state, ignoring command")
@@ -1594,12 +1648,25 @@ def main():
                 # like a pause and use the old disconnect transition.
                 info("CONTROL PAUSE_UNTIL_DISCONNECT")
                 evseController.setControlState(ControlState.DORMANT)
-                evse_state = evseController.getEvseState()
-                new_exec_state, new_previous_state = handle_pause_until_disconnect(
-                    previous_state, evse_state
-                )
-                if new_exec_state != execState:
-                    _set_exec_state(new_exec_state, new_previous_state)
+                if unplug_settle_active(
+                    _unplug_settle_until, datetime.now()
+                ):
+                    # The Wallbox may still be leaving OCPP; wait for the
+                    # settle before trusting a disconnect reading.
+                    pass
+                else:
+                    _unplug_settle_until = None
+                    evse_state = evseController.getEvseState()
+                    (
+                        new_exec_state,
+                        new_previous_state,
+                    ) = handle_pause_until_disconnect(
+                        previous_state, evse_state
+                    )
+                    if new_exec_state != execState:
+                        _set_exec_state(
+                            new_exec_state, new_previous_state
+                        )
 
 if __name__ == '__main__':
     main()

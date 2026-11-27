@@ -41,6 +41,9 @@
       change; dashboard switch times and cancel/early-exit button; control
       and hybrid mode changes refused while an active idle handoff owns OCPP;
       dashboard commands dismiss the current idle run
+- [x] UNPLUG after OCPP waits one minute for the Wallbox transition before
+      trusting a disconnect reading, then resumes SMART only if the car is
+      still absent
 - [x] Control-loop stall watchdog that dumps every thread's stack after 120 s
       without a tick, plus isolation of the 1 s watchers and session/scheduler
       calls so one failure cannot stop control
