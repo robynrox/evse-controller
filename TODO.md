@@ -35,6 +35,9 @@
 - [ ] Add support for power monitoring devices beyond Shelly EM
 
 ## Completed
+- [x] Control-loop stall watchdog that dumps every thread's stack after 120 s
+      without a tick, plus isolation of the 1 s watchers and session/scheduler
+      calls so one failure cannot stop control
 - [x] Idle OCPP handoff with randomised switch-in/out timings, replacing the
       old SoC/time Smart OCPP trigger; automatic handoff timing is separately
       configurable

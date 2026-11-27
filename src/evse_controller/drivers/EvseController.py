@@ -101,6 +101,10 @@ class EvseController(PowerMonitorObserver):
         self.MAX_HISTORY_POINTS = 300
         self.history_store = HistoryStore()
         self._address_save_lock = threading.Lock()
+        # Set before the power-monitor threads start: they call update() and
+        # calculateTargetCurrent() immediately, and an unset flag there raises
+        # an AttributeError that kills the first sample.
+        self._use_new_current_calculation = False
 
         # Initialize power monitors
         # Initialize primary Shelly
@@ -252,7 +256,7 @@ class EvseController(PowerMonitorObserver):
             bool: True if using new method with configurable parameters, 
                   False if using traditional power range method
         """
-        return self._use_new_current_calculation
+        return getattr(self, "_use_new_current_calculation", False)
 
     @use_new_current_calculation.setter
     def use_new_current_calculation(self, value: bool) -> None:

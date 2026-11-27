@@ -2030,6 +2030,7 @@ If using VS Code (recommended):
 - The Wallbox occasionally requires automatic restarts due to Modbus communication issues, causing approximately 6 minutes of downtime when this occurs. Manual power cycling might be needed 3-4 times per year. The reset log names the last Modbus error, all documented Wallbox status codes are mapped, and a single raw state-0 read is treated as transient until the next poll confirms it.
 - The web interface is designed for local network use and doesn't include authentication or security features for remote access.
 - The web interface currently has limited accessibility features. Users requiring screen readers or keyboard-only navigation may experience difficulties. If you need accessibility features, please open an issue on GitHub to discuss your requirements.
+- The control loop is a single thread. If it ever stops making progress, `ControlLoopWatchdog` logs `CONTROL LOOP STALLED` with every live thread's stack after 120 seconds. That dump is the first thing to check in `evse.log` if the plan stops updating or dashboard overrides appear to be ignored.
 
 ## Roadmap
 

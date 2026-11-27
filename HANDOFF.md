@@ -353,6 +353,15 @@ completed fixes.
   releases it at switch-out; an automatic OCPP session adopts an existing idle
   handoff instead of toggling OCPP again. The optional `ocpp.auto_randomise`
   switch applies the same timing to automatic sessions independently.
+- **Control-loop watchdog.** `control_watchdog.py` is a daemon thread that
+  receives a heartbeat from every main-loop pass. If no pass completes for
+  120 s it logs an error containing every live thread's stack, so a blocked
+  lock, a stalled I/O call or an accidental unbounded loop is diagnosed in
+  the log instead of presenting as "the controller is running but the plan is
+  stale and overrides are ignored". It repeats every five minutes while the
+  stall persists. The 1 s transition/idle watchers and the scheduled-event
+  and session-sync calls are also isolated so an exception in one of them
+  cannot stop the loop.
 - **Link health.** `poll_health.py` keeps a bounded rolling history of
   successful/failed polls for each Shelly and the Wallbox. `/api/ext_status`
   returns 1/5/60-minute success rates and the age of the last success, so the

@@ -27,6 +27,7 @@ from evse_controller.drivers.evse.async_interface import (
     EvseThreadInterface,
 )
 from evse_controller.utils.memory_monitor import MemoryMonitor
+from evse_controller.control_watchdog import ControlLoopWatchdog
 from evse_controller.mqtt import MQTTManager
 
 # Ensure data directories exist before anything else
@@ -645,6 +646,15 @@ def _check_idle_ocpp(now: Optional[datetime] = None) -> None:
         _idle_ocpp_window = switch_window(
             window[0], window[1], rng=_idle_ocpp_rng
         )
+        # One line per run makes the randomised switch points visible in the
+        # log, so a future report can tell whether the idle handoff was
+        # involved in a control problem.
+        debug(
+            "CONTROL Idle OCPP window "
+            f"{window[0]:%H:%M}-{window[1]:%H:%M}; switch in "
+            f"{_idle_ocpp_window.switch_in:%H:%M:%S}, out "
+            f"{_idle_ocpp_window.switch_out:%H:%M:%S}"
+        )
     if _idle_ocpp_dismissed_key == key:
         if active_override is not None and active_override.source == "idle_ocpp":
             _release_idle_ocpp("idle OCPP dismissed")
@@ -1153,6 +1163,7 @@ def print_usage_instructions():
 
 _shutdown_event = threading.Event()
 
+
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
     global inputThread, memory_monitor, mqttManager
@@ -1207,7 +1218,14 @@ def main():
     memory_monitor = MemoryMonitor(interval=3600)  # Log every hour
     memory_monitor.start()
 
+    # Watch the loop itself.  If a call blocks forever, this dumps every
+    # thread's stack so the stall can be diagnosed instead of being lost on
+    # the next restart.
+    loop_watchdog = ControlLoopWatchdog(report=error)
+    loop_watchdog.start()
+
     while not _shutdown_event.is_set():
+        loop_watchdog.beat()
         try:
             # Get current SoC for conditional event evaluation
             current_soc = None
@@ -1220,7 +1238,11 @@ def main():
                 debug(f"Could not get SoC for scheduler: {e}")
             
             # Check for scheduled events
-            due_events = scheduler.get_due_events(current_soc=current_soc)
+            try:
+                due_events = scheduler.get_due_events(current_soc=current_soc)
+            except Exception as exc:
+                error(f"CONTROL: scheduled-event check failed: {exc}")
+                due_events = []
             for event in due_events:
                 info(f"Executing scheduled event: changing to {event.state}")
                 execQueue.put(event.state)
@@ -1372,9 +1394,16 @@ def main():
             pass
 
         # Watch unplug/reconnect once a second.  A short unplug can fall
-        # entirely between two 20-second control ticks.
-        _check_evse_transition()
-        _check_idle_ocpp()
+        # entirely between two 20-second control ticks.  Either watcher
+        # failing must not stop the control loop.
+        try:
+            _check_evse_transition()
+        except Exception as exc:
+            error(f"CONTROL: EVSE transition check failed: {exc}")
+        try:
+            _check_idle_ocpp()
+        except Exception as exc:
+            error(f"CONTROL: idle OCPP check failed: {exc}")
 
         now = time.localtime()
         nowInSeconds = time.time()
@@ -1395,7 +1424,10 @@ def main():
                     f"EV READINESS: schedule check failed: {exc}"
                 )
             _maybe_schedule_auto_ocpp(now_for_sessions)
-            _sync_session_override(now_for_sessions)
+            try:
+                _sync_session_override(now_for_sessions)
+            except Exception as exc:
+                error(f"CONTROL: session override sync failed: {exc}")
             try:
                 weather_refresher.maybe_fetch()
             except Exception as exc:

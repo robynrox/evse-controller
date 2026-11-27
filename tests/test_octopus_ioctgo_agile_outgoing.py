@@ -117,6 +117,12 @@ def _build_tariff(state_path=None, now=None) -> IOctGoWithAgileOutgoingTariff:
         IOctGoWithAgileOutgoingTariff,
         "get_current_datetime",
         return_value=fixed_now,
+    ), patch.object(
+        IOctGoWithAgileOutgoingTariff,
+        "_fetch_rates_async",
+    ), patch.object(
+        IOctGoWithAgileOutgoingTariff,
+        "_fetch_import_rates_async",
     ):
         tariff = IOctGoWithAgileOutgoingTariff(state_path=state_path)
     # Tests that need another hour call set_time_functions afterwards.  This
